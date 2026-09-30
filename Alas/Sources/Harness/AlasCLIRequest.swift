@@ -75,6 +75,14 @@ struct AlasCLIRequest: Equatable {
             mapped = .review(.localChanges(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
         case .review(.target(let target, let worktree)):
             mapped = .review(.target(target, worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
+        case .agentList(let worktree):
+            mapped = .agentList(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) })
+        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning):
+            mapped = .sessionNew(
+                prompt: prompt, agentID: agentID,
+                worktree: .existing(worktreeID: RemotePath.virtualizing(id, like: anchor)),
+                model: model, reasoning: reasoning
+            )
         default:
             return self
         }

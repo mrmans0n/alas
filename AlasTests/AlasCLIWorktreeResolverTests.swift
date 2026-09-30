@@ -11,17 +11,28 @@ struct AlasCLIWorktreeResolverTests {
         #expect(rows == ["* main              /tmp/repo", "  feature/review    /tmp/repo-feature"])
     }
 
-    @Test(arguments: [true, false])
-    func printedRealPathResolvesAgainstCallersHost(remoteCaller: Bool) {
+    @Test(arguments: [true, false], ["switch", "delete", "agentList", "sessionNew"])
+    func printedRealPathResolvesAgainstCallersHost(remoteCaller: Bool, kind: String) {
         let local = Self.worktree(branch: "local", path: "/srv/repo")
         let remote = Self.worktree(branch: "remote", path: "/.alas-remote/mini/srv/repo")
         let printed = AlasCLIWorktreeResolver.rows(worktrees: [remote], currentWorktreeId: remote.id)[0]
         #expect(printed.hasSuffix(" /srv/repo"))
         let anchor = remoteCaller ? remote.path.path : local.path.path
-        let request = AlasCLIRequest(version: 1, sessionId: nil, cwd: nil, command: .worktree(.switch(target: "/srv/repo")))
+        let command: AlasCLIRequest.Command = switch kind {
+        case "switch": .worktree(.switch(target: "/srv/repo"))
+        case "delete": .worktree(.delete(target: "/srv/repo", force: false, keepBranch: false))
+        case "agentList": .agentList(worktree: "/srv/repo")
+        default: .sessionNew(prompt: "p", agentID: nil, worktree: .existing(worktreeID: "/srv/repo"))
+        }
+        let request = AlasCLIRequest(version: 1, sessionId: nil, cwd: nil, command: command)
 
-        guard case .worktree(.switch(let target)) = request.virtualizingPaths(like: anchor).command else {
-            Issue.record("expected switch"); return
+        let target: String
+        switch request.virtualizingPaths(like: anchor).command {
+        case .worktree(.switch(let t)), .worktree(.delete(let t, _, _)), .agentList(worktree: let t?),
+             .sessionNew(_, _, .existing(let t), _, _):
+            target = t
+        default:
+            Issue.record("unexpected command"); return
         }
 
         #expect(AlasCLIWorktreeResolver.resolve(target: target, worktrees: [local, remote])
