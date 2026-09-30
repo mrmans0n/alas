@@ -11,6 +11,23 @@ struct AlasCLIWorktreeResolverTests {
         #expect(rows == ["* main              /tmp/repo", "  feature/review    /tmp/repo-feature"])
     }
 
+    @Test(arguments: [true, false])
+    func printedRealPathResolvesAgainstCallersHost(remoteCaller: Bool) {
+        let local = Self.worktree(branch: "local", path: "/srv/repo")
+        let remote = Self.worktree(branch: "remote", path: "/.alas-remote/mini/srv/repo")
+        let printed = AlasCLIWorktreeResolver.rows(worktrees: [remote], currentWorktreeId: remote.id)[0]
+        #expect(printed.hasSuffix(" /srv/repo"))
+        let anchor = remoteCaller ? remote.path.path : local.path.path
+        let request = AlasCLIRequest(version: 1, sessionId: nil, cwd: nil, command: .worktree(.switch(target: "/srv/repo")))
+
+        guard case .worktree(.switch(let target)) = request.virtualizingPaths(like: anchor).command else {
+            Issue.record("expected switch"); return
+        }
+
+        #expect(AlasCLIWorktreeResolver.resolve(target: target, worktrees: [local, remote])
+            == .matched(remoteCaller ? remote : local))
+    }
+
     @Test func exactBranchMatchWins() {
         let main = Self.worktree(branch: "main", path: "/tmp/main")
         let match = Self.worktree(branch: "feature/review", path: "/tmp/review")

@@ -58,7 +58,7 @@ struct AlasCLIRequest: Equatable {
     }
 
     /// A CLI run inside a remote terminal reports paths on the remote host;
-    /// re-key `open` paths onto the caller's virtual namespace. Local anchors
+    /// re-key absolute `open` paths and worktree targets onto the caller's virtual namespace. Local anchors
     /// leave the request unchanged.
     func virtualizingPaths(like anchor: String) -> AlasCLIRequest {
         let mapped: Command
@@ -67,6 +67,14 @@ struct AlasCLIRequest: Equatable {
             mapped = .open(paths: paths.map { RemotePath.virtualizing($0, like: anchor) })
         case .openAt(let path, let line, let endLine):
             mapped = .openAt(path: RemotePath.virtualizing(path, like: anchor), line: line, endLine: endLine)
+        case .worktree(.switch(let target)):
+            mapped = .worktree(.switch(target: RemotePath.virtualizing(target, like: anchor)))
+        case .worktree(.delete(let target, let force, let keepBranch)):
+            mapped = .worktree(.delete(target: RemotePath.virtualizing(target, like: anchor), force: force, keepBranch: keepBranch))
+        case .review(.localChanges(let worktree)):
+            mapped = .review(.localChanges(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
+        case .review(.target(let target, let worktree)):
+            mapped = .review(.target(target, worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
         default:
             return self
         }
