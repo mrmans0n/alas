@@ -189,6 +189,23 @@ actor ACPSessionPersistence {
         else { try operation() }
     }
 
+    /// Ack-gated callers use this form: `false` means the lease fence was
+    /// already lost or the write failed, so the broker must replay the update.
+    func setPromptSuggestionsAndReport(
+        sessionId: String,
+        suggestions: [ACPPromptSuggestion]?,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { () -> Bool in
+            try store.setPromptSuggestions(sessionId: sessionId, suggestions: suggestions)
+            return true
+        }
+        if let fence { return (try store.withLeaseFence(fence, operation)) ?? false }
+        try operation()
+        return true
+    }
+
     @discardableResult
     func updateHelperProcOffsets(
         sessionId: String,
