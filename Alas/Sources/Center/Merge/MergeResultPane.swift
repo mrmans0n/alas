@@ -45,7 +45,7 @@ struct MergeResultPane: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.drawsBackground = true
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.containerSize = NSSize(
@@ -133,7 +133,7 @@ struct MergeResultPane: NSViewRepresentable {
             }
             context.coordinator.lastKey = key
         }
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         coordinator.rowHeight = lineHeight()
         coordinator.contentTopInset = textView.textContainerInset.height
     }

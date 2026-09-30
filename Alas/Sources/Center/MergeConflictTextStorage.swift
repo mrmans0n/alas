@@ -6,6 +6,13 @@ import SwiftUI
 /// — no state of their own. Uses `TreeSitterHighlighter` for highlighting,
 /// with regex fallback handled internally by the highlighter.
 enum MergeConflictTextStorage {
+    /// Whether a column must re-render: the text changed, or the theme did
+    /// (including a code theme switch, which leaves the text untouched but
+    /// changes every foreground and syntax attribute).
+    static func needsRebuild(renderedText: String, text: String, renderedTheme: Theme?, theme: Theme) -> Bool {
+        renderedText != text || renderedTheme != theme
+    }
+
     /// Produces a themed attributed string for `text` with syntax
     /// highlighting based on `fileExtension`. Falls back to plain
     /// monospaced text when no language is registered for the extension.

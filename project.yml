@@ -51,6 +51,8 @@ targets:
       - path: Alas/Sources
       - path: Alas/Resources/Themes
         buildPhase: resources
+      - path: Alas/Resources/CodeThemes
+        buildPhase: resources
       - path: Alas/Resources/Assets.xcassets
         buildPhase: resources
       - path: ThirdParty/ghostty/src/font/res/JetBrainsMonoNerdFont-Regular.ttf

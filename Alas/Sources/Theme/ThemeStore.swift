@@ -21,6 +21,10 @@ final class ThemeStore {
     /// (light vs dark) and ignores `userPickedId` until turned off.
     private var matchSystem: Bool = false
 
+    /// Code theme family id (see `CodePalette.families`); re-resolved
+    /// against every new `current` so the variant tracks light/dark.
+    private var codeFamily = "default"
+
     /// Theme used when matchSystem is on and the system is light.
     private static let systemLightThemeId = "light"
     /// Theme used when matchSystem is on and the system is dark.
@@ -91,7 +95,7 @@ final class ThemeStore {
         // Manual selection turns off match-system implicitly so the user's
         // pick actually shows up.
         matchSystem = false
-        self.current = next
+        self.current = withCodePalette(next)
     }
 
     /// Apply an accent preset (one of the keys in `Theme.accentHexById`).
@@ -101,6 +105,17 @@ final class ThemeStore {
         var next = current
         next.accentOverrideHex = accentId.flatMap { Theme.accentHexById[$0] }
         current = next
+    }
+
+    func setCodeTheme(family: String) {
+        codeFamily = family
+        current = withCodePalette(current)
+    }
+
+    private func withCodePalette(_ theme: Theme) -> Theme {
+        var next = theme
+        next.codePalette = CodePalette.resolve(family: codeFamily, darkMode: theme.darkMode)
+        return next
     }
 
     /// Toggle the "Match system" mode. When on, current theme follows the
@@ -136,7 +151,7 @@ final class ThemeStore {
         guard let next = try? Theme.loadBundled(id: targetId) else { return }
         var withAccent = next
         withAccent.accentOverrideHex = current.accentOverrideHex
-        current = withAccent
+        current = withCodePalette(withAccent)
     }
 
     private func systemIsDark() -> Bool {

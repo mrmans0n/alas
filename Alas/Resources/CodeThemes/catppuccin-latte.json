@@ -1,0 +1,18 @@
+{
+  "id": "catppuccin-latte",
+  "name": "Catppuccin Latte",
+  "colors": {
+    "bg": "#eff1f5",
+    "fg": "#4c4f69",
+    "gutter-fg": "#9ca0b0",
+    "selection": "#ccd0da",
+    "comment": "#7c7f93",
+    "keyword": "#8839ef",
+    "string": "#40a02b",
+    "number": "#fe640b",
+    "type": "#df8e1d",
+    "function": "#1e66f5",
+    "constant": "#fe640b",
+    "attribute": "#ea76cb"
+  }
+}

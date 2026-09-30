@@ -61,4 +61,12 @@ struct ThemeTests {
         let theme = try Theme.loadBundled(id: "cool-slate")
         #expect(theme.darkMode == true)
     }
+
+    @Test(arguments: CodePalette.families.flatMap { [$0.light, $0.dark] }.compactMap { $0 })
+    func bundledCodePaletteLoadsEverySlot(id: String) throws {
+        // `loadBundled` returns nil unless every slot parses as #rrggbb,
+        // so non-nil proves the file is bundled and complete.
+        let palette = try #require(CodePalette.loadBundled(id: id))
+        #expect(palette.id == id)
+    }
 }

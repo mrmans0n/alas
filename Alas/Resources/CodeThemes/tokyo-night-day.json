@@ -1,0 +1,18 @@
+{
+  "id": "tokyo-night-day",
+  "name": "Tokyo Night Day",
+  "colors": {
+    "bg": "#e1e2e7",
+    "fg": "#3760bf",
+    "gutter-fg": "#a8aecb",
+    "selection": "#b7c1e3",
+    "comment": "#848cb5",
+    "keyword": "#9854f1",
+    "string": "#587539",
+    "number": "#b15c00",
+    "type": "#07879d",
+    "function": "#2e7de9",
+    "constant": "#b15c00",
+    "attribute": "#007197"
+  }
+}
