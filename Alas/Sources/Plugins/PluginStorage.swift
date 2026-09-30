@@ -10,7 +10,7 @@ final class PluginStorage {
     static let maxKeyBytes = 128
     static let maxTotalBytes = 1 << 20
 
-    enum SetResult: Equatable { case stored, invalidKey, invalidValue, full }
+    enum SetResult: Equatable { case stored, invalidKey, invalidValue, full, failed }
 
     private let file: URL
     private var entries: [String: Data]?
@@ -32,13 +32,13 @@ final class PluginStorage {
     }
 
     func get(_ key: String) -> Data? {
-        load()[key]
+        load()?[key]
     }
 
     func set(_ key: String, value: Data?) -> SetResult {
         let keyBytes = key.utf8.count
         guard (1...Self.maxKeyBytes).contains(keyBytes) else { return .invalidKey }
-        var next = load()
+        guard var next = load() else { return .failed }
         if let value {
             // Foundation also accepts UTF-16/32 and a BOM, which would corrupt the UTF-8 file.
             guard String(data: value, encoding: .utf8) != nil,
@@ -54,18 +54,19 @@ final class PluginStorage {
         guard next.reduce(0, { $0 + $1.key.utf8.count + $1.value.count }) <= Self.maxTotalBytes else {
             return .full
         }
-        guard write(next) else { return .full }
+        guard write(next) else { return .failed }
         entries = next
         return .stored
     }
 
     func keys() -> [String] {
-        load().keys.sorted()
+        (load() ?? [:]).keys.sorted()
     }
 
     // MARK: - Persistence
 
-    private func load() -> [String: Data] {
+    /// nil when an unreadable file could not be moved aside; the store is then unavailable.
+    private func load() -> [String: Data]? {
         if let entries { return entries }
         var loaded: [String: Data] = [:]
         if FileManager.default.fileExists(atPath: file.path) {
@@ -75,8 +76,18 @@ final class PluginStorage {
                 // Never overwrite user data: move the unreadable file aside first.
                 // ponytail: only the latest .corrupt is kept.
                 let aside = file.appendingPathExtension("corrupt")
-                try? FileManager.default.removeItem(at: aside)
-                try? FileManager.default.moveItem(at: file, to: aside)
+                do {
+                    var isDirectory: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: aside.path, isDirectory: &isDirectory) {
+                        // Only ever replace an older backup file, never a directory.
+                        if isDirectory.boolValue { return nil }
+                        _ = try FileManager.default.replaceItemAt(aside, withItemAt: file)
+                    } else {
+                        try FileManager.default.moveItem(at: file, to: aside)
+                    }
+                } catch {
+                    return nil
+                }
             }
         }
         entries = loaded

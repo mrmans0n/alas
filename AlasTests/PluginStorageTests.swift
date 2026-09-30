@@ -88,6 +88,24 @@ struct PluginStorageTests {
         #expect(PluginStorage(file: file).keys() == ["new"])
     }
 
+    @Test func anUnreadableFileThatCannotBeMovedAsideStaysIntactAndBlocksWrites() throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        let aside = file.appendingPathExtension("corrupt")
+        // A non-empty directory at the .corrupt path makes replacing it impossible.
+        try FileManager.default.createDirectory(
+            at: aside.appending(path: "d"), withIntermediateDirectories: true)
+        let marker = aside.appending(path: "d/keep")
+        try Data("old".utf8).write(to: marker)
+        let garbage = Data("not json".utf8)
+        try garbage.write(to: file)
+        let storage = PluginStorage(file: file)
+        #expect(storage.set("new", value: Data("1".utf8)) == .failed)
+        #expect(storage.keys().isEmpty)
+        #expect(try Data(contentsOf: file) == garbage)
+        #expect(try Data(contentsOf: marker) == Data("old".utf8))
+    }
+
     @Test func aMissingFileIsAnEmptyStoreWithoutACorruptCopy() {
         let file = makeFile()
         let storage = PluginStorage(file: file)
