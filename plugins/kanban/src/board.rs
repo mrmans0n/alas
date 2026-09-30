@@ -189,14 +189,25 @@ impl Board {
         }
     }
 
-    /// `sessions` is (session id, state) from the snapshot. Returns whether any card changed.
-    /// A following card moves only when its session's state changes, so a manual move holds
-    /// until the agent does something new. A session not seen yet leaves the card alone.
-    pub fn sync(&mut self, sessions: &[(String, String)]) -> bool {
+    /// `sessions` is (session id, state, worktree branch) from the snapshot. Returns whether any
+    /// card changed. A following card moves only when its session's state changes, so a manual
+    /// move holds until the agent does something new. A session not seen yet leaves the card alone.
+    pub fn sync(&mut self, sessions: &[(String, String, String)]) -> bool {
         let mut changed = false;
-        for c in self.cards.iter_mut().filter(|c| c.following) {
+        for c in self.cards.iter_mut() {
             let Some(sid) = c.session_id.as_deref() else { continue };
-            let state = sessions.iter().find(|(id, _)| id == sid).map(|(_, s)| s.as_str());
+            let session = sessions.iter().find(|(id, _, _)| id == sid);
+            // task/start answers with the requested branch; the worktree may have a suffixed one.
+            if let Some((_, _, branch)) = session {
+                if c.branch.as_deref() != Some(branch.as_str()) {
+                    c.branch = Some(branch.clone());
+                    changed = true;
+                }
+            }
+            if !c.following {
+                continue;
+            }
+            let state = session.map(|(_, s, _)| s.as_str());
             if (state.is_none() && !c.seen) || (c.seen && c.agent_state.as_deref() == state) {
                 continue;
             }
@@ -229,8 +240,8 @@ mod tests {
         (b, id)
     }
 
-    fn sess(state: &str) -> Vec<(String, String)> {
-        vec![("s1".into(), state.into())]
+    fn sess(state: &str) -> Vec<(String, String, String)> {
+        vec![("s1".into(), state.into(), "br".into())]
     }
 
     #[test]

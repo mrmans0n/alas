@@ -19,7 +19,7 @@ pub struct Kanban {
     load_request: i64,
     /// The latest (session id, state) list, kept so a snapshot that beats the stored board still applies.
     /// `None` until the first snapshot, so a board loaded first is not synced against no sessions.
-    sessions: Option<Vec<(String, String)>>,
+    sessions: Option<Vec<(String, String, String)>>,
     /// The stored board could not be read, so it is never overwritten.
     load_failed: bool,
     /// storage/set request ids awaiting a reply.
@@ -53,7 +53,16 @@ impl Kanban {
     }
 
     fn apply(&mut self, snapshot: Snapshot) {
-        self.sessions = Some(snapshot.worktrees.into_iter().flat_map(|w| w.sessions).map(|s| (s.id, s.state)).collect());
+        self.sessions = Some(
+            snapshot
+                .worktrees
+                .into_iter()
+                .flat_map(|w| {
+                    let branch = w.branch;
+                    w.sessions.into_iter().map(move |s| (s.id, s.state, branch.clone()))
+                })
+                .collect(),
+        );
         // Most snapshots move nothing; saving and re-rendering the whole board for them is wasted fuel.
         if self.sync() {
             self.changed();
@@ -275,15 +284,19 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_that_moves_nothing_is_neither_saved_nor_rendered() {
+    fn a_snapshot_takes_the_real_branch_and_one_that_changes_nothing_is_neither_saved_nor_rendered() {
         let mut k = loaded_with_a_card();
         let req = start(&mut k);
         feed(&mut k, json!({"jsonrpc":"2.0","id":req,"result":{"sessionId":"s","branch":"task/x"}}));
-        let changed = json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
-            {"id":"w","branch":"task/x","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"running"}]}]}}});
-        feed(&mut k, changed.clone());
+        let snapshot = |branch: &str| json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
+            {"id":"w","branch":branch,"current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"running"}]}]}}});
+        feed(&mut k, snapshot("task/x"));
         assert_eq!(rendered_column("card-1").0, "col-running");
-        feed(&mut k, changed);
+        // Only the branch differs: the host created a suffixed one because task/x was taken.
+        feed(&mut k, snapshot("task/x-2"));
+        assert_eq!(k.board.cards[0].branch.as_deref(), Some("task/x-2"));
+        assert!(test_host::take_sent().iter().any(|m| m["method"] == "storage/set"));
+        feed(&mut k, snapshot("task/x-2"));
         assert!(test_host::take_sent().is_empty());
     }
 
