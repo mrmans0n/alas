@@ -55,6 +55,11 @@ struct NativePeerWorkspace: Equatable {
     /// Directories (root keyed by `""`) whose last listing was cut off by the
     /// peer's `RemoteWorktreeFileAccess.maxFileTreeNodes` cap.
     private var truncatedPaths: Set<String> = []
+    /// Child listings already in flight when a root refresh starts belong to
+    /// the previous tree snapshot and must not merge into the replacement.
+    private var invalidatedLoadingPaths: Set<String> = []
+    private var invalidatedRepliesBeforeRoot: Set<String> = []
+    private var rootLoadInFlight = false
 
     /// True while any loaded listing — root or a directory — was truncated by
     /// the peer, so the UI can note that the tree may be incomplete.
@@ -69,7 +74,9 @@ struct NativePeerWorkspace: Equatable {
     /// False while the root listing is already in flight. A loaded tree
     /// stays on screen until the new listing replaces it.
     mutating func beginRootLoad() -> Bool {
-        if fileTree == .loading { return false }
+        guard !rootLoadInFlight else { return false }
+        rootLoadInFlight = true
+        invalidatedLoadingPaths.formUnion(loadingPaths)
         if case .loaded = fileTree { return true }
         fileTree = .loading
         return true
@@ -127,6 +134,9 @@ struct NativePeerWorkspace: Equatable {
         }
         if documentContent == .loading { documentContent = .failed(Self.offlineMessage) }
         loadingPaths = []
+        rootLoadInFlight = false
+        invalidatedLoadingPaths = []
+        invalidatedRepliesBeforeRoot = []
     }
 
     /// Folds a changes/files reply in. Returns false for every other message
@@ -154,6 +164,7 @@ struct NativePeerWorkspace: Equatable {
             let mapped = nodes.map(Self.fileTreeNode)
             let truncationKey = path ?? ""
             if let path, !path.isEmpty {
+                if discardInvalidatedChildReply(path: path) { return true }
                 loadingPaths.remove(path)
                 guard case .loaded(let tree) = fileTree else { return true }
                 let merge = RightPaneState.mergingChildren(in: tree, for: path, with: mapped, state: .loaded)
@@ -161,6 +172,8 @@ struct NativePeerWorkspace: Equatable {
                 fileTree = .loaded(merge.nodes)
                 loadedPaths.insert(path)
             } else {
+                rootLoadInFlight = false
+                invalidatedRepliesBeforeRoot = []
                 fileTree = .loaded(mapped)
                 loadedPaths = []
                 failedPaths = []
@@ -177,6 +190,7 @@ struct NativePeerWorkspace: Equatable {
             fileTreeRevision &+= 1
         case .fileTreeFailed(_, let path, let reason, let message):
             if let path, !path.isEmpty {
+                if discardInvalidatedChildReply(path: path) { return true }
                 loadingPaths.remove(path)
                 failedPaths.insert(path)
                 if case .loaded(let tree) = fileTree {
@@ -184,8 +198,12 @@ struct NativePeerWorkspace: Equatable {
                         in: tree, for: path, with: [], state: .failed).nodes)
                 }
                 fileTreeRevision &+= 1
-            } else if fileTree == .loading {
-                fileTree = .failed(Self.describe(reason, message: message))
+            } else {
+                rootLoadInFlight = false
+                resetInvalidatedRepliesBeforeRoot()
+                if fileTree == .loading {
+                    fileTree = .failed(Self.describe(reason, message: message))
+                }
             }
         case .fileDiffResult(_, let path, let stage, let hunks, let truncated, let metadataNote):
             guard document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:))) else {
@@ -210,6 +228,32 @@ struct NativePeerWorkspace: Equatable {
             return false
         }
         return true
+    }
+
+    private mutating func discardInvalidatedChildReply(path: String) -> Bool {
+        guard invalidatedLoadingPaths.remove(path) != nil else { return false }
+        loadingPaths.remove(path)
+        if rootLoadInFlight {
+            invalidatedRepliesBeforeRoot.insert(path)
+        } else {
+            resetChildForReload(path: path)
+        }
+        return true
+    }
+
+    private mutating func resetInvalidatedRepliesBeforeRoot() {
+        for path in invalidatedRepliesBeforeRoot {
+            resetChildForReload(path: path)
+        }
+        invalidatedRepliesBeforeRoot = []
+    }
+
+    private mutating func resetChildForReload(path: String) {
+        if case .loaded(let tree) = fileTree {
+            fileTree = .loaded(RightPaneState.mergingChildren(
+                in: tree, for: path, with: [], state: .notLoaded).nodes)
+        }
+        fileTreeRevision &+= 1
     }
 
     static func describe(_ reason: RemoteFileAccessReason, message: String?) -> String {

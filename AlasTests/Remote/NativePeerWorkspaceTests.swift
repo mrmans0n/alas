@@ -136,6 +136,45 @@ struct NativePeerWorkspaceTests {
         #expect(failedNode.childrenState == .failed)
     }
 
+    @Test func rootRefreshIgnoresAStaleChildReplyThatArrivesBeforeTheRoot() {
+        var workspace = NativePeerWorkspace()
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        _ = workspace.beginChildrenLoad(path: "src")
+
+        _ = workspace.beginRootLoad()
+        _ = workspace.apply(.fileTree(
+            sessionId: "B:s", path: "src", nodes: [file("src/stale.swift")], truncated: false))
+
+        guard case .loaded(let beforeRoot) = workspace.fileTree else {
+            Issue.record("expected the previous tree while the root refresh is pending")
+            return
+        }
+        #expect(RightPaneState.fileTreeNode(at: "src/stale.swift", in: beforeRoot) == nil)
+
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        #expect(workspace.shouldLoadChildren(path: "src", childrenState: .notLoaded))
+    }
+
+    @Test func rootRefreshIgnoresAStaleChildReplyThatArrivesAfterTheRoot() {
+        var workspace = NativePeerWorkspace()
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        _ = workspace.beginChildrenLoad(path: "src")
+
+        _ = workspace.beginRootLoad()
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        #expect(!workspace.shouldLoadChildren(path: "src", childrenState: .notLoaded))
+
+        _ = workspace.apply(.fileTree(
+            sessionId: "B:s", path: "src", nodes: [file("src/stale.swift")], truncated: false))
+
+        guard case .loaded(let refreshedTree) = workspace.fileTree else {
+            Issue.record("expected the refreshed tree")
+            return
+        }
+        #expect(RightPaneState.fileTreeNode(at: "src/stale.swift", in: refreshedTree) == nil)
+        #expect(workspace.shouldLoadChildren(path: "src", childrenState: .notLoaded))
+    }
+
     @Test func rootFileTreeTruncationIsPreservedAndClearedOnAFullListing() {
         var workspace = NativePeerWorkspace()
         #expect(!workspace.fileTreeTruncated)
