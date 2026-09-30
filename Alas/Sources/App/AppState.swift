@@ -5237,7 +5237,7 @@ final class AppState {
                 like: repoPath.path
             ))
         } else {
-            guard !destination.isRemoteAlasPath else { throw RemotePath.reservedForRemoteError(destination.path) }
+            guard !RemotePath.isReserved(destination.path) else { throw RemotePath.reservedForRemoteError(destination.path) }
             preparedDestination = destination
         }
         if isRemote {

@@ -122,12 +122,15 @@ struct ProjectsManagerTests {
 
     /// A local repository under the reserved prefix would be classified as
     /// remote and run on a made-up ssh host, so it is refused before any git.
-    @Test(arguments: [false, true])
-    func addLocalProjectRefusesTheReservedRemotePrefix(underReservedPrefix: Bool) async throws {
+    @Test(arguments: ["", RemotePath.root + "/x", RemotePath.root])
+    func addLocalProjectRefusesTheReservedRemotePrefix(reservedPrefix: String) async throws {
         let repo = try await makeRepo(name: "reserved")
         defer { try? FileManager.default.removeItem(at: repo) }
-        let path = underReservedPrefix ? URL(fileURLWithPath: RemotePath.root + "/x" + repo.path) : repo
+        // The bare root stands in for a repository rooted at the namespace itself.
+        let path = reservedPrefix.isEmpty ? repo
+            : URL(fileURLWithPath: reservedPrefix == RemotePath.root ? reservedPrefix : reservedPrefix + repo.path)
         let mgr = ProjectsManager(persistedProjects: [])
+        let underReservedPrefix = !reservedPrefix.isEmpty
 
         do {
             _ = try await mgr.addProject(path: path, displayName: "repo", color: "#fff")

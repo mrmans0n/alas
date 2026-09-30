@@ -8,6 +8,13 @@ enum RemotePath {
 
     /// Error for a local path inside the reserved namespace: such a path
     /// would be classified as remote and run on a made-up ssh host.
+    /// True for the namespace root itself and anything under it, as written
+    /// or once standardized. The bare root is not a remote path, but a local
+    /// project there would make its children parse as remote.
+    static func isReserved(_ path: String) -> Bool {
+        [path, URL(fileURLWithPath: path).standardizedFileURL.path].contains { $0 == root || $0.hasPrefix(root + "/") }
+    }
+
     static func reservedForRemoteError(_ path: String) -> NSError {
         NSError(domain: "ProjectsManager", code: 3, userInfo: [
             NSLocalizedDescriptionKey: "\(path) is inside \(root)/, which is reserved for remote projects.",

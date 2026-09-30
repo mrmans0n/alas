@@ -38,6 +38,18 @@ struct AppStateRemoteWorktreePathTests {
         #expect(destination.path == expected)
     }
 
+    /// Local worktree destinations may not land in the reserved namespace,
+    /// including its bare root.
+    @Test(arguments: [RemotePath.root, RemotePath.root + "/x/wt"])
+    func localDestinationRefusesTheReservedNamespace(destination: String) async {
+        await #expect(throws: (any Error).self) {
+            try await AppState.preparedCreateWorktreeDestination(
+                repoPath: URL(fileURLWithPath: "/srv/repo"),
+                destination: URL(fileURLWithPath: destination)
+            )
+        }
+    }
+
     @Test func remoteSaveAsNormalizesRelativePath() throws {
         let path = try AppState.normalizedRemoteRelativePath(" nested\\file.txt ")
 
