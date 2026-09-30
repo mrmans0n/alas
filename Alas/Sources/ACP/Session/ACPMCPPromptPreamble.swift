@@ -65,13 +65,16 @@ enum ACPMCPPromptPreamble {
         mode: ACPMCPPreambleMode = .mcp,
         ggStack: GGPreambleStackContext? = nil,
         issue: IssuePreambleContext? = nil,
-        nativeSubagentsDisabled: Bool = false
+        nativeSubagentsDisabled: Bool = false,
+        nativeDelegationMechanism: ACPNativeDelegationMechanism? = nil
     ) -> String? {
         guard builtInInjected || !userServerNames.isEmpty || ggStack != nil || issue != nil
                 || nativeSubagentsDisabled
         else { return nil }
         let delegation = nativeSubagentsDisabled
-            ? nativeDelegationLine(builtInInjected: builtInInjected, isDelegated: isDelegated, mode: mode)
+            ? nativeDelegationLine(
+                builtInInjected: builtInInjected, isDelegated: isDelegated, mode: mode,
+                mechanism: nativeDelegationMechanism)
             : nil
         switch mode {
         case .mcp:
@@ -100,9 +103,17 @@ enum ACPMCPPromptPreamble {
     private static func nativeDelegationLine(
         builtInInjected: Bool,
         isDelegated: Bool,
-        mode: ACPMCPPreambleMode
+        mode: ACPMCPPreambleMode,
+        mechanism: ACPNativeDelegationMechanism?
     ) -> String {
-        let off = "Your native subagent tool is turned off for this session."
+        // Pi has no native subagent tool, and Alas can only verify the
+        // exclusion for known extensions without a custom
+        // PI_ACP_PI_COMMAND, so instruct rather than claim.
+        let off = mechanism == .piCommandWrapper
+            ? "Do not use subagent tools from Pi extensions (such as "
+                + ACPPiSubagentExtensions.excludedTools.joined(separator: ", ")
+                + ") in this session."
+            : "Your native subagent tool is turned off for this session."
         if isDelegated {
             return off + " Do the work in this session."
         }

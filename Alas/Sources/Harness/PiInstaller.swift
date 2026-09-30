@@ -48,7 +48,7 @@ struct PiInstaller: AgentInstaller, Sendable {
         try FileManager.default.removeItem(at: extensionURL)
     }
 
-    private static func isManaged(_ contents: String) -> Bool {
+    static func isManaged(_ contents: String) -> Bool {
         contents.contains(managedMarker) || legacyManagedMarkers.contains { contents.contains($0) }
     }
 

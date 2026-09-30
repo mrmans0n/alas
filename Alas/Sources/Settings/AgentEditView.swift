@@ -9,6 +9,9 @@ struct AgentEditView: View {
     @State private var draft: AgentDefinition
     @State private var nativeSubagentsDisabled: Bool
     @State private var deleteConfirmShown = false
+    /// Pi only: what the installed Pi extensions leave uncovered. Read once
+    /// when the sheet opens.
+    @State private var piExtensionCoverage: ACPPiSubagentExtensions.Coverage?
 
     @Environment(\.theme) var theme
 
@@ -20,6 +23,12 @@ struct AgentEditView: View {
         _nativeSubagentsDisabled = State(initialValue: targetID.map {
             state.config.agents.nativeSubagentsDisabled(for: $0)
         } ?? false)
+        _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
+            ? ACPPiSubagentExtensions.coverage(
+                agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
+                projects: Self.localPiRoots(state.projects, checkouts: state.workspacesManager.checkouts),
+                customPiCommand: ProcessInfo.processInfo.environment[ACPPiSubagentExtensions.piCommandKey])
+            : nil)
         switch target {
         case .new:
             _draft = State(initialValue: AgentDefinition(
@@ -135,7 +144,8 @@ struct AgentEditView: View {
                 name: "Disable native subagents",
                 desc: nativeDelegationSupport.settingsRowDescription(
                     isOn: nativeSubagentsDisabled,
-                    alasToolsExposed: state.config.harness.exposeAlasMCP
+                    alasToolsExposed: state.config.harness.exposeAlasMCP,
+                    extensionCoverage: piExtensionCoverage
                 )
             ) {
                 AlasToggle(on: $nativeSubagentsDisabled)
@@ -173,6 +183,28 @@ struct AgentEditView: View {
             Button("Delete", role: .destructive, action: delete)
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Every local checkout a Pi session can start in: each project's main
+    /// checkout and its linked worktrees, and each workspace checkout root,
+    /// since Pi reads the session's own `.pi` folder.
+    private static func localPiRoots(
+        _ projects: [ProjectConfig],
+        checkouts: [WorkspaceCheckout]
+    ) -> [(name: String, root: URL)] {
+        var seen = Set<String>()
+        var roots: [(name: String, root: URL)] = []
+        for project in projects where project.host == nil {
+            roots.append((project.name, URL(fileURLWithPath: project.path, isDirectory: true)))
+            for worktree in project.cachedWorktrees {
+                roots.append(("\(project.name), \(worktree.name)", worktree.path))
+            }
+        }
+        for checkout in checkouts where checkout.executionLocation == .local {
+            roots.append(("workspace \(checkout.fallbackWorkspaceName), \(checkout.branch)",
+                          URL(fileURLWithPath: checkout.rootPath, isDirectory: true)))
+        }
+        return roots.filter { seen.insert($0.root.standardizedFileURL.path).inserted }
     }
 
     /// Custom agents resolve to `.unsupported` (their ids are UUIDs).
