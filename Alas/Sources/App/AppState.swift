@@ -1428,24 +1428,18 @@ final class AppState {
         // orphaned. The test host shares the user's app support dir, so it
         // skips the files.
         var projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
-        let legacyWorktreeIDs: [String: String]
-        if Self.isRunningUnitTests {
-            legacyWorktreeIDs = RemotePathMigration.legacyIDMap(projects: projectsFile.projects)
-        } else {
-            let hadPending = projectsFile.projects.contains { !$0.legacyWorktreeIDs.isEmpty }
-            legacyWorktreeIDs = RemotePathMigration.migratePending(
-                projects: &projectsFile.projects, defaults: AlasProfile.userDefaults
-            )
-            // Record completion right away; on failure the pending maps stay
-            // and are saved with projects.json whenever it is next written.
-            if hadPending, projectsFile.projects.allSatisfy(\.legacyWorktreeIDs.isEmpty) {
-                do {
-                    try store.write(projectsFile, to: Paths.projectsFile)
-                } catch {
-                    Self.logger.error("Saving projects after the id migration failed: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-        }
+        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
+        var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
+        // On any failure the pending maps stay and are saved with
+        // projects.json whenever it is next written, so the next launch retries.
+        let unitTestHost = Self.isRunningUnitTests
+        RemotePathMigration.complete(
+            projectsFile: &projectsFile,
+            config: &config,
+            spaces: &spacesFile,
+            saving: unitTestHost ? nil : store,
+            migrateStores: { unitTestHost ? false : RemotePathMigration.migrate(idMap: $0, defaults: AlasProfile.userDefaults) }
+        )
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
         self.localTextModelStore = suggestionStore
@@ -1484,13 +1478,6 @@ final class AppState {
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
-        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
-        var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
-        if !legacyWorktreeIDs.isEmpty {
-            RemotePathMigration.rewrite(
-                &config, &spacesFile, idMap: legacyWorktreeIDs, saving: Self.isRunningUnitTests ? nil : store
-            )
-        }
         self.config = config
         self.languageServerConfigChangeTracker = LanguageServerConfigChangeTracker(
             initial: config.code.languageServers

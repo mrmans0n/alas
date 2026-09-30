@@ -79,23 +79,31 @@ enum RemotePathMigration {
         }
     }
 
-    /// Migrates the stores for every pending legacy id and clears the
-    /// projects' pending maps only when every step succeeded; otherwise they
-    /// stay (and persist with projects.json) so the next launch retries.
+    /// Runs every step that depends on the pending legacy ids, in order:
+    /// the id-keyed stores (`migrateStores`), then recents and last
+    /// selections (`rewrite`), and only when all of them succeeded writes
+    /// projects.json without the pending maps. Until then the maps stay, so
+    /// the next launch retries every step; each one is idempotent. `store`
+    /// is nil in the test host: nothing is saved and nothing is cleared.
     /// Returns the map that was applied.
-    static func migratePending(
-        projects: inout [ProjectConfig],
-        root: URL = Paths.appSupportRoot,
-        fileManager: FileManager = .default,
-        defaults: UserDefaults? = nil
+    @discardableResult
+    static func complete(
+        projectsFile: inout ProjectsFile,
+        config: inout AppConfig,
+        spaces: inout SpacesFile?,
+        saving store: (any PersistenceStoreProtocol)?,
+        migrateStores: ([String: String]) -> Bool
     ) -> [String: String] {
-        let idMap = legacyIDMap(projects: projects)
-        guard idMap.isEmpty || migrate(idMap: idMap, root: root, fileManager: fileManager, defaults: defaults) else {
-            return idMap
+        let idMap = legacyIDMap(projects: projectsFile.projects)
+        guard projectsFile.projects.contains(where: { !$0.legacyWorktreeIDs.isEmpty }) else { return idMap }
+        let storesMigrated = idMap.isEmpty || migrateStores(idMap)
+        let rewritesSaved = idMap.isEmpty || rewrite(&config, &spaces, idMap: idMap, saving: store)
+        guard storesMigrated, rewritesSaved, let store else { return idMap }
+        var cleared = projectsFile
+        for index in cleared.projects.indices {
+            cleared.projects[index].legacyWorktreeIDs = [:]
         }
-        for index in projects.indices {
-            projects[index].legacyWorktreeIDs = [:]
-        }
+        if save(cleared, to: Paths.projectsFile, store) { projectsFile = cleared }
         return idMap
     }
 
@@ -261,12 +269,14 @@ enum RemotePathMigration {
     /// changed. Saving here matters: projects.json can be re-saved with the
     /// virtual ids before any settings save, and the legacy map is then gone.
     /// `store` is nil in the test host, which shares the user's app support dir.
+    /// Returns false when a changed file could not be saved.
+    @discardableResult
     static func rewrite(
         _ config: inout AppConfig,
         _ spaces: inout SpacesFile?,
         idMap: [String: String],
         saving store: (any PersistenceStoreProtocol)?
-    ) {
+    ) -> Bool {
         let (oldConfig, oldSpaces) = (config, spaces)
         config.recentWorktreeIdsByProject = config.recentWorktreeIdsByProject.mapValues { $0.map { idMap[$0] ?? $0 } }
         config.recentWorktreeRefs = config.recentWorktreeRefs.map {
@@ -280,16 +290,19 @@ enum RemotePathMigration {
             }
             spaces = file
         }
-        guard let store else { return }
-        if config != oldConfig { save(config, to: Paths.appConfigFile, store) }
-        if let spaces, spaces != oldSpaces { save(spaces, to: Paths.spacesFile, store) }
+        guard let store else { return true }
+        let configSaved = config == oldConfig || save(config, to: Paths.appConfigFile, store)
+        let spacesSaved = spaces == nil || spaces == oldSpaces || save(spaces, to: Paths.spacesFile, store)
+        return configSaved && spacesSaved
     }
 
-    private static func save(_ value: some Encodable, to url: URL, _ store: any PersistenceStoreProtocol) {
+    private static func save(_ value: some Encodable, to url: URL, _ store: any PersistenceStoreProtocol) -> Bool {
         do {
             try store.write(value, to: url)
+            return true
         } catch {
             logger.error("Saving \(url.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

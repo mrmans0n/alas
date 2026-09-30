@@ -202,9 +202,9 @@ struct RemotePathMigrationTests {
         #expect(entry?.portConflict == .ownedByRun(worktreeID: new, branch: "b", scriptName: "s"))
     }
 
-    /// A failed step keeps the projects' pending ids so the next launch
-    /// retries; a run where every step succeeds clears them.
-    @Test func pendingIdsStayUntilEveryStepSucceeds() throws {
+    /// A store step that cannot finish is reported, and the retry after the
+    /// obstacle is gone completes it.
+    @Test func migrateReportsAFailedStoreStepAndCompletesOnRetry() throws {
         let root = makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let tabs = try seed(.tabs, root: root, id: old, text: "tabs")
@@ -212,23 +212,60 @@ struct RemotePathMigrationTests {
         let blocker = RemotePathMigration.Store.tabs.url(root: root, id: new).deletingLastPathComponent()
         try FileManager.default.createDirectory(at: blocker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: blocker)
-        var project = ProjectConfig(
-            id: "p", name: "P", path: RemotePath.virtual(host: "mini", realPath: "/srv/repo"), color: "#fff",
-            addedAt: .distantPast, host: "mini"
-        )
-        project.legacyWorktreeIDs = [old: new]
-        var projects = [project]
 
-        _ = RemotePathMigration.migratePending(projects: &projects, root: root)
-
-        #expect(projects[0].legacyWorktreeIDs == [old: new])
+        #expect(!RemotePathMigration.migrate(idMap: [old: new], root: root))
         #expect(FileManager.default.fileExists(atPath: tabs.path))
 
         try FileManager.default.removeItem(at: blocker)
-        _ = RemotePathMigration.migratePending(projects: &projects, root: root)
-
-        #expect(projects[0].legacyWorktreeIDs.isEmpty)
+        #expect(RemotePathMigration.migrate(idMap: [old: new], root: root))
         #expect(FileManager.default.fileExists(atPath: relocated(tabs, root: root, store: .tabs).path))
+    }
+
+    /// projects.json is the only durable id map, so its pending ids are
+    /// cleared only after the stores migrated and recents and selections were
+    /// saved; any failure keeps them and the next launch retries everything.
+    @Test(arguments: ["stores", "config", "spaces"])
+    func completeClearsPendingIdsOnlyAfterEveryDependentStepIsSaved(failingStep: String) {
+        var project = ProjectConfig(id: "p", name: "P", path: new, color: "#fff", addedAt: .distantPast, host: "mini")
+        project.legacyWorktreeIDs = [old: new]
+        var projectsFile = ProjectsFile(projects: [project])
+        let store = RecordingStore()
+        var events: [String] = []
+        store.onWrite = { events.append($0.lastPathComponent) }
+        var storesFail = failingStep == "stores"
+        store.failing = failingStep == "config" ? [Paths.appConfigFile] : failingStep == "spaces" ? [Paths.spacesFile] : []
+        func run() {
+            // Each launch re-reads recents and selections from disk.
+            var config = AppConfig.defaults
+            config.recentWorktreeRefs = [.init(projectId: "p", worktreeId: old)]
+            var spaces: SpacesFile? = SpacesFile(activeSpaceId: "s", spaces: [
+                SpaceConfig(id: "s", name: "S", emoji: "x", projectIds: ["p"], lastSelectedWorktreeId: old, createdAt: .distantPast),
+            ])
+            RemotePathMigration.complete(
+                projectsFile: &projectsFile, config: &config, spaces: &spaces, saving: store,
+                migrateStores: { _ in
+                    events.append("stores")
+                    return !storesFail
+                }
+            )
+        }
+
+        run()
+
+        #expect(projectsFile.projects[0].legacyWorktreeIDs == [old: new])
+        #expect(!events.contains(Paths.projectsFile.lastPathComponent))
+
+        storesFail = false
+        store.failing = []
+        events = []
+        run()
+
+        #expect(projectsFile.projects[0].legacyWorktreeIDs.isEmpty)
+        #expect(events == [
+            "stores", Paths.appConfigFile.lastPathComponent, Paths.spacesFile.lastPathComponent,
+            Paths.projectsFile.lastPathComponent,
+        ])
+        #expect((store.writes.last?.value as? ProjectsFile)?.projects.allSatisfy(\.legacyWorktreeIDs.isEmpty) == true)
     }
 
     /// An interrupted `.new` delegation is recovered by its destination path,
@@ -368,6 +405,12 @@ struct RemotePathMigrationTests {
 
 private final class RecordingStore: PersistenceStoreProtocol {
     private(set) var writes: [(url: URL, value: Any)] = []
-    func write(_ value: some Encodable, to url: URL) throws { writes.append((url, value)) }
+    var failing: Set<URL> = []
+    var onWrite: (URL) -> Void = { _ in }
+    func write(_ value: some Encodable, to url: URL) throws {
+        if failing.contains(url) { throw CocoaError(.fileWriteNoPermission) }
+        writes.append((url, value))
+        onWrite(url)
+    }
     func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
