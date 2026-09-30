@@ -264,6 +264,7 @@ struct CodeEditorView: NSViewRepresentable {
                 rendersTextDecorations: !context.coordinator.currentBufferReadOnly
             )
         }
+        nsView.backgroundColor = EditorTheme(theme: theme).bg
         nsView.configureMinimap(shown: showMinimap, theme: theme)
     }
 

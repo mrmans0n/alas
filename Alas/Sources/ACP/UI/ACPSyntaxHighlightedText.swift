@@ -47,7 +47,7 @@ struct ACPSyntaxHighlightCacheKey: Equatable {
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\(colorKey($0.value))" }
             .joined(separator: "|")
-        return "id=\(theme.id)|accent=\(theme.accentOverrideHex ?? "")|tokens=\(tokenKey)|overrides=\(overrideKey)"
+        return "id=\(theme.id)|accent=\(theme.accentOverrideHex ?? "")|code=\(theme.codePalette?.id ?? "")|tokens=\(tokenKey)|overrides=\(overrideKey)"
     }
 
     private static func colorKey(_ color: Color) -> String {

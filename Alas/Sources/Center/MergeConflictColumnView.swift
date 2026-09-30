@@ -29,7 +29,7 @@ struct MergeConflictColumnView: NSViewRepresentable {
         )
         textView.autoresizingMask = [.width]
         textView.drawsBackground = true
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         textView.textContainerInset = NSSize(width: 6, height: 6)
 
         scroll.documentView = textView
@@ -52,6 +52,6 @@ struct MergeConflictColumnView: NSViewRepresentable {
             )
             textView.textStorage?.setAttributedString(attr)
         }
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
     }
 }
