@@ -210,8 +210,10 @@ struct ACPNativeDelegationControlsTests {
             (nil, "/custom/pi", "/custom/pi"),
             ("/agent/pi", "/custom/pi", "/agent/pi"),
             ("", nil, "pi"),
-            // A relaunch that carries Alas's own wrapper forward must not loop.
+            // A relaunch that carries Alas's own wrapper forward, or another
+            // Alas profile's copy, must not loop.
             ("WRAPPER", nil, "pi"),
+            (nil, "OTHER-PROFILE-WRAPPER", "pi"),
         ] as [(String?, String?, String)]
     )
     func piLaunchWrapper(agentValue: String?, inheritedValue: String?, expectedTarget: String) throws {
@@ -221,6 +223,11 @@ struct ACPNativeDelegationControlsTests {
         func resolve(_ value: String?) -> String? {
             guard let value else { return nil }
             if value == "WRAPPER" { return wrapper.path }
+            if value == "OTHER-PROFILE-WRAPPER" {
+                let other = directory.appendingPathComponent("other-profile.sh")
+                try? Data(ACPPiSubagentExtensions.wrapperContents.utf8).write(to: other)
+                return other.path
+            }
             // Every user command must exist for the launch to pass.
             if value.hasPrefix("/") {
                 let command = directory.appendingPathComponent(String(value.dropFirst()).replacingOccurrences(of: "/", with: "-"))

@@ -75,7 +75,7 @@ enum ACPPiSubagentExtensions {
         # (PI_ACP_PI_COMMAND). It runs the command pi-acp would have run
         # (\(wrapperTargetKey)) with every original argument, and excludes the
         # tools of known Pi subagent extensions.
-        target="${\(wrapperTargetKey):-pi}"
+        \(wrapperMarker)
         if ! command -v "$target" >/dev/null 2>&1; then
           echo "Alas: cannot run the Pi command \\"$target\\"." >&2
           exit 127
@@ -93,16 +93,29 @@ enum ACPPiSubagentExtensions {
         inheritedEnvironment: [String: String],
         wrapper: URL
     ) throws -> [String: String] {
-        let existing = (extraEnv[piCommandKey] ?? inheritedEnvironment[piCommandKey])
-            .flatMap { $0.isEmpty ? nil : $0 }
-        // A relaunch can carry this wrapper forward; chaining to it would loop.
-        let target = existing.flatMap { $0 == wrapper.path ? nil : $0 } ?? "pi"
+        let existing = userPiCommand(extraEnv[piCommandKey] ?? inheritedEnvironment[piCommandKey])
+        let target = existing ?? "pi"
         let path = extraEnv["PATH"] ?? ACPProcessEnvironment.augmented(inheritedEnvironment)["PATH"] ?? ""
         guard isRunnable(target, path: path) else {
             throw ACPNativeDelegationError.piCommandUnavailable(command: target, isUserCommand: existing != nil)
         }
         return [piCommandKey: wrapper.path, wrapperTargetKey: target]
     }
+
+    /// `value` as a command of the user's own, or nil when it is empty or is
+    /// an Alas wrapper (this one, a symlink to it, or another Alas
+    /// profile's copy carried in through the environment). Chaining to an
+    /// Alas wrapper would make it run itself forever, since every copy reads
+    /// the same `ALAS_PI_ACP_PI_TARGET`.
+    static func userPiCommand(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        guard value.contains("/") else { return value }
+        let data = FileManager.default.contents(atPath: value) ?? Data()
+        return String(decoding: data.prefix(4096), as: UTF8.self).contains(wrapperMarker) ? nil : value
+    }
+
+    /// The line that identifies an Alas wrapper, whichever profile wrote it.
+    static let wrapperMarker = "target=\"${\(wrapperTargetKey):-pi}\""
 
     /// Whether `command` resolves the way `exec` in the wrapper would
     /// resolve it: a path as is, a bare name through `path`. A relative path
@@ -220,7 +233,7 @@ enum ACPPiSubagentExtensions {
         for project in projects {
             scan(base: project.root.appendingPathComponent(".pi", isDirectory: true), label: project.name, isGlobal: false)
         }
-        if let customPiCommand, !customPiCommand.isEmpty {
+        if let customPiCommand = userPiCommand(customPiCommand) {
             note("PI_ACP_PI_COMMAND \(customPiCommand)", into: &unrecognized)
         }
         if !unrecognized.isEmpty { return .unrecognized(covered: covered, unrecognized: unrecognized) }
