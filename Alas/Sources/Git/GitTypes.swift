@@ -20,6 +20,14 @@ struct Worktree: Identifiable, Equatable, Codable {
     var addedLines: Int = 0
     var deletedLines: Int = 0
 
+    /// `WorktreeService` records a detached HEAD as this literal branch value.
+    var isDetached: Bool { branch == "(detached)" }
+
+    /// Label that tells worktrees apart in lists: the branch, or the checkout
+    /// directory name when HEAD is detached, since every detached worktree
+    /// shares the same branch value.
+    var title: String { isDetached ? path.lastPathComponent : branch }
+
     enum CodingKeys: String, CodingKey {
         case id, projectId, name, branch, path, isMainWorktree, status,
              lastActivity, createdAt, lineageID, addedLines, deletedLines

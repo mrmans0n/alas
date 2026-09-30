@@ -146,13 +146,13 @@ final class ReviewTargetPaletteModel {
             return all
                 .sorted { a, b in
                     if (a.id == currentId) != (b.id == currentId) { return a.id == currentId }
-                    return a.branch.localizedCaseInsensitiveCompare(b.branch) == .orderedAscending
+                    return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
                 }
                 .map(entry)
         }
         return all
             .compactMap { worktree -> (Worktree, Double)? in
-                if let r = FuzzyMatch.score(query: trimmed, target: worktree.branch) {
+                if let r = FuzzyMatch.score(query: trimmed, target: worktree.title) {
                     return (worktree, r.score)
                 }
                 if let r = FuzzyMatch.score(query: trimmed, target: worktree.name) {
@@ -162,7 +162,7 @@ final class ReviewTargetPaletteModel {
             }
             .sorted { a, b in
                 if a.1 != b.1 { return a.1 > b.1 }
-                return a.0.branch.localizedCaseInsensitiveCompare(b.0.branch) == .orderedAscending
+                return a.0.title.localizedCaseInsensitiveCompare(b.0.title) == .orderedAscending
             }
             .map { entry($0.0) }
     }

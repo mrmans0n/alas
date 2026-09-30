@@ -459,6 +459,26 @@ struct RepoSelectorModelTests {
         #expect(indices == [0, 1, 2])
     }
 
+    @Test func filterModeMatchesDetachedWorktreesByDirectoryName() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
+        let scratch = worktree("scratch", projectId: "p1", branch: "(detached)")
+        let e = env(projects: [p1], worktrees: ["p1": [flicker, scratch]])
+
+        model.query = "flick"
+        let flickIds: [String] = model.rows(environment: e).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+        #expect(flickIds == ["fix-flicker"])
+
+        model.query = "detached"
+        let ids: [String] = model.rows(environment: e).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+        #expect(ids == ["fix-flicker", "scratch"])
+    }
+
     @Test func filterModePropagatesCurrentFlag() {
         let model = RepoSelectorModel()
         let p1 = project("p1")

@@ -234,22 +234,26 @@ final class RepoSelectorModel {
         var scored: [Scored] = []
         for project in projects {
             for w in env.visibleWorktrees(project.id) {
-                if let r = FuzzyMatch.score(query: query, target: w.branch) {
+                if let r = FuzzyMatch.score(query: query, target: w.title) {
                     scored.append(Scored(worktree: w, indices: r.indices, score: r.score))
-                } else if let r = FuzzyMatch.score(query: query, target: "\(project.name) \(w.branch)") {
-                    let branchStart = project.name.count + 1
-                    let branchIndices = r.indices.compactMap { index -> Int? in
-                        guard index >= branchStart else { return nil }
-                        return index - branchStart
+                } else if let r = FuzzyMatch.score(query: query, target: "\(project.name) \(w.title)") {
+                    let titleStart = project.name.count + 1
+                    let titleIndices = r.indices.compactMap { index -> Int? in
+                        guard index >= titleStart else { return nil }
+                        return index - titleStart
                     }
-                    scored.append(Scored(worktree: w, indices: branchIndices, score: r.score - 1))
+                    scored.append(Scored(worktree: w, indices: titleIndices, score: r.score - 1))
+                } else if w.isDetached, let r = FuzzyMatch.score(query: query, target: w.branch) {
+                    // "detached" still lists every detached worktree; the
+                    // matched text is the tag, not the title, so nothing highlights.
+                    scored.append(Scored(worktree: w, indices: [], score: r.score - 1))
                 }
             }
         }
         return scored
             .sorted { a, b in
                 if a.score != b.score { return a.score > b.score }
-                return a.worktree.branch.localizedCaseInsensitiveCompare(b.worktree.branch)
+                return a.worktree.title.localizedCaseInsensitiveCompare(b.worktree.title)
                     == .orderedAscending
             }
             .map { .worktree($0.worktree, indices: $0.indices, isCurrent: $0.worktree.id == currentId) }
