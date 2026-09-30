@@ -117,9 +117,9 @@ enum ACPPiSubagentExtensions {
     /// Reads at most the first 4 KiB, and only from a regular file, so a
     /// large binary or a FIFO never costs more than that.
     private static func startsWithWrapperMarker(_ file: String) -> Bool {
-        var info = stat()
-        guard stat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
-              let handle = FileHandle(forReadingAtPath: file)
+        let resolved = URL(fileURLWithPath: file).resolvingSymlinksInPath().path
+        guard (try? FileManager.default.attributesOfItem(atPath: resolved)[.type]) as? FileAttributeType == .typeRegular,
+              let handle = FileHandle(forReadingAtPath: resolved)
         else { return false }
         defer { try? handle.close() }
         let head = (try? handle.read(upToCount: 4096)) ?? Data()
@@ -374,7 +374,10 @@ enum ACPPiSubagentExtensions {
             return normalized == relative || normalized == absolute
         }
         func glob(_ pattern: Substring) -> Bool {
-            [relative, name, absolute].contains { fnmatch(String(pattern), $0, FNM_PATHNAME) == 0 }
+            let pattern = String(pattern)
+            return [relative, name, absolute].contains { (candidate: String) -> Bool in
+                fnmatch(pattern, candidate, FNM_PATHNAME) == 0
+            }
         }
         var enabled = true
         if overrides.contains(where: { $0.hasPrefix("!") && glob($0.dropFirst()) }) { enabled = false }
