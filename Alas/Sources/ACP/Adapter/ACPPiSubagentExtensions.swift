@@ -29,8 +29,11 @@ enum ACPPiSubagentExtensions {
         /// steers a subagent.
         let delegationTools: [String]
 
+        /// Prereleases are never verified: `isVersion` ranks `0.69.0-beta`
+        /// below `0.69.0`, so it would otherwise pass the upper bound.
         func isVerified(_ version: String) -> Bool {
-            ACPNativeDelegationControls.isVersion(version, atLeast: verifiedVersions.lowerBound)
+            !version.contains("-")
+                && ACPNativeDelegationControls.isVersion(version, atLeast: verifiedVersions.lowerBound)
                 && !ACPNativeDelegationControls.isVersion(version, atLeast: verifiedVersions.upperBound)
         }
 

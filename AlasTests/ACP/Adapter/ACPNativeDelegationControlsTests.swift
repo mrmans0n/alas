@@ -344,6 +344,7 @@ struct ACPNativeDelegationControlsTests {
             ("npm:pi-subagents", "0.69.0", "pi-subagents 0.69.0 not verified"),
             ("npm:pi-subagents", "0.67.9", "pi-subagents 0.67.9 not verified"),
             ("npm:pi-subagents", "0.68.0-beta.1", "pi-subagents 0.68.0-beta.1 not verified"),
+            ("npm:pi-subagents", "0.69.0-beta.1", "pi-subagents 0.69.0-beta.1 not verified"),
             ("npm:pi-subagents", nil, "pi-subagents (unreadable version) not verified"),
         ] as [(String, String?, String?)]
     )
