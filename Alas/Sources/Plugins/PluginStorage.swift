@@ -135,7 +135,10 @@ final class PluginStorage {
         while true {
             skipSpace()
             if i >= bytes.count || bytes[i] == UInt8(ascii: "}") { break }
-            if bytes[i] == UInt8(ascii: ",") { i += 1; continue }
+            if bytes[i] == UInt8(ascii: ",") {
+                i += 1
+                continue
+            }
             let keyStart = i
             skipString()
             guard i <= bytes.count,
@@ -149,7 +152,9 @@ final class PluginStorage {
             var depth = 0
             scan: while i < bytes.count {
                 switch bytes[i] {
-                case UInt8(ascii: "\""): skipString(); continue
+                case UInt8(ascii: "\""):
+                    skipString()
+                    continue
                 case UInt8(ascii: "{"), UInt8(ascii: "["): depth += 1
                 case UInt8(ascii: "}"), UInt8(ascii: "]"):
                     if depth == 0 { break scan }

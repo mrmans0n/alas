@@ -4,7 +4,10 @@ import Foundation
 struct PluginViewNode: Equatable, Sendable {
     enum Kind: String, Sendable { case vstack, hstack, scroll, text, badge, button, textField, menu, card, divider, spacer }
     enum Tone: String, Sendable { case normal, dim, accent, warn, danger }
-    struct MenuItem: Equatable, Sendable { let id: String; let label: String }
+    struct MenuItem: Equatable, Sendable {
+        let id: String
+        let label: String
+    }
     let id: String
     let kind: Kind
     var children: [PluginViewNode] = []   // stacks, card; scroll has exactly one
@@ -81,7 +84,10 @@ enum PluginViewTree {
         init(from decoder: Decoder) throws { raw = try Raw(from: decoder) }
     }
 
-    private struct RawItem: Decodable { var id: String?; var label: String? }
+    private struct RawItem: Decodable {
+        var id: String?
+        var label: String?
+    }
 
     private struct Raw: Decodable {
         var id: String?
