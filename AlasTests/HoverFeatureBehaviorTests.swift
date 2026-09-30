@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -18,6 +19,45 @@ struct HoverFeatureBehaviorTests {
         #expect(timer.isCancelled)
         await timer.value
         #expect(await recorder.calls.isEmpty)
+    }
+
+    /// SwiftUI overlays (agent launcher, file search, …) sit in the same
+    /// hosting view as the editor, but the editor's tracking area still
+    /// delivers `mouseMoved`. Hover must only route while the editor is the
+    /// topmost hit target; a covered editor treats the move as an exit.
+    @Test(arguments: [false, true])
+    func mouseMovedRoutesHoverOnlyWhenEditorIsTopmost(covered: Bool) throws {
+        let textView = makeTextView()
+        let root = NSHostingView(rootView: ZStack {
+            HostedTextView(view: textView)
+            if covered {
+                Color.black.opacity(0.42).onTapGesture {}
+            }
+        }.frame(width: 800, height: 600))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = root
+        root.layoutSubtreeIfNeeded()
+        #expect(textView.window === window)
+
+        var hovered = 0
+        var exited = 0
+        textView.hoverHandler = { _ in hovered += 1 }
+        textView.mouseExitedHandler = { exited += 1 }
+        let location = textView.convert(point(forCharacterAt: 4, in: textView), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        ))
+        textView.mouseMoved(with: event)
+        textView.mouseMoved(with: event)
+
+        #expect(hovered == (covered ? 0 : 2))
+        #expect(exited == (covered ? 1 : 0))
     }
 
     private func makeTextView() -> CodeTextView {
@@ -332,6 +372,12 @@ struct HoverFeatureBehaviorTests {
         }
         return found
     }
+}
+
+private struct HostedTextView: NSViewRepresentable {
+    let view: NSView
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 @MainActor

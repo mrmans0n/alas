@@ -120,6 +120,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    /// Set once a `mouseMoved` lands under an overlay; see `pointerBecameCovered`.
+    private var isPointerCovered = false
     var completionManualTriggerHandler: (() -> Void)?
     var completionChangeHandler: ((NSRange?) -> Void)?
     var completionSelectionChangeHandler: (() -> Void)?
@@ -1423,6 +1425,11 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     // MARK: - Mouse / gesture handling
 
     override func mouseMoved(with event: NSEvent) {
+        guard isTopmostHitTarget(atWindowLocation: event.locationInWindow) else {
+            pointerBecameCovered()
+            return
+        }
+        isPointerCovered = false
         super.mouseMoved(with: event)
         let p = convert(event.locationInWindow, from: nil)
         if inlayHoverHandler?(p) == true {
@@ -1430,6 +1437,18 @@ final class CodeTextView: NSTextView, FontSizeResponder {
             return
         }
         hoverHandler?(p)
+    }
+
+    /// An overlay drawn above the editor (launcher, palettes) still lets the
+    /// tracking area fire `mouseMoved`. Treat the first covered move as an
+    /// exit so hover, inlay, and ⌘-underline state clear instead of reacting
+    /// to text the user can't see.
+    private func pointerBecameCovered() {
+        guard !isPointerCovered else { return }
+        isPointerCovered = true
+        _ = inlayHoverHandler?(nil)
+        cancelSourceHoverHandler?()
+        mouseExitedHandler?()
     }
 
     override func mouseDown(with event: NSEvent) {
