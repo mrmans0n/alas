@@ -129,11 +129,18 @@ extension AppState {
         // As for scheduled chat sessions: the launch returns normally when the session could not
         // be opened or its agent did not start, so check what it left behind.
         guard !Task.isCancelled else { return cancelled }
+        // Recorded on the worktree like a thrown launch error, so the sidebar offers a retry.
+        func failed(_ message: String) -> String {
+            markWorktreeLaunchFailed(
+                worktree: worktree, projectId: project.id, error: PluginTaskLaunchFailure(message: message),
+                launchSurface: surface)
+            return message
+        }
         guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
-            return "Could not open a chat session for \(agentId) in \(worktree.branch)."
+            return failed("Could not open a chat session for \(agentId) in \(worktree.branch).")
         }
         if let reason = session.lastError {
-            return "\(agentId) could not start in \(worktree.branch): \(reason)"
+            return failed("\(agentId) could not start in \(worktree.branch): \(reason)")
         }
         return nil
     }
@@ -149,6 +156,12 @@ extension AppState {
             },
             selectedWorktreeId: selectedWorktreeId)
     }
+}
+
+/// A launch that returned normally but left no working agent session.
+private struct PluginTaskLaunchFailure: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 extension AppState {
