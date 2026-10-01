@@ -68,6 +68,8 @@ pub struct Kanban {
     /// The latest (session id, state, branch) list, kept so a snapshot that beats the load still applies.
     /// `None` until the first snapshot, so a tracker loaded first is not synced against no sessions.
     sessions: Option<Vec<(String, String, String)>>,
+    /// The last agent/list reply succeeded, so `agents` is the set Start may use.
+    agents_loaded: bool,
 }
 
 fn send_start(e: &Entry, description: &str) -> i64 {
@@ -281,10 +283,21 @@ impl Kanban {
         self.pending_starts.iter().any(|&(_, p)| p == n) || self.body_loads.iter().any(|(_, p, then)| *p == n && matches!(then, Then::Start))
     }
 
+    /// The notice for a ticket whose assignee is no longer in a loaded agent list. The host would
+    /// create a worktree and then fail to launch it, so such a Start is not sent.
+    fn unavailable_assignee(&self, n: u64) -> Option<String> {
+        let assignee = self.tracker.entry(n)?.assignee.as_deref()?;
+        (self.agents_loaded && !self.agents.iter().any(|a| a.id == assignee))
+            .then(|| format!("{assignee} is no longer available — pick another agent."))
+    }
+
     /// The prompt needs the description, so a body that is not open is read first.
     fn start(&mut self, n: u64) {
         if self.starting(n) {
             return;
+        }
+        if let Some(notice) = self.unavailable_assignee(n) {
+            return self.set_notice(notice);
         }
         if self.unreadable.contains(&n) {
             return self.set_notice(format!("Could not start KAN-{n}: its saved details could not be read."));
@@ -306,10 +319,13 @@ impl Kanban {
             return self.set_notice(format!("KAN-{n}: the agent's reply was not saved because the ticket's saved details could not be read."));
         }
         if let Some(body) = self.open_body_mut(n) {
-            body.comment(Author::Agent, &text);
-            self.commit(false, true, &[]);
+            if body.agent_reply(&text) {
+                self.commit(false, true, &[]);
+            }
         } else if let Some(mut body) = loaded {
-            body.comment(Author::Agent, &text);
+            if !body.agent_reply(&text) {
+                return;
+            }
             let writes = store::writes(&self.tracker, &[(n, &body)], &[], false);
             self.save(writes);
             // Reads sent before this write would miss the comment: read again.
@@ -348,6 +364,9 @@ impl Kanban {
             }
             Then::Comment(text) => self.agent_comment(n, text, Some(body)),
             Then::Start => {
+                if let Some(notice) = self.unavailable_assignee(n) {
+                    return self.set_notice(notice);
+                }
                 if let Some(e) = self.tracker.entry(n).filter(|e| !e.status.closed()) {
                     // The open body may hold a newer description than the one just read.
                     let open = self.open_body.as_ref().filter(|(open, _)| *open == n).map(|(_, b)| b);
@@ -524,9 +543,13 @@ impl Plugin for Kanban {
                         let mut seen = std::collections::HashSet::new();
                         agents.retain(|a| seen.insert(a.id.clone()));
                         self.agents = agents;
+                        self.agents_loaded = true;
                         self.render();
                     }
-                    Err(e) => self.set_notice(format!("Could not list the agents: {}", e.message)),
+                    Err(e) => {
+                        self.agents_loaded = false;
+                        self.set_notice(format!("Could not list the agents: {}", e.message));
+                    }
                 }
             }
             Event::Reply { result: Err(e), .. } => log("warn", &format!("request failed: {} {}", e.code, e.message)),
@@ -638,6 +661,22 @@ mod tests {
 
         snapshot(&mut k, "idle");
         assert!(test_host::take_sent().is_empty());
+
+        // Reopening the session reports `running` again; the next idle fetches the transcript's
+        // last reply, which is still the same one.
+        let idle_again = |k: &mut Kanban, message: &str| {
+            snapshot(k, "running");
+            snapshot(k, "idle");
+            let fetch = sent_one(&test_host::take_sent(), "session/last_message");
+            reply(k, fetch["id"].as_i64().unwrap(), json!({ "message": message }));
+            let read = sent_one(&test_host::take_sent(), "storage/get");
+            reply(k, read["id"].as_i64().unwrap(), json!({ "value": body }));
+            writes(&test_host::take_sent())
+        };
+        assert!(idle_again(&mut k, "Fixed it.").is_empty(), "the same reply is not added twice");
+        let saved = idle_again(&mut k, "Fixed more.");
+        let comments = &saved.iter().find(|(key, _)| key == "ticket-1").unwrap().1["comments"];
+        assert_eq!(comments.as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -664,6 +703,19 @@ mod tests {
         reply(&mut k, start["id"].as_i64().unwrap(), json!({"sessionId":"s","branch":"task/kan-1"}));
         assert!(writes(&test_host::take_sent()).is_empty());
         assert!(k.tracker.index.is_empty());
+    }
+
+    #[test]
+    fn a_start_for_an_assignee_no_longer_listed_is_not_sent() {
+        let mut k = with_ticket(json!({"assignee":"gone"}));
+        k.agent_request = Some(agent_list());
+        test_host::take_sent();
+        let agents = k.agent_request.unwrap();
+        reply(&mut k, agents, json!({"agents":[{"id":"claude","name":"Claude"}]}));
+        event(&mut k, "start-1", None);
+        let sent = test_host::take_sent();
+        assert!(!sent.iter().any(|m| m["method"] == "task/start" || m["method"] == "storage/get"));
+        assert_eq!(k.notice.as_deref(), Some("gone is no longer available — pick another agent."));
     }
 
     #[test]

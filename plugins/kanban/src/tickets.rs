@@ -162,17 +162,33 @@ pub struct Body {
     pub comments: Vec<Comment>,
 }
 
+fn clip_comment(text: &str) -> &str {
+    let text = text.trim();
+    match text.char_indices().nth(MAX_COMMENT_CHARS) {
+        Some((cut, _)) => &text[..cut],
+        None => text,
+    }
+}
+
 impl Body {
+    /// Adds an agent's reply unless it repeats the last one. The host answers with the
+    /// transcript's last reply, so a reopened session can report the same reply again.
+    /// Returns whether it was added.
+    pub fn agent_reply(&mut self, text: &str) -> bool {
+        let last = self.comments.iter().rev().find(|c| c.author == Author::Agent);
+        if last.is_some_and(|c| c.text == clip_comment(text)) || clip_comment(text).is_empty() {
+            return false;
+        }
+        self.comment(Author::Agent, text);
+        true
+    }
+
     /// Trims and clips the text; past the cap the oldest comments go. Empty text is ignored.
     pub fn comment(&mut self, author: Author, text: &str) {
-        let text = text.trim();
+        let text = clip_comment(text);
         if text.is_empty() {
             return;
         }
-        let text = match text.char_indices().nth(MAX_COMMENT_CHARS) {
-            Some((cut, _)) => &text[..cut],
-            None => text,
-        };
         self.comments.push(Comment { author, text: text.into() });
         if self.comments.len() > MAX_COMMENTS {
             let excess = self.comments.len() - MAX_COMMENTS;
