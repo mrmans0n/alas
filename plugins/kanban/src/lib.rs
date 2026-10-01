@@ -112,11 +112,15 @@ impl Kanban {
     }
 
     /// Sets the notice without rendering; returns whether it was set.
+    /// A failed load, or a failed save not yet followed by a good one, is not replaced: either may
+    /// be the only sign that changes are not stored. A newer save failure does replace one.
     fn note(&mut self, notice: String) -> bool {
-        if !self.load_failed {
+        let save_failed = |n: &str| n.starts_with(SAVE_FAILED);
+        let held = self.load_failed || (self.notice.as_deref().is_some_and(save_failed) && !save_failed(&notice));
+        if !held {
             self.notice = Some(notice);
         }
-        !self.load_failed
+        !held
     }
 
     /// Sends writes in order, unless the store could not be read.
@@ -692,6 +696,9 @@ mod tests {
         event(&mut k, "back", None);
         let render = test_host::take_sent().into_iter().rev().find(|m| m["method"] == "view/render").unwrap();
         assert!(render["params"]["root"].to_string().contains(SAVE_FAILED), "navigating keeps it");
+        let agents = k.agent_request.unwrap();
+        feed(&mut k, json!({"jsonrpc":"2.0","id":agents,"error":{"code":-32603,"message":"agents unavailable"}}));
+        assert!(k.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)), "another notice does not replace it");
 
         event(&mut k, "status-1", Some("done"));
         for set in test_host::take_sent().iter().filter(|m| m["method"] == "storage/set") {
