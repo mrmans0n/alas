@@ -61,7 +61,13 @@ struct PluginRuntimeTests {
         ([.spin], "took longer than 100 ms"),
         ([.script("alas.send({});")], "expects one string"),
         ([.send(String(repeating: "x", count: 2000))], "exceeds"),
+        // Refused by its length alone, without copying 64 MB out of JavaScriptCore.
+        ([.script("alas.send('x'.repeat(64 << 20));")], "exceeds"),
         ([.sendRepeated("x", times: 5)], "more than 4"),
+        // Turning the thrown value into text runs its toString, which must not escape the limit.
+        ([.script("throw { toString() { for (;;) {} } };")], "took longer than 100 ms"),
+        // Only a prefix of a huge thrown string is copied out to describe the failure.
+        ([.script("throw 'boom' + 'x'.repeat(64 << 20);")], "plugin threw: boomxxx"),
         // Catching the refusal does not save the call.
         ([.script("try { alas.send(2); } catch {} alas.send('ok');")], "expects one string"),
     ])
@@ -83,6 +89,8 @@ struct PluginRuntimeTests {
         ("", "does not define"),
         ("syntax error (", "plugin threw"),
         ("for (;;) {}", "took longer than 500 ms"),
+        // Reading `handle` runs a getter the plugin defined.
+        (#"Object.defineProperty(globalThis, "handle", { get() { for (;;) {} } });"#, "took longer than 500 ms"),
     ])
     func unloadableScriptsFailToLoad(script: String, fragment: String) async throws {
         let error = await #expect(throws: PluginRuntimeError.self) {

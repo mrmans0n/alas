@@ -681,6 +681,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
     private var appliedTextLayoutConfiguration: TextLayoutConfiguration?
+    private var lastTiledGeometry: TileGeometry?
     private var rowGeometryPresentationWidth: CGFloat?
     private var textLayoutConfigurationApplicationCount = 0
     private var horizontalScrollerVisibilityChangeCount = 0
@@ -1028,6 +1029,31 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
 
     override func tile() {
+        // AppKit re-lays out every nested scroll view whenever an ancestor
+        // scroller moves it (`geometryInWindowDidChange`), so this runs on
+        // each review scroll tick. `super.tile()` first parks the clip view
+        // under the ruler and the code below moves it back, resizing the code
+        // view several times on the way and forcing a full redraw of the hunk
+        // for a net change of nothing. Skip the round trip when nothing tiling
+        // depends on has changed and the clip view still sits after the ruler.
+        let geometry = tileGeometry()
+        if geometry == lastTiledGeometry, clipViewSitsAfterRuler() { return }
+        let clipFrameBefore = contentView.frame
+        let codeSizeBefore = textView.frame.size
+        defer {
+            // A round trip that leaves the clip view where it was must leave
+            // the code view's size there too. Autoresizing alone would end it
+            // a ruler's width short of what `layout()` sized it to, so the
+            // next tick would see a changed document and re-tile forever.
+            if !wraps, contentView.frame == clipFrameBefore, textView.frame.size != codeSizeBefore {
+                setTextViewSizeSuppressingFrameWidthGeometryInvalidation(
+                    width: codeSizeBefore.width,
+                    height: codeSizeBefore.height
+                )
+            }
+            lastTiledGeometry = tileGeometry()
+        }
+
         super.tile()
         guard rulersVisible, let ruler = verticalRulerView else { return }
 
@@ -1053,6 +1079,40 @@ final class DiffPaneTextScrollView: NSScrollView {
             width: rulerWidth,
             height: clipFrame.height
         )
+    }
+
+    /// Everything `tile()`'s result depends on.
+    private struct TileGeometry: Equatable {
+        let size: NSSize
+        let documentSize: NSSize?
+        let rulerThickness: CGFloat?
+        let hasHorizontalScroller: Bool
+        let autohidesScrollers: Bool
+        let scrollerStyle: NSScroller.Style
+        let contentInsets: [CGFloat]
+        let backingScaleFactor: CGFloat?
+        let wraps: Bool
+    }
+
+    private func tileGeometry() -> TileGeometry {
+        TileGeometry(
+            size: bounds.size,
+            documentSize: documentView?.frame.size,
+            rulerThickness: rulersVisible ? verticalRulerView?.ruleThickness : nil,
+            hasHorizontalScroller: hasHorizontalScroller,
+            autohidesScrollers: autohidesScrollers,
+            scrollerStyle: scrollerStyle,
+            contentInsets: [contentInsets.top, contentInsets.left, contentInsets.bottom, contentInsets.right],
+            backingScaleFactor: window?.backingScaleFactor,
+            wraps: wraps
+        )
+    }
+
+    private func clipViewSitsAfterRuler() -> Bool {
+        guard rulersVisible, let ruler = verticalRulerView else { return true }
+        let clipFrame = contentView.frame
+        return abs(clipFrame.minX - ruler.ruleThickness) <= 0.5
+            && abs(clipFrame.width - max(bounds.width - ruler.ruleThickness, 1)) <= 0.5
     }
 
     func resetHorizontalOriginToLeading() {

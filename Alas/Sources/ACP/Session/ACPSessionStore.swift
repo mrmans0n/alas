@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 20
+    static let targetSchemaVersion = 21
     let path: String
     let db: SQLiteDatabase
 
@@ -47,6 +47,7 @@ final class ACPSessionStore {
         if current < 18 { try migrate_to_v18() }
         if current < 19 { try migrate_to_v19() }
         if current < 20 { try migrate_to_v20() }
+        if current < 21 { try migrate_to_v21() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -316,6 +317,20 @@ final class ACPSessionStore {
             try db.exec("ALTER TABLE sessions ADD COLUMN prompt_suggestions TEXT")
         }
     }
+
+    private func migrate_to_v21() throws {
+        // `ephemeral_parent_id` marks a hidden side-question session (`/btw`)
+        // forked from that parent. It stays out of history until promoted.
+        // `via` records which feature created a fork, for its divider.
+        let sessionColumns = try db.query("PRAGMA table_info(sessions)")
+        if !sessionColumns.contains(where: { ($0["name"] as? String) == "ephemeral_parent_id" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN ephemeral_parent_id TEXT")
+        }
+        let forkColumns = try db.query("PRAGMA table_info(session_forks)")
+        if !forkColumns.contains(where: { ($0["name"] as? String) == "via" }) {
+            try db.exec("ALTER TABLE session_forks ADD COLUMN via TEXT")
+        }
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -362,6 +377,10 @@ struct ACPSessionRow: Equatable, Sendable {
     /// pills and chips survive an app restart and reach mirror sessions
     /// before any attach happens (see `migrate_to_v20`).
     var promptSuggestions: [ACPPromptSuggestion]? = nil
+    /// Parent of a hidden side-question session. Written once at insert:
+    /// later upserts keep the stored value, and only
+    /// `promoteEphemeralSession` clears it (see `migrate_to_v21`).
+    var ephemeralParentId: String? = nil
     var autoRun: Bool
     var helperProcStdoutOffset: Int64? = nil
     var helperProcStderrOffset: Int64? = nil
@@ -515,8 +534,8 @@ extension ACPSessionStore {
         INSERT INTO session_forks (
           target_session_id, source_session_id, source_agent_id,
           source_boundary_seq, inherited_message_count, phase,
-          mechanism, context_delivery_pending
-        ) VALUES (?,?,?,?,?,?,?,?)
+          mechanism, context_delivery_pending, via
+        ) VALUES (?,?,?,?,?,?,?,?,?)
         ON CONFLICT(target_session_id) DO UPDATE SET
           source_session_id = excluded.source_session_id,
           source_agent_id = excluded.source_agent_id,
@@ -524,7 +543,8 @@ extension ACPSessionStore {
           inherited_message_count = excluded.inherited_message_count,
           phase = excluded.phase,
           mechanism = excluded.mechanism,
-          context_delivery_pending = excluded.context_delivery_pending
+          context_delivery_pending = excluded.context_delivery_pending,
+          via = excluded.via
         """, bindings: [
             record.targetSessionID,
             record.sourceSessionID,
@@ -533,7 +553,8 @@ extension ACPSessionStore {
             record.inheritedMessageCount,
             record.phase.rawValue,
             record.mechanism?.rawValue,
-            record.contextDeliveryPending ? 1 : 0
+            record.contextDeliveryPending ? 1 : 0,
+            record.via?.rawValue
         ])
     }
 
@@ -554,7 +575,8 @@ extension ACPSessionStore {
             inheritedMessageCount: Int((row["inherited_message_count"] as? Int64) ?? 0),
             phase: phase,
             mechanism: (row["mechanism"] as? String).flatMap(ACPSessionForkMechanism.init(rawValue:)),
-            contextDeliveryPending: ((row["context_delivery_pending"] as? Int64) ?? 0) != 0
+            contextDeliveryPending: ((row["context_delivery_pending"] as? Int64) ?? 0) != 0,
+            via: (row["via"] as? String).flatMap(ACPSessionForkVia.init(rawValue:))
         )
     }
 
@@ -596,10 +618,10 @@ extension ACPSessionStore {
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
-                              auto_run, helper_proc_stdout_offset,
+                              ephemeral_parent_id, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -613,6 +635,7 @@ extension ACPSessionStore {
             current_mode = excluded.current_mode,
             config_option_values = excluded.config_option_values,
             native_subagents_disabled = COALESCE(sessions.native_subagents_disabled, excluded.native_subagents_disabled),
+            ephemeral_parent_id = sessions.ephemeral_parent_id,
             auto_run = excluded.auto_run,
             helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
@@ -634,6 +657,7 @@ extension ACPSessionStore {
             s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
             s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues),
             s.nativeSubagentsDisabled.map { $0 ? 1 : 0 },
+            s.ephemeralParentId,
             s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
@@ -791,9 +815,55 @@ extension ACPSessionStore {
 
     func recentSessions(limit: Int = 50) throws -> [ACPSessionRow] {
         let rows = try db.query("""
-        SELECT * FROM sessions WHERE archived = 0 ORDER BY last_opened_at DESC LIMIT ?
+        SELECT * FROM sessions
+        WHERE archived = 0 AND ephemeral_parent_id IS NULL
+        ORDER BY last_opened_at DESC LIMIT ?
         """, bindings: [Int64(limit)])
         return rows.map(Self.rowToSession)
+    }
+
+    /// Deletes hidden side-question sessions nobody is driving (no live lease
+    /// and no activity within `staleAfter`) and returns their ids. The
+    /// activity check spares a session another instance has just created but
+    /// not yet leased. Selection and deletion share one `BEGIN IMMEDIATE`
+    /// transaction, so a concurrent `claimLease` cannot slip in between.
+    func deleteOrphanedEphemeralSessions(now: Int64, staleAfter: Int64) throws -> [String] {
+        let staleCutoff = now - staleAfter
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let rows = try db.query("""
+            SELECT s.id, l.pid, l.heartbeat_at
+            FROM sessions s
+            LEFT JOIN session_leases l ON l.session_id = s.id
+            WHERE s.ephemeral_parent_id IS NOT NULL AND s.updated_at < ?
+            """, bindings: [staleCutoff])
+            let ids: [String] = rows.compactMap { row in
+                guard let id = row["id"] as? String else { return nil }
+                if let heartbeatAt = row["heartbeat_at"] as? Int64,
+                   heartbeatAt >= staleCutoff,
+                   let pid = row["pid"] as? Int64,
+                   ACPProcessLiveness.pidAlive(pid) {
+                    return nil
+                }
+                return id
+            }
+            for id in ids {
+                try db.exec("DELETE FROM sessions WHERE id = ?", bindings: [id])
+            }
+            try db.exec("COMMIT")
+            return ids
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Turns a hidden side-question session into a regular one.
+    func promoteEphemeralSession(id: String) throws -> Bool {
+        try db.execChanges(
+            "UPDATE sessions SET ephemeral_parent_id = NULL WHERE id = ? AND ephemeral_parent_id IS NOT NULL",
+            bindings: [id]
+        ) > 0
     }
 
     func deleteSession(id: String) throws {
@@ -1134,6 +1204,7 @@ extension ACPSessionStore {
             nativeSubagentsDisabled: (r["native_subagents_disabled"] as? Int64).map { $0 != 0 },
             promptSuggestions: (r["prompt_suggestions"] as? String)
                 .flatMap { try? JSONDecoder().decode([ACPPromptSuggestion].self, from: Data($0.utf8)) },
+            ephemeralParentId: r["ephemeral_parent_id"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
             helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,
