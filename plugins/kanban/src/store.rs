@@ -1,7 +1,7 @@
 //! Storage layout: `meta`, `index`, and one `ticket-<n>` key per body. Pure, no SDK calls.
 
 use crate::board::Board;
-use crate::tickets::{Body, Entry, Meta, Tracker, MAX_INDEX};
+use crate::tickets::{Body, Entry, Meta, Tracker, FORMAT_VERSION, MAX_INDEX};
 use serde_json::value::{to_raw_value, RawValue};
 
 pub const META: &str = "meta";
@@ -44,6 +44,10 @@ pub fn load(meta: Option<&str>, index: Option<&str>, legacy: Option<&str>) -> Lo
         Ok(m) => m,
         Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
     };
+    // Saving would rewrite newer data with this version's schema and strip what it does not know.
+    if meta.version > FORMAT_VERSION {
+        return Loaded::Unreadable("These tickets were saved by a newer version of the Kanban plugin; they are left untouched and nothing will be saved.".into());
+    }
     let mut index = match serde_json::from_str::<Vec<Entry>>(index) {
         Ok(i) => i,
         Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
@@ -117,6 +121,7 @@ mod tests {
     fn loading_picks_the_stored_format() {
         let meta = r#"{"version":1,"next_number":3}"#;
         let index = r#"[{"number":2,"title":"t","status":"todo"}]"#;
+        let newer = r#"{"version":2,"next_number":3}"#;
         let legacy = r#"{"cards":[{"id":1,"title":"c","prompt":"p","column":"Backlog"}],"next_id":2}"#;
         for (m, i, l, want) in [
             (None, None, None, "fresh"),
@@ -126,6 +131,7 @@ mod tests {
             (None, None, Some("garbage"), "unreadable"),
             (Some("garbage"), Some(index), None, "unreadable"),
             (Some(meta), Some("garbage"), None, "unreadable"),
+            (Some(newer), Some(index), None, "unreadable"),
             (Some(meta), Some(index), Some(legacy), "tracker"),
             (Some(meta), None, Some(legacy), "migrated"),
             (None, Some(index), None, "tracker"),
