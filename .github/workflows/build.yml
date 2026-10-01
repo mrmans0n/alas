@@ -681,12 +681,6 @@ jobs:
             toolchain: "1.98.1"
           - project: AlasHelper
             toolchain: "1.98.1"
-          - project: plugins/alas-plugin
-            toolchain: "1.98.1"
-          - project: plugins/kanban
-            toolchain: "1.98.1"
-          - project: plugins/pixel-office
-            toolchain: "1.98.1"
           # tree-sitter-pack's build script declares this toolchain until the
           # crate owns a rust-toolchain.toml like the other first-party crates.
           - project: ThirdParty/treesitter-pack
@@ -701,7 +695,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ matrix.project }}/target
-          key: rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-${{ hashFiles('AlasCLI/Cargo.lock', 'AlasHelper/Cargo.lock', 'plugins/alas-plugin/Cargo.lock', 'plugins/kanban/Cargo.lock', 'plugins/pixel-office/Cargo.lock', 'ThirdParty/treesitter-pack/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-${{ hashFiles('AlasCLI/Cargo.lock', 'AlasHelper/Cargo.lock', 'ThirdParty/treesitter-pack/Cargo.lock') }}
           restore-keys: |
             rust-${{ runner.os }}-${{ matrix.project }}-${{ matrix.toolchain }}-
 

@@ -198,7 +198,7 @@ Two read-only requests, both API 3 (below API 3 they answer `-32601`).
 
 ## Reference plugin
 
-[`plugins/kanban`](../../plugins/kanban) is a small ticket tracker built on all
+[Kanban](https://github.com/mrmans0n/alas-plugins/tree/main/plugins/kanban) is a small ticket tracker built on all
 of the above. Tickets live in storage as a `meta` key, an `index` and one
 `ticket-<n>` key per body, so drawing the board reads only the index. **Start**
 runs `task/start` with the ticket in the prompt and the assignee picked from
