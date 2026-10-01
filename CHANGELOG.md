@@ -6,19 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.21] - 2026-10-01
+
 ### ✨ Features
 
 - Turn the Kanban plugin into a ticket tracker: `KAN-<n>` tickets with statuses, priorities, descriptions and comments, a ticket screen, assignment to an installed agent, and Start, which runs the assignee in a new worktree and adds the agent's final reply as a comment. Boards saved by the card version are converted on first load and left in place. Adds the `session/last_message` and `agent/list` plugin requests, and an API 3 `session.read` capability for reading an agent's last reply.
 - Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
 - Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
+- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull (#1672).
+- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version (#1670).
 
 ### 🐛 Fixes
 
-- Head Alas's own prompts about a delegated child (an escalated blocker, a turn without a result, a failure) as Alas notices in the parent transcript instead of as reports from the child, and say when the user cancelled a child's turn (#1663).
-- Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.
-- Make clickable plugin view cards a keyboard stop that Space or Return clicks.
-- Make the full issue and pull-request badge in ACP user messages trigger its hover card.
-- Stop warning that the agent harness didn't start the Alas MCP server after a session re-attaches to an agent that survived an app restart. Its server started before the restart and won't announce itself again, so the badge stays neutral until the session's first Alas request confirms it. Sessions whose server never starts still get the warning (#1665).
+- Head Alas's own prompts about a delegated child as Alas notices in the parent transcript instead of as reports from the child, and say when the user cancelled a child's turn (#1664).
+- Write plugin storage off the main thread, make clickable plugin view cards keyboard-accessible, and align plugin settings panes with the standard settings layout (#1661, #1667).
+- Make the full issue and pull-request badge in ACP user messages trigger its hover card (#1668).
+- Stop warning that the agent harness didn't start the Alas MCP server after a session re-attaches to an agent that survived an app restart (#1665).
+- Hide the question message that repeats the first form field label (#1671).
+- Theme invisible-character glyphs and the minimap background consistently with the selected code theme (#1660).
+- Keep the main worktree first in the Peers sidebar, follow local project ordering, and resolve symlinked worktree destinations correctly (#1669, #1673).
 
 ## [0.19.20] - 2026-10-01
 
