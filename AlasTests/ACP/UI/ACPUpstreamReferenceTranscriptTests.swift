@@ -97,4 +97,39 @@ struct ACPUpstreamReferenceTranscriptTests {
 
         #expect(chipped.naturalFittingSize().width > plain.naturalFittingSize().width + 30)
     }
+
+    @Test("a hover-card scroll observer does not keep the scroll view's clip view alive")
+    func scrollObserverDoesNotRetainClipView() async {
+        let store = await UpstreamReferenceFixtures.store()
+        weak var weakScrollView: NSScrollView?
+        weak var weakClipView: NSClipView?
+        autoreleasepool {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+            let textView = ACPMarkdownInlineNSTextView(
+                frame: NSRect(x: 0, y: 0, width: 300, height: 40),
+                textContainer: NSTextContainer()
+            )
+            scrollView.documentView = textView
+            textView.upstreamReferences = store
+            weakScrollView = scrollView
+            weakClipView = scrollView.contentView
+        }
+
+        // Autoreleased AppKit temporaries drain on the next run-loop turn; a
+        // real retain cycle never drains, so poll against a deadline. The clip
+        // view is asserted rather than the text view because AppKit keeps a
+        // text view that has a superview alive on its own, independent of the
+        // observer; only a retaining observer pins the clip view.
+        Self.spinRunLoop(until: { weakScrollView == nil && weakClipView == nil }, timeout: 2)
+
+        #expect(weakScrollView == nil)
+        #expect(weakClipView == nil)
+    }
+
+    private static func spinRunLoop(until condition: () -> Bool, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
 }

@@ -241,7 +241,7 @@ extension NSAttributedString.Key {
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     private var upstreamRevisionObservation: AnyCancellable?
-    private var scrollObservation: AnyCancellable?
+    private var scrollObserver: (any NSObjectProtocol)?
     private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
 
     /// Set on user-message paragraphs that render reference chips. A lookup
@@ -266,14 +266,28 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// screen position is closed when the enclosing clip view scrolls instead.
     /// Only views that render chips observe.
     private func updateScrollObservation() {
-        scrollObservation = nil
+        removeScrollObserver()
         guard upstreamReferences != nil, let clipView = enclosingScrollView?.contentView else { return }
         clipView.postsBoundsChangedNotifications = true
-        scrollObservation = NotificationCenter.default
-            .publisher(for: NSView.boundsDidChangeNotification, object: clipView)
-            .sink { [weak self] _ in
-                MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
-            }
+        // Block-based observer: Combine's NotificationCenter publisher retains
+        // `object`, which would form a text view -> clip view -> document view
+        // cycle that only detaching from the window breaks.
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+        }
+    }
+
+    private func removeScrollObserver() {
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        scrollObserver = nil
+    }
+
+    isolated deinit {
+        removeScrollObserver()
     }
 
     /// Marks every reference-chip attachment range as attribute-edited.
