@@ -1814,14 +1814,62 @@ final class ACPSessionManager: ObservableObject {
         }
         await attach(to: side.id, freshlyCreated: true)
         guard sideQuestionSessionIDs[parentID] == side.id else { return side }
-        if let modeID = ACPSideQuestionModePolicy.preferredModeID(
-            modes: side.availableModes,
-            currentModeID: side.currentMode
-        ) {
-            await setMode(for: side.id, modeId: modeID)
+        guard await enterReadOnlyMode(side) else {
+            if sideQuestionSessionIDs[parentID] == side.id {
+                sideQuestionSessionIDs[parentID] = nil
+            }
+            await discardSideSession(id: side.id)
+            throw ACPSideQuestionError.unsafeMode
         }
+        guard sideQuestionSessionIDs[parentID] == side.id else { return side }
         _ = submit(sessionId: side.id, text: question, attachments: [], intent: .auto) { _ in }
         return side
+    }
+
+    /// Moves a side session out of modes that run tool calls without asking,
+    /// through whichever source backs its mode chip, and waits for the agent
+    /// to accept. False when the session would stay in such a mode.
+    private func enterReadOnlyMode(_ side: ACPSession) async -> Bool {
+        guard let mode = side.chipState.mode else { return true }
+        guard let target = ACPSideQuestionModePolicy.preferredModeID(
+            options: mode.options,
+            currentID: mode.currentId
+        ) else {
+            return ACPSideQuestionModePolicy.allows(options: mode.options, currentID: mode.currentId)
+        }
+        guard let runner = runners[side.id] else { return false }
+        let remoteID = side.remoteSessionId ?? side.id
+        do {
+            switch mode.source {
+            case .mode:
+                try await runner.connection.setMode(sessionId: remoteID, modeId: target)
+                side.currentMode = target
+            case .configOption(let configID):
+                let echoed = try await runner.connection.setConfigOption(
+                    sessionId: remoteID,
+                    configId: configID,
+                    value: .string(target)
+                )
+                if !echoed.isEmpty {
+                    side.availableConfigOptions = echoed
+                } else if let index = side.availableConfigOptions.firstIndex(where: { $0.id == configID }) {
+                    let option = side.availableConfigOptions[index]
+                    side.availableConfigOptions[index] = ACPConfigOption(
+                        id: option.id,
+                        name: option.name,
+                        type: option.type,
+                        category: option.category,
+                        currentValue: .string(target),
+                        options: option.options
+                    )
+                }
+            case .model:
+                return false
+            }
+        } catch {
+            return false
+        }
+        return true
     }
 
     /// Closes the parent's side session and deletes it with its transcript.

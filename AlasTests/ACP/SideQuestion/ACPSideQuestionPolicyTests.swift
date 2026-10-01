@@ -4,29 +4,34 @@ import Testing
 
 @Suite("ACP side question policy")
 struct ACPSideQuestionPolicyTests {
-    static let claudeModes: [ACPModeInfo] = [
-        .init(id: "default", name: "Manual", kind: .standard),
-        .init(id: "plan", name: "Plan", kind: .plan),
-        .init(id: "bypassPermissions", name: "Bypass", kind: .fullAccess),
+    static let claudeModes: [ChipSpec.Item] = [
+        .init(id: "default", name: "Manual", description: nil, kind: .standard),
+        .init(id: "plan", name: "Plan", description: nil, kind: .plan),
+        .init(id: "bypassPermissions", name: "Bypass", description: nil, kind: .fullAccess),
     ]
-    static let codexModes: [ACPModeInfo] = [
-        .init(id: "read-only", name: "Ask for approval", kind: .standard),
-        .init(id: "agent", name: "Approve for me", kind: .autoReview),
-        .init(id: "agent-full-access", name: "Full access", kind: .fullAccess),
+    static let codexModes: [ChipSpec.Item] = [
+        .init(id: "read-only", name: "Ask for approval", description: nil, kind: .standard),
+        .init(id: "agent", name: "Approve for me", description: nil, kind: .autoReview),
+        .init(id: "agent-full-access", name: "Full access", description: nil, kind: .fullAccess),
+    ]
+    static let fullAccessOnly: [ChipSpec.Item] = [
+        .init(id: "yolo", name: "YOLO", description: nil, kind: .fullAccess),
     ]
 
     @Test(
         "side sessions switch to plan, or away from self-approving modes",
         arguments: [
-            (claudeModes, "bypassPermissions", Optional("plan")),
-            (claudeModes, "plan", nil),
-            (codexModes, "agent-full-access", "read-only"),
-            (codexModes, "agent", "read-only"),
-            (codexModes, "read-only", nil),
-            ([], nil, nil),
-        ] as [([ACPModeInfo], String?, String?)]
+            (claudeModes, "bypassPermissions", Optional("plan"), false),
+            (claudeModes, "plan", nil, true),
+            (codexModes, "agent-full-access", "read-only", false),
+            (codexModes, "agent", "read-only", false),
+            (codexModes, "read-only", nil, true),
+            (fullAccessOnly, "yolo", nil, false),
+            ([], nil, nil, true),
+        ] as [([ChipSpec.Item], String?, String?, Bool)]
     )
-    func preferredMode(modes: [ACPModeInfo], current: String?, expected: String?) {
-        #expect(ACPSideQuestionModePolicy.preferredModeID(modes: modes, currentModeID: current) == expected)
+    func preferredMode(options: [ChipSpec.Item], current: String?, expected: String?, currentAllowed: Bool) {
+        #expect(ACPSideQuestionModePolicy.preferredModeID(options: options, currentID: current) == expected)
+        #expect(ACPSideQuestionModePolicy.allows(options: options, currentID: current) == currentAllowed)
     }
 }
