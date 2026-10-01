@@ -1,57 +1,142 @@
-//! Kanban: a board of task cards that start agents in new worktrees and follow them.
+//! Kanban: a small ticket tracker whose tickets start agents in new worktrees and follow them.
 
 pub mod board;
 pub mod store;
 pub mod tickets;
 pub mod view;
 
-use alas_plugin::{export_plugin, log, render, request, request_snapshot, storage_get, storage_set, task_start, Event, Plugin, Snapshot};
-use board::{Board, Column};
-use serde_json::json;
+use alas_plugin::{
+    agent_list, export_plugin, last_message, log, parse_agents, parse_last_message, render, request, request_snapshot, storage_get,
+    storage_set, task_start_with, Agent, Event, Plugin, RpcError, Snapshot,
+};
+use serde_json::{json, value::RawValue, Value};
+use store::{body_key, Loaded};
+use tickets::{Author, Body, Entry, Priority, Status, Tracker, FORMAT_VERSION, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS};
+use view::{Draft, Screen, ViewState};
 
-const BOARD_FULL: &str = "The board is full: delete or finish some cards first.";
+const TRACKER_FULL: &str = "The tracker is full: delete some tickets first.";
+const SAVE_FAILED: &str = "Could not save: ";
+
+/// What to do with a ticket body once it is read.
+enum Then {
+    /// Show it on the ticket screen.
+    Open,
+    /// Append the agent's message and save it.
+    Comment(String),
+    /// Start the ticket with its description.
+    Start,
+}
 
 #[derive(Default)]
 pub struct Kanban {
-    board: Board,
+    tracker: Tracker,
+    screen: Screen,
+    /// The open ticket's body, once read. Its description and comments are editable only then,
+    /// so a body is never saved before it is known.
+    open_body: Option<(u64, Body)>,
+    agents: Vec<Agent>,
+    draft: Draft,
     form: u64,
-    /// task/start request id → card id.
-    pending: Vec<(i64, u64)>,
-    loaded: bool,
-    load_request: i64,
-    /// The latest (session id, state) list, kept so a snapshot that beats the stored board still applies.
-    /// `None` until the first snapshot, so a board loaded first is not synced against no sessions.
-    sessions: Option<Vec<(String, String, String)>>,
-    /// The stored board could not be read, so it is never overwritten.
-    load_failed: bool,
-    /// storage/set request ids awaiting a reply.
-    saves: Vec<i64>,
-    /// A danger line at the top of the board, e.g. a failed save.
     notice: Option<String>,
+    loaded: bool,
+    /// The store could not be read, so it is never overwritten.
+    load_failed: bool,
+    /// storage/get ids for meta, index and the legacy board, and their replies as they arrive.
+    load: [i64; 3],
+    load_replies: [Option<Result<Option<String>, RpcError>>; 3],
+    /// storage/get id, ticket, and what to do with the body.
+    body_loads: Vec<(i64, u64, Then)>,
+    /// task/start id → ticket.
+    pending_starts: Vec<(i64, u64)>,
+    /// session/last_message id → ticket.
+    fetches: Vec<(i64, u64)>,
+    agent_request: Option<i64>,
+    /// storage/set ids awaiting a reply.
+    saves: Vec<i64>,
+    /// The latest (session id, state, branch) list, kept so a snapshot that beats the load still applies.
+    /// `None` until the first snapshot, so a tracker loaded first is not synced against no sessions.
+    sessions: Option<Vec<(String, String, String)>>,
+}
+
+fn send_start(e: &Entry, description: &str) -> i64 {
+    let n = e.number;
+    let prompt = format!("KAN-{n}: {}\n\n{description}", e.title);
+    task_start_with(&e.title, prompt.trim_end(), Some(&format!("task/kan-{n}")), e.assignee.as_deref())
 }
 
 impl Kanban {
-    fn changed(&mut self) {
+    fn render(&self) {
         if !self.loaded {
             return;
         }
-        if !self.load_failed {
-            self.saves.push(storage_set("board", &self.board));
-        }
+        let body = match (self.screen, &self.open_body) {
+            (Screen::Ticket(n), Some((open, body))) if n == *open => Some(body),
+            _ => None,
+        };
+        let loading_starts = self.body_loads.iter().filter(|(_, _, then)| matches!(then, Then::Start)).map(|&(_, n, _)| n);
+        let starting: Vec<u64> = self.pending_starts.iter().map(|&(_, n)| n).chain(loading_starts).collect();
+        render(
+            0,
+            &view::render(&ViewState {
+                tracker: &self.tracker,
+                screen: &self.screen,
+                body,
+                agents: &self.agents,
+                draft: &self.draft,
+                form: self.form,
+                notice: self.notice.as_deref(),
+                starting: &starting,
+            }),
+        );
+    }
+
+    fn set_notice(&mut self, notice: String) {
+        self.notice = Some(notice);
         self.render();
     }
 
-    fn render(&self) {
-        render(0, &view::render(&self.board, self.form, self.notice.as_deref()));
+    /// Sends writes in order, unless the store could not be read.
+    fn save(&mut self, writes: Vec<(String, Option<Box<RawValue>>)>) {
+        if self.load_failed {
+            return;
+        }
+        for (key, value) in writes {
+            self.saves.push(storage_set(&key, &value));
+        }
     }
 
-    fn starting(&self, card: u64) -> bool {
-        self.pending.iter().any(|&(_, p)| p == card)
+    /// Saves one change (the index, the open body, deleted bodies) and re-renders.
+    fn commit(&mut self, index_changed: bool, open_body: bool, deleted: &[u64]) {
+        if !self.loaded {
+            return;
+        }
+        if index_changed {
+            // Archived bodies stay stored; only the index drops them.
+            self.tracker.archive();
+            if let Screen::Ticket(n) = self.screen {
+                if self.tracker.entry(n).is_none() {
+                    self.screen = Screen::default();
+                    self.open_body = None;
+                }
+            }
+        }
+        let body = self.open_body.as_ref().filter(|_| open_body).map(|(n, b)| (*n, b));
+        let writes = store::writes(&self.tracker, body.as_slice(), deleted, index_changed);
+        self.save(writes);
+        self.render();
     }
 
-    /// Syncs the board with the latest sessions; returns whether any card changed.
+    /// Follows the latest sessions; saves and renders only when a ticket changed.
     fn sync(&mut self) -> bool {
-        self.sessions.as_deref().is_some_and(|sessions| self.board.sync(sessions))
+        let Some(sessions) = &self.sessions else { return false };
+        let (changed, fetch) = self.tracker.sync(sessions);
+        for (n, session) in fetch {
+            self.fetches.push((last_message(&session), n));
+        }
+        if changed {
+            self.commit(true, false, &[]);
+        }
+        changed
     }
 
     fn apply(&mut self, snapshot: Snapshot) {
@@ -65,58 +150,248 @@ impl Kanban {
                 })
                 .collect(),
         );
-        // Most snapshots move nothing; saving and re-rendering the whole board for them is wasted fuel.
-        if self.sync() {
-            self.changed();
+        if self.loaded {
+            self.sync();
         }
     }
 
-    fn view_event(&mut self, id: &str, kind: &str, value: Option<String>) {
-        let card_id = |prefix: &str| id.strip_prefix(prefix).and_then(|n| n.parse::<u64>().ok());
-        if id.starts_with("new-prompt-") && kind == "submit" {
-            // The cap keeps one pasted card from filling the plugin's 1 MiB of storage.
-            let prompt: String = value.unwrap_or_default().chars().take(8000).collect();
-            // The card's title is the prompt's first line.
-            if self.board.add("", &prompt) == 0 {
-                // Empty input adds nothing; otherwise the board is full. The form keeps its text.
-                if !prompt.trim().is_empty() && !self.load_failed {
-                    self.notice = Some(BOARD_FULL.into());
-                    self.render();
-                }
-                return;
+    fn finish_load(&mut self) {
+        let [meta, index, legacy] = std::mem::take(&mut self.load_replies).map(|r| r.expect("every reply is in"));
+        let loaded = match (meta, index, legacy) {
+            (Ok(meta), Ok(index), Ok(legacy)) => store::load(meta.as_deref(), index.as_deref(), legacy.as_deref()),
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Loaded::Unreadable(format!("The stored tickets could not be read ({}); nothing will be saved.", e.message)),
+        };
+        self.loaded = true;
+        match loaded {
+            Loaded::Fresh => self.tracker.meta.version = FORMAT_VERSION,
+            Loaded::Tracker(tracker) => self.tracker = tracker,
+            Loaded::Migrated(tracker, bodies) => {
+                // The old board stays stored, so a downgrade loses nothing.
+                self.tracker = tracker;
+                let bodies: Vec<(u64, &Body)> = bodies.iter().map(|(n, b)| (*n, b)).collect();
+                let writes = store::writes(&self.tracker, &bodies, &[], true);
+                self.save(writes);
             }
-            if self.notice.as_deref() == Some(BOARD_FULL) {
-                self.notice = None;
+            Loaded::Unreadable(reason) => {
+                self.load_failed = true;
+                self.notice = Some(reason);
             }
-            self.form += 1;
-        } else if let Some(card) = card_id("start-") {
-            let Some(c) = self.board.cards.iter().find(|c| c.id == card) else { return };
-            if self.starting(card) {
-                return;
-            }
-            let request = task_start(&c.title, &c.prompt);
-            self.pending.push((request, card));
-            return;
-        } else if let Some(card) = card_id("delete-") {
-            if self.starting(card) {
-                return;
-            }
-            self.board.delete(card);
-        } else if let Some(card) = card_id("move-") {
-            let Some(column) = value.as_deref().and_then(Column::from_key) else { return };
-            if self.starting(card) {
-                return;
-            }
-            self.board.move_to(card, column);
-        } else if let Some(card) = card_id("card-") {
-            if let Some(session) = self.board.cards.iter().find(|c| c.id == card).and_then(|c| c.session_id.clone()) {
-                request("session/focus", json!({"id": session}));
-            }
-            return;
-        } else {
+        }
+        if !self.sync() {
+            self.render();
+        }
+    }
+
+    fn navigate(&mut self, screen: Screen) {
+        self.screen = screen;
+        self.open_body = None;
+        if !self.load_failed {
+            self.notice = None;
+        }
+        self.render();
+    }
+
+    fn open(&mut self, n: u64) {
+        if self.tracker.entry(n).is_none() {
             return;
         }
-        self.changed();
+        self.body_loads.retain(|(_, _, then)| !matches!(then, Then::Open));
+        self.body_loads.push((storage_get(&body_key(n)), n, Then::Open));
+        // Agents may have been installed since the last screen.
+        self.agent_request = Some(agent_list());
+        self.navigate(Screen::Ticket(n));
+    }
+
+    fn create(&mut self, description: &str) {
+        let description: String = description.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
+        let title = if self.draft.title.is_empty() { description.lines().next().unwrap_or("") } else { self.draft.title.as_str() };
+        if title.trim().is_empty() {
+            return;
+        }
+        let Some(n) = self.tracker.create(title, self.draft.priority, self.draft.assignee.clone()) else {
+            if !self.load_failed {
+                self.set_notice(TRACKER_FULL.into());
+            }
+            return;
+        };
+        if self.notice.as_deref() == Some(TRACKER_FULL) {
+            self.notice = None;
+        }
+        self.draft = Draft::default();
+        self.form += 1;
+        let body = Body { description, ..Body::default() };
+        let bodies: &[(u64, &Body)] = if body.description.is_empty() { &[] } else { &[(n, &body)] };
+        let writes = store::writes(&self.tracker, bodies, &[], true);
+        self.save(writes);
+        self.render();
+    }
+
+    fn open_body_mut(&mut self, n: u64) -> Option<&mut Body> {
+        self.open_body.as_mut().filter(|(open, _)| *open == n).map(|(_, b)| b)
+    }
+
+    fn starting(&self, n: u64) -> bool {
+        self.pending_starts.iter().any(|&(_, p)| p == n) || self.body_loads.iter().any(|(_, p, then)| *p == n && matches!(then, Then::Start))
+    }
+
+    /// The prompt needs the description, so a body that is not open is read first.
+    fn start(&mut self, n: u64) {
+        if self.starting(n) {
+            return;
+        }
+        let Some(e) = self.tracker.entry(n).filter(|e| !e.status.closed()) else { return };
+        match self.open_body.as_ref().filter(|(open, _)| *open == n) {
+            Some((_, body)) => self.pending_starts.push((send_start(e, &body.description), n)),
+            None => self.body_loads.push((storage_get(&body_key(n)), n, Then::Start)),
+        }
+        self.render();
+    }
+
+    /// Appends an agent's message to ticket `n`'s body: the open one, `loaded`, or one read first.
+    fn agent_comment(&mut self, n: u64, text: String, loaded: Option<Body>) {
+        if self.tracker.entry(n).is_none() {
+            return;
+        }
+        if let Some(body) = self.open_body_mut(n) {
+            body.comment(Author::Agent, &text);
+            self.commit(false, true, &[]);
+        } else if let Some(mut body) = loaded {
+            body.comment(Author::Agent, &text);
+            let writes = store::writes(&self.tracker, &[(n, &body)], &[], false);
+            self.save(writes);
+            // A ticket screen read sent before this write would miss the comment: read it again.
+            if let Some(load) = self.body_loads.iter_mut().find(|(_, p, then)| *p == n && matches!(then, Then::Open)) {
+                load.0 = storage_get(&body_key(n));
+            }
+        } else {
+            self.body_loads.push((storage_get(&body_key(n)), n, Then::Comment(text)));
+        }
+    }
+
+    fn body_loaded(&mut self, id: i64, value: Result<Option<String>, RpcError>) {
+        let Some(i) = self.body_loads.iter().position(|(r, _, _)| *r == id) else { return };
+        let (_, n, then) = self.body_loads.remove(i);
+        let body = match value {
+            Ok(raw) => store::parse_body(raw.as_deref()),
+            // Nothing is written without the body, so a failed read loses nothing.
+            Err(e) => return self.set_notice(format!("Could not read KAN-{n}: {}", e.message)),
+        };
+        match then {
+            Then::Open => {
+                if self.screen == Screen::Ticket(n) && self.open_body.is_none() {
+                    self.open_body = Some((n, body));
+                    self.render();
+                }
+            }
+            Then::Comment(text) => self.agent_comment(n, text, Some(body)),
+            Then::Start => {
+                if let Some(e) = self.tracker.entry(n).filter(|e| !e.status.closed()) {
+                    // The open body may hold a newer description than the one just read.
+                    let open = self.open_body.as_ref().filter(|(open, _)| *open == n).map(|(_, b)| b);
+                    let request = send_start(e, &open.unwrap_or(&body).description);
+                    self.pending_starts.push((request, n));
+                }
+                self.render();
+            }
+        }
+    }
+
+    fn start_replied(&mut self, n: u64, result: Result<Value, RpcError>) {
+        // A deleted or closed ticket is not resurrected; its agent keeps running.
+        if !self.tracker.entry(n).is_some_and(|e| !e.status.closed()) {
+            return self.render();
+        }
+        match result {
+            Ok(r) => self.tracker.started(n, r["sessionId"].as_str().unwrap_or_default().into(), r["branch"].as_str().unwrap_or_default().into()),
+            Err(e) => self.tracker.start_failed(n, &e.message),
+        }
+        self.commit(true, false, &[]);
+    }
+
+    fn fetched(&mut self, n: u64, result: Result<Value, RpcError>) {
+        match result.map(|r| parse_last_message(&r)) {
+            Ok(Some(text)) if !text.trim().is_empty() => self.agent_comment(n, text, None),
+            Ok(_) => self.set_notice(format!("KAN-{n}: the agent finished without a message.")),
+            Err(e) => self.set_notice(format!("Could not read the agent's last message for KAN-{n}: {}", e.message)),
+        }
+    }
+
+    fn view_event(&mut self, id: &str, value: Option<String>) {
+        if !self.loaded {
+            return;
+        }
+        let value = value.unwrap_or_default();
+        let number = |prefix: &str| id.strip_prefix(prefix).and_then(|n| n.parse::<u64>().ok());
+        // Field ids end in the form generation: `<prefix><n>-<form>`.
+        let field = |prefix: &str| id.strip_prefix(prefix).and_then(|r| r.split_once('-')).and_then(|(n, _)| n.parse::<u64>().ok());
+
+        if id == "back" {
+            self.navigate(Screen::default());
+        } else if id == "show-cancelled" {
+            if let Screen::Board { show_cancelled } = &mut self.screen {
+                *show_cancelled = !*show_cancelled;
+            }
+            self.render();
+        } else if id == "create" {
+            self.create("");
+        } else if id.starts_with("new-title-") {
+            // Kept for Create; the field keeps showing what was typed.
+            self.draft.title = value.trim().chars().take(MAX_TITLE_CHARS).collect();
+        } else if id.starts_with("new-description-") {
+            self.create(&value);
+        } else if id.starts_with("new-priority-") {
+            if let Some(p) = Priority::from_key(&value) {
+                self.draft.priority = p;
+                self.render();
+            }
+        } else if id.starts_with("new-assignee-") {
+            self.draft.assignee = (value != view::UNASSIGNED).then_some(value);
+            self.render();
+        } else if let Some(n) = number("ticket-") {
+            self.open(n);
+        } else if let Some(n) = number("status-") {
+            let Some(status) = Status::from_key(&value) else { return };
+            self.tracker.set_status(n, status);
+            self.commit(true, false, &[]);
+        } else if let Some(n) = number("cancel-") {
+            self.tracker.set_status(n, Status::Cancelled);
+            self.commit(true, false, &[]);
+        } else if let Some(n) = number("priority-") {
+            let (Some(priority), Some(e)) = (Priority::from_key(&value), self.tracker.entry_mut(n)) else { return };
+            e.priority = priority;
+            self.commit(true, false, &[]);
+        } else if let Some(n) = number("assign-") {
+            let Some(e) = self.tracker.entry_mut(n) else { return };
+            e.assignee = (value != view::UNASSIGNED).then_some(value);
+            self.commit(true, false, &[]);
+        } else if let Some(n) = number("start-") {
+            self.start(n);
+        } else if let Some(n) = number("open-") {
+            if let Some(session) = self.tracker.entry(n).and_then(|e| e.session_id.as_deref()) {
+                request("session/focus", json!({"id": session}));
+            }
+        } else if let Some(n) = number("delete-") {
+            if self.tracker.entry(n).is_some() {
+                self.tracker.delete(n);
+                self.commit(true, false, &[n]);
+            }
+        } else if let Some(n) = field("description-") {
+            // Before the body arrives there is nothing to edit, and saving would overwrite it.
+            let Some(body) = self.open_body_mut(n) else { return };
+            let description: String = value.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
+            if body.description != description {
+                body.description = description;
+                self.commit(false, true, &[]);
+            }
+        } else if let Some(n) = field("comment-") {
+            let Some(body) = self.open_body_mut(n) else { return };
+            if value.trim().is_empty() {
+                return;
+            }
+            body.comment(Author::You, &value);
+            self.form += 1;
+            self.commit(false, true, &[]);
+        }
     }
 }
 
@@ -124,58 +399,55 @@ impl Plugin for Kanban {
     fn handle(&mut self, event: Event) {
         match event {
             Event::Activate { .. } => {
-                self.load_request = storage_get("board");
+                // The legacy board is read every time: loading needs it whenever meta or index is absent.
+                self.load = [storage_get(store::META), storage_get(store::INDEX), storage_get(store::LEGACY)];
                 request_snapshot();
+                self.agent_request = Some(agent_list());
             }
-            Event::Stored { id, value } if id == self.load_request && !self.loaded => {
-                // A missing board starts empty. One that cannot be read also starts empty,
-                // but is never overwritten, so the stored copy survives.
-                let loaded = match value {
-                    Ok(None) => Ok(Board::default()),
-                    Ok(Some(text)) => serde_json::from_str(&text).map_err(|e| e.to_string()),
-                    Err(e) => Err(e.message),
-                };
-                match loaded {
-                    Ok(board) => self.board = board,
-                    Err(reason) => {
-                        self.load_failed = true;
-                        self.notice = Some(format!("Could not load the board, so changes are not saved: {reason}"));
-                    }
-                }
-                self.loaded = true;
-                // The stored board needs saving only when the sync changed it.
-                if self.sync() {
-                    self.changed();
-                } else {
-                    self.render();
+            Event::Stored { id, value } if !self.loaded && self.load.contains(&id) => {
+                let i = self.load.iter().position(|&l| l == id).expect("contained");
+                self.load_replies[i] = Some(value);
+                if self.load_replies.iter().all(Option::is_some) {
+                    self.finish_load();
                 }
             }
+            Event::Stored { id, value } => self.body_loaded(id, value),
             Event::Snapshot(snapshot) | Event::WorkspaceChanged(snapshot) => self.apply(snapshot),
-            Event::ViewEvent { id, kind, value, .. } => self.view_event(&id, &kind, value),
+            Event::ViewEvent { id, value, .. } => self.view_event(&id, value),
+            Event::TaskFailed { session_id, reason } => {
+                self.tracker.task_failed(&session_id, &reason);
+                self.commit(true, false, &[]);
+            }
             Event::Reply { id, result } if self.saves.contains(&id) => {
                 self.saves.retain(|&s| s != id);
-                let notice = result.err().map(|e| format!("Could not save the board: {}", e.message));
-                if notice != self.notice {
-                    self.notice = notice;
-                    self.render();
-                }
-            }
-            Event::Reply { id, result } if self.pending.iter().any(|&(r, _)| r == id) => {
-                let Some(index) = self.pending.iter().position(|&(r, _)| r == id) else { return };
-                let (_, card) = self.pending.remove(index);
                 match result {
-                    Ok(r) => self.board.started(
-                        card,
-                        r["sessionId"].as_str().unwrap_or_default().into(),
-                        r["branch"].as_str().unwrap_or_default().into(),
-                    ),
-                    Err(e) => self.board.start_failed(card, &e.message),
+                    Err(e) => self.set_notice(format!("{SAVE_FAILED}{}", e.message)),
+                    Ok(_) if self.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)) => {
+                        self.notice = None;
+                        self.render();
+                    }
+                    Ok(_) => {}
                 }
-                self.changed();
             }
-            Event::TaskFailed { session_id, reason } => {
-                self.board.task_failed(&session_id, &reason);
-                self.changed();
+            Event::Reply { id, result } if self.pending_starts.iter().any(|&(r, _)| r == id) => {
+                let i = self.pending_starts.iter().position(|&(r, _)| r == id).expect("contained");
+                let (_, n) = self.pending_starts.remove(i);
+                self.start_replied(n, result);
+            }
+            Event::Reply { id, result } if self.fetches.iter().any(|&(r, _)| r == id) => {
+                let i = self.fetches.iter().position(|&(r, _)| r == id).expect("contained");
+                let (_, n) = self.fetches.remove(i);
+                self.fetched(n, result);
+            }
+            Event::Reply { id, result } if self.agent_request == Some(id) => {
+                self.agent_request = None;
+                match result {
+                    Ok(r) => {
+                        self.agents = parse_agents(&r);
+                        self.render();
+                    }
+                    Err(e) => self.set_notice(format!("Could not list the agents: {}", e.message)),
+                }
             }
             Event::Reply { result: Err(e), .. } => log("warn", &format!("request failed: {} {}", e.code, e.message)),
             _ => {}
@@ -189,148 +461,144 @@ export_plugin!(Kanban);
 mod tests {
     use super::*;
     use alas_plugin::{dispatch, test_host};
-    use serde_json::Value;
 
     fn feed(k: &mut Kanban, message: Value) {
         dispatch(k, message.to_string().as_bytes());
     }
 
-    /// An activated plugin whose stored board holds Backlog card 1, with the sent log cleared.
-    fn loaded_with_a_card() -> Kanban {
+    fn reply(k: &mut Kanban, id: i64, result: Value) {
+        feed(k, json!({"jsonrpc":"2.0","id":id,"result":result}));
+    }
+
+    fn event(k: &mut Kanban, id: &str, value: Option<&str>) {
+        feed(k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":id,"kind":"click","value":value}}));
+    }
+
+    fn snapshot(k: &mut Kanban, state: &str) {
+        feed(k, json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
+            {"id":"w","branch":"task/kan-1","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":state}]}]}}}));
+    }
+
+    /// An activated plugin whose store held `meta`, `index` and the legacy `board` (`null` = unset).
+    fn activate(meta: Value, index: Value, board: Value) -> Kanban {
         test_host::take_sent();
         let mut k = Kanban::default();
         feed(&mut k, json!({"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{"project":{"id":"p","name":"P"}}}));
-        let load = k.load_request;
-        feed(&mut k, json!({"jsonrpc":"2.0","id":load,"result":{"value":{"cards":[
-            {"id":1,"title":"Fix it","prompt":"do","column":"Backlog"}],"next_id":1}}}));
+        let reads: Vec<_> = test_host::take_sent().into_iter().filter(|m| m["method"] == "storage/get").map(|m| m["params"]["key"].clone()).collect();
+        assert_eq!(reads, ["meta", "index", "board"], "the legacy board is always read");
+        for (id, value) in k.load.into_iter().zip([meta, index, board]) {
+            reply(&mut k, id, json!({ "value": value }));
+        }
+        k
+    }
+
+    /// A loaded tracker holding ticket 1 ("Fix it", Todo, plus `fields`), with the sent log cleared.
+    fn with_ticket(fields: Value) -> Kanban {
+        let mut entry = json!({"number":1,"title":"Fix it","status":"todo"});
+        entry.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        let k = activate(json!({"version":1,"next_number":2}), json!([entry]), Value::Null);
         test_host::take_sent();
         k
     }
 
-    /// Clicks Start on card 1 and returns the task/start request id.
-    fn start(k: &mut Kanban) -> i64 {
-        feed(k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":"start-1","kind":"click"}}));
-        let sent = test_host::take_sent();
-        let req = sent.iter().find(|m| m["method"] == "task/start").expect("a task/start request");
-        assert_eq!(req["params"], json!({"title":"Fix it","prompt":"do"}));
-        req["id"].as_i64().unwrap()
+    /// (key, value) of every storage/set in `sent`, in order.
+    fn writes(sent: &[Value]) -> Vec<(String, Value)> {
+        let sets = sent.iter().filter(|m| m["method"] == "storage/set");
+        sets.map(|m| (m["params"]["key"].as_str().unwrap().to_owned(), m["params"]["value"].clone())).collect()
     }
 
-    /// The column holding `card` in the last rendered tree, and that tree.
-    fn rendered_column(card: &str) -> (String, Value) {
-        let sent = test_host::take_sent();
-        assert!(sent.iter().any(|m| m["method"] == "storage/set"), "every change is saved");
-        column_in(&sent, card)
-    }
-
-    fn column_in(sent: &[Value], card: &str) -> (String, Value) {
-        let root = sent.iter().rev().find(|m| m["method"] == "view/render").expect("a render")["params"]["root"].clone();
-        let scroll = root["children"].as_array().unwrap().last().unwrap();
-        for col in scroll["child"]["children"].as_array().unwrap() {
-            let cards = col["children"].as_array().unwrap().last().unwrap()["child"]["children"].as_array().unwrap();
-            if let Some(node) = cards.iter().find(|n| n["id"] == card) {
-                return (col["id"].as_str().unwrap().to_string(), node.clone());
-            }
-        }
-        panic!("{card} is not rendered")
+    fn sent_one(sent: &[Value], method: &str) -> Value {
+        let found: Vec<_> = sent.iter().filter(|m| m["method"] == method).collect();
+        assert_eq!(found.len(), 1, "one {method} in {sent:?}");
+        found[0].clone()
     }
 
     #[test]
-    fn starting_a_card_requests_a_task_and_a_reply_moves_it_to_running() {
-        let mut k = loaded_with_a_card();
-        let req = start(&mut k);
-        feed(&mut k, json!({"jsonrpc":"2.0","id":req,"result":{"sessionId":"s","branch":"task/x"}}));
-        let (col, card) = rendered_column("card-1");
-        assert_eq!(col, "col-running");
-        assert_eq!(card["clickable"], true);
+    fn a_legacy_board_is_migrated_once_and_left_in_place() {
+        let board = json!({"cards":[{"id":7,"title":"Fix it","prompt":"do","column":"Review","session_id":"s","following":true,"seen":true,"agent_state":"idle"}],"next_id":7});
+        let mut k = activate(Value::Null, Value::Null, board.clone());
+        let saved = writes(&test_host::take_sent());
+        let keys: Vec<_> = saved.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys, ["meta", "ticket-1", "index"], "the old board is not touched");
+        assert_eq!(k.tracker.entry(1).unwrap().status, Status::InReview);
 
-        feed(&mut k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":"card-1","kind":"click"}}));
+        let mut stored = saved.into_iter().map(|(_, v)| v);
+        let (meta, _, index) = (stored.next().unwrap(), stored.next(), stored.next().unwrap());
+        k = activate(meta, index, board);
+        assert!(writes(&test_host::take_sent()).is_empty(), "a migrated tracker is not migrated again");
+        assert_eq!(k.tracker.index.len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_store_is_never_overwritten() {
+        let mut k = activate(json!({"version":1,"next_number":2}), json!("garbage"), Value::Null);
         let sent = test_host::take_sent();
-        assert_eq!((sent[0]["method"].clone(), sent[0]["params"].clone()), (json!("session/focus"), json!({"id":"s"})));
+        assert!(sent_one(&sent, "view/render")["params"]["root"].to_string().contains("could not be read"));
+        event(&mut k, "new-description-0", Some("New ticket"));
+        snapshot(&mut k, "idle");
+        assert_eq!(k.tracker.index.len(), 1, "the tracker still works in memory");
+        assert!(writes(&test_host::take_sent()).is_empty());
     }
 
     #[test]
-    fn a_failed_start_shows_the_reason_in_backlog() {
-        let mut k = loaded_with_a_card();
-        let req = start(&mut k);
-        feed(&mut k, json!({"jsonrpc":"2.0","id":req,"error":{"code":-32003,"message":"a task is already starting"}}));
-        let (col, card) = rendered_column("card-1");
-        assert_eq!(col, "col-backlog");
-        assert!(card.to_string().contains("Start failed: a task is already starting"));
+    fn an_idle_session_adds_its_last_message_as_one_comment() {
+        let mut k = with_ticket(json!({"status":"in_progress","session_id":"s","branch":"task/kan-1","agent_state":"running","following":true,"seen":true}));
+        snapshot(&mut k, "idle");
+        let fetch = sent_one(&test_host::take_sent(), "session/last_message");
+        assert_eq!(fetch["params"], json!({"id":"s"}));
 
-        let req = start(&mut k);
-        feed(&mut k, json!({"jsonrpc":"2.0","id":req,"result":{"sessionId":"s","branch":"task/x"}}));
-        feed(&mut k, json!({"jsonrpc":"2.0","method":"task/failed","params":{"sessionId":"s","reason":"no worktree"}}));
-        let (col, card) = rendered_column("card-1");
-        assert_eq!(col, "col-backlog");
-        assert!(card.to_string().contains("Start failed: no worktree"));
-    }
+        reply(&mut k, fetch["id"].as_i64().unwrap(), json!({"message":"Fixed it."}));
+        let read = sent_one(&test_host::take_sent(), "storage/get");
+        assert_eq!(read["params"]["key"], "ticket-1");
+        reply(&mut k, read["id"].as_i64().unwrap(), json!({"value":{"description":"d"}}));
+        let saved = writes(&test_host::take_sent());
+        let body = &saved.iter().find(|(key, _)| key == "ticket-1").expect("the body is saved").1;
+        assert_eq!(body["description"], "d");
+        assert_eq!(body["comments"], json!([{"author":"agent","text":"Fixed it."}]));
 
-    #[test]
-    fn a_refused_card_shows_a_notice_keeps_the_typed_text_and_the_next_add_clears_it() {
-        let mut k = loaded_with_a_card();
-        while k.board.add("filler", "p") != 0 {}
-        let submit = |k: &mut Kanban, field: &str, value: &str| {
-            let id = format!("{field}-{}", k.form);
-            feed(k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":id,"kind":"submit","value":value}}));
-        };
-        submit(&mut k, "new-prompt", "P");
-        let sent = test_host::take_sent();
-        assert!(!sent.iter().any(|m| m["method"] == "storage/set"));
-        assert!(sent.last().unwrap()["params"]["root"].to_string().contains(BOARD_FULL));
-        assert_eq!(k.form, 0, "the form keeps its text");
-
-        k.board.delete(1);
-        submit(&mut k, "new-prompt", "P");
-        assert_eq!(k.notice, None);
-        assert!(!test_host::take_sent().last().unwrap()["params"]["root"].to_string().contains(BOARD_FULL));
-    }
-
-    #[test]
-    fn a_snapshot_takes_the_real_branch_and_one_that_changes_nothing_is_neither_saved_nor_rendered() {
-        let mut k = loaded_with_a_card();
-        let req = start(&mut k);
-        feed(&mut k, json!({"jsonrpc":"2.0","id":req,"result":{"sessionId":"s","branch":"task/x"}}));
-        let snapshot = |branch: &str| json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
-            {"id":"w","branch":branch,"current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"running"}]}]}}});
-        feed(&mut k, snapshot("task/x"));
-        assert_eq!(rendered_column("card-1").0, "col-running");
-        // Only the branch differs: the host created a suffixed one because task/x was taken.
-        feed(&mut k, snapshot("task/x-2"));
-        assert_eq!(k.board.cards[0].branch.as_deref(), Some("task/x-2"));
-        assert!(test_host::take_sent().iter().any(|m| m["method"] == "storage/set"));
-        feed(&mut k, snapshot("task/x-2"));
+        snapshot(&mut k, "idle");
         assert!(test_host::take_sent().is_empty());
     }
 
     #[test]
-    fn a_board_loaded_before_the_first_snapshot_keeps_its_columns_and_is_not_resaved() {
-        test_host::take_sent();
-        let mut k = Kanban::default();
-        feed(&mut k, json!({"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{"project":{"id":"p","name":"P"}}}));
-        let load = k.load_request;
-        feed(&mut k, json!({"jsonrpc":"2.0","id":load,"result":{"value":{"cards":[
-            {"id":1,"title":"Fix it","prompt":"do","column":"Running","session_id":"s","following":true,"seen":true}],"next_id":1}}}));
-        let sent = test_host::take_sent();
-        assert!(!sent.iter().any(|m| m["method"] == "storage/set"));
-        assert_eq!(column_in(&sent, "card-1").0, "col-running");
+    fn edits_before_the_body_loads_write_nothing() {
+        let mut k = with_ticket(json!({}));
+        event(&mut k, "ticket-1", None);
+        sent_one(&test_host::take_sent(), "storage/get");
+        let form = k.form;
+        event(&mut k, &format!("description-1-{form}"), Some("new description"));
+        event(&mut k, &format!("comment-1-{form}"), Some("a comment"));
+        assert!(test_host::take_sent().is_empty());
     }
 
     #[test]
-    fn a_snapshot_before_the_board_loads_is_applied_after_load_without_saving_an_empty_board() {
-        test_host::take_sent();
-        let mut k = Kanban::default();
-        feed(&mut k, json!({"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{"project":{"id":"p","name":"P"}}}));
-        let snapshot = test_host::take_sent().iter().find(|m| m["method"] == "workspace/snapshot").unwrap()["id"].clone();
-        feed(&mut k, json!({"jsonrpc":"2.0","id":snapshot,"result":{"snapshot":{"worktrees":[
-            {"id":"w","branch":"task/x","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"idle"}]}]}}}));
-        assert!(test_host::take_sent().is_empty(), "nothing is saved or rendered before the board loads");
+    fn a_start_reply_for_a_deleted_ticket_is_ignored() {
+        let mut k = with_ticket(json!({}));
+        event(&mut k, "start-1", None);
+        let read = sent_one(&test_host::take_sent(), "storage/get");
+        reply(&mut k, read["id"].as_i64().unwrap(), json!({"value":null}));
+        let start = sent_one(&test_host::take_sent(), "task/start");
+        event(&mut k, "delete-1", None);
+        assert!(writes(&test_host::take_sent()).contains(&("ticket-1".into(), Value::Null)));
 
-        let load = k.load_request;
-        feed(&mut k, json!({"jsonrpc":"2.0","id":load,"result":{"value":{"cards":[
-            {"id":1,"title":"Fix it","prompt":"do","column":"Running","session_id":"s","following":true}],"next_id":1}}}));
-        let sent = test_host::take_sent();
-        let saved = &sent.iter().find(|m| m["method"] == "storage/set").expect("the loaded board is saved")["params"]["value"];
-        assert_eq!(saved["cards"][0]["column"], "Review");
+        reply(&mut k, start["id"].as_i64().unwrap(), json!({"sessionId":"s","branch":"task/kan-1"}));
+        assert!(writes(&test_host::take_sent()).is_empty());
+        assert!(k.tracker.index.is_empty());
+    }
+
+    #[test]
+    fn start_sends_the_ticket_and_assignee() {
+        let mut k = with_ticket(json!({"assignee":"claude"}));
+        event(&mut k, "start-1", None);
+        let read = sent_one(&test_host::take_sent(), "storage/get");
+        event(&mut k, "start-1", None);
+        assert!(!test_host::take_sent().iter().any(|m| m["method"] == "storage/get"), "a second Start waits for the first");
+
+        reply(&mut k, read["id"].as_i64().unwrap(), json!({"value":{"description":"Make it work."}}));
+        let start = sent_one(&test_host::take_sent(), "task/start");
+        assert_eq!(
+            start["params"],
+            json!({"title":"Fix it","prompt":"KAN-1: Fix it\n\nMake it work.","branch":"task/kan-1","agent":"claude"})
+        );
     }
 }

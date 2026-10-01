@@ -2,6 +2,7 @@
 
 use crate::board::Board;
 use crate::tickets::{Body, Entry, Meta, Tracker};
+use serde_json::value::{to_raw_value, RawValue};
 
 pub const META: &str = "meta";
 pub const INDEX: &str = "index";
@@ -56,17 +57,18 @@ pub fn parse_body(raw: Option<&str>) -> Body {
 }
 
 /// The writes for one change, in order: meta, bodies, the index (only if `index_changed`), then
-/// deletes. Each item is (key, raw JSON, or `None` to delete). `deleted` is only for tickets
+/// deletes. Each item is (key, raw JSON, or `None` to delete). Raw, so sending it copies the text
+/// instead of parsing it again. `deleted` is only for tickets
 /// removed by `Tracker::delete`; archived bodies stay.
-pub fn writes(tracker: &Tracker, bodies: &[(u64, &Body)], deleted: &[u64], index_changed: bool) -> Vec<(String, Option<String>)> {
-    let json = |v: serde_json::Result<String>| v.expect("plain data serializes");
+pub fn writes(tracker: &Tracker, bodies: &[(u64, &Body)], deleted: &[u64], index_changed: bool) -> Vec<(String, Option<Box<RawValue>>)> {
+    let json = |v: serde_json::Result<Box<RawValue>>| v.expect("plain data serializes");
     let mut out = Vec::with_capacity(bodies.len() + deleted.len() + 2);
-    out.push((META.to_owned(), Some(json(serde_json::to_string(&tracker.meta)))));
+    out.push((META.to_owned(), Some(json(to_raw_value(&tracker.meta)))));
     for (n, b) in bodies {
-        out.push((body_key(*n), Some(json(serde_json::to_string(b)))));
+        out.push((body_key(*n), Some(json(to_raw_value(b)))));
     }
     if index_changed {
-        out.push((INDEX.to_owned(), Some(json(serde_json::to_string(&tracker.index)))));
+        out.push((INDEX.to_owned(), Some(json(to_raw_value(&tracker.index)))));
     }
     out.extend(deleted.iter().map(|n| (body_key(*n), None)));
     out
@@ -121,7 +123,7 @@ mod tests {
         t.meta.version = FORMAT_VERSION;
         t.create("a", Priority::None, None);
         let body = Body { description: "d".into(), ..Body::default() };
-        let keys = |w: Vec<(String, Option<String>)>| w.into_iter().map(|(k, v)| (k, v.is_some())).collect::<Vec<_>>();
+        let keys = |w: Vec<(String, Option<Box<RawValue>>)>| w.into_iter().map(|(k, v)| (k, v.is_some())).collect::<Vec<_>>();
         let k = |s: &str, put| (s.to_owned(), put);
         assert_eq!(
             keys(writes(&t, &[(1, &body)], &[7], true)),

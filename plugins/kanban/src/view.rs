@@ -1,13 +1,53 @@
-//! Renders the board as a view tree. Pure: no SDK calls besides the node types.
+//! Renders the board and the ticket screen as view trees. Pure: no SDK calls besides the node types.
+//!
+//! Ids are built only from fixed words and ticket numbers, so they stay unique and under the
+//! host's 64 bytes. Board cards carry index data only; a ticket body is read on its screen.
 
-use crate::board::{Board, Card, Column, MAX_CARDS, MAX_CARD_TEXT_BYTES};
-use alas_plugin::{Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
+use crate::tickets::{Author, Body, Entry, Priority, Status, Tracker, MAX_COMMENTS, MAX_LABELS, MAX_LABEL_CHARS};
+use alas_plugin::{Agent, Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
 
-// The board holds at most MAX_CARDS, so every card renders and each one can be used. Only a
-// board stored over the cap shows a "+N older" caption, which keeps the tree well under the
-// host's 2,000-node limit.
-const MAX_CARDS_PER_COLUMN: usize = MAX_CARDS;
 const MAX_TEXT: usize = 500;
+/// Comments carry the agent's results, so they show more than other text.
+const MAX_COMMENT_TEXT: usize = 2_000;
+/// The host's cap on any string in a tree, in Unicode scalars.
+const MAX_STRING: usize = 4_000;
+/// The host's cap on menu items.
+const MAX_MENU_ITEMS: usize = 64;
+/// The assignee menu item that clears the assignee.
+pub const UNASSIGNED: &str = "-";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Board { show_cancelled: bool },
+    Ticket(u64),
+}
+
+impl Default for Screen {
+    fn default() -> Self {
+        Screen::Board { show_cancelled: false }
+    }
+}
+
+/// The New ticket form's choices. The description is not kept: submitting it creates the ticket.
+#[derive(Debug, Default)]
+pub struct Draft {
+    pub title: String,
+    pub priority: Priority,
+    pub assignee: Option<String>,
+}
+
+pub struct ViewState<'a> {
+    pub tracker: &'a Tracker,
+    pub screen: &'a Screen,
+    /// The open ticket's body; `None` while it loads.
+    pub body: Option<&'a Body>,
+    pub agents: &'a [Agent],
+    pub draft: &'a Draft,
+    pub form: u64,
+    pub notice: Option<&'a str>,
+    /// Tickets with a Start in flight.
+    pub starting: &'a [u64],
+}
 
 fn clip(s: &str, max: usize) -> String {
     // A string has at least as many bytes as chars, so short ones skip the char scan.
@@ -25,232 +65,405 @@ fn text(id: String, text: &str, style: Option<TextStyle>, tone: Option<Tone>) ->
 }
 
 fn hstack(id: String, children: Vec<Node>) -> Node {
-    Node::Hstack { id, children, spacing: None }
+    Node::Hstack { id, children, spacing: Some(8) }
 }
 
-pub fn render(board: &Board, form: u64, notice: Option<&str>) -> Node {
-    let columns = Column::ALL.into_iter().map(|col| column(board, col, form)).collect();
-    let mut children: Vec<Node> = notice.map(|n| text("notice".into(), n, None, Some(Tone::Danger))).into_iter().collect();
-    children.push(Node::Scroll {
+fn vstack(id: String, children: Vec<Node>) -> Node {
+    Node::Vstack { id, children, spacing: Some(8), width: None }
+}
+
+fn button(id: String, label: &str, icon: Option<&str>, style: ButtonStyle, disabled: bool) -> Node {
+    Node::Button { id, label: label.into(), icon: icon.map(Into::into), style: Some(style), disabled }
+}
+
+pub fn render(s: &ViewState) -> Node {
+    let mut children: Vec<Node> = s.notice.map(|n| text("notice".into(), n, None, Some(Tone::Danger))).into_iter().collect();
+    match *s.screen {
+        Screen::Ticket(n) => match s.tracker.entry(n) {
+            Some(e) => children.push(ticket(s, e)),
+            None => board(s, false, &mut children),
+        },
+        Screen::Board { show_cancelled } => board(s, show_cancelled, &mut children),
+    }
+    Node::Vstack { id: "root".into(), spacing: Some(12), width: None, children }
+}
+
+fn board(s: &ViewState, show_cancelled: bool, out: &mut Vec<Node>) {
+    out.push(new_ticket(s));
+    let toggle = if show_cancelled { "Hide cancelled" } else { "Show cancelled" };
+    out.push(button("show-cancelled".into(), toggle, None, ButtonStyle::Plain, false));
+    let columns = Status::ALL
+        .into_iter()
+        .filter(|&status| show_cancelled || status != Status::Cancelled)
+        .map(|status| column(s.tracker, status))
+        .collect();
+    out.push(Node::Scroll {
         id: "scroll".into(),
         axis: Axis::Horizontal,
         child: Box::new(Node::Hstack { id: "columns".into(), children: columns, spacing: Some(12) }),
     });
-    Node::Vstack { id: "root".into(), spacing: None, width: None, children }
 }
 
-fn column(board: &Board, col: Column, form: u64) -> Node {
-    let key = col.key();
-    let cards = board.in_column(col);
-    let mut children = vec![hstack(
+fn new_ticket(s: &ViewState) -> Node {
+    let f = s.form;
+    let row = vec![
+        Node::TextField {
+            id: format!("new-title-{f}"),
+            value: s.draft.title.clone(),
+            placeholder: Some("Title (Return keeps it)".into()),
+            multiline: false,
+        },
+        priority_menu(format!("new-priority-{f}"), s.draft.priority),
+        assignee_menu(format!("new-assignee-{f}"), s.draft.assignee.as_deref(), s.agents),
+        button("create".into(), "Create", Some("plus"), ButtonStyle::Primary, false),
+    ];
+    let children = vec![
+        text("new-heading".into(), "New ticket", Some(TextStyle::Title), None),
+        hstack("new-row".into(), row),
+        Node::TextField {
+            id: format!("new-description-{f}"),
+            value: String::new(),
+            placeholder: Some("Description — ⌘Return creates the ticket; without a title, its first line is the title".into()),
+            multiline: true,
+        },
+    ];
+    Node::Card { id: "new".into(), children, tone: None, clickable: false, width: None }
+}
+
+fn priority_menu(id: String, current: Priority) -> Node {
+    let items = Priority::ALL
+        .into_iter()
+        .filter(|&p| p != current)
+        .map(|p| MenuItem { id: p.key().into(), label: p.title().into() })
+        .collect();
+    Node::Menu { id, label: current.title().into(), items }
+}
+
+/// With no agents there is nothing to pick, so a label says so instead of an empty menu.
+fn assignee_menu(id: String, current: Option<&str>, agents: &[Agent]) -> Node {
+    if agents.is_empty() {
+        return text(id, "No agents available", Some(TextStyle::Caption), Some(Tone::Dim));
+    }
+    let name = current.map(|a| agents.iter().find(|x| x.id == a).map_or(a, |x| x.name.as_str()));
+    let mut items = vec![MenuItem { id: UNASSIGNED.into(), label: "Unassigned".into() }];
+    // Item ids must be 1 to 64 bytes; an agent whose id is not cannot be offered.
+    let pickable = agents.iter().filter(|a| (1..=64).contains(&a.id.len()) && a.id != UNASSIGNED);
+    items.extend(pickable.take(MAX_MENU_ITEMS - 1).map(|a| MenuItem { id: a.id.clone(), label: clip(&a.name, 100) }));
+    Node::Menu { id, label: clip(&format!("Assignee: {}", name.unwrap_or("none")), MAX_TEXT), items }
+}
+
+fn state_badge(id: String, state: &str) -> Node {
+    let tone = match state {
+        "awaiting_input" | "permission_request" => Some(Tone::Warn),
+        "running" => Some(Tone::Accent),
+        _ => None,
+    };
+    Node::Badge { id, text: clip(state, 40), tone }
+}
+
+fn priority_badge(id: String, priority: Priority) -> Node {
+    let tone = match priority {
+        Priority::Urgent => Some(Tone::Danger),
+        Priority::High => Some(Tone::Warn),
+        _ => None,
+    };
+    Node::Badge { id, text: priority.title().into(), tone }
+}
+
+fn column(tracker: &Tracker, status: Status) -> Node {
+    let key = status.key();
+    // The index is not in number order: closed tickets sit at its end in closing order.
+    let mut entries: Vec<&Entry> = tracker.in_status(status).collect();
+    entries.sort_unstable_by_key(|e| e.number);
+    let header = hstack(
         format!("col-{key}-header"),
         vec![
-            text(format!("col-{key}-title"), col.title(), Some(TextStyle::Title), None),
-            Node::Badge { id: format!("col-{key}-count"), text: cards.len().to_string(), tone: None },
+            text(format!("col-{key}-title"), status.title(), Some(TextStyle::Title), None),
+            Node::Badge { id: format!("col-{key}-count"), text: entries.len().to_string(), tone: None },
+        ],
+    );
+    // Cards scroll on their own, under the header, so every card stays reachable.
+    let cards = Node::Scroll {
+        id: format!("col-{key}-scroll"),
+        axis: Axis::Vertical,
+        child: Box::new(vstack(format!("col-{key}-cards"), entries.into_iter().map(card).collect())),
+    };
+    Node::Vstack { id: format!("col-{key}"), children: vec![header, cards], spacing: Some(8), width: Some(280) }
+}
+
+fn card(e: &Entry) -> Node {
+    let n = e.number;
+    let mut meta = vec![text(format!("ticket-{n}-number"), &format!("KAN-{n}"), Some(TextStyle::Caption), Some(Tone::Dim))];
+    if e.priority != Priority::None {
+        meta.push(priority_badge(format!("ticket-{n}-priority"), e.priority));
+    }
+    if let Some(assignee) = &e.assignee {
+        meta.push(text(format!("ticket-{n}-assignee"), assignee, Some(TextStyle::Caption), None));
+    }
+    if let (Some(_), Some(state)) = (&e.session_id, &e.agent_state) {
+        meta.push(state_badge(format!("ticket-{n}-state"), state));
+    }
+    let mut children = vec![hstack(format!("ticket-{n}-meta"), meta), text(format!("ticket-{n}-title"), &e.title, None, None)];
+    if let Some(error) = &e.error {
+        children.push(text(format!("ticket-{n}-error"), &format!("Start failed: {error}"), None, Some(Tone::Danger)));
+    }
+    Node::Card { id: format!("ticket-{n}"), children, tone: None, clickable: true, width: None }
+}
+
+fn ticket(s: &ViewState, e: &Entry) -> Node {
+    let n = e.number;
+    let mut out = vec![hstack(
+        "header".into(),
+        vec![
+            button("back".into(), "Back", Some("chevron.left"), ButtonStyle::Plain, false),
+            text(format!("ticket-{n}-number"), &format!("KAN-{n}"), Some(TextStyle::Title), Some(Tone::Dim)),
+            text(format!("ticket-{n}-title"), &e.title, Some(TextStyle::Title), None),
         ],
     )];
-    if col == Column::Backlog {
-        children.push(Node::TextField {
-            id: format!("new-prompt-{form}"),
+
+    let statuses = Status::ALL
+        .into_iter()
+        .filter(|&st| st != e.status)
+        .map(|st| MenuItem { id: st.key().into(), label: st.title().into() })
+        .collect();
+    let mut controls = vec![
+        Node::Menu { id: format!("status-{n}"), label: e.status.title().into(), items: statuses },
+        priority_menu(format!("priority-{n}"), e.priority),
+        assignee_menu(format!("assign-{n}"), e.assignee.as_deref(), s.agents),
+    ];
+    // A session is running from the accepted start until it is seen idle (or gone).
+    let running = e.session_id.is_some() && (!e.seen || e.agent_state.as_deref().is_some_and(|st| st != "idle"));
+    if !running && !e.status.closed() {
+        let starting = s.starting.contains(&n);
+        let label = if starting { "Starting…" } else { "Start" };
+        controls.push(button(format!("start-{n}"), label, Some("play.fill"), ButtonStyle::Primary, starting));
+    }
+    out.push(hstack(format!("ticket-{n}-controls"), controls));
+
+    if let Some(branch) = &e.branch {
+        let mut row = vec![text(format!("ticket-{n}-branch"), branch, Some(TextStyle::Monospaced), None)];
+        if let Some(state) = &e.agent_state {
+            row.push(state_badge(format!("ticket-{n}-state"), state));
+        }
+        if e.session_id.is_some() {
+            row.push(button(format!("open-{n}"), "Open session", None, ButtonStyle::Normal, false));
+        }
+        out.push(hstack(format!("ticket-{n}-session"), row));
+    }
+    if let Some(error) = &e.error {
+        out.push(text(format!("ticket-{n}-error"), &format!("Start failed: {error}"), None, Some(Tone::Danger)));
+    }
+
+    match s.body {
+        None => out.push(text("loading".into(), "Loading…", None, Some(Tone::Dim))),
+        Some(body) => body_nodes(n, s.form, body, &mut out),
+    }
+
+    let mut footer = Vec::new();
+    if e.status != Status::Cancelled {
+        footer.push(button(format!("cancel-{n}"), "Cancel ticket", None, ButtonStyle::Normal, false));
+    }
+    footer.push(button(format!("delete-{n}"), "Delete", Some("trash"), ButtonStyle::Plain, false));
+    out.push(hstack("footer".into(), footer));
+
+    Node::Scroll { id: "ticket".into(), axis: Axis::Vertical, child: Box::new(vstack("ticket-content".into(), out)) }
+}
+
+fn body_nodes(n: u64, form: u64, body: &Body, out: &mut Vec<Node>) {
+    out.push(text("description-heading".into(), "Description", Some(TextStyle::Caption), Some(Tone::Dim)));
+    if body.description.char_indices().nth(MAX_STRING).is_none() {
+        out.push(Node::TextField {
+            id: format!("description-{n}-{form}"),
+            value: body.description.clone(),
+            placeholder: Some("Describe the ticket — ⌘Return saves".into()),
+            multiline: true,
+        });
+    } else {
+        // The host caps a field's text, so a longer description is shown in parts and can only
+        // be replaced, not edited in place.
+        let mut rest = body.description.as_str();
+        for i in 0.. {
+            if rest.is_empty() {
+                break;
+            }
+            let cut = rest.char_indices().nth(MAX_STRING).map_or(rest.len(), |(cut, _)| cut);
+            out.push(Node::Text { id: format!("description-part-{i}"), text: rest[..cut].into(), style: None, tone: None });
+            rest = &rest[cut..];
+        }
+        out.push(Node::TextField {
+            id: format!("description-{n}-{form}"),
             value: String::new(),
-            placeholder: Some("What should the agent do? First line becomes the title — ⌘Return to add".into()),
+            placeholder: Some("Too long to edit here — ⌘Return replaces it".into()),
             multiline: true,
         });
     }
-    if col == Column::Backlog && board.nearly_full() {
-        let text = if board.has_room(MAX_CARD_TEXT_BYTES) {
-            "The board is nearly full: new cards remove the oldest Done cards."
-        } else {
-            "The board is nearly full: delete cards or move them to Done to make room."
-        };
-        children.push(self::text("board-full".into(), text, Some(TextStyle::Caption), Some(Tone::Dim)));
+    if !body.labels.is_empty() {
+        let labels = body.labels.iter().take(MAX_LABELS).enumerate();
+        let badges = labels.map(|(i, l)| Node::Badge { id: format!("label-{i}"), text: clip(l, MAX_LABEL_CHARS), tone: None });
+        out.push(hstack("labels".into(), badges.collect()));
     }
-    // The newest cards stay visible; older ones are summarised first.
-    let hidden = cards.len().saturating_sub(MAX_CARDS_PER_COLUMN);
-    let mut stack = Vec::with_capacity(cards.len() - hidden + 1);
-    if hidden > 0 {
-        let older = format!("+{hidden} older");
-        stack.push(text(format!("col-{key}-older"), &older, Some(TextStyle::Caption), Some(Tone::Dim)));
-    }
-    stack.extend(cards[hidden..].iter().map(|c| card(c)));
-    // Cards scroll on their own, under the header, so every card's buttons stay reachable.
-    children.push(Node::Scroll {
-        id: format!("col-{key}-scroll"),
-        axis: Axis::Vertical,
-        child: Box::new(Node::Vstack { id: format!("col-{key}-cards"), children: stack, spacing: Some(8), width: None }),
-    });
-    Node::Vstack { id: format!("col-{key}"), children, spacing: Some(8), width: Some(280) }
-}
 
-fn card(c: &Card) -> Node {
-    let id = c.id;
-    let mut children = vec![
-        text(format!("card-{id}-title"), &c.title, None, None),
-        text(format!("card-{id}-prompt"), &clip(&c.prompt, 120), Some(TextStyle::Caption), Some(Tone::Dim)),
-    ];
-    if let Some(branch) = &c.branch {
-        children.push(text(format!("card-{id}-branch"), branch, Some(TextStyle::Monospaced), None));
-    }
-    if let Some(state) = &c.agent_state {
-        let tone = match state.as_str() {
-            "awaiting_input" | "permission_request" => Some(Tone::Warn),
-            "running" => Some(Tone::Accent),
-            _ => None,
+    out.push(text("comments-heading".into(), "Comments", Some(TextStyle::Caption), Some(Tone::Dim)));
+    let hidden = body.comments.len().saturating_sub(MAX_COMMENTS);
+    for (i, c) in body.comments.iter().enumerate().skip(hidden) {
+        let author = match c.author {
+            Author::You => "You",
+            Author::Agent => "Agent",
         };
-        children.push(Node::Badge { id: format!("card-{id}-state"), text: state.clone(), tone });
-    }
-    if let Some(error) = &c.error {
-        children.push(text(format!("card-{id}-error"), &format!("Start failed: {error}"), None, Some(Tone::Danger)));
-    }
-    let mut buttons = Vec::new();
-    if c.column == Column::Backlog {
-        buttons.push(Node::Button {
-            id: format!("start-{id}"),
-            label: "Start".into(),
-            icon: Some("play.fill".into()),
-            style: Some(ButtonStyle::Primary),
-            disabled: false,
-        });
-        buttons.push(Node::Button {
-            id: format!("delete-{id}"),
-            label: "Delete".into(),
-            icon: None,
-            style: Some(ButtonStyle::Plain),
-            disabled: false,
+        out.push(Node::Card {
+            id: format!("said-{i}"),
+            children: vec![
+                text(format!("said-{i}-author"), author, Some(TextStyle::Caption), Some(Tone::Dim)),
+                Node::Text { id: format!("said-{i}-text"), text: clip(&c.text, MAX_COMMENT_TEXT), style: None, tone: None },
+            ],
+            tone: None,
+            clickable: false,
+            width: None,
         });
     }
-    // A card without a session has nothing to follow, so only Backlog and Done make sense.
-    let items = Column::ALL
-        .into_iter()
-        .filter(|&col| col != c.column)
-        .filter(|col| c.session_id.is_some() || matches!(col, Column::Backlog | Column::Done))
-        .map(|col| MenuItem { id: col.key().into(), label: col.title().into() })
-        .collect();
-    buttons.push(Node::Menu { id: format!("move-{id}"), label: "Move to".into(), items });
-    children.push(hstack(format!("card-{id}-buttons"), buttons));
-    Node::Card { id: format!("card-{id}"), children, tone: None, clickable: c.session_id.is_some(), width: None }
+    out.push(Node::TextField {
+        id: format!("comment-{n}-{form}"),
+        value: String::new(),
+        placeholder: Some("Add a comment — ⌘Return posts it".into()),
+        multiline: true,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tickets::{MAX_COMMENT_CHARS, MAX_DESCRIPTION_CHARS, MAX_INDEX, MAX_TITLE_CHARS};
+    use serde_json::Value;
+    use std::collections::HashSet;
 
-    /// Every node in the tree, depth first.
-    fn flatten<'a>(node: &'a Node, out: &mut Vec<(&'a str, &'a Node)>) {
-        let (id, kids): (&String, Vec<&Node>) = match node {
-            Node::Vstack { id, children, .. } | Node::Hstack { id, children, .. } | Node::Card { id, children, .. } => {
-                (id, children.iter().collect())
-            }
-            Node::Scroll { id, child, .. } => (id, vec![child.as_ref()]),
-            Node::Text { id, .. }
-            | Node::Badge { id, .. }
-            | Node::Button { id, .. }
-            | Node::TextField { id, .. }
-            | Node::Menu { id, .. }
-            | Node::Divider { id }
-            | Node::Spacer { id } => (id, vec![]),
-        };
-        out.push((id, node));
-        kids.into_iter().for_each(|k| flatten(k, out));
+    fn tree(tracker: &Tracker, screen: Screen, body: Option<&Body>, agents: &[Agent]) -> Value {
+        let draft = Draft::default();
+        let state = ViewState { tracker, screen: &screen, body, agents, draft: &draft, form: 0, notice: None, starting: &[] };
+        serde_json::to_value(render(&state)).unwrap()
     }
 
-    fn find<'a>(tree: &'a Node, want: &str) -> Option<&'a Node> {
-        let mut all = Vec::new();
-        flatten(tree, &mut all);
-        all.into_iter().find(|(id, _)| *id == want).map(|(_, n)| n)
-    }
-
-    #[test]
-    fn the_board_renders_five_columns_with_counts() {
-        let mut b = Board::default();
-        b.add("a", "p");
-        let id = b.add("b", "p");
-        b.started(id, "s".into(), "br".into());
-        let tree = render(&b, 0, None);
-        let Node::Vstack { children, .. } = &tree else { panic!() };
-        let Node::Scroll { child, axis: Axis::Horizontal, .. } = &children[0] else { panic!() };
-        let Node::Hstack { children: cols, .. } = child.as_ref() else { panic!() };
-        let keys: Vec<_> = cols
-            .iter()
-            .map(|c| match c {
-                Node::Vstack { id, width: Some(280), .. } => id.as_str(),
-                other => panic!("{other:?}"),
-            })
-            .collect();
-        assert_eq!(keys, ["col-backlog", "col-running", "col-needs_you", "col-review", "col-done"]);
-        for (col, count) in [("backlog", "1"), ("running", "1"), ("done", "0")] {
-            let Some(Node::Badge { text, .. }) = find(&tree, &format!("col-{col}-count")) else { panic!() };
-            assert_eq!(text, count);
+    fn find<'a>(v: &'a Value, id: &str) -> Option<&'a Value> {
+        if v["id"] == id && v.get("kind").is_some() {
+            return Some(v);
         }
-        let mut ids = Vec::new();
-        flatten(&tree, &mut ids);
-        let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
-        assert_eq!(unique.len(), ids.len(), "ids must be unique");
+        let kids = v.get("children").and_then(Value::as_array).map(|c| c.iter().collect()).or_else(|| v.get("child").map(|c| vec![c]));
+        kids.unwrap_or_default().into_iter().find_map(|k| find(k, id))
     }
 
-    #[test]
-    fn backlog_cards_have_start_and_delete_and_started_cards_are_clickable() {
-        let mut b = Board::default();
-        let fresh = b.add("a", "p");
-        let started = b.add("b", "p");
-        b.started(started, "s".into(), "task/b".into());
-        b.start_failed(fresh, "boom");
-        let tree = render(&b, 0, None);
-
-        let Some(Node::Card { clickable: false, .. }) = find(&tree, &format!("card-{fresh}")) else { panic!() };
-        assert!(find(&tree, &format!("start-{fresh}")).is_some());
-        assert!(find(&tree, &format!("delete-{fresh}")).is_some());
-        let Some(Node::Text { text, tone: Some(Tone::Danger), .. }) = find(&tree, &format!("card-{fresh}-error")) else { panic!() };
-        assert_eq!(text, "Start failed: boom");
-        let Some(Node::Menu { items, .. }) = find(&tree, &format!("move-{fresh}")) else { panic!() };
-        assert_eq!(items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["done"]);
-
-        let Some(Node::Card { clickable: true, .. }) = find(&tree, &format!("card-{started}")) else { panic!() };
-        assert!(find(&tree, &format!("start-{started}")).is_none());
-        assert!(find(&tree, &format!("card-{started}-branch")).is_some());
-        let Some(Node::Menu { items, .. }) = find(&tree, &format!("move-{started}")) else { panic!() };
-        assert_eq!(items.len(), 4);
+    fn ids(v: &Value, out: &mut Vec<String>) {
+        if let Some(id) = v.get("kind").and(v["id"].as_str()) {
+            out.push(id.into());
+        }
+        v.get("children").and_then(Value::as_array).into_iter().flatten().chain(v.get("child")).for_each(|k| ids(k, out));
     }
 
-    #[test]
-    fn a_column_holding_the_whole_board_renders_every_card_within_the_host_limits() {
-        let mut b = Board::default();
-        for i in 0..MAX_CARDS {
-            let id = b.add(&format!("t{i}"), "p");
-            b.started(id, format!("s{i}"), format!("task/t{i}"));
-            b.move_to(id, Column::Review);
-        }
-        let tree = render(&b, 0, None);
-        assert!(b.cards.iter().all(|c| find(&tree, &format!("card-{}", c.id)).is_some()));
-        assert!(find(&tree, "col-review-older").is_none());
-        for col in Column::ALL {
-            let Some(Node::Scroll { axis: Axis::Vertical, .. }) = find(&tree, &format!("col-{}-scroll", col.key())) else {
-                panic!("{col:?} has no vertical scroll")
-            };
-        }
-        let mut ids = Vec::new();
-        flatten(&tree, &mut ids);
-        let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
-        assert_eq!(unique.len(), ids.len(), "ids must be unique");
-        assert!(ids.len() <= 2000, "{} nodes", ids.len());
-        fn depth(n: &Node) -> usize {
-            1 + match n {
-                Node::Vstack { children, .. } | Node::Hstack { children, .. } | Node::Card { children, .. } => {
-                    children.iter().map(depth).max().unwrap_or(0)
+    fn assert_within_host_limits(tree: &Value) {
+        fn walk(v: &Value, depth: usize, max_depth: &mut usize) {
+            match v {
+                Value::String(s) => assert!(s.chars().count() <= 4000, "a {}-char string", s.chars().count()),
+                Value::Array(a) => a.iter().for_each(|x| walk(x, depth, max_depth)),
+                Value::Object(o) => {
+                    let depth = depth + o.contains_key("kind") as usize;
+                    *max_depth = (*max_depth).max(depth);
+                    if let Some(items) = o.get("items").and_then(Value::as_array) {
+                        assert!(items.len() <= 64);
+                    }
+                    o.values().for_each(|x| walk(x, depth, max_depth));
                 }
-                Node::Scroll { child, .. } => depth(child),
-                _ => 0,
+                _ => {}
             }
         }
-        assert!(depth(&tree) <= 16);
+        let mut all = Vec::new();
+        ids(tree, &mut all);
+        assert!(all.iter().all(|id| (1..=64).contains(&id.len())));
+        assert_eq!(all.iter().collect::<HashSet<_>>().len(), all.len(), "ids must be unique");
+        assert!(all.len() <= 2000, "{} nodes", all.len());
+        let mut depth = 0;
+        walk(tree, 0, &mut depth);
+        assert!(depth <= 16, "depth {depth}");
+    }
+
+    fn column_cards(tree: &Value, key: &str) -> Vec<String> {
+        let cards = find(tree, &format!("col-{key}-cards")).unwrap();
+        cards["children"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_owned()).collect()
     }
 
     #[test]
-    fn form_field_ids_change_with_the_form_generation() {
-        let b = Board::default();
-        assert!(find(&render(&b, 0, None), "new-prompt-0").is_some());
-        let tree = render(&b, 1, None);
-        assert!(find(&tree, "new-prompt-1").is_some());
-        assert!(find(&tree, "new-prompt-0").is_none());
+    fn the_board_has_five_columns_and_cards_carry_index_data() {
+        let mut t = Tracker::default();
+        for title in ["a", "b", "c", "d", "e"] {
+            t.create(title, Priority::None, None);
+        }
+        let first = t.entry_mut(1).unwrap();
+        first.priority = Priority::High;
+        first.assignee = Some("claude".into());
+        t.started(2, "s".into(), "task/kan-2".into());
+        t.entry_mut(2).unwrap().agent_state = Some("running".into());
+        // Closing 4 before 3 leaves them out of number order in the index.
+        t.set_status(4, Status::Done);
+        t.set_status(3, Status::Done);
+        t.set_status(5, Status::Cancelled);
+
+        let board = tree(&t, Screen::Board { show_cancelled: false }, None, &[]);
+        let columns: Vec<_> = find(&board, "columns").unwrap()["children"].as_array().unwrap().iter().map(|c| c["id"].clone()).collect();
+        assert_eq!(columns, ["col-backlog", "col-todo", "col-in_progress", "col-in_review", "col-done"]);
+        assert_eq!(find(&board, "col-done-count").unwrap()["text"], "2");
+        assert_eq!(column_cards(&board, "done"), ["ticket-3", "ticket-4"]);
+        assert_eq!(find(&board, "ticket-1").unwrap()["clickable"], true);
+        assert_eq!(find(&board, "ticket-1-number").unwrap()["text"], "KAN-1");
+        assert_eq!(find(&board, "ticket-1-title").unwrap()["text"], "a");
+        assert_eq!(find(&board, "ticket-1-priority").unwrap()["text"], "High");
+        assert_eq!(find(&board, "ticket-1-assignee").unwrap()["text"], "claude");
+        assert_eq!(find(&board, "ticket-2-state").unwrap()["text"], "running");
+        assert!(find(&board, "ticket-5").is_none());
+
+        let board = tree(&t, Screen::Board { show_cancelled: true }, None, &[]);
+        assert_eq!(column_cards(&board, "cancelled"), ["ticket-5"]);
+    }
+
+    #[test]
+    fn a_full_tracker_stays_within_the_host_limits() {
+        let mut t = Tracker::default();
+        let title = "é".repeat(MAX_TITLE_CHARS);
+        for i in 0..MAX_INDEX {
+            let n = t.create(&title, Priority::Urgent, Some("a".repeat(200))).unwrap();
+            t.started(n, format!("s{i}"), "b".repeat(300));
+            let e = t.entry_mut(n).unwrap();
+            e.agent_state = Some("awaiting_input".into());
+            e.error = Some("x".repeat(5000));
+        }
+        let agents: Vec<_> = (0..100).map(|i| Agent { id: format!("agent-{i}"), name: "n".repeat(5000) }).collect();
+        let board = tree(&t, Screen::Board { show_cancelled: true }, None, &agents);
+        assert_within_host_limits(&board);
+        assert_eq!(column_cards(&board, "in_progress").len(), MAX_INDEX);
+
+        let mut body = Body { description: "d".repeat(MAX_DESCRIPTION_CHARS), labels: vec!["l".repeat(100); 20], comments: vec![] };
+        for _ in 0..MAX_COMMENTS {
+            body.comment(Author::Agent, &"c".repeat(MAX_COMMENT_CHARS));
+        }
+        let screen = tree(&t, Screen::Ticket(MAX_INDEX as u64), Some(&body), &agents);
+        assert_within_host_limits(&screen);
+        assert!(find(&screen, &format!("description-{MAX_INDEX}-0")).is_some());
+    }
+
+    #[test]
+    fn the_ticket_screen_waits_for_its_body() {
+        let mut t = Tracker::default();
+        t.create("a", Priority::None, None);
+        let has_field = |v: &Value| {
+            let mut all = Vec::new();
+            ids(v, &mut all);
+            all.iter().any(|id| id.starts_with("description-1-") || id.starts_with("comment-1-"))
+        };
+        let loading = tree(&t, Screen::Ticket(1), None, &[]);
+        assert!(find(&loading, "loading").is_some());
+        assert!(!has_field(&loading));
+        assert!(find(&loading, "status-1").is_some(), "index fields are editable at once");
+
+        let body = Body { description: "d".into(), ..Body::default() };
+        let loaded = tree(&t, Screen::Ticket(1), Some(&body), &[]);
+        assert!(find(&loaded, "loading").is_none());
+        assert_eq!(find(&loaded, "description-1-0").unwrap()["value"], "d");
+        assert!(find(&loaded, "comment-1-0").is_some());
     }
 }

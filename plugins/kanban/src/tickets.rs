@@ -63,7 +63,7 @@ impl Status {
         Status::ALL.into_iter().find(|s| s.key() == key)
     }
 
-    fn closed(self) -> bool {
+    pub fn closed(self) -> bool {
         matches!(self, Status::Done | Status::Cancelled)
     }
 }
@@ -77,6 +77,34 @@ pub enum Priority {
     Medium,
     High,
     Urgent,
+}
+
+impl Priority {
+    pub const ALL: [Priority; 5] = [Priority::None, Priority::Low, Priority::Medium, Priority::High, Priority::Urgent];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Priority::None => "No priority",
+            Priority::Low => "Low",
+            Priority::Medium => "Medium",
+            Priority::High => "High",
+            Priority::Urgent => "Urgent",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Priority::None => "none",
+            Priority::Low => "low",
+            Priority::Medium => "medium",
+            Priority::High => "high",
+            Priority::Urgent => "urgent",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Priority> {
+        Priority::ALL.into_iter().find(|p| p.key() == key)
+    }
 }
 
 /// One index record. Empty fields are not written: the index is saved after every change.
