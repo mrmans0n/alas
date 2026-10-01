@@ -4347,7 +4347,7 @@ final class RightPaneState: GGSplitCommitServicing {
         pullInFlight = true
         Task { @MainActor in
             defer { pullInFlight = false }
-            await performPull(autoOpenConflicts: true)
+            await performPull(autoOpenConflicts: { true })
         }
     }
 
@@ -4355,8 +4355,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// (and its follow-up refreshes) finishes so the sidebar keeps its
     /// spinner up for exactly as long as the work runs. Returns nil when a
     /// guard declined the pull; `.clean` when the pull succeeded; `.conflict`
-    /// when the worktree is left mid-rebase (the second-click selection path
-    /// surfaces the conflicts in the right pane); `.error` when git reported a
+    /// when the worktree is left mid-rebase; `.error` when git reported a
     /// failure.
     ///
     /// The checkpoint journal revalidation lives in `performPull()` rather
@@ -4364,18 +4363,20 @@ final class RightPaneState: GGSplitCommitServicing {
     /// activated (and therefore never ran journal discovery), and the cached
     /// `checkpointMutationsDisabled` would silently veto the pull.
     ///
-    /// Conflict auto-open is suppressed: the pulled worktree is not selected,
-    /// so `openConflict`'s tab activation would happen invisibly and would
-    /// also clear a viewing native peer session's selection, ejecting the
-    /// user from what they were reading.
+    /// - Parameter autoOpenConflicts: Evaluated once, at completion, to
+    ///   decide whether a `.conflict` result auto-opens the first conflicted
+    ///   file. The sidebar passes a selection check so the pull the user is
+    ///   looking at behaves like a changes-tab pull, while a background pull
+    ///   stays silent (an invisible tab activation would also clear a viewing
+    ///   native peer session's selection).
     @discardableResult
     @MainActor
-    func pullAwaited() async -> MergeResult? {
+    func pullAwaited(autoOpenConflicts: @escaping () -> Bool) async -> MergeResult? {
         guard showBehindUpstreamChip, mergeOp.current == nil, !pullInFlight else { return nil }
         sidebarError = nil
         pullInFlight = true
         defer { pullInFlight = false }
-        return await performPull(autoOpenConflicts: false)
+        return await performPull(autoOpenConflicts: autoOpenConflicts)
     }
 
     /// The body shared by `pull()` and `pullAwaited()`. Both entry points own
@@ -4383,11 +4384,12 @@ final class RightPaneState: GGSplitCommitServicing {
     /// guarded work, records the failure message in `sidebarError`, and
     /// returns the pull outcome (nil when a checkpoint guard rejected it).
     ///
-    /// - Parameter autoOpenConflicts: Whether a `.conflict` result auto-opens
-    ///   the first conflicted file's tab. False for background (sidebar)
-    ///   pulls, whose worktree is not selected — see `pullAwaited()`.
+    /// - Parameter autoOpenConflicts: Evaluated at completion to decide
+    ///   whether a `.conflict` result auto-opens the first conflicted file's
+    ///   tab. Constant true from `pull()`; a selection check from
+    ///   `pullAwaited()` — see its doc comment.
     @MainActor
-    private func performPull(autoOpenConflicts: Bool) async -> MergeResult? {
+    private func performPull(autoOpenConflicts: () -> Bool) async -> MergeResult? {
         do {
             guard await checkpointMutationAllowedAfterJournalRevalidation() else { return nil }
             let result = try await git.pull(worktreePath: worktree.path)
@@ -4395,7 +4397,7 @@ final class RightPaneState: GGSplitCommitServicing {
             // pull() already fetched upstream; skip the redundant network
             // fetch and just recount against the already-fresh tracking ref.
             await refreshSyncStatus()
-            if autoOpenConflicts {
+            if autoOpenConflicts() {
                 handleOperationResult(result)
             }
             if case .error(let message) = result {

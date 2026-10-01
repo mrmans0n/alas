@@ -2996,7 +2996,14 @@ final class AppState {
             // A freshly created pane has not probed its upstream yet, and
             // `pullAwaited()` no-ops until it knows the branch is behind.
             if !pane.showBehindUpstreamChip { await pane.refreshSyncStatus() }
-            let result = await pane.pullAwaited()
+            // Conflict auto-open only when this pull's worktree is the pane
+            // the user is actually looking at — either it was already
+            // selected, or the second click selected it mid-pull. Evaluated
+            // at completion, so a selection made while the rebase runs still
+            // opens the conflict like a changes-tab pull would.
+            let result = await pane.pullAwaited(autoOpenConflicts: { [weak self] in
+                self?.inAppBannerWorktreeID == pane.worktree.id
+            })
             // The pull ran without switching the selection, so its outcome
             // would otherwise only surface in the right pane of a worktree
             // the user never selected. `InAppNotificationStack` renders only
