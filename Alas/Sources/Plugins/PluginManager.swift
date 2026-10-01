@@ -166,6 +166,10 @@ final class PluginManager {
         guard manifest.version == version.version, manifest.api == version.api else {
             throw PluginCatalogError.invalidDownload("it is \(manifest.version) for API \(manifest.api), not the \(version.version) the catalog lists")
         }
+        // The row showed the record's capabilities; the download may not ask for anything else.
+        guard Set(manifest.capabilities.map(\.rawValue)) == Set(version.capabilities) else {
+            throw PluginCatalogError.invalidDownload("it asks for different capabilities than the catalog lists")
+        }
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
         let stagingRoot = directory.appending(path: ".staging")
