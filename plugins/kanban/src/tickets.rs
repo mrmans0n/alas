@@ -17,7 +17,7 @@ pub const MAX_COMMENT_CHARS: usize = 2_000;
 /// (a snapshot that moves a ticket) uses 11.6M fuel, 12.3M for escape-heavy titles, against
 /// half the host's 25M per call. 85 tickets went over.
 pub const MAX_INDEX: usize = 75;
-/// Closed tickets kept in the index; older ones leave it, their bodies stay stored.
+/// Closed tickets kept in the index; older ones leave it and their bodies are deleted.
 pub const ARCHIVE_KEEP: usize = 15;
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -205,8 +205,8 @@ impl Tracker {
             return None;
         }
         // A stale stored next_number must not reuse a number still in the index.
-        let number = self.meta.next_number.max(self.index.iter().map(|e| e.number + 1).max().unwrap_or(1)).max(1);
-        self.meta.next_number = number + 1;
+        let number = self.meta.next_number.max(self.index.iter().map(|e| e.number.saturating_add(1)).max().unwrap_or(1)).max(1);
+        self.meta.next_number = number.saturating_add(1);
         self.index.push(Entry {
             number,
             title: title.chars().take(MAX_TITLE_CHARS).collect(),
@@ -308,7 +308,10 @@ impl Tracker {
                 continue;
             }
             let state = session.map(|(_, s, _)| s.as_str());
-            if (state.is_none() && !e.seen) || (e.seen && e.agent_state.as_deref() == state) {
+            // A session gone after it was reported idle (e.g. after a relaunch) changes nothing,
+            // so a manual status holds.
+            let gone_after_idle = state.is_none() && e.agent_state.as_deref() == Some("idle");
+            if (state.is_none() && !e.seen) || (e.seen && e.agent_state.as_deref() == state) || gone_after_idle {
                 continue;
             }
             e.status = match state {
@@ -332,7 +335,7 @@ impl Tracker {
     }
 
     /// Drops the oldest Done and Cancelled tickets past `ARCHIVE_KEEP` from the index and
-    /// returns their numbers. Their bodies stay stored.
+    /// returns their numbers, whose bodies the caller deletes.
     pub fn archive(&mut self) -> Vec<u64> {
         let closed = self.index.iter().filter(|e| e.status.closed()).count();
         let mut excess = closed.saturating_sub(ARCHIVE_KEEP);
@@ -448,6 +451,13 @@ mod tests {
         t.sync(&sess("running"));
         t.sync(&[]);
         assert_eq!(t.index[0].status, Status::InReview);
+
+        // Gone after it was reported idle: a manual status holds.
+        let mut t = started();
+        t.sync(&sess("idle"));
+        t.set_status(1, Status::Todo);
+        assert!(!t.sync(&[]).0);
+        assert_eq!((t.index[0].status, t.index[0].agent_state.as_deref()), (Status::Todo, Some("idle")));
 
         // A manual status holds until the state changes.
         let mut t = started();

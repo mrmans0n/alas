@@ -239,7 +239,11 @@ fn ticket(s: &ViewState, e: &Entry) -> Node {
     let running = e.session_id.is_some() && (!e.seen || e.agent_state.as_deref().is_some_and(|st| st != "idle"));
     if !running && !e.status.closed() {
         let starting = s.starting.contains(&n);
-        let label = if starting { "Starting…" } else { "Start" };
+        let label = match (starting, e.session_id.is_some()) {
+            (true, _) => "Starting…",
+            (false, true) => "Start again",
+            (false, false) => "Start",
+        };
         controls.push(button(format!("start-{n}"), label, Some("play.fill"), ButtonStyle::Primary, starting));
     }
     out.push(hstack(format!("ticket-{n}-controls"), controls));

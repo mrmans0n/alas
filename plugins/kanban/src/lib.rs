@@ -16,6 +16,7 @@ use view::{Draft, Screen, ViewState};
 
 const TRACKER_FULL: &str = "The tracker is full: delete some tickets first.";
 const SAVE_FAILED: &str = "Could not save: ";
+const DESCRIPTION_CUT: &str = "The description was cut to 4,000 characters.";
 
 /// What to do with a ticket body once it is read.
 enum Then {
@@ -54,6 +55,8 @@ pub struct Kanban {
     /// session/last_message id → ticket.
     fetches: Vec<(i64, u64)>,
     agent_request: Option<i64>,
+    /// The session/focus request of the last Open session click.
+    focus_request: Option<i64>,
     /// storage/set ids awaiting a reply.
     saves: Vec<i64>,
     /// The latest (session id, state, branch) list, kept so a snapshot that beats the load still applies.
@@ -96,11 +99,17 @@ impl Kanban {
 
     /// A load failure's notice stays: it says nothing will be saved.
     fn set_notice(&mut self, notice: String) {
-        if self.load_failed {
-            return;
+        if self.note(notice) {
+            self.render();
         }
-        self.notice = Some(notice);
-        self.render();
+    }
+
+    /// Sets the notice without rendering; returns whether it was set.
+    fn note(&mut self, notice: String) -> bool {
+        if !self.load_failed {
+            self.notice = Some(notice);
+        }
+        !self.load_failed
     }
 
     /// Sends writes in order, unless the store could not be read.
@@ -118,18 +127,17 @@ impl Kanban {
         if !self.loaded {
             return;
         }
-        if index_changed {
-            // Archived bodies stay stored; only the index drops them.
-            self.tracker.archive();
-            if let Screen::Ticket(n) = self.screen {
-                if self.tracker.entry(n).is_none() {
-                    self.screen = Screen::default();
-                    self.open_body = None;
-                }
+        // Nobody can open an archived ticket, so its body goes with it.
+        let archived = if index_changed { self.tracker.archive() } else { Vec::new() };
+        if let Screen::Ticket(n) = self.screen {
+            if self.tracker.entry(n).is_none() {
+                self.screen = Screen::default();
+                self.open_body = None;
             }
         }
+        let deleted: Vec<u64> = deleted.iter().copied().chain(archived).collect();
         let body = self.open_body.as_ref().filter(|_| open_body).map(|(n, b)| (*n, b));
-        let writes = store::writes(&self.tracker, body.as_slice(), deleted, index_changed);
+        let writes = store::writes(&self.tracker, body.as_slice(), &deleted, index_changed);
         self.save(writes);
         self.render();
     }
@@ -211,6 +219,7 @@ impl Kanban {
     }
 
     fn create(&mut self, description: &str) {
+        let cut = description.trim().chars().nth(MAX_DESCRIPTION_CHARS).is_some();
         let description: String = description.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
         let title = if self.draft.title.is_empty() { description.lines().next().unwrap_or("") } else { self.draft.title.as_str() };
         if title.trim().is_empty() {
@@ -224,6 +233,9 @@ impl Kanban {
         };
         if self.notice.as_deref() == Some(TRACKER_FULL) {
             self.notice = None;
+        }
+        if cut {
+            self.note(DESCRIPTION_CUT.into());
         }
         self.draft = Draft::default();
         self.form += 1;
@@ -376,7 +388,7 @@ impl Kanban {
             self.start(n);
         } else if let Some(n) = number("open-") {
             if let Some(session) = self.tracker.entry(n).and_then(|e| e.session_id.as_deref()) {
-                request("session/focus", json!({"id": session}));
+                self.focus_request = Some(request("session/focus", json!({"id": session})));
             }
         } else if let Some(n) = number("delete-") {
             if self.tracker.entry(n).is_some() {
@@ -389,6 +401,9 @@ impl Kanban {
             let description: String = value.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
             if body.description != description {
                 body.description = description;
+                if value.trim().chars().nth(MAX_DESCRIPTION_CHARS).is_some() {
+                    self.note(DESCRIPTION_CUT.into());
+                }
                 self.commit(false, true, &[]);
             }
         } else if let Some(n) = field("comment-") {
@@ -447,6 +462,12 @@ impl Plugin for Kanban {
                 let i = self.fetches.iter().position(|&(r, _)| r == id).expect("contained");
                 let (_, n) = self.fetches.remove(i);
                 self.fetched(n, result);
+            }
+            Event::Reply { id, result } if self.focus_request == Some(id) => {
+                self.focus_request = None;
+                if result.is_err() {
+                    self.set_notice("That session is not open any more.".into());
+                }
             }
             Event::Reply { id, result } if self.agent_request == Some(id) => {
                 self.agent_request = None;

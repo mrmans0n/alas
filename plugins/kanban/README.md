@@ -102,18 +102,18 @@ Alas gives every plugin call a fixed fuel budget, and parsing, saving and
 drawing tickets costs fuel per ticket and per byte. The index cap keeps the
 costliest board call under half the budget, and the comment caps do the same
 for opening a full ticket or adding a comment to it. Archived tickets leave the index
-but their bodies stay stored. When the tracker is full, a new ticket is
+and their bodies are deleted. When the tracker is full, a new ticket is
 refused until you delete some.
 
 ## Known limits
 
 - **Create** drops a description you have typed but not submitted. Press
   ⌘Return in the description instead.
-- If Alas quits while a ticket is starting, the ticket can stay unlinked even
-  though its worktree and agent were created; starting it again makes a second
-  worktree.
+- If Alas quits while a ticket is starting, the ticket is not linked to the
+  worktree and agent that were created: after a relaunch it moves to In review,
+  and **Start again** makes a second worktree.
 - Text dense with quotes, backslashes or line breaks costs more fuel to read.
   A full ticket of such text stays within a plugin call's budget but uses more
   than half of it.
-- All of a project's tickets share the plugin's 1 MB of storage, archived
-  bodies included. When it is full, saving shows an error.
+- All of a project's tickets share the plugin's 1 MB of storage. When it is
+  full, saving shows an error.
