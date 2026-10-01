@@ -2592,6 +2592,32 @@ final class AppState {
         workspaceNavigationState.selectedCheckoutID.flatMap(workspacesManager.checkout(id:))
     }
 
+    /// The worktree whose `CenterPaneView` is currently mounted, if any.
+    /// `InAppNotificationStack` renders only inside a mounted `CenterPaneView`,
+    /// so an in-app banner posted for any other id is never drawn. Mirrors the
+    /// exact branch conditions of `RootView`'s center content: no banner while
+    /// a native peer session/document or the forest preview is on screen, none
+    /// on the workspace overview or the empty state, and the checkout fallback
+    /// pane posts under its pseudo worktree id.
+    var inAppBannerWorktreeID: String? {
+        if isPreviewingForestScenes
+            || nativePeerSessions?.selectedSessionId != nil { return nil }
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: selectedWorktreeId,
+            projects: navigationProjects,
+            projectsManager: projectsManager,
+            allowedWorktreeIDs: checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: checkoutFocusedWorktreeScope,
+            isRefreshingProjectTopologies: isRefreshingProjectTopologies
+        )
+        if case .worktree(let wt) = resolver.resolve() { return wt.id }
+        if selectedWorkspaceCheckout != nil,
+           sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() != nil {
+            return sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout()?.id
+        }
+        return nil
+    }
+
     /// A refreshed snapshot can archive or remove the displayed checkout.
     /// Clear its focus so no repository pane keeps a stale checkout context.
     func reconcileWorkspaceNavigationSelection() {
@@ -2973,13 +2999,34 @@ final class AppState {
             let result = await pane.pullAwaited()
             // The pull ran without switching the selection, so its outcome
             // would otherwise only surface in the right pane of a worktree
-            // the user never selected. `InAppNotificationStack` mounts only
-            // inside `CenterPaneView`, which is not on screen while a native
-            // peer session or document is open — post a macOS notification
-            // there (its click-through focuses the pulled worktree), and the
-            // in-app banner on the currently selected worktree otherwise.
+            // the user never selected. `InAppNotificationStack` renders only
+            // inside a mounted `CenterPaneView`; when no such pane is on
+            // screen (peer session, workspace overview, forest preview,
+            // empty state) post a macOS notification instead — its
+            // click-through focuses the pulled worktree.
             guard let self, let result else { return }
-            if self.nativePeerSessions?.selectedSessionId != nil {
+            if let bannerWorktreeID = self.inAppBannerWorktreeID {
+                switch result {
+                case .clean:
+                    self.inAppNotifications.post(
+                        "Pulled \(worktree.branch)",
+                        severity: .success,
+                        worktreeID: bannerWorktreeID
+                    )
+                case .conflict:
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) hit conflicts",
+                        severity: .error,
+                        worktreeID: bannerWorktreeID
+                    )
+                case .error(let message):
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) failed: \(message)",
+                        severity: .error,
+                        worktreeID: bannerWorktreeID
+                    )
+                }
+            } else {
                 switch result {
                 case .clean:
                     self.harness.notifications.notifyWorktreePull(
@@ -2998,28 +3045,6 @@ final class AppState {
                         body: "Pull of \(worktree.branch) failed: \(message)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
-                    )
-                }
-            } else {
-                let visibleWorktreeID = self.selectedWorktreeId ?? id
-                switch result {
-                case .clean:
-                    self.inAppNotifications.post(
-                        "Pulled \(worktree.branch)",
-                        severity: .success,
-                        worktreeID: visibleWorktreeID
-                    )
-                case .conflict:
-                    self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) hit conflicts",
-                        severity: .error,
-                        worktreeID: visibleWorktreeID
-                    )
-                case .error(let message):
-                    self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) failed: \(message)",
-                        severity: .error,
-                        worktreeID: visibleWorktreeID
                     )
                 }
             }
