@@ -23,7 +23,7 @@ final class CodeEditorLayoutManager: NSLayoutManager {
     private var markerColor = NSColor.secondaryLabelColor.withAlphaComponent(0.42)
 
     func update(configuration: CodeEditorTextRenderingConfiguration, theme: Theme) {
-        let color = NSColor(theme.color("fg")).withAlphaComponent(0.42)
+        let color = EditorTheme(theme: theme).defaultFG.withAlphaComponent(0.42)
         guard self.configuration != configuration || !markerColor.isEqual(color) else { return }
         self.configuration = configuration
         markerColor = color
