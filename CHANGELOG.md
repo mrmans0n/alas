@@ -6,19 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.20] - 2026-10-01
+
 ### ✨ Features
 
-- Add plugin API 3: native view tabs described as a tree of controls, a `tasks.start` capability that creates a worktree and starts the default agent with a prompt without changing the selection, and per-project plugin storage. Add a Kanban plugin whose cards start agents in new worktrees and follow their sessions through Running, Needs you and Review.
-- Persist an agent's advertised slash commands and skills so their pills and composer chips survive an app restart, appear in mirrors and forks before any attach, and keep their hover cards.
-- Show peer branch changes as an expandable folder tree and compare them using the viewing Mac's configured commit comparison mode.
+- Add plugin API 3 with native view tabs, a `tasks.start` capability, per-project plugin storage, and a Kanban plugin whose cards start agents in new worktrees (#1653).
+- Persist an agent's advertised slash commands and skills so their pills and composer chips survive an app restart, appear in mirrors and forks before any attach, and keep their hover cards (#1659).
+- Add selectable code themes for editors, diffs, merge views, ACP code blocks, and previews (#1658).
+- Let a remote project share a path with a local project (#1648).
+- Show directory names for detached worktrees in the sidebar (#1651).
+- Show peer branch changes as an expandable folder tree and compare them using the viewing Mac's configured commit comparison mode (#1650).
+- Badge absolute paths in the ACP composer and transcript (#1649).
 - Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only (#1643).
+- Add plugin canvas tabs, a Release plugin setting, and the Pixel Office plugin (#1635).
+- Group peer working tree changes (#1636).
 
 ### 🐛 Fixes
 
-- Set an existing hook socket or isolated-profile runtime directory owned by the user to `0700` instead of accepting an owner-only mode that cannot be traversed, which left hooks, persistent terminals, and ACP brokers unable to start. Refuse such a directory, or an isolated profile root, that group or others could write (#1640).
-- Keep delegated children connected to Alas across an app restart: their `alas` CLI and MCP server now reach the app through a per-session socket link that each attach repoints, and on launch Alas re-attaches children that had a turn in progress, so their reports and turn outcomes still reach the parent (#1641).
-- Hold every prompt to a delegated child with a requested model or reasoning until the selection is acknowledged: prompts typed in the child's tab and a tab restored at launch can no longer run on the previous model, a message sent to a child that already failed is refused atomically with the failure (also across instances sharing a profile), and reasoning levels an agent publishes only after `session/set_model` are waited for instead of rejected (#1639).
-- Render delegated prompts and child reports as cards instead of user bubbles, and keep them out of the user's Up next queue.
+- Hold every prompt to a delegated child with a requested model or reasoning until the selection is acknowledged. Prompts typed in the child's tab and tabs restored at launch can no longer run on the previous model (#1655).
+- Render delegated prompts and child reports as cards instead of user bubbles, and keep them out of the user's Up next queue (#1654).
+- Keep delegated children connected to Alas across an app restart by reattaching sessions that had a turn in progress (#1646).
+- Isolate plugins per profile and keep Pixel Office within its fuel budget (#1647).
+- Ignore editor hover while an overlay covers the editor (#1645).
+- Hide the Peers section until a peer is paired (#1644).
+- Set existing hook socket and isolated-profile runtime directories owned by the user to `0700`, and refuse directories that group or others can write (#1640).
+- Mute the "Show earlier" button inside ACP tool-call bundles (#1637).
+
+### 🏗️ Internal
+
+- Tile peer transcripts on the AppKit scroller to reduce view overhead (#1642).
+- Remove the experimental next-prompt suggestions.
+- Update the Rust `png` and `tree-sitter-haskell` dependencies (#1638, #1652).
 
 ## [0.19.19] - 2026-09-29
 
