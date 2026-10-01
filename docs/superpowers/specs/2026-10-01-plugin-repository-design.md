@@ -58,10 +58,10 @@ Served from `https://raw.githubusercontent.com/mrmans0n/alas-plugins/main/index.
     "summary": "A ticket board whose tickets start agent tasks.",
     "homepage": "https://github.com/mrmans0n/alas-plugins/tree/main/plugins/kanban",
     "versions": [{
-      "version": "0.2.0",
-      "api": 3,
+      "version": "0.3.0",
+      "api": 4,
       "capabilities": ["workspace.read", "session.focus", "session.read", "tasks.start"],
-      "manifest": "https://github.com/mrmans0n/alas-plugins/releases/download/kanban-v0.2.0/plugin.json",
+      "manifest": "https://github.com/mrmans0n/alas-plugins/releases/download/kanban-v0.3.0/plugin.json",
       "entry": "https://github.com/mrmans0n/alas-plugins/releases/download/kanban-v0.3.0/plugin.js",
       "hash": "<PluginTrust hash>"
     }]
@@ -96,12 +96,15 @@ merging a PR does not publish it.
   row shows the name, version, summary, and the capabilities written out in
   words, with an **Install** button.
 - **Install** downloads both files, verifies the hash, and writes them to
-  `Plugins/.staging/<id>/`. It then renames that folder to `Plugins/<id>/` and
-  rescans the plugins folder. The plugin shows up unapproved and goes through the
+  `Plugins/.staging/<id>/`. Discovery skips hidden entries, so the staging folder
+  is never scanned as a plugin. Install then moves that folder to `Plugins/<id>/`
+  and rescans the plugins folder. The plugin shows up unapproved and goes through the
   existing **Approve…** sheet. Nothing runs before the user approves it.
 - **Update available** appears on an installed plugin when the index has a newer
-  compatible version for its id. Updating stops the plugin's instances, swaps the
-  folder the same way, and rescans. Because the hash changed, the plugin asks
+  compatible version for its id. Updating stops the plugin's instances, stages
+  the new files the same way, and swaps them in with
+  `FileManager.replaceItemAt(_:withItemAt:)`, which replaces the existing folder
+  in one step, then rescans. Because the hash changed, the plugin asks
   for approval again, which is the right moment to review any new capabilities.
 - **Remove** is offered for plugins installed from the catalog (folder name is
   the id and the hash matches some catalog version). It stops the instances and
@@ -129,8 +132,9 @@ Behind the existing experimental Plugins setting, like the rest of the system.
 ## What community plugins will need next (not in this spec)
 
 The plugins the repo is meant to attract, such as Notion, Linear or GitHub
-integrations, need host APIs that do not exist yet. Each gets its own spec as
-API 4:
+integrations, need host APIs that do not exist yet. They are specced in
+`2026-10-01-plugin-api-expansion-design.md`, starting at API 5 (API 4 is the
+JavaScript runtime switch):
 
 - **`http.fetch` with a host allowlist** declared in the manifest and shown in
   the approval sheet. Alas makes the request, so the plugin never gets sockets.
