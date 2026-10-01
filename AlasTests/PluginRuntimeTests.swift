@@ -66,6 +66,8 @@ struct PluginRuntimeTests {
         ([.sendRepeated("x", times: 5)], "more than 4"),
         // Turning the thrown value into text runs its toString, which must not escape the limit.
         ([.script("throw { toString() { for (;;) {} } };")], "took longer than 100 ms"),
+        // Only a prefix of a huge thrown string is copied out to describe the failure.
+        ([.script("throw 'boom' + 'x'.repeat(64 << 20);")], "plugin threw: boomxxx"),
         // Catching the refusal does not save the call.
         ([.script("try { alas.send(2); } catch {} alas.send('ok');")], "expects one string"),
     ])
