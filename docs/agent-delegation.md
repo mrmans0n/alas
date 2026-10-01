@@ -328,9 +328,21 @@ agent can tell a report from its user's prompt:
 The worktree clause is omitted when the worktree is unknown. In the parent's
 transcript the report renders as a full-width card, not a user bubble, headed
 **Report from \<agent\> child · \<first 8 characters of the session id\>**.
-The prompts Alas sends a parent about its child (a failure, or a turn that
-ended without a report) already start with `[alas system] Delegated session …`
-and carry the same header.
+
+The prompts Alas itself sends a parent about its child start with
+`[alas system] Delegated session …` instead. They render as the same card, but
+headed as Alas's notice, not as the child's report:
+
+| Prompt | Card header |
+|---|---|
+| The child has waited on a permission, question, or plan prompt past the escalation delay | **Alas · \<agent\> child \<id\> needs a human decision** |
+| The child's turn ended without a `session_send` report | **Alas · \<agent\> child \<id\> finished without a result** |
+| The child's turn or the child itself failed | **Alas · \<agent\> child \<id\> failed** |
+
+A child turn that ended after a report, or that the user cancelled, does not
+wake the parent. It appears in the parent's transcript as a one-line notice,
+for example `Delegated session <id> (<agent-id>) had its turn cancelled by the
+user.`
 
 A parent's message to its child is delivered unchanged and rendered as the
 same kind of card headed **Delegated prompt**, as is the child's initial task
