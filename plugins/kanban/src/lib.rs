@@ -36,7 +36,10 @@ pub struct Kanban {
     open_body: Option<(u64, Body)>,
     agents: Vec<Agent>,
     draft: Draft,
+    /// Generation of the New ticket and description field ids; bumping it resets those fields.
     form: u64,
+    /// Generation of the comment field id, separate so posting keeps unsaved description text.
+    comment_form: u64,
     notice: Option<String>,
     loaded: bool,
     /// The store could not be read, so it is never overwritten.
@@ -84,13 +87,18 @@ impl Kanban {
                 agents: &self.agents,
                 draft: &self.draft,
                 form: self.form,
+                comment_form: self.comment_form,
                 notice: self.notice.as_deref(),
                 starting: &starting,
             }),
         );
     }
 
+    /// A load failure's notice stays: it says nothing will be saved.
     fn set_notice(&mut self, notice: String) {
+        if self.load_failed {
+            return;
+        }
         self.notice = Some(notice);
         self.render();
     }
@@ -259,8 +267,8 @@ impl Kanban {
             body.comment(Author::Agent, &text);
             let writes = store::writes(&self.tracker, &[(n, &body)], &[], false);
             self.save(writes);
-            // A ticket screen read sent before this write would miss the comment: read it again.
-            if let Some(load) = self.body_loads.iter_mut().find(|(_, p, then)| *p == n && matches!(then, Then::Open)) {
+            // Reads sent before this write would miss the comment: read again.
+            for load in self.body_loads.iter_mut().filter(|(_, p, then)| *p == n && matches!(then, Then::Open | Then::Comment(_))) {
                 load.0 = storage_get(&body_key(n));
             }
         } else {
@@ -389,7 +397,7 @@ impl Kanban {
                 return;
             }
             body.comment(Author::You, &value);
-            self.form += 1;
+            self.comment_form += 1;
             self.commit(false, true, &[]);
         }
     }
@@ -415,8 +423,9 @@ impl Plugin for Kanban {
             Event::Snapshot(snapshot) | Event::WorkspaceChanged(snapshot) => self.apply(snapshot),
             Event::ViewEvent { id, value, .. } => self.view_event(&id, value),
             Event::TaskFailed { session_id, reason } => {
-                self.tracker.task_failed(&session_id, &reason);
-                self.commit(true, false, &[]);
+                if self.tracker.task_failed(&session_id, &reason) {
+                    self.commit(true, false, &[]);
+                }
             }
             Event::Reply { id, result } if self.saves.contains(&id) => {
                 self.saves.retain(|&s| s != id);
@@ -443,7 +452,11 @@ impl Plugin for Kanban {
                 self.agent_request = None;
                 match result {
                     Ok(r) => {
-                        self.agents = parse_agents(&r);
+                        let mut agents = parse_agents(&r);
+                        // Duplicate menu item ids would stop the plugin.
+                        let mut seen = std::collections::HashSet::new();
+                        agents.retain(|a| seen.insert(a.id.clone()));
+                        self.agents = agents;
                         self.render();
                     }
                     Err(e) => self.set_notice(format!("Could not list the agents: {}", e.message)),
@@ -565,9 +578,9 @@ mod tests {
         let mut k = with_ticket(json!({}));
         event(&mut k, "ticket-1", None);
         sent_one(&test_host::take_sent(), "storage/get");
-        let form = k.form;
-        event(&mut k, &format!("description-1-{form}"), Some("new description"));
-        event(&mut k, &format!("comment-1-{form}"), Some("a comment"));
+        let (description, comment) = (format!("description-1-{}", k.form), format!("comment-1-{}", k.comment_form));
+        event(&mut k, &description, Some("new description"));
+        event(&mut k, &comment, Some("a comment"));
         assert!(test_host::take_sent().is_empty());
     }
 

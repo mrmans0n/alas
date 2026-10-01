@@ -3,14 +3,12 @@
 //! Ids are built only from fixed words and ticket numbers, so they stay unique and under the
 //! host's 64 bytes. Board cards carry index data only; a ticket body is read on its screen.
 
-use crate::tickets::{Author, Body, Entry, Priority, Status, Tracker, MAX_COMMENTS, MAX_LABELS, MAX_LABEL_CHARS};
+use crate::tickets::{Author, Body, Entry, Priority, Status, Tracker, MAX_COMMENTS, MAX_DESCRIPTION_CHARS, MAX_INDEX, MAX_LABELS, MAX_LABEL_CHARS};
 use alas_plugin::{Agent, Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
 
 const MAX_TEXT: usize = 500;
 /// Comments carry the agent's results, so they show more than other text.
 const MAX_COMMENT_TEXT: usize = 2_000;
-/// The host's cap on any string in a tree, in Unicode scalars.
-const MAX_STRING: usize = 4_000;
 /// The host's cap on menu items.
 const MAX_MENU_ITEMS: usize = 64;
 /// The assignee menu item that clears the assignee.
@@ -44,6 +42,8 @@ pub struct ViewState<'a> {
     pub agents: &'a [Agent],
     pub draft: &'a Draft,
     pub form: u64,
+    /// The comment field's own generation, so posting a comment keeps unsaved description text.
+    pub comment_form: u64,
     pub notice: Option<&'a str>,
     /// Tickets with a Start in flight.
     pub starting: &'a [u64],
@@ -141,10 +141,14 @@ fn priority_menu(id: String, current: Priority) -> Node {
 
 /// With no agents there is nothing to pick, so a label says so instead of an empty menu.
 fn assignee_menu(id: String, current: Option<&str>, agents: &[Agent]) -> Node {
-    if agents.is_empty() {
-        return text(id, "No agents available", Some(TextStyle::Caption), Some(Tone::Dim));
-    }
     let name = current.map(|a| agents.iter().find(|x| x.id == a).map_or(a, |x| x.name.as_str()));
+    if agents.is_empty() {
+        let label = match name {
+            Some(name) => format!("Assignee: {name} (no agents available)"),
+            None => "No agents available".into(),
+        };
+        return text(id, &label, Some(TextStyle::Caption), Some(Tone::Dim));
+    }
     let mut items = vec![MenuItem { id: UNASSIGNED.into(), label: "Unassigned".into() }];
     // Item ids must be 1 to 64 bytes; an agent whose id is not cannot be offered.
     let pickable = agents.iter().filter(|a| (1..=64).contains(&a.id.len()) && a.id != UNASSIGNED);
@@ -175,6 +179,8 @@ fn column(tracker: &Tracker, status: Status) -> Node {
     // The index is not in number order: closed tickets sit at its end in closing order.
     let mut entries: Vec<&Entry> = tracker.in_status(status).collect();
     entries.sort_unstable_by_key(|e| e.number);
+    // Loading caps the index; this keeps the tree within the host's node limit regardless.
+    entries.truncate(MAX_INDEX);
     let header = hstack(
         format!("col-{key}-header"),
         vec![
@@ -256,7 +262,7 @@ fn ticket(s: &ViewState, e: &Entry) -> Node {
 
     match s.body {
         None => out.push(text("loading".into(), "Loading…", None, Some(Tone::Dim))),
-        Some(body) => body_nodes(n, s.form, body, &mut out),
+        Some(body) => body_nodes(n, s.form, s.comment_form, body, &mut out),
     }
 
     let mut footer = Vec::new();
@@ -269,34 +275,15 @@ fn ticket(s: &ViewState, e: &Entry) -> Node {
     Node::Scroll { id: "ticket".into(), axis: Axis::Vertical, child: Box::new(vstack("ticket-content".into(), out)) }
 }
 
-fn body_nodes(n: u64, form: u64, body: &Body, out: &mut Vec<Node>) {
+fn body_nodes(n: u64, form: u64, comment_form: u64, body: &Body, out: &mut Vec<Node>) {
     out.push(text("description-heading".into(), "Description", Some(TextStyle::Caption), Some(Tone::Dim)));
-    if body.description.char_indices().nth(MAX_STRING).is_none() {
-        out.push(Node::TextField {
-            id: format!("description-{n}-{form}"),
-            value: body.description.clone(),
-            placeholder: Some("Describe the ticket — ⌘Return saves".into()),
-            multiline: true,
-        });
-    } else {
-        // The host caps a field's text, so a longer description is shown in parts and can only
-        // be replaced, not edited in place.
-        let mut rest = body.description.as_str();
-        for i in 0.. {
-            if rest.is_empty() {
-                break;
-            }
-            let cut = rest.char_indices().nth(MAX_STRING).map_or(rest.len(), |(cut, _)| cut);
-            out.push(Node::Text { id: format!("description-part-{i}"), text: rest[..cut].into(), style: None, tone: None });
-            rest = &rest[cut..];
-        }
-        out.push(Node::TextField {
-            id: format!("description-{n}-{form}"),
-            value: String::new(),
-            placeholder: Some("Too long to edit here — ⌘Return replaces it".into()),
-            multiline: true,
-        });
-    }
+    out.push(Node::TextField {
+        id: format!("description-{n}-{form}"),
+        // Edits are capped; the clip only guards against tampered storage over the host's limit.
+        value: body.description.chars().take(MAX_DESCRIPTION_CHARS).collect(),
+        placeholder: Some("Describe the ticket — ⌘Return saves".into()),
+        multiline: true,
+    });
     if !body.labels.is_empty() {
         let labels = body.labels.iter().take(MAX_LABELS).enumerate();
         let badges = labels.map(|(i, l)| Node::Badge { id: format!("label-{i}"), text: clip(l, MAX_LABEL_CHARS), tone: None });
@@ -322,7 +309,7 @@ fn body_nodes(n: u64, form: u64, body: &Body, out: &mut Vec<Node>) {
         });
     }
     out.push(Node::TextField {
-        id: format!("comment-{n}-{form}"),
+        id: format!("comment-{n}-{comment_form}"),
         value: String::new(),
         placeholder: Some("Add a comment — ⌘Return posts it".into()),
         multiline: true,
@@ -332,13 +319,13 @@ fn body_nodes(n: u64, form: u64, body: &Body, out: &mut Vec<Node>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tickets::{MAX_COMMENT_CHARS, MAX_DESCRIPTION_CHARS, MAX_INDEX, MAX_TITLE_CHARS};
+    use crate::tickets::{MAX_COMMENT_CHARS, MAX_TITLE_CHARS};
     use serde_json::Value;
     use std::collections::HashSet;
 
     fn tree(tracker: &Tracker, screen: Screen, body: Option<&Body>, agents: &[Agent]) -> Value {
         let draft = Draft::default();
-        let state = ViewState { tracker, screen: &screen, body, agents, draft: &draft, form: 0, notice: None, starting: &[] };
+        let state = ViewState { tracker, screen: &screen, body, agents, draft: &draft, form: 0, comment_form: 0, notice: None, starting: &[] };
         serde_json::to_value(render(&state)).unwrap()
     }
 
@@ -437,13 +424,14 @@ mod tests {
         assert_within_host_limits(&board);
         assert_eq!(column_cards(&board, "in_progress").len(), MAX_INDEX);
 
-        let mut body = Body { description: "d".repeat(MAX_DESCRIPTION_CHARS), labels: vec!["l".repeat(100); 20], comments: vec![] };
+        let mut body = Body { description: "d".repeat(MAX_DESCRIPTION_CHARS + 1), labels: vec!["l".repeat(100); 20], comments: vec![] };
         for _ in 0..MAX_COMMENTS {
             body.comment(Author::Agent, &"c".repeat(MAX_COMMENT_CHARS));
         }
         let screen = tree(&t, Screen::Ticket(MAX_INDEX as u64), Some(&body), &agents);
         assert_within_host_limits(&screen);
-        assert!(find(&screen, &format!("description-{MAX_INDEX}-0")).is_some());
+        let field = find(&screen, &format!("description-{MAX_INDEX}-0")).unwrap();
+        assert_eq!(field["value"].as_str().unwrap().len(), MAX_DESCRIPTION_CHARS, "an over-long stored description is clipped");
     }
 
     #[test]

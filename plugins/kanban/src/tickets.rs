@@ -5,7 +5,8 @@ use crate::board::{Board, Column};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TITLE_CHARS: usize = 200;
-pub const MAX_DESCRIPTION_CHARS: usize = 8_000;
+/// The host caps a text field at 4,000 Unicode scalars, so a longer description could not be edited.
+pub const MAX_DESCRIPTION_CHARS: usize = 4_000;
 pub const MAX_LABELS: usize = 8;
 pub const MAX_LABEL_CHARS: usize = 32;
 pub const MAX_COMMENTS: usize = 50;
@@ -266,17 +267,20 @@ impl Tracker {
         }
     }
 
-    /// An accepted start failed in the background: its session never came up.
-    pub fn task_failed(&mut self, session_id: &str, reason: &str) {
-        if let Some(e) = self.index.iter_mut().find(|e| e.session_id.as_deref() == Some(session_id)) {
+    /// An accepted start failed in the background: its session never came up. A closed ticket
+    /// stays closed. Returns whether a ticket had that session.
+    pub fn task_failed(&mut self, session_id: &str, reason: &str) -> bool {
+        let Some(e) = self.index.iter_mut().find(|e| e.session_id.as_deref() == Some(session_id)) else { return false };
+        if !e.status.closed() {
             e.status = Status::Todo;
-            e.error = Some(reason.into());
-            e.session_id = None;
-            e.following = false;
-            e.seen = false;
-            e.fetched = false;
-            e.agent_state = None;
         }
+        e.error = Some(reason.into());
+        e.session_id = None;
+        e.following = false;
+        e.seen = false;
+        e.fetched = false;
+        e.agent_state = None;
+        true
     }
 
     /// `sessions` is (session id, state, worktree branch) from the snapshot. Returns whether any
@@ -372,7 +376,9 @@ impl Tracker {
                 error: c.error.clone(),
             });
             if !c.prompt.is_empty() {
-                bodies.push((number, Body { description: c.prompt.clone(), ..Body::default() }));
+                // The old board stays stored, so a longer prompt is not lost.
+                let description = c.prompt.chars().take(MAX_DESCRIPTION_CHARS).collect();
+                bodies.push((number, Body { description, ..Body::default() }));
             }
         }
         let meta = Meta { version: FORMAT_VERSION, next_number: index.len() as u64 + 1 };
@@ -488,6 +494,15 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_task_does_not_reopen_a_closed_ticket() {
+        let mut t = started();
+        t.set_status(1, Status::Cancelled);
+        assert!(t.task_failed("s1", "boom"));
+        assert_eq!((t.index[0].status, t.index[0].session_id.as_deref()), (Status::Cancelled, None));
+        assert!(!t.task_failed("s1", "again"));
+    }
+
+    #[test]
     fn comments_are_capped_and_clipped() {
         let mut b = Body::default();
         b.comment(Author::You, "  \n ");
@@ -519,7 +534,7 @@ mod tests {
             cards: vec![
                 card(7, Column::Backlog, "do it\nmore", None),
                 card(3, Column::Running, "", Some("running")),
-                card(9, Column::NeedsYou, "p", Some("awaiting_input")),
+                card(9, Column::NeedsYou, &"x".repeat(MAX_DESCRIPTION_CHARS + 1), Some("awaiting_input")),
                 card(4, Column::Review, "p", Some("idle")),
                 card(5, Column::Done, "p", None),
             ],
@@ -540,6 +555,7 @@ mod tests {
         assert_eq!((t.meta.version, t.meta.next_number), (FORMAT_VERSION, 6));
         assert_eq!(bodies[0], (1, Body { description: "do it\nmore".into(), ..Body::default() }));
         assert!(bodies.iter().all(|(n, _)| *n != 2), "an empty prompt has no body");
+        assert_eq!(bodies[1].1.description.len(), MAX_DESCRIPTION_CHARS, "a long prompt is clipped");
         let review = &t.index[3];
         assert_eq!((review.session_id.as_deref(), review.branch.as_deref()), (Some("s4"), Some("br")));
         assert!(review.following && review.seen && review.fetched);

@@ -1,7 +1,7 @@
 //! Storage layout: `meta`, `index`, and one `ticket-<n>` key per body. Pure, no SDK calls.
 
 use crate::board::Board;
-use crate::tickets::{Body, Entry, Meta, Tracker};
+use crate::tickets::{Body, Entry, Meta, Tracker, MAX_INDEX};
 use serde_json::value::{to_raw_value, RawValue};
 
 pub const META: &str = "meta";
@@ -34,12 +34,17 @@ pub fn load(meta: Option<&str>, index: Option<&str>, legacy: Option<&str>) -> Lo
             Ok(m) => m,
             Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
         };
-        let index = match serde_json::from_str::<Vec<Entry>>(index) {
+        let mut index = match serde_json::from_str::<Vec<Entry>>(index) {
             Ok(i) => i,
             Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
         };
+        // The floor counts every stored number, so one dropped below is never reused.
         let floor = index.iter().map(|e| e.number.saturating_add(1)).max().unwrap_or(1);
         meta.next_number = meta.next_number.max(floor);
+        // Tampered storage must not break the view's unique ids or size limits on every start.
+        let mut seen = std::collections::HashSet::new();
+        index.retain(|e| seen.insert(e.number));
+        index.truncate(MAX_INDEX);
         return Loaded::Tracker(Tracker { meta, index });
     }
     match board {
