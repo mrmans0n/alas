@@ -57,3 +57,6 @@ files. These are planned; see the roadmap in
 
 A complete working plugin lives in
 [`plugins/samples/hello-workspace`](../../plugins/samples/hello-workspace).
+
+Kanban, Pixel Office, the Rust SDK and any plugin you want others to install live in
+[mrmans0n/alas-plugins](https://github.com/mrmans0n/alas-plugins).

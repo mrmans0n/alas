@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "alas-plugin"
 version = "0.1.0"
+source = "git+https://github.com/mrmans0n/alas-plugins?tag=sdk-v0.1.0#a98c366c1fef33c6ad3001dea63b4df4791fcf24"
 dependencies = [
  "serde",
  "serde_json",

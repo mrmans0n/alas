@@ -7,7 +7,7 @@ sample uses and the one that has been checked against Alas.
 
 ## The shape of a plugin
 
-With the [`alas-plugin`](../../plugins/alas-plugin) Rust SDK a plugin is one
+With the [`alas-plugin`](https://github.com/mrmans0n/alas-plugins/tree/main/sdk/alas-plugin) Rust SDK a plugin is one
 type and one macro call. The SDK owns the ABI glue (`alas_alloc`, `alas_handle`
 and the `alas.send` import), the JSON-RPC framing, request ids, and the
 activation handshake: `alas/activate` is answered before your code sees it.
@@ -27,7 +27,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-alas-plugin = { path = "../alas-plugin" }   # adjust to where you keep the SDK
+alas-plugin = { git = "https://github.com/mrmans0n/alas-plugins", tag = "sdk-v0.1.0" }
 serde_json = "1"
 
 [profile.release]
@@ -78,7 +78,8 @@ On non-wasm targets the SDK replaces the host imports with an in-memory
 recorder, so plain `cargo test` works. Feed messages to `alas_plugin::dispatch`
 and read what the plugin sent with `alas_plugin::test_host::take_sent()`, or the
 frames it presented with `test_host::take_frames()`. The SDK's own tests in
-`plugins/alas-plugin/src/lib.rs` show the pattern.
+`sdk/alas-plugin/src/lib.rs` in
+[alas-plugins](https://github.com/mrmans0n/alas-plugins) show the pattern.
 
 For that, add `"rlib"` to `crate-type` (`["cdylib", "rlib"]`) so tests can link.
 
