@@ -58,6 +58,7 @@ files. These are planned; see the roadmap in
 | Run the sample plugin and see it work | [Getting started](getting-started.md) |
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
 | Look up the runtime, limits, and every method | [API v4 reference](api-v4.md) |
+| Add commands, notifications and session events | [API v5](api-v5.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
