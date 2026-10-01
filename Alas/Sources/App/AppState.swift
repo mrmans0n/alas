@@ -2592,6 +2592,32 @@ final class AppState {
         workspaceNavigationState.selectedCheckoutID.flatMap(workspacesManager.checkout(id:))
     }
 
+    /// The worktree whose `CenterPaneView` is currently mounted, if any.
+    /// `InAppNotificationStack` renders only inside a mounted `CenterPaneView`,
+    /// so an in-app banner posted for any other id is never drawn. Mirrors the
+    /// exact branch conditions of `RootView`'s center content: no banner while
+    /// a native peer session/document or the forest preview is on screen, none
+    /// on the workspace overview or the empty state, and the checkout fallback
+    /// pane posts under its pseudo worktree id.
+    var inAppBannerWorktreeID: String? {
+        if isPreviewingForestScenes
+            || nativePeerSessions?.selectedSessionId != nil { return nil }
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: selectedWorktreeId,
+            projects: navigationProjects,
+            projectsManager: projectsManager,
+            allowedWorktreeIDs: checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: checkoutFocusedWorktreeScope,
+            isRefreshingProjectTopologies: isRefreshingProjectTopologies
+        )
+        if case .worktree(let wt) = resolver.resolve() { return wt.id }
+        if selectedWorkspaceCheckout != nil,
+           sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() != nil {
+            return sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout()?.id
+        }
+        return nil
+    }
+
     /// A refreshed snapshot can archive or remove the displayed checkout.
     /// Clear its focus so no repository pane keeps a stale checkout context.
     func reconcileWorkspaceNavigationSelection() {
@@ -2944,22 +2970,100 @@ final class AppState {
         scheduleWorktreeSelectionFollowUp(id: id, acknowledgeSidebar: true)
     }
 
-    /// Backs the sidebar's `↓N` badge: selects the worktree so the right pane
-    /// can surface conflicts or errors, then pulls through the same guarded
-    /// path as the Commits header chip.
+    /// Backs the sidebar's `↓N` badge. The first click pulls without changing
+    /// the selection — the badge spins in the sidebar while the fetch + rebase
+    /// runs, so the user keeps their current worktree. A second click while
+    /// the pull is still in flight selects the worktree instead, matching the
+    /// changes tab's behavior of surfacing conflicts/errors in its right pane.
     func pullWorktreeFromSidebar(id: String) {
         guard let worktree = worktree(withId: id) else { return }
-        selectWorktreeFromSidebar(id: id)
+        if worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: id)
+            || rightPaneStore.activeState(worktreeId: id)?.pullInFlight == true {
+            // Second click while a pull is already running (sidebar- or
+            // changes-tab-initiated): route to selection instead.
+            selectWorktreeFromSidebar(id: id)
+            return
+        }
+        worktreeUpstreamStatusStore.markPullingUpstream(worktreeID: id)
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
+            comparisonMode: config.changes.comparisonMode,
+            activates: false
         )
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            defer { self?.worktreeUpstreamStatusStore.clearPullingUpstream(worktreeID: id) }
             // A freshly created pane has not probed its upstream yet, and
-            // `pull()` no-ops until it knows the branch is behind.
+            // `pullAwaited()` no-ops until it knows the branch is behind.
             if !pane.showBehindUpstreamChip { await pane.refreshSyncStatus() }
-            pane.pull()
+            // Conflict auto-open only when this pull's worktree is the pane
+            // the user is actually looking at — either it was already
+            // selected, or the second click selected it mid-pull. Evaluated
+            // at completion, so a selection made while the rebase runs still
+            // opens the conflict like a changes-tab pull would.
+            let result = await pane.pullAwaited(autoOpenConflicts: { [weak self] in
+                self?.inAppBannerWorktreeID == pane.worktree.id
+            })
+            // The pull ran without switching the selection, so its outcome
+            // would otherwise only surface in the right pane of a worktree
+            // the user never selected. `InAppNotificationStack` renders only
+            // inside a mounted `CenterPaneView`; when no such pane is on
+            // screen (peer session, workspace overview, forest preview,
+            // empty state) post a macOS notification instead — its
+            // click-through focuses the pulled worktree.
+            // Refresh the sidebar badge even when the pull was declined: the
+            // sync-status probe above may have found the branch no longer
+            // behind (e.g. updated by another Git client), and the stale
+            // `↓N` must not stay clickable repeating the no-op.
+            guard let self else { return }
+            guard let result else {
+                await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
+                return
+            }
+            if let bannerWorktreeID = self.inAppBannerWorktreeID {
+                switch result {
+                case .clean:
+                    self.inAppNotifications.post(
+                        "Pulled \(worktree.branch)",
+                        severity: .success,
+                        worktreeID: bannerWorktreeID
+                    )
+                case .conflict:
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) hit conflicts",
+                        severity: .error,
+                        worktreeID: bannerWorktreeID
+                    )
+                case .error(let message):
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) failed: \(message)",
+                        severity: .error,
+                        worktreeID: bannerWorktreeID
+                    )
+                }
+            } else {
+                switch result {
+                case .clean:
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pulled \(worktree.branch)",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                case .conflict:
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pull of \(worktree.branch) hit conflicts — click to resolve.",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                case .error(let message):
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pull of \(worktree.branch) failed: \(message)",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                }
+            }
+            await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
         }
     }
 

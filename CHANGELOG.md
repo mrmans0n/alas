@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
 - Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
 
 ### 🐛 Fixes

@@ -136,6 +136,30 @@ final class NotificationService {
         ))
     }
 
+    /// Outcome of a sidebar-initiated upstream pull on a worktree that is not
+    /// selected. Posted only while a native peer session/document — which
+    /// mounts no in-app banner surface — is on screen; clicking focuses the
+    /// pulled worktree.
+    func notifyWorktreePull(body: String, projectId: String, worktreeId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Pull"
+        content.body = body
+        content.sound = .default
+        content.userInfo = [
+            "projectId": projectId,
+            "worktreeId": worktreeId,
+            // The delegate requires a sessionId to route a click; reusing
+            // the worktree id makes `activateHarnessSession` select the
+            // worktree and match no tab, which lands the user on it.
+            "sessionId": worktreeId,
+        ]
+        notificationAdder(UNNotificationRequest(
+            identifier: "worktree-pull-\(worktreeId)-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        ))
+    }
+
     func notifyAlas(body: String, title: String?, agent: AgentKind,
                     projectId: String, worktreeId: String, sessionId: String,
                     owner: SessionOwnerID? = nil) {

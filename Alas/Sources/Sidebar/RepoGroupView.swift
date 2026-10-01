@@ -22,6 +22,7 @@ struct RepoGroupView: View {
     let isMain: (Worktree) -> Bool
     let upstreamStatus: (Worktree) -> WorktreeUpstreamStatus?
     var onPullUpstream: ((Worktree) -> Void)? = nil
+    var isPullUpstreamInFlight: ((Worktree) -> Bool)? = nil
     let workspaceCheckout: (Worktree) -> WorktreeWorkspaceCheckoutPresentation?
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
@@ -163,6 +164,7 @@ struct RepoGroupView: View {
                             isMain: isMain(wt),
                             upstreamStatus: upstreamStatus(wt),
                             onPullUpstream: onPullUpstream.map { pull in { pull(wt) } },
+                            isPullUpstreamInFlight: isPullUpstreamInFlight?(wt) ?? false,
                             operationState: operationState(wt),
                             harnessSummary: harnessSummary(wt.id),
                             ggMenuModel: ggMenuModel(wt),
