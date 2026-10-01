@@ -243,6 +243,10 @@ struct SidebarView: View {
                                             revision: state.revisionChangeGeneration(worktreeID: wt.id)
                                         )
                                     },
+                                    pluginCommands: { state.pluginCommands($0, projectID: project.id) },
+                                    onRunPluginCommand: { item, slot, wt in
+                                        state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
+                                    },
                                     isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
                                     highlightedWorktreeId: highlightedWorktreeId
                                 )

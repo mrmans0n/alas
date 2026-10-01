@@ -55,6 +55,8 @@ struct TabBarView: View {
     let titleLookup: (TabID) -> String?
     let transcriptLookup: (TabID) -> ACPTranscript?
     var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     @State private var tabStripWidth: CGFloat = 0
     @Environment(\.theme) var theme
 
@@ -135,7 +137,13 @@ struct TabBarView: View {
                 onNew: onNewRunScript,
                 onEdit: onEditScripts
             )
-            .padding(.trailing, rightSidebarHidden ? 2 : 8)
+            .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? 2 : 8)
+            if !pluginCommands.isEmpty {
+                ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
+                    PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
+                }
+                .padding(.trailing, rightSidebarHidden ? 2 : 8)
+            }
             if rightSidebarHidden {
                 ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
                     .padding(.trailing, 8)

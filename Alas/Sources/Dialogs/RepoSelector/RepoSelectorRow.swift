@@ -14,6 +14,7 @@ enum RepoSelectorRow: Equatable {
     enum Action: Equatable {
         case newProject
         case newWorktreeForRepo(projectId: String)
+        case pluginCommand(PluginCommandItem)
     }
 
     enum EmptyHint: Equatable {
@@ -37,6 +38,8 @@ enum RepoSelectorRow: Equatable {
             return "action:new-project"
         case .action(.newWorktreeForRepo(let projectId)):
             return "action:new-worktree:\(projectId)"
+        case .action(.pluginCommand(let item)):
+            return "action:plugin:\(item.id)"
         case .emptyHint(.noProjects):
             return "empty:no-projects"
         case .recentHeader:

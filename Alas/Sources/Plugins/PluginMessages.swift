@@ -167,3 +167,10 @@ struct PluginStorageKeyParams: Codable, Sendable {
 struct PluginStorageKeysResult: Codable, Equatable, Sendable {
     let keys: [String]
 }
+
+// API 5.
+
+struct PluginNotifyParams: Decodable, Sendable {
+    let title: String
+    let body: String?
+}

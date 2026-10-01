@@ -23,7 +23,7 @@ struct PluginCatalogIndex: Decodable, Sendable, Equatable {
 
         /// The newest version this Alas can run.
         var newestCompatible: Version? {
-            versions.filter { $0.api == PluginManifest.supportedAPIVersion && $0.entry != nil }
+            versions.filter { PluginManifest.supportedAPIVersions.contains($0.api) && $0.entry != nil }
                 .max { PluginCatalogIndex.isOlder($0.version, than: $1.version) }
         }
     }
