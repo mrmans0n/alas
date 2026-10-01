@@ -104,7 +104,8 @@ merging a PR does not publish it.
   compatible version for its id. Updating downloads, verifies and stages the new
   files the same way while the old version keeps running, then validates the
   staged folder with the same checks discovery applies (manifest, capabilities,
-  id, entry file). Only once all of that passed does it stop the plugin's
+  id, entry file) and checks that its `id`, `version` and `api` match the index
+  record it was picked from. Only once all of that passed does it stop the plugin's
   instances and swap the folder in with
   `FileManager.replaceItemAt(_:withItemAt:)`, which replaces it in one step, then
   rescan. A failed download, hash check or validation leaves the installed
