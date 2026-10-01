@@ -162,6 +162,28 @@ struct ACPSessionManagerDisposalTests {
         await manager.detach(sessionId: parent.id)
     }
 
+    @Test(
+        "deleting the parent or disposing every session also deletes its side session",
+        arguments: [true, false]
+    )
+    func sideSessionEndsWithParent(deletingParent: Bool) async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+
+        if deletingParent {
+            try await manager.deleteSession(id: parent.id)
+        } else {
+            await manager.disposeAllLiveSessions()
+        }
+        await manager.flushPersistence()
+
+        #expect(manager.sideQuestions[parent.id] == nil)
+        #expect(manager.runners[side.id] == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+    }
+
     @Test("keeping a side question twice promotes it once")
     func sideQuestionPromotesOnce() async throws {
         let client = ACPMockClient()

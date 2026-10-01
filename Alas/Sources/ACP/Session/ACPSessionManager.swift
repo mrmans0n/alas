@@ -2371,6 +2371,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deletePersistedSession(id: ACPSession.ID) async throws {
+        // A side session can't outlive its parent; nothing could reach it.
         await dismissSideQuestion(parentID: id)
         try await disposeSession(id: id)
         let previous = persistenceTail
@@ -8079,6 +8080,11 @@ extension ACPSessionManager {
     }
 
     func disposeAllLiveSessions() async {
+        // Side sessions are deleted rather than left for the next launch's
+        // purge, which spares fresh lease-free rows.
+        for parentID in Array(sideQuestions.keys) {
+            await dismissSideQuestion(parentID: parentID)
+        }
         let ids = Set(runners.keys)
             .union(attachingSessions.keys)
             .union(attachmentAttempts.keys)
