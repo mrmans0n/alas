@@ -45,6 +45,10 @@ struct PluginHostActions {
     var switchWorktree: (String) -> Bool
     /// Returns false when `id` is not an active session of this project.
     var focusSession: (String) -> Bool
+    /// The session's last agent reply, untruncated; the host bounds it.
+    var lastMessage: (String) -> PluginLastMessage
+    /// Agents that can be started, in registry order.
+    var agents: () -> [PluginAgent]
     /// Returns synchronously; the completion is called once, later, with nil on success or the failure reason.
     var startTask: (PluginTaskRequest, @escaping @MainActor (String?) -> Void) -> PluginTaskStart
 
@@ -54,6 +58,8 @@ struct PluginHostActions {
             snapshot: { PluginWorkspaceSnapshot(worktrees: []) },
             switchWorktree: { _ in false },
             focusSession: { _ in false },
+            lastMessage: { _ in .unknownSession },
+            agents: { [] },
             startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available") })
     }
 }
@@ -68,11 +74,14 @@ final class PluginHost {
         "workspace/snapshot": .workspaceRead,
         "worktree/switch": .worktreeSwitch,
         "session/focus": .sessionFocus,
+        "session/last_message": .sessionRead,
+        "agent/list": .workspaceRead,
         "task/start": .tasksStart,
         "storage/get": nil,
         "storage/set": nil,
         "storage/keys": nil,
     ]
+    private static let apiThreeReads: Set<String> = ["session/last_message", "agent/list"]
     static let maxPromptBytes = 32 * 1024
     private static let traceLimit = 100
     private static let logLimit = 200
@@ -317,7 +326,7 @@ final class PluginHost {
 
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
-        guard let capability = Self.methods[method], manifest.api >= 3 || !method.hasPrefix("storage/") else {
+        guard let capability = Self.methods[method], manifest.api >= 3 || !(method.hasPrefix("storage/") || Self.apiThreeReads.contains(method)) else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
         if let capability, !grants.contains(capability) {
@@ -343,6 +352,19 @@ final class PluginHost {
                 return errorReply(id, code: -32003, "unknown session \(params.id)")
             }
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "session/last_message":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginSessionFocusParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            switch actions.lastMessage(params.id) {
+            case .unknownSession: return errorReply(id, code: -32003, "unknown session \(params.id)")
+            case .none: return encode(PluginResponse(id: id, result: PluginLastMessageResult(message: nil), error: nil))
+            case .text(let text):
+                return encode(PluginResponse(
+                    id: id, result: PluginLastMessageResult(message: PluginLastMessageText.bounded(text)), error: nil))
+            }
+        case "agent/list":
+            return encode(PluginResponse(id: id, result: PluginAgentListResult(agents: actions.agents()), error: nil))
         case "task/start":
             return startTask(id: id, data: data)
         case "storage/get":

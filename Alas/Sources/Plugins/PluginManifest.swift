@@ -5,13 +5,14 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case worktreeSwitch = "worktree.switch"
     case sessionFocus = "session.focus"
     case tasksStart = "tasks.start"
+    case sessionRead = "session.read"
 
     /// The first plugin API version that offers this capability.
     var minimumAPI: Int {
         switch self {
         case .workspaceRead, .worktreeSwitch: 1
         case .sessionFocus: 2
-        case .tasksStart: 3
+        case .tasksStart, .sessionRead: 3
         }
     }
 
@@ -22,6 +23,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .worktreeSwitch: "Switch the selected worktree"
         case .sessionFocus: "Open agent sessions in this project"
         case .tasksStart: "Create worktrees and start agents in this project"
+        case .sessionRead: "Read agents' final replies in this project"
         }
     }
 }

@@ -20,7 +20,7 @@ Anything under **Not loaded** shows the folder name and the reason.
 | `plugin.json is missing "<field>"` | A required field is absent or blank. | Add `id`, `name`, `version`, `api` and `entry`. |
 | `invalid plugin id "…"` | The id is not reverse-DNS. | Use lowercase letters, digits and `-`, in at least two dot-separated segments, such as `com.example.my-plugin`. |
 | `requires plugin API 4; this Alas supports 1, 2, 3` | `api` is not `1`, `2` or `3`. | Set `"api"` to `1`, `2` for canvas tabs, or `3` for view tabs, tasks and storage. |
-| `unknown capability "…"` | A typo, or a capability this Alas does not have. | Use `workspace.read`, `worktree.switch`, `session.focus` or `tasks.start`. |
+| `unknown capability "…"` | A typo, or a capability this Alas does not have. | Use `workspace.read`, `worktree.switch`, `session.focus`, `session.read` or `tasks.start`. |
 | `entry "…" must be a relative path inside the plugin folder` | `entry` is absolute, uses `..`, or **the file does not exist, is a symlink, or resolves outside the folder**. | Check the path, and that the build actually copied the wasm file. |
 | `duplicate plugin id …` | Two folders declare the same `id`. | Remove or change one. Neither loads until you do. |
 

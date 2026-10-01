@@ -16,7 +16,7 @@ unchanged.
 ```json
 {
   "api": 3,
-  "capabilities": ["workspace.read", "session.focus", "tasks.start"],
+  "capabilities": ["workspace.read", "session.focus", "session.read", "tasks.start"],
   "contributes": { "tabs": [{ "id": "board", "title": "Board", "kind": "view" }] }
 }
 ```
@@ -25,8 +25,8 @@ unchanged.
   tab, and so is `kind` in a manifest with `"api"` below 3.
 - View tabs open from **View → Plugins** like canvas tabs, and are restored the
   same way. They never receive `tick`.
-- `tasks.start` is an API 3 capability; a manifest that requests it with a lower
-  `api` is rejected. `session.focus` stays an API 2 capability.
+- `tasks.start` and `session.read` are API 3 capabilities; a manifest that
+  requests either with a lower `api` is rejected. `session.focus` stays an API 2 capability.
 
 ## `view/render`
 
@@ -103,6 +103,12 @@ currently showing.
 
 Approval text: "Create worktrees and start agents in this project".
 
+## Capability: `session.read`
+
+Approval text: "Read agents' final replies in this project". It covers
+`session/last_message`, which exposes what an agent wrote, so it is a separate
+approval from `workspace.read`.
+
 ## `task/start`
 
 Request `task/start {title, prompt, branch?, agent?}` returns
@@ -169,7 +175,34 @@ approval and removing the plugin, so a reinstall keeps its data. Deleting the
 folder resets it. A file that cannot be read is moved aside as `.corrupt`
 rather than overwritten.
 
+## Reading sessions and agents
+
+Two read-only requests, both API 3 (below API 3 they answer `-32601`).
+`session/last_message` needs `session.read`; `agent/list` needs `workspace.read`.
+
+| Request | Reply |
+|---|---|
+| `session/last_message {id}` | `{message}`: the session's last agent reply, trimmed, or `null` |
+| `agent/list` | `{agents: [{id, name}]}`: the agents that can be started, in the order Alas lists them |
+
+- `message` is cut to at most 4,096 UTF-8 bytes, on a character boundary.
+  It is `null` when the session has not produced a reply yet and for terminal
+  sessions.
+- `id` is a session id from `workspace/snapshot`.
+
+| Error | When |
+|---|---|
+| `-32001` | the request's capability was not granted |
+| `-32003` | "unknown session <id>": not an active session of this project |
+| `-32602` | invalid params |
+
 ## Reference plugin
 
-[`plugins/kanban`](../../plugins/kanban) is a Kanban board built on all of
-the above: cards start agents in new worktrees and follow them automatically.
+[`plugins/kanban`](../../plugins/kanban) is a small ticket tracker built on all
+of the above. Tickets live in storage as a `meta` key, an `index` and one
+`ticket-<n>` key per body, so drawing the board reads only the index. **Start**
+runs `task/start` with the ticket in the prompt and the assignee picked from
+`agent/list`; the ticket then follows its session through `workspace/changed`,
+and when the session goes idle the plugin fetches `session/last_message` and
+adds it as a comment. Its README records how its caps were sized against the
+per-call fuel budget.

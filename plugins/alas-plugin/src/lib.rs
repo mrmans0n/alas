@@ -406,7 +406,53 @@ pub fn render(tab: u32, root: &Node) {
 
 /// Starts a task in a new worktree. The reply (`Event::Reply`) holds `{sessionId, branch}`.
 pub fn task_start(title: &str, prompt: &str) -> i64 {
-    request("task/start", json!({"title": title, "prompt": prompt}))
+    task_start_with(title, prompt, None, None)
+}
+
+/// Like `task_start`, optionally naming the branch and the agent to run it.
+pub fn task_start_with(title: &str, prompt: &str, branch: Option<&str>, agent: Option<&str>) -> i64 {
+    #[derive(Serialize)]
+    struct Params<'a> {
+        title: &'a str,
+        prompt: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        branch: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent: Option<&'a str>,
+    }
+    request("task/start", Params { title, prompt, branch, agent })
+}
+
+/// The reply (`Event::Reply`) decodes with `parse_last_message`.
+pub fn last_message(session_id: &str) -> i64 {
+    #[derive(Serialize)]
+    struct Params<'a> {
+        id: &'a str,
+    }
+    request("session/last_message", Params { id: session_id })
+}
+
+/// The reply (`Event::Reply`) decodes with `parse_agents`.
+pub fn agent_list() -> i64 {
+    #[derive(Serialize)]
+    struct Params {}
+    request("agent/list", Params {})
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+}
+
+/// `{"message": "..."}` gives `Some`; `null` or a missing key gives `None`.
+pub fn parse_last_message(result: &Value) -> Option<String> {
+    result.get("message")?.as_str().map(str::to_owned)
+}
+
+/// Malformed results give an empty list.
+pub fn parse_agents(result: &Value) -> Vec<Agent> {
+    result.get("agents").and_then(|a| Vec::<Agent>::deserialize(a).ok()).unwrap_or_default()
 }
 
 /// The reply arrives as `Event::Stored`.
@@ -733,9 +779,20 @@ mod tests {
         task_start("T", "do it");
         storage_get("k");
         storage_set("k", &json!([1]));
+        last_message("s1");
+        agent_list();
+        task_start_with("t", "p", Some("task/kan-3"), Some("claude"));
         let sent = test_host::take_sent();
         assert_eq!((sent[0]["method"].clone(), sent[0]["params"].clone()), (json!("task/start"), json!({"title":"T","prompt":"do it"})));
         assert_eq!((sent[1]["method"].clone(), sent[1]["params"].clone()), (json!("storage/get"), json!({"key":"k"})));
         assert_eq!((sent[2]["method"].clone(), sent[2]["params"].clone()), (json!("storage/set"), json!({"key":"k","value":[1]})));
+        assert_eq!((sent[3]["method"].clone(), sent[3]["params"].clone()), (json!("session/last_message"), json!({"id":"s1"})));
+        assert_eq!((sent[4]["method"].clone(), sent[4]["params"].clone()), (json!("agent/list"), json!({})));
+        assert_eq!(sent[5]["params"], json!({"title":"t","prompt":"p","branch":"task/kan-3","agent":"claude"}));
+
+        assert_eq!(parse_last_message(&json!({"message":"hi"})), Some("hi".into()));
+        assert_eq!(parse_last_message(&json!({"message":null})), None);
+        assert_eq!(parse_agents(&json!({"agents":[{"id":"a","name":"A"}]})), vec![Agent { id: "a".into(), name: "A".into() }]);
+        assert!(parse_agents(&json!({"agents":"x"})).is_empty() && parse_agents(&json!(null)).is_empty());
     }
 }

@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Turn the Kanban plugin into a ticket tracker: `KAN-<n>` tickets with statuses, priorities, descriptions and comments, a ticket screen, assignment to an installed agent, and Start, which runs the assignee in a new worktree and adds the agent's final reply as a comment. Boards saved by the card version are converted on first load and left in place. Adds the `session/last_message` and `agent/list` plugin requests, and an API 3 `session.read` capability for reading an agent's last reply.
+- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
+- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
 - Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull (#1672).
 - Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version (#1670).
 

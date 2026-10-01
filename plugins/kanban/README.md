@@ -1,9 +1,11 @@
 # Kanban
 
-A board of task cards for a project. Starting a card creates a worktree and
-starts an agent with the card's prompt; the card then follows its session
-across the board. It uses plugin API 3 (view tabs, `task/start` and storage)
-and is the reference plugin for that API.
+A small ticket tracker for a project whose tickets start agents. Starting a
+ticket creates a worktree and starts an agent with the ticket's title and
+description; the ticket then follows its session, and the agent's final reply
+is added to it as a comment. It uses plugin API 3 (view tabs, `task/start`,
+`session/last_message`, `agent/list` and storage) and is the reference plugin
+for that API.
 
 ## Build and install
 
@@ -20,32 +22,96 @@ plugins/kanban/build.sh
 
 Then turn on **Settings → Debug → Experimental → Plugins** (it only shows when
 `~/.alas/.debug` exists), open **Settings → Plugins**, click **Approve…** on
-Kanban, and open **View → Plugins → Board**.
+Kanban (it asks to read the workspace, open sessions, read agents' final replies
+and start agents), and open **View → Plugins → Board**.
 
-## Using the board
+## Tickets
 
-Columns: **Backlog**, **Running**, **Needs you**, **Review** and **Done**.
+A ticket is numbered `KAN-<n>`. Numbers are never reused, even after a delete.
+It has a title, a description, a priority (No priority, Low, Medium, High,
+Urgent), an optional assignee, and comments.
 
-- Add a card at the top of Backlog: type the prompt and press ⌘Return. Its
-  first line becomes the card's title.
-- **Start** creates a new worktree (branch `task/<title>`) and starts the
-  project's default agent there with the prompt. Every Start makes a new
-  worktree. If the start fails, the card stays in Backlog with the reason;
-  Start retries.
-- A started card follows its session: running → Running, waiting for input or
-  permission → Needs you, idle or ended → Review. Click it to open the session.
-- **Move to** moves a card by hand. Moving to Done or Backlog stops it
-  following its session; Running, Needs you and Review keep following. A card
-  that was never started can only move to Backlog or Done.
+The board has five columns, one per status: **Backlog**, **Todo**,
+**In progress**, **In review** and **Done**. **Show cancelled** adds a
+**Cancelled** column. A card shows the number, title, priority, assignee and,
+when the ticket has a session, the agent's state. Click a card to open its
+ticket screen.
 
-The board is saved per project in the plugin's storage and survives restarts.
-If Alas quits while a card is starting, the card can stay in Backlog even
-though its worktree and agent were created; starting it again makes a second
-worktree.
+### Creating a ticket
 
-The board holds at most 50 cards and 96,000 bytes of title and prompt text.
-Alas gives every plugin call a fixed fuel budget, and loading, saving and
-drawing the board costs fuel per card and per byte; at these caps the costliest
-call stays under half the budget. Past a cap, adding a card removes the oldest
-Done cards to make room. When removing every Done card would not be enough,
-the card is not added. Backlog says so once the board is nearly full.
+The **New ticket** form sits above the board. Type a title (Return keeps it),
+pick a priority and an assignee, then type the description and press ⌘Return
+to create the ticket. Without a title, the description's first line becomes
+the title. New tickets start in Backlog.
+
+### The ticket screen
+
+- **Back** returns to the board.
+- Status, priority and assignee menus. The assignee menu lists the agents Alas
+  can start, refreshed each time a ticket opens.
+- The description, saved when you press ⌘Return in it.
+- Comments, oldest first, from **You** or the **Agent**, and a field to add
+  one (⌘Return posts it).
+- **Cancel ticket** and **Delete**.
+
+### Starting an agent
+
+**Start** creates a new worktree on branch `task/kan-<n>` and starts the
+assignee there, or the project's default agent when the ticket is unassigned.
+The prompt is `KAN-<n>: <title>` followed by the description. Start is offered
+while the ticket is open (not Done or Cancelled) and has no running session.
+If the start is refused, the ticket keeps its status and shows the reason.
+
+A started ticket follows its session: running, waiting for input or for
+permission → **In progress**; idle → **In review**; a session that has gone missing after it was seen also → **In review** (unless it had already gone idle, so a status you set by hand survives a relaunch). A status you set
+by hand holds until the session's state changes again. Done and Cancelled stop
+following. **Open session** focuses the agent's session.
+
+When a followed session goes idle after running, the plugin fetches the
+agent's last reply once with `session/last_message` and adds it to the ticket
+as an **Agent** comment.
+
+## Upgrading from the card board
+
+A board saved by the earlier card version of this plugin is converted on first
+load: each card becomes a ticket, numbered in card order, with its prompt as
+the description and its session carried over. Columns map to statuses:
+Backlog → Backlog, Running and Needs you → In progress, Review → In review,
+Done → Done. Prompts longer than 4,000 characters are cut, because that is the
+most a text field can edit. The old `board` key is left in place, so nothing
+is lost and an older plugin build still finds its board.
+
+## Storage and caps
+
+Tickets are saved per project in the plugin's storage: `meta`, an `index` with
+one small record per ticket, and one `ticket-<n>` key per description and
+comments. The board reads only the index; a ticket's body is read when its
+screen opens or an agent comment arrives.
+
+| Cap | Value |
+|---|---|
+| Tickets in the index | 75 |
+| Done and Cancelled tickets kept in the index | 15, the oldest-closed leave first |
+| Title | 200 characters |
+| Description | 4,000 characters |
+| Comments per ticket | 10, the oldest dropped first |
+| Comment | 2,000 characters; a longer agent reply is cut |
+| Labels | 8 of 32 characters |
+
+Alas gives every plugin call a fixed fuel budget, and parsing, saving and
+drawing tickets costs fuel per ticket and per byte. The index cap keeps the
+costliest board call under half the budget, and the comment caps do the same
+for opening a full ticket or adding a comment to it. Archived tickets leave the index
+and their bodies are deleted. When the tracker is full, a new ticket is
+refused until you delete some.
+
+## Known limits
+
+- If Alas quits while a ticket is starting, the ticket is not linked to the
+  worktree and agent that were created: after a relaunch it moves to In review,
+  and **Start again** makes a second worktree.
+- Text dense with quotes, backslashes or line breaks costs more fuel to read.
+  A full ticket of such text stays within a plugin call's budget but uses more
+  than half of it.
+- All of a project's tickets share the plugin's 1 MB of storage. When it is
+  full, saving shows an error.
