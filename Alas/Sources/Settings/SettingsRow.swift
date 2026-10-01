@@ -12,6 +12,8 @@ enum SettingsRowLayout {
 struct SettingsRow<Control: View>: View {
     let name: String
     var desc: String? = nil
+    /// Makes the name/description text selectable (diagnostics, URLs, paths).
+    var selectable: Bool = false
     @ViewBuilder let control: () -> Control
     @Environment(\.theme) var theme
 
@@ -19,9 +21,11 @@ struct SettingsRow<Control: View>: View {
         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.system(size: 12.5, weight: .medium))
+                    .textSelection(if: selectable)
                     .foregroundColor(theme.color("fg"))
                 if let desc {
                     Text(desc).font(.system(size: 11.5))
+                        .textSelection(if: selectable)
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -42,5 +46,14 @@ struct SettingsRow<Control: View>: View {
 extension View {
     func settingsDropdownFrame() -> some View {
         frame(width: SettingsRowLayout.dropdownControlWidth, alignment: .leading)
+    }
+
+    @ViewBuilder
+    func textSelection(if enabled: Bool) -> some View {
+        if enabled {
+            textSelection(.enabled)
+        } else {
+            self
+        }
     }
 }
