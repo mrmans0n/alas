@@ -14,9 +14,9 @@ struct PluginCatalogTests {
         PluginCatalogIndex.Entry(id: "io.x.p", name: "P", summary: nil, homepage: nil, versions: versions)
     }
 
-    static func installed(folder: String = "io.x.p", version: String, hash: String) throws -> PluginManager.Plugin {
+    static func installed(folder: String = "io.x.p", version: String, hash: String, linked: Bool = false) throws -> PluginManager.Plugin {
         let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"\#(version)","api":4,"entry":"plugin.js"}"#.utf8))
-        return PluginManager.Plugin(folder: URL(filePath: "/tmp/Plugins/\(folder)"), manifest: manifest, source: Data(), hash: hash)
+        return PluginManager.Plugin(folder: URL(filePath: "/tmp/Plugins/\(folder)"), manifest: manifest, source: Data(), hash: hash, isLinked: linked)
     }
 
     /// Numeric, not lexical; other APIs and entries without a script (Wasm-era releases) are skipped.
@@ -32,6 +32,7 @@ struct PluginCatalogTests {
         let name: String
         let installed: (folder: String, version: String, hash: String)?
         let expected: PluginCatalogRow
+        var linked = false
         var testDescription: String { name }
     }
 
@@ -41,10 +42,12 @@ struct PluginCatalogTests {
         RowCase(name: "older from the catalog", installed: ("io.x.p", "0.2.0", "old"), expected: .update(version("0.3.0", hash: "new"))),
         RowCase(name: "built locally into another folder", installed: ("kanban", "0.3.0", "new"), expected: .installedLocally),
         RowCase(name: "edited in place", installed: ("io.x.p", "0.2.0", "edited"), expected: .installedLocally),
+        // Removing it would delete the symlink's target, perhaps someone's checkout.
+        RowCase(name: "symlinked in under the id", installed: ("io.x.p", "0.3.0", "new"), expected: .installedLocally, linked: true),
     ])
     func rowStateFollowsWhatIsInstalled(_ c: RowCase) throws {
         let entry = Self.entry([Self.version("0.3.0", hash: "new"), Self.version("0.2.0", hash: "old")])
-        let installed = try c.installed.map { try Self.installed(folder: $0.folder, version: $0.version, hash: $0.hash) }
+        let installed = try c.installed.map { try Self.installed(folder: $0.folder, version: $0.version, hash: $0.hash, linked: c.linked) }
         #expect(PluginCatalogRow(entry: entry, installed: installed) == c.expected)
     }
 
