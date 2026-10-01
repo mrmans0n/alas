@@ -60,8 +60,8 @@ struct ACPToolbar: View {
                 }
             )
             ACPRecoveryPill(session: session)
-            if let currentGoal = session.currentGoal {
-                ACPGoalPill(goal: currentGoal)
+            ACPGoalControl(session: session) { action, objective in
+                try await manager.controlGoal(for: session.id, action: action, objective: objective)
             }
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
