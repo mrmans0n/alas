@@ -81,7 +81,7 @@ Served from `https://raw.githubusercontent.com/mrmans0n/alas-plugins/main/index.
 ## Release pipeline
 
 1. Bump `version` in the plugin's `plugin.json` and `package.json`, then merge.
-2. Push the tag `kanban-v0.2.0`.
+2. Push the tag `kanban-v0.3.0`.
 3. `release.yml` bundles `plugin.js` with esbuild, checks that the tag matches the manifest
    version, creates the GitHub release with both files, computes the hash, adds
    the entry to `index.json` and pushes it to `main`.
@@ -101,10 +101,11 @@ merging a PR does not publish it.
   and rescans the plugins folder. The plugin shows up unapproved and goes through the
   existing **Approve…** sheet. Nothing runs before the user approves it.
 - **Update available** appears on an installed plugin when the index has a newer
-  compatible version for its id. Updating stops the plugin's instances, stages
-  the new files the same way, and swaps them in with
-  `FileManager.replaceItemAt(_:withItemAt:)`, which replaces the existing folder
-  in one step, then rescans. Because the hash changed, the plugin asks
+  compatible version for its id. Updating downloads, verifies and stages the new
+  files the same way while the old version keeps running. Only once that worked
+  does it stop the plugin's instances and swap the folder in with
+  `FileManager.replaceItemAt(_:withItemAt:)`, which replaces it in one step, then
+  rescan. A failed update leaves the installed version running. Because the hash changed, the plugin asks
   for approval again, which is the right moment to review any new capabilities.
 - **Remove** is offered for plugins installed from the catalog (folder name is
   the id and the hash matches some catalog version). It stops the instances and

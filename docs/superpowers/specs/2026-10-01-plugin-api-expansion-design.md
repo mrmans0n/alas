@@ -258,11 +258,10 @@ exact argv prefix:
   `{exit, stdout, stderr}`. Output is capped at 1 MiB, the run at 10 minutes, and
   an instance may have 2 running at once.
 - `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
-  exactly what the manifest says. `env` values may use `{{secret:key}}`, so a
-  token can reach a CLI without the plugin seeing it. A command can still print
-  its environment, so Alas replaces every substituted secret value in `stdout`
-  and `stderr` with `[secret]` before replying, and does the same to output it
-  shows for long-running processes.
+  exactly what the manifest says. `env` takes plain values only: `{{secret:key}}`
+  is refused there. A process's output goes back to the plugin, and a command
+  can print a secret in any encoding, so no redaction could keep it hidden.
+  Commands that need credentials use their own login (`op signin`, `gh auth`).
 - `longRunning` processes are started with `process/start` and show up in the
   Run tab as runs owned by the plugin: visible, with output, and stoppable by the
   user. Alas stops them when the plugin stops. There are no invisible processes.
