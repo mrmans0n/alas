@@ -819,7 +819,8 @@ struct PluginHostTests {
         await host.settingsChanged()
         let changed = try #require(lastReply(host))
         #expect(changed.contains("settings/changed") && changed.contains(#""team":"ops""#))
-        #expect(![reply, changed].contains { $0.contains("token") || $0.contains("s3cret") })
+        // A plugin learns that a secret is set, never what it is.
+        #expect([reply, changed].allSatisfy { $0.contains(#""secretsSet":["token"]"#) && !$0.contains("s3cret") })
     }
 
     struct FetchCase: Sendable {

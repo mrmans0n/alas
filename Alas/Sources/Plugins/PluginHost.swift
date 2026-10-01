@@ -247,7 +247,7 @@ final class PluginHost {
     func settingsChanged() async {
         guard state == .active else { return }
         await deliver(encode(JSONRPCEnvelope(
-            id: nil, method: "settings/changed", params: PluginSettingsPayload(values: settings.values()))))
+            id: nil, method: "settings/changed", params: PluginSettingsPayload(settings))))
     }
 
     /// Sends `alas/deactivate`, then drops the instance whatever the plugin does.
@@ -498,7 +498,7 @@ final class PluginHost {
             guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
             return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
         case "settings/get":
-            return encode(PluginResponse(id: id, result: PluginSettingsPayload(values: settings.values()), error: nil))
+            return encode(PluginResponse(id: id, result: PluginSettingsPayload(settings), error: nil))
         case "http/fetch":
             return fetch(id: id, data: data)
         case "timer/set":

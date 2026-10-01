@@ -120,11 +120,12 @@ Up to 16 settings. Alas draws the form under the plugin in Settings → Plugins
 once it is approved. Values belong to the plugin, not to a project: every
 project the plugin runs in sees the same ones.
 
-Request `settings/get` (no capability) answers `{values}`: every `string` and
-`bool` setting, with its default when the user has not set it (`""` and `false`
-when there is no default). Secrets are never in it. When the user changes a
-setting, each running instance gets the notification `settings/changed {values}`,
-the same shape. Text fields change when the user presses Return or leaves the
+Request `settings/get` (no capability) answers `{values, secretsSet}`: `values`
+has every `string` and `bool` setting, with its default when the user has not set
+it (`""` and `false` when there is no default); `secretsSet` lists the keys of the
+secret settings that hold a value. Secret values are never in it. When the user
+changes any setting, secrets included, each running instance gets the
+notification `settings/changed {values, secretsSet}`, the same shape. Text fields change when the user presses Return or leaves the
 field.
 
 ### Secrets are usable, not readable

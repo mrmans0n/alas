@@ -186,6 +186,13 @@ struct PluginNotifyParams: Decodable, Sendable {
 /// `settings/get` result and `settings/changed` params.
 struct PluginSettingsPayload: Codable {
     let values: [String: PluginSettingValue]
+    /// Keys of the secret settings that hold a value; the values themselves are never sent.
+    let secretsSet: [String]
+
+    @MainActor init(_ settings: PluginSettings) {
+        values = settings.values()
+        secretsSet = settings.declared.filter { $0.kind == .secret && settings.isSecretSet($0.key) }.map(\.key)
+    }
 }
 
 struct PluginHTTPFetchParams: Decodable, Sendable {
