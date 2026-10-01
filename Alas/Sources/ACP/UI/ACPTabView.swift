@@ -304,6 +304,20 @@ private struct ACPSessionView: View {
         }
     }
 
+    private func sideQuestionSlot(contentMaxWidth: CGFloat) -> some View {
+        ACPSideQuestionSlot(
+            manager: manager,
+            parentID: sessionId,
+            typography: chatTypography,
+            onInsert: insertSideAnswer,
+            onKeep: {
+                state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
+            }
+        )
+        .frame(maxWidth: contentMaxWidth)
+        .padding(.horizontal, 20)
+    }
+
     private func insertSideAnswer(_ answer: String) {
         var draft = session.composerDraft
         let separator = draft.isEmpty ? "" : "\n\n"
@@ -477,17 +491,7 @@ private struct ACPSessionView: View {
                 }
 
                 VStack(spacing: 8) {
-                    ACPSideQuestionSlot(
-                        manager: manager,
-                        parentID: sessionId,
-                        typography: chatTypography,
-                        onInsert: insertSideAnswer,
-                        onKeep: {
-                            state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
-                        }
-                    )
-                    .frame(maxWidth: contentMaxWidth)
-                    .padding(.horizontal, 20)
+                    sideQuestionSlot(contentMaxWidth: contentMaxWidth)
                     composerView(
                         placement: composerPlacement,
                         contentMaxWidth: contentMaxWidth,
@@ -693,6 +697,9 @@ private struct ACPSessionView: View {
         VStack(spacing: 0) {
             intro()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // `/btw` can be the first thing asked in a new session.
+            sideQuestionSlot(contentMaxWidth: contentMaxWidth)
+                .padding(.bottom, 8)
             composerView(
                 placement: .inFlow,
                 contentMaxWidth: contentMaxWidth,
@@ -772,6 +779,11 @@ private struct ACPSessionView: View {
             // purge/reinstate skip and the new draft survives.
             // `/btw` never reaches the main session: it opens a side question.
             if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror {
+                // Complete the composer's submission like a sent prompt, so
+                // its persisted draft is cleared and `/btw …` doesn't come
+                // back. Deferred: the composer records the pending submit
+                // only after this handler returns.
+                Task { @MainActor in onPromptFinished(true) }
                 Task { @MainActor in
                     if question.isEmpty {
                         await manager.composeSideQuestion(parentID: sessionId)

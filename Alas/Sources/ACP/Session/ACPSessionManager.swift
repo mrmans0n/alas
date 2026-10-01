@@ -1787,7 +1787,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Asks `question` in a hidden side session forked from `parentID` at its
-    /// last completed turn, replacing the parent's current side question.
+    /// last answer, replacing the parent's current side question.
     @discardableResult
     func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
         await dismissSideQuestion(parentID: parentID)
@@ -1819,27 +1819,33 @@ final class ACPSessionManager: ObservableObject {
                 )
             }
         } catch {
-            if sideQuestions[parentID]?.id == entry.id {
-                sideQuestions[parentID]?.error = error.localizedDescription
-            }
+            failSideQuestion(entry, parentID: parentID, error: error)
             throw error
         }
         // Dismissed or replaced while the fork was being created.
         guard sideQuestions[parentID]?.id == entry.id else {
-            try? await deletePersistedSession(id: side.id)
+            await discardSideSession(id: side.id)
             return side
         }
         sideQuestions[parentID]?.sessionID = side.id
         await attach(to: side.id, freshlyCreated: true)
         guard sideQuestions[parentID]?.id == entry.id else { return side }
-        if let modeID = ACPSideQuestionModePolicy.preferredModeID(
-            modes: side.availableModes,
-            currentModeID: side.currentMode
-        ) {
-            await setMode(for: side.id, modeId: modeID)
+        guard await enterReadOnlyMode(side) else {
+            await discardSideSession(id: side.id)
+            failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
+            throw ACPSideQuestionError.unsafeMode
         }
+        guard sideQuestions[parentID]?.id == entry.id else { return side }
         _ = submit(sessionId: side.id, text: question, attachments: [], intent: .auto) { _ in }
+        sideQuestions[parentID]?.isSubmitted = true
         return side
+    }
+
+    /// Keeps a failed question's card up with its error, without a session.
+    private func failSideQuestion(_ entry: ACPSideQuestion, parentID: ACPSession.ID, error: Error) {
+        guard sideQuestions[parentID]?.id == entry.id else { return }
+        sideQuestions[parentID]?.sessionID = nil
+        sideQuestions[parentID]?.error = error.localizedDescription
     }
 
     /// Closes the parent's side session and deletes it with its transcript.
@@ -1847,15 +1853,30 @@ final class ACPSessionManager: ObservableObject {
         guard let entry = sideQuestions.removeValue(forKey: parentID),
               let sideID = entry.sessionID
         else { return }
-        try? await deletePersistedSession(id: sideID)
+        await discardSideSession(id: sideID)
+    }
+
+    /// Deletes a side session. When the remote close or teardown fails, it
+    /// still drops the local runner and row: nothing else could reach a
+    /// hidden session to retry, and the launch purge skips fresh rows.
+    private func discardSideSession(id: ACPSession.ID) async {
+        do {
+            try await deletePersistedSession(id: id)
+        } catch {
+            await detach(sessionId: id)
+            try? await persistence.deleteSession(id: id)
+            forgetSession(id: id)
+        }
     }
 
     /// Keeps the parent's side session as a regular forked session, listed in
     /// history. Returns nil when the parent has no running side session.
     func promoteSideQuestion(parentID: ACPSession.ID) async throws -> ACPSession? {
-        guard let sideID = sideQuestions[parentID]?.sessionID, let side = sessions[sideID] else {
-            return nil
-        }
+        // Only once the question was sent: promoting during attach would
+        // drop the entry, and the question would never be asked.
+        guard let current = sideQuestions[parentID], current.isSubmitted,
+              let sideID = current.sessionID, let side = sessions[sideID]
+        else { return nil }
         await flushPersistence()
         _ = try await persistence.promoteEphemeralSession(id: sideID)
         // A concurrent dismissal may have deleted the side session meanwhile,

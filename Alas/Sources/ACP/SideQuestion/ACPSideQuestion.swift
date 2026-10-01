@@ -7,6 +7,8 @@ struct ACPSideQuestion: Equatable, Sendable {
     let question: String
     var sessionID: ACPSession.ID?
     var error: String?
+    /// Set once the question reached the side session; Keep needs it.
+    var isSubmitted = false
 }
 
 /// Slash commands Alas handles itself instead of sending to the agent.
@@ -107,15 +109,42 @@ enum ACPSideQuestionPermissionRule {
 }
 
 /// The mode a side session switches to: plan when the agent has one,
-/// otherwise away from modes that approve tool calls on their own.
+/// otherwise away from modes that approve tool calls on their own. Works on
+/// the mode chip's options, whether the agent backs them with
+/// `session/set_mode` or a config option.
 enum ACPSideQuestionModePolicy {
-    static func preferredModeID(modes: [ACPModeInfo], currentModeID: String?) -> String? {
-        if let plan = modes.first(where: { $0.kind == .plan }) {
-            return plan.id == currentModeID ? nil : plan.id
+    /// Nil when the current mode can stay.
+    static func preferredModeID(options: [ChipSpec.Item], currentID: String?) -> String? {
+        if let plan = options.first(where: { $0.kind == .plan }) {
+            return plan.id == currentID ? nil : plan.id
         }
-        let current = modes.first { $0.id == currentModeID }
-        guard current?.kind == .fullAccess || current?.kind == .autoReview else { return nil }
-        return modes.first { $0.kind == .standard }?.id
+        guard let current = options.first(where: { $0.id == currentID }), selfApproves(current) else {
+            return nil
+        }
+        return options.first { $0.kind == .standard }?.id
+    }
+
+    /// Whether a side session may ask its question in `currentID`.
+    static func allows(options: [ChipSpec.Item], currentID: String?) -> Bool {
+        guard let current = options.first(where: { $0.id == currentID }) else { return true }
+        return !selfApproves(current)
+    }
+
+    /// These modes run tool calls without asking, so the read-only
+    /// permission gate would never see them.
+    private static func selfApproves(_ item: ChipSpec.Item) -> Bool {
+        item.kind == .fullAccess || item.kind == .autoReview
+    }
+}
+
+enum ACPSideQuestionError: LocalizedError, Equatable {
+    case unsafeMode
+
+    var errorDescription: String? {
+        switch self {
+        case .unsafeMode:
+            "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
+        }
     }
 }
 

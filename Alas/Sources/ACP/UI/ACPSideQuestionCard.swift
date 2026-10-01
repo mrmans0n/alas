@@ -111,7 +111,8 @@ struct ACPSideQuestionCard: View {
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
-                onKeep: onKeep
+                // Offered once the question was sent; see `promoteSideQuestion`.
+                onKeep: entry.isSubmitted ? onKeep : nil
             ) {
                 VStack(alignment: .leading, spacing: 6) {
                     // The first question is the header; later ones collapse
