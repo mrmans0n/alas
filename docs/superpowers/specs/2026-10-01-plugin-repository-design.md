@@ -75,9 +75,9 @@ Served from `https://raw.githubusercontent.com/mrmans0n/alas-plugins/main/index.
   whose `api` it supports, so an older Alas still gets something that loads.
 - `capabilities` is copied from the manifest so the list can show what a plugin
   asks for before downloading anything.
-- `summary` and `homepage` come from new optional manifest fields of the same
-  name. Older versions of Alas ignore unknown manifest fields, so adding them
-  does not need an API bump.
+- `summary` comes from a new optional manifest field. Older versions of Alas
+  ignore unknown manifest fields, so adding it does not need an API bump.
+  `homepage` is the plugin's folder in the repo.
 - Alas ignores a `format` it does not know and shows "Catalog needs a newer Alas".
 
 ## Release pipeline
