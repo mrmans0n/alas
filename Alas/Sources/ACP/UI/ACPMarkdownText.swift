@@ -567,11 +567,11 @@ private struct CodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ScrollView(.horizontal, showsIndicators: false) {
-                codeText
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-            }
-            .background(ACPBlockWheelRouter())
+            // Wraps rather than scrolling sideways: a horizontal SwiftUI
+            // ScrollView here swallowed vertical trackpad gestures, freezing
+            // the transcript while the pointer hovered a code block.
+            codeText
+                .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .background(theme.color("bg-0").opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 6))
