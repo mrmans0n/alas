@@ -1,32 +1,25 @@
 # Plugin API v3
 
-API 3 is API 2 plus native view tabs, task starting and plugin storage.
-Everything in the [API v1 reference](api-v1.md) and [API v2 additions](api-v2.md)
-still applies.
+> Message reference. Plugins target API 4; see [api-v4.md](api-v4.md) for the runtime.
 
-## What's new in API 3
-
-Declare `"api": 3` in `plugin.json` to use anything on this page. An Alas that
-only supports an older API refuses the plugin with
-`requires plugin API 3; this Alas supports ...`. API 1 and 2 plugins are
-unchanged.
+API 3 added native view tabs, task starting and plugin storage. Everything in
+the [API v1 reference](api-v1.md) and [API v2 additions](api-v2.md) still
+applies.
 
 ## Manifest: tab `kind`
 
 ```json
 {
-  "api": 3,
+  "api": 4,
   "capabilities": ["workspace.read", "session.focus", "session.read", "tasks.start"],
   "contributes": { "tabs": [{ "id": "board", "title": "Board", "kind": "view" }] }
 }
 ```
 
 - `kind` is `"canvas"` (the default) or `"view"`. Any other value is an invalid
-  tab, and so is `kind` in a manifest with `"api"` below 3.
+  tab.
 - View tabs open from **View → Plugins** like canvas tabs, and are restored the
   same way. They never receive `tick`.
-- `tasks.start` and `session.read` are API 3 capabilities; a manifest that
-  requests either with a lower `api` is rejected. `session.focus` stays an API 2 capability.
 
 ## `view/render`
 
@@ -146,7 +139,7 @@ Request `task/start {title, prompt, branch?, agent?}` returns
 ## Storage
 
 Each plugin has a private key-value store per project. No capability is needed,
-because the data is the plugin's own. It is API 3 only.
+because the data is the plugin's own.
 
 | Request | Reply |
 |---|---|
@@ -177,7 +170,7 @@ rather than overwritten.
 
 ## Reading sessions and agents
 
-Two read-only requests, both API 3 (below API 3 they answer `-32601`).
+Two read-only requests.
 `session/last_message` needs `session.read`; `agent/list` needs `workspace.read`.
 
 | Request | Reply |
@@ -204,5 +197,4 @@ of the above. Tickets live in storage as a `meta` key, an `index` and one
 runs `task/start` with the ticket in the prompt and the assignee picked from
 `agent/list`; the ticket then follows its session through `workspace/changed`,
 and when the session goes idle the plugin fetches `session/last_message` and
-adds it as a comment. Its README records how its caps were sized against the
-per-call fuel budget.
+adds it as a comment.

@@ -5,7 +5,8 @@ struct PluginLimits: Sendable, Equatable {
     /// Wall-clock limit for one call into the plugin. Enforced by JavaScriptCore's watchdog, which only
     /// fires while the JIT is off: `Alas.entitlements` must never gain `com.apple.security.cs.allow-jit`.
     var timePerCall: Duration = .milliseconds(250)
-    /// The first call also evaluates the plugin's script.
+    /// For evaluating the plugin's script, once at load. Every `handle` call, `alas/activate` included,
+    /// gets `timePerCall`.
     var timeForActivation: Duration = .seconds(1)
     var maxSourceBytes = 8 << 20
     var maxMessageBytes = 1 << 20
@@ -182,8 +183,9 @@ final class PluginRuntime: @unchecked Sendable {
 
     private func present(tab: JSValue, pixels: JSValue, width: JSValue) {
         guard hostFailure == nil else { return }
-        guard tab.isNumber, width.isNumber else { return refuse(.badFrame("tab and width must be numbers")) }
-        let tab = Int(tab.toInt32()), width = Int(width.toInt32())
+        // Whole numbers only, so a fractional tab cannot quietly draw to another one.
+        guard tab.isNumber, width.isNumber, let tab = Int(exactly: tab.toDouble()), let width = Int(exactly: width.toDouble())
+        else { return refuse(.badFrame("tab and width must be whole numbers")) }
         guard (0..<tabCount).contains(tab) else { return refuse(.badFrame("tab \(tab) is not declared")) }
         guard (1...limits.maxFrameDimension).contains(width) else {
             return refuse(.badFrame("width \(width) is out of range"))

@@ -40,7 +40,8 @@ struct PluginRuntimeTests {
         (.present(tab: 0, length: 4100, width: 1), "does not fit"),
         (.present(tab: 0, length: 5 << 20, width: 1024), "frame size limit"),
         (.script("alas.present(0, new Float32Array(4), 1);"), "Uint8Array"),
-        (.script("alas.present('0', new Uint8Array(4), 1);"), "must be numbers"),
+        (.script("alas.present('0', new Uint8Array(4), 1);"), "whole numbers"),
+        (.script("alas.present(0.7, new Uint8Array(4), 1);"), "whole numbers"),
     ])
     func invalidFramesSurfaceAsErrors(step: PluginFixtureStep, fragment: String) async throws {
         let runtime = try await Self.load([[step]], tabCount: 1)

@@ -1,13 +1,15 @@
 # Alas plugin API v1 reference
 
-The exact contract between Alas and a plugin. For how the pieces fit together,
-read [Concepts](concepts.md) first. To build something, start with
-[Getting started](getting-started.md).
+> Message reference. Plugins target API 4; see [api-v4.md](api-v4.md) for the runtime.
+
+The messages, types and errors API 1 introduced, all still current. For how the
+pieces fit together, read [Concepts](concepts.md) first. To build something,
+start with [Getting started](getting-started.md).
 
 **Contents**
 
 1. [Plugin folder and manifest](#1-plugin-folder-and-manifest)
-2. [The WebAssembly module](#2-the-webassembly-module)
+2. [The script](#2-the-script)
 3. [Messages](#3-messages)
 4. [Types](#4-types)
 5. [Delivery semantics](#5-delivery-semantics)
@@ -35,7 +37,7 @@ install there when the variable is set.
 Plugins/
 └── my-plugin/
     ├── plugin.json     required: the manifest
-    └── plugin.wasm     required: the file named by "entry"
+    └── plugin.js       required: the file named by "entry"
 ```
 
 The folder name does not matter to Alas. Only `id` identifies a plugin.
@@ -47,8 +49,8 @@ The folder name does not matter to Alas. Only `id` identifies a plugin.
   "id": "com.example.my-plugin",
   "name": "My Plugin",
   "version": "0.1.0",
-  "api": 1,
-  "entry": "plugin.wasm",
+  "api": 4,
+  "entry": "plugin.js",
   "capabilities": ["workspace.read", "worktree.switch"]
 }
 ```
@@ -58,12 +60,12 @@ The folder name does not matter to Alas. Only `id` identifies a plugin.
 | `id` | string | yes | Reverse-DNS: dot-separated segments of lowercase letters, digits and `-`, at least two segments (`[a-z0-9-]+(\.[a-z0-9-]+)+`). Must be unique across installed plugins. |
 | `name` | string | yes | Non-blank. Shown to the user. |
 | `version` | string | yes | Non-blank. Shown to the user; not interpreted. |
-| `api` | integer | yes | The plugin API version. Must be `1`. |
-| `entry` | string | yes | Path to the wasm file, relative to the plugin folder. Must not start with `/` or contain a `..` segment, and must name a regular file that, with symlinks resolved, lies inside the folder. A symlink as the file itself is not accepted. |
+| `api` | integer | yes | The plugin API version. Must be `4`. |
+| `entry` | string | yes | Path to the script, relative to the plugin folder. Must not start with `/` or contain a `..` segment, and must name a regular file that, with symlinks resolved, lies inside the folder. A symlink as the file itself is not accepted. |
 | `capabilities` | array of strings | no | Capabilities the plugin wants. Each must be one listed below. May be omitted, but not `null`. |
 
-Unknown fields are ignored. `contributes` is reserved for a later release and
-ignored today.
+Unknown fields are ignored. `contributes` declares tabs; see
+[API v2](api-v2.md#manifest-contributestabs) and [API v3](api-v3.md#manifest-tab-kind).
 
 ### Validation
 
@@ -88,66 +90,19 @@ Then the entry file must exist. A folder that fails any check is listed under
 | `workspace.read` | Call `workspace/snapshot` and receive `workspace/changed`, for its own project. | Read this project's worktrees and what their agent sessions are doing |
 | `worktree.switch` | Call `worktree/switch` to select a worktree of its own project. | Switch the selected worktree |
 
-`log` needs no capability.
+`log` needs no capability. The capabilities added later are listed in
+[API v4](api-v4.md#capabilities).
 
 ---
 
-## 2. The WebAssembly module
+## 2. The script
 
-The module must be a core WebAssembly module. Build it for `wasm32-unknown-unknown`
-(no WASI, no JavaScript glue).
+How the plugin's JavaScript is loaded and called, the `handle` function, and the
+`alas.send` and `alas.present` host functions are described in
+[API v4 → The script](api-v4.md#2-the-script).
 
-### Exports
-
-| Export | Signature | Purpose |
-|---|---|---|
-| `memory` | linear memory | Where messages are exchanged. |
-| `alas_alloc` | `(len: i32) -> i32` | Returns the address of a buffer of at least `len` bytes. |
-| `alas_handle` | `(ptr: i32, len: i32) -> ()` | Handles the message stored at `ptr`, `len` bytes long. Returns nothing. |
-
-### Imports
-
-The module may import exactly one function:
-
-| Import | Signature | Purpose |
-|---|---|---|
-| `alas.send` | `(ptr: i32, len: i32) -> ()` | Sends the message stored at `ptr`, `len` bytes long, to Alas. |
-
-Any other import makes the module fail to load. That includes every WASI
-function and anything a JavaScript bridge such as `wasm-bindgen` adds.
-
-### Checks at load
-
-Alas rejects a module, before it runs any message, when:
-
-- it cannot be parsed or instantiated, for example because of an import Alas does
-  not provide, or an initial memory or table above the [limits](#7-limits);
-- `memory`, `alas_alloc` or `alas_handle` is not exported;
-- `alas_alloc` is not exactly `(i32) -> i32`, or `alas_handle` is not exactly
-  `(i32, i32) -> ()`.
-
-The error messages are listed in [Why a plugin stops](#why-a-plugin-stops).
-
-### Buffers and ownership
-
-**Alas → plugin.** For each message Alas calls `alas_alloc(len)`, copies the
-message into the returned buffer, then calls `alas_handle(ptr, len)`. The plugin
-owns the buffer from then on and should free it. The buffer must lie entirely
-inside `memory`, checked after `alas_alloc` returns, so if you need to grow memory,
-do it inside `alas_alloc`.
-
-**Plugin → Alas.** `alas.send` copies the bytes immediately. You may free or
-reuse the buffer as soon as `alas.send` returns.
-
-A message is one JSON object. There is no framing, newline, or batch array.
-
-### Execution budget
-
-Everything Alas asks of a plugin is metered. One budget of
-[25,000,000 fuel units](#7-limits) covers the `alas_alloc` and `alas_handle` calls
-for a message together. The module's `start` function, if it has one, runs
-under its own budget of the same size at load. A plugin that runs out of fuel
-traps with `Trap: out of fuel` and is stopped.
+A message is one JSON object, passed and sent as a string. There is no framing,
+newline, or batch array.
 
 ---
 
@@ -201,7 +156,7 @@ The first message a plugin receives. It starts the plugin for one project.
   "id": 0,
   "method": "alas/activate",
   "params": {
-    "api": 1,
+    "api": 4,
     "project": { "id": "9F1C6A0E-5D2B-4C77-8E4A-1B0C2D3E4F50", "name": "my-project" },
     "grants": ["workspace.read"]
   }
@@ -407,12 +362,12 @@ new ones may be added.
 
 ## 5. Delivery semantics
 
-- **One message per call.** Each message Alas sends is one `alas_handle` call, and
+- **One message per call.** Each message Alas sends is one `handle` call, and
   Alas never makes a second call while the first is running.
 - **Sends are collected, then processed.** Messages sent with `alas.send` during a
-  call are processed in the order sent, after `alas_handle` returns.
+  call are processed in the order sent, after `handle` returns.
 - **Replies come in later calls.** The response to a plugin request arrives as a
-  new `alas_handle` call, in the order the requests were made. Match it by `id`.
+  new `handle` call, in the order the requests were made. Match it by `id`.
 - **Bounded chains.** A single delivery, meaning the message Alas started with
   plus the replies to requests the plugin makes in response, allows at most 64
   calls into the plugin. A plugin that answers every reply with another request
@@ -450,23 +405,8 @@ name, are cut so the reply always fits the message limit.
 ### Why a plugin stops
 
 The plugin is discarded and its instance shows `Stopped: <reason>`. **Restart**
-starts a fresh instance.
-
-| Reason | Cause |
-|---|---|
-| `could not load plugin: <detail>` | The module could not be parsed or instantiated. |
-| `plugin does not export <name>` | `memory`, `alas_alloc` or `alas_handle` is missing. |
-| `plugin export <name> has the wrong signature` | `alas_alloc` or `alas_handle` has a different type from the one required. |
-| `plugin did not respond to alas/activate` | No response to `alas/activate` in the first call. |
-| `plugin rejected activation: <message>` | The response to `alas/activate` was an error. |
-| `plugin sent a request before answering alas/activate` | A request came before the activation response. Nothing is acted on. |
-| `plugin sent a malformed message` | Not valid JSON-RPC 2.0. See [Envelope](#envelope). |
-| `plugin sent a request id longer than 256 bytes` | A request had a string `id` over the limit. |
-| `plugin passed an invalid memory range (ptr <p>, len <n>)` | `alas.send` was given a range outside `memory`, or `alas_alloc` returned a buffer that does not fit. |
-| `message of <n> bytes exceeds the size limit` | A message was larger than 1 MiB. |
-| `plugin sent more than 64 messages in one call` | Too many `alas.send` calls in one `alas_handle`. |
-| `plugin exceeded 64 round trips in one delivery` | See [Delivery semantics](#5-delivery-semantics). |
-| a trap description | The runtime's description of the trap, for example `Trap: out of fuel`, `Trap: unreachable`, `Trap: out of bounds memory access`, `Trap: integer divide by zero`, or `Trap: call stack exhausted`. |
+starts a fresh instance. The reasons are listed in
+[API v4 → Why a plugin stops](api-v4.md#5-why-a-plugin-stops).
 
 ### Manifest and discovery errors
 
@@ -477,7 +417,8 @@ Shown next to the folder under **Not loaded**. The plugin does not run.
 | `plugin.json is not a valid JSON object` | The manifest is not JSON, or not an object. |
 | `plugin.json is missing "<field>"` | A required field is absent, or a string field is blank. |
 | `invalid plugin id "<id>"; use reverse-DNS such as io.example.plugin` | `id` has the wrong format. |
-| `requires plugin API <n>; this Alas supports 1` | `api` is not `1`. |
+| `built for plugin API <n>, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 4` | `api` is `1`, `2` or `3`. See [Migrating](api-v4.md#6-migrating-from-api-1-to-3). |
+| `requires plugin API <n>; this Alas supports 4` | `api` is any other value but `4`. |
 | `unknown capability "<name>"` | A capability Alas does not know. |
 | `entry "<path>" must be a relative path inside the plugin folder` | `entry` is absolute, contains `..`, or does not name an existing file. |
 | `duplicate plugin id <id>` | Two folders declare the same `id`. Both are rejected. |
@@ -489,19 +430,14 @@ Shown next to the folder under **Not loaded**. The plugin does not run.
 
 | Limit | Value | When exceeded |
 |---|---|---|
-| Execution per message (`alas_alloc` plus `alas_handle`) | 25,000,000 fuel units | The plugin traps with `Trap: out of fuel` and is stopped. |
-| Execution at load (the `start` function) | 25,000,000 fuel units | The module fails to load. |
-| Linear memory | 64 MiB, or the module's own declared maximum if lower | `memory.grow` returns `-1`. A larger initial size fails to load. |
-| Table elements | 100,000 | Growth is refused. A larger initial size fails to load. |
+| Time per call | 250 ms (script evaluation: 1 s) | The plugin is stopped. |
 | Message size, either direction | 1 MiB | The plugin is stopped. |
-| `alas.send` calls per `alas_handle` | 64 | The plugin is stopped. |
+| `alas.send` calls per `handle` call | 64 | The plugin is stopped. |
 | String request `id` | 256 bytes | The plugin is stopped. |
 | Calls into the plugin per delivery | 64 | The plugin is stopped. |
 | `log` message length | 2,000 Unicode code points | Truncated. |
 | Log lines kept per instance | 200 | Oldest dropped. **Settings → Plugins** shows them all; **Debug → Plugins…** the latest 5. |
 | Messages kept in the trace | 100 | Oldest dropped. **Debug → Plugins…** (Debug builds only) shows the latest 20, each cut to 2,000 bytes. |
 
-On an optimized build of Alas, 25,000,000 fuel is on the order of 50 ms of tight
-Wasm execution. Debug builds of Alas run the interpreter unoptimized, hundreds of
-times slower, so the same budget can take many seconds there. Keep the work per
-message small either way.
+The runtime's own limits (script size, frames) are in
+[API v4 → Limits](api-v4.md#4-limits).
