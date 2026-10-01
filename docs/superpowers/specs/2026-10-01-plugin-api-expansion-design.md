@@ -1,6 +1,7 @@
 # Plugin API expansion: contribution slots and integration capabilities
 
-Follows API 3 (view tabs, `task/start`, storage). Tracks phase 5 of
+Follows API 4, the JavaScript runtime switch, which carries the API 3 surface
+(view tabs, `task/start`, storage) unchanged. Tracks phase 5 of
 [#1560](https://github.com/mrmans0n/alas/issues/1560). Distribution is covered
 separately in `2026-10-01-plugin-repository-design.md`.
 
@@ -121,7 +122,7 @@ them:
 
 ### 3. Panels: the view tree outside tabs
 
-API 3's view tree (`view/render`, `view/event`) already renders natively. A
+The view tree (`view/render`, `view/event`) already renders natively. A
 panel is a view tree hosted somewhere other than a tab:
 
 ```json
@@ -257,8 +258,10 @@ exact argv prefix:
   `{exit, stdout, stderr}`. Output is capped at 1 MiB, the run at 10 minutes, and
   an instance may have 2 running at once.
 - `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
-  exactly what the manifest says. `env` values may use `{{secret:key}}`, so a
-  token can reach a CLI without the plugin seeing it.
+  exactly what the manifest says. `env` takes plain values only: `{{secret:key}}`
+  is refused there. A process's output goes back to the plugin, and a command
+  can print a secret in any encoding, so no redaction could keep it hidden.
+  Commands that need credentials use their own login (`op signin`, `gh auth`).
 - `longRunning` processes are started with `process/start` and show up in the
   Run tab as runs owned by the plugin: visible, with output, and stoppable by the
   user. Alas stops them when the plugin stops. There are no invisible processes.
@@ -300,18 +303,19 @@ version by one.
 
 | API | Adds | Reference plugin |
 |---|---|---|
-| 4 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
-| 5 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
-| 6 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
+| 5 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.state`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
+| 6 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `worktree.removed`, `focus.changed`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
+| 7 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
 | — | OAuth PKCE, app-scoped instances | when a plugin needs them |
 
-API 4 also introduces `right` panels because the Linear bridge needs a place to
+API 5 also introduces `right` panels because the Linear bridge needs a place to
 list issues, and adding the right-pane rail later means changing the same files.
 
 ## Compatibility
 
-- Every addition is a new capability, method, manifest field or slot, so API 1–3
-  plugins keep loading.
+- Every addition is a new capability, method, manifest field or slot, so API 4
+  plugins keep loading on an Alas that supports API 5 and later. (API 1–3 were
+  the WebAssembly runtime and are refused since the JavaScript switch.)
 - An Alas that doesn't know a slot ignores commands placed in it rather than
   refusing the plugin, because slots will keep growing. Unknown capabilities are
   still refused, as today.
@@ -328,4 +332,5 @@ Per the testing policy, tests pin decisions, not views:
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
 - Context provider: size cap, skip on failure.
-- One `PluginHostTests` WAT fixture per new host call for the capability check.
+- One `PluginHostTests` case per new host call for the capability check, using
+  the JavaScript fixture (`PluginJSFixture`) that replaced the WAT one.
