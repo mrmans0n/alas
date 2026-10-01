@@ -1006,6 +1006,66 @@ let second = true
         }
     }
 
+    /// AppKit marks every nested scroll view as needing layout whenever the
+    /// outer review scroller moves it. Re-tiling unchanged geometry must not
+    /// bounce the code view's frame, or each scroll tick redraws every
+    /// mounted hunk in full.
+    @Test(arguments: [false, true], [8, 90])
+    func retilingUnchangedGeometryLeavesCodeViewFrameAlone(wraps: Bool, lineLength: Int) throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = (1...40).map { "let value\($0) = \(String(repeating: "x", count: lineLength))" }
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: text, attributes: [.font: font]),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 900))
+        scrollView.update(
+            document: document,
+            lineLabels: lines.indices.map { "\($0 + 1)" },
+            wraps: wraps,
+            font: font,
+            theme: theme(),
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+        // Review rows size each pane to its document, as the container does.
+        scrollView.setFrameSize(NSSize(width: 420, height: scrollView.documentHeight))
+        scrollView.layoutSubtreeIfNeeded()
+        let codeView = try #require(scrollView.documentView)
+        let settledCodeFrame = codeView.frame
+        let settledClipFrame = scrollView.contentView.frame
+
+        codeView.postsFrameChangedNotifications = true
+        var codeFrameChanges = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: codeView, queue: nil
+        ) { _ in codeFrameChanges += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        // A tick after the first: the pane has had one chance to settle.
+        scrollView.needsLayout = true
+        scrollView.layoutSubtreeIfNeeded()
+        let settledAfterRetile = codeView.frame
+        codeFrameChanges = 0
+        scrollView.needsLayout = true
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(codeFrameChanges == 0)
+        #expect(settledAfterRetile == settledCodeFrame)
+        #expect(codeView.frame == settledCodeFrame)
+        #expect(scrollView.contentView.frame == settledClipFrame)
+    }
+
     @Test func longGutterRowsStayAlignedWithActualCodeLineFragments() throws {
         let theme = theme()
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
