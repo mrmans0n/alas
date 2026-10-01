@@ -228,13 +228,10 @@ private struct ACPSessionView: View {
                 if isMirror {
                     mirrorBanner()
                 }
-                if let err = session.lastError {
+                if let err = session.lastError, showsGenericFailureBanner {
                     errorBanner(err)
                 } else if case .failed(let reason) = session.agentState,
-                          ACPAdapterUpdateBannerDecider.showsGenericFailure(
-                              setupState: session.setupState,
-                              setupNudgeDismissed: isSetupNudgeDismissed
-                          ) {
+                          showsGenericFailureBanner {
                     errorBanner(reason, dismissible: false)
                 }
                 if case .failed(let msg) = session.hydrationState {
@@ -830,6 +827,13 @@ private struct ACPSessionView: View {
         ACPSetupNudgeDismissal.isDismissed(
             state.config.harness.dismissedACPSetupNudges,
             key: adapterUpdateKey
+        )
+    }
+
+    private var showsGenericFailureBanner: Bool {
+        ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: session.setupState,
+            setupNudgeDismissed: isSetupNudgeDismissed
         )
     }
 
