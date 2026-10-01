@@ -18,7 +18,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     /// Plain-language description shown when the user approves a plugin.
     var summary: String {
         switch self {
-        case .workspaceRead: "Read this project's worktrees and what their agent sessions are doing"
+        case .workspaceRead: "Read this project's worktrees, what their agent sessions are doing, and agents' final replies"
         case .worktreeSwitch: "Switch the selected worktree"
         case .sessionFocus: "Open agent sessions in this project"
         case .tasksStart: "Create worktrees and start agents in this project"

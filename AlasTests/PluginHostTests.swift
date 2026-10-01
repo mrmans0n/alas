@@ -60,6 +60,14 @@ struct PluginHostTests {
                     recorder.focused.append(id)
                     return id == "s1"
                 },
+                lastMessage: { id in
+                    switch id {
+                    case "s1": .text(String(repeating: "é", count: 3000))
+                    case "quiet": .none
+                    default: .unknownSession
+                    }
+                },
+                agents: { [PluginAgent(id: "claude", name: "Claude Code")] },
                 startTask: { request, completion in
                     if recorder.rejections > 0 {
                         recorder.rejections -= 1
@@ -193,6 +201,36 @@ struct PluginHostTests {
         #expect(host.state == .active)
         #expect(recorder.focused == testCase.focused)
         #expect(lastReply(host)?.contains(testCase.reply) == true)
+    }
+
+    struct ReadCase: Sendable {
+        let method: String
+        let params: String
+        let grants: Set<PluginCapability>
+        let reply: String
+    }
+
+    @Test(arguments: [
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [], reply: #""code":-32001"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"quiet"}"#, grants: [.workspaceRead], reply: #""result":{"message":null}"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"gone"}"#, grants: [.workspaceRead], reply: #""code":-32003"#),
+        ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""name":"Claude Code""#),
+    ])
+    func workspaceReadRequestsAreGatedAndShaped(_ c: ReadCase) async throws {
+        let request = #"{"jsonrpc":"2.0","id":1,"method":"\#(c.method)","params":\#(c.params)}"#
+        let host = try makeHost([[.send(activateOK), .send(request)]], grants: c.grants, manifest: Self.v3Manifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(lastReply(host)?.contains(c.reply) == true)
+    }
+
+    @Test
+    func lastMessageIsBoundedWithoutSplittingACharacter() {
+        let text = String(repeating: "é", count: 3000)
+        let bounded = PluginLastMessageText.bounded(text)
+        #expect(bounded.utf8.count <= 4096)
+        #expect(text.hasPrefix(bounded))
+        #expect(bounded.count == 2048)
     }
 
     @Test(arguments: [1, 2])

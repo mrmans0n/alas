@@ -91,6 +91,45 @@ struct PluginSessionFocusParams: Codable, Equatable, Sendable {
     let id: String
 }
 
+enum PluginLastMessage: Equatable {
+    case unknownSession, none, text(String)
+}
+
+struct PluginAgent: Encodable, Equatable {
+    let id: String
+    let name: String
+}
+
+struct PluginLastMessageResult: Encodable {
+    let message: String?
+
+    // `null` must be present, not omitted.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(message, forKey: .message)
+    }
+
+    private enum CodingKeys: String, CodingKey { case message }
+}
+
+struct PluginAgentListResult: Encodable {
+    let agents: [PluginAgent]
+}
+
+enum PluginLastMessageText {
+    /// Cuts on a Character boundary so a multi-byte character is never split.
+    static func bounded(_ text: String, maxBytes: Int = 4096) -> String {
+        var out = ""
+        var bytes = 0
+        for character in text {
+            bytes += character.utf8.count
+            if bytes > maxBytes { break }
+            out.append(character)
+        }
+        return out
+    }
+}
+
 // API 3. `view/render`'s `root` and `storage/set`'s `value` are arbitrary JSON, read with `JSONSerialization`.
 
 struct PluginViewRenderHeader: Decodable {

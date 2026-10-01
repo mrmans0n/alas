@@ -50,6 +50,29 @@ extension AppState {
                 }
                 return false
             },
+            lastMessage: { [weak self] id in
+                guard let self else { return .unknownSession }
+                for worktree in self.projectsManager.worktreesByProject[project.id] ?? [] {
+                    guard self.agentSidebarRollup(for: worktree).active.contains(where: {
+                        PluginWorkspaceSnapshot.SessionInput(row: $0).id == id
+                    }) else { continue }
+                    // Terminal sessions have no live ACP session and so no transcript.
+                    let messages = self.acpManager(forWorktreeId: worktree.id)?.liveSession(for: id)?.transcript.messages ?? []
+                    for message in messages.reversed() {
+                        guard case .agent(_, _, let text) = message else { continue }
+                        let trimmed = text.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { return .text(trimmed) }
+                    }
+                    return .none
+                }
+                return .unknownSession
+            },
+            agents: { [weak self] in
+                guard let self else { return [] }
+                return self.agentRegistry.enabled()
+                    .filter { ACPLaunchCatalog.spec(for: $0.id) != nil }
+                    .map { PluginAgent(id: $0.id, name: $0.displayName) }
+            },
             startTask: { [weak self] request, completion in
                 // The host outlives project edits, so use the project as it is now: a rename
                 // changes the worktree path template's `{repo}`.

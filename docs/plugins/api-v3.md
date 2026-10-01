@@ -166,6 +166,27 @@ approval and removing the plugin, so a reinstall keeps its data. Deleting the
 folder resets it. A file that cannot be read is moved aside as `.corrupt`
 rather than overwritten.
 
+## Reading sessions and agents
+
+Two read-only requests. Both need the `workspace.read` capability and API 3
+(below API 3 they answer `-32601`).
+
+| Request | Reply |
+|---|---|
+| `session/last_message {id}` | `{message}`: the session's last agent reply, trimmed, or `null` |
+| `agent/list` | `{agents: [{id, name}]}`: the agents that can be started, in the order Alas lists them |
+
+- `message` is cut to at most 4,096 UTF-8 bytes, on a character boundary.
+  It is `null` when the session has not produced a reply yet and for terminal
+  sessions.
+- `id` is a session id from `workspace/snapshot`.
+
+| Error | When |
+|---|---|
+| `-32001` | `workspace.read` was not granted |
+| `-32003` | "unknown session <id>": not an active session of this project |
+| `-32602` | invalid params |
+
 ## Reference plugin
 
 [`plugins/kanban`](../../plugins/kanban) is a Kanban board built on all of
