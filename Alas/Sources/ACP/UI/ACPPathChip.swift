@@ -82,7 +82,7 @@ enum ACPPathChipStyle {
         let textHeight = (label as NSString).size(withAttributes: attributes).height
         (label as NSString).draw(in: NSRect(
             x: cap.maxX + ACPCommandPillStyle.nameHorizontalPadding,
-            y: frame.minY + (frame.height - textHeight) / 2,
+            y: ACPMentionChipMetrics.labelOriginY(in: frame),
             width: frame.width - cap.width - 2 * ACPCommandPillStyle.nameHorizontalPadding,
             height: textHeight
         ), withAttributes: attributes)
@@ -94,7 +94,7 @@ final class ACPPathChipAttachment: NSTextAttachment {
     let isDirectory: Bool
 
     @MainActor
-    init(path: String, isDirectory: Bool, font: NSFont) {
+    init(path: String, isDirectory: Bool) {
         self.path = path
         self.isDirectory = isDirectory
         super.init(data: nil, ofType: nil)
@@ -110,7 +110,7 @@ final class ACPPathChipAttachment: NSTextAttachment {
         self.image = image
         bounds = NSRect(
             x: 0,
-            y: ACPMentionChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPMentionChipMetrics.baselineOffset,
             width: size.width,
             height: size.height
         )
@@ -122,9 +122,8 @@ final class ACPPathChipAttachment: NSTextAttachment {
 enum ACPPathChip {
     @MainActor
     static func chip(for match: ACPAbsolutePathDetector.Match, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        let font = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 13)
         let chip = NSMutableAttributedString(
-            attachment: ACPPathChipAttachment(path: match.path, isDirectory: match.isDirectory, font: font)
+            attachment: ACPPathChipAttachment(path: match.path, isDirectory: match.isDirectory)
         )
         var chipAttributes = attributes
         chipAttributes[.attachment] = nil

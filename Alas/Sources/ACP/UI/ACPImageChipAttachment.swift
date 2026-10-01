@@ -33,11 +33,7 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
     }
 
     override func cellBaselineOffset() -> NSPoint {
-        let size = ACPImageChipMetrics.cellSize(for: nil)
-        return NSPoint(
-            x: 0,
-            y: ACPImageChipMetrics.baselineOffset(for: ACPImageChipMetrics.fallbackFont, attachmentHeight: size.height)
-        )
+        NSPoint(x: 0, y: ACPImageChipMetrics.baselineOffset)
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
@@ -64,14 +60,9 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
         let size = ACPImageChipMetrics.cellSize(for: nil)
-        let font = textContainer.layoutManager?.textStorage?.attribute(
-            .font,
-            at: charIndex,
-            effectiveRange: nil
-        ) as? NSFont
         return NSRect(
             x: 0,
-            y: ACPImageChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPImageChipMetrics.baselineOffset,
             width: size.width,
             height: size.height
         )
@@ -85,16 +76,14 @@ private final class ACPImageChipCell: NSTextAttachmentCell {
 /// without crossing back into the main-actor `NSCell` API.
 private enum ACPImageChipMetrics {
     static let side: CGFloat = 20
-    // Computed, not a stored global, so it stays nonisolated.
-    static var fallbackFont: NSFont { NSFont.systemFont(ofSize: 13) }
 
     static func cellSize(for font: NSFont?) -> NSSize {
         NSSize(width: side, height: side)
     }
 
-    static func baselineOffset(for font: NSFont?, attachmentHeight: CGFloat) -> CGFloat {
-        let resolvedFont = font ?? fallbackFont
-        let letterCenterFromBaseline = (resolvedFont.ascender + resolvedFont.descender) / 2
-        return letterCenterFromBaseline - attachmentHeight / 2
+    /// Shares its vertical center with the label chips, so a thumbnail
+    /// lines up with the mention and command chips beside it.
+    static var baselineOffset: CGFloat {
+        ACPMentionChipMetrics.baselineOffset - (side - ACPMentionChipMetrics.height) / 2
     }
 }

@@ -21,13 +21,11 @@ enum ACPCommandPillStyle {
         command.hasPrefix("/") ? String(command.dropFirst()) : command
     }
 
-    /// Top padding that centers the pill on the letters of the first line
-    /// of `font`: the same rule `ACPMentionChipMetrics.baselineOffset` uses
-    /// inside the composer, expressed from the line's top edge.
+    /// Top padding that puts the pill's label on the baseline of the first
+    /// line of `font`: the same rule `ACPMentionChipMetrics.baselineOffset`
+    /// applies to inline chips, expressed from the line's top edge.
     static func topInset(forLineFont font: NSFont) -> CGFloat {
-        let baselineFromTop = font.ascender
-        let letterCenterFromBaseline = (font.ascender + font.descender) / 2
-        return baselineFromTop - letterCenterFromBaseline - ACPMentionChipMetrics.height / 2
+        font.ascender - (ACPMentionChipMetrics.height - ACPMentionChipMetrics.labelBaselineInset)
     }
 }
 
@@ -239,22 +237,16 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
     override var cellSize: NSSize { size }
 
     override func cellBaselineOffset() -> NSPoint {
-        NSPoint(x: 0, y: ACPMentionChipMetrics.baselineOffset(
-            for: NSFont.systemFont(ofSize: 13),
-            attachmentHeight: size.height
-        ))
+        NSPoint(x: 0, y: ACPMentionChipMetrics.baselineOffset)
     }
 
     override func cellFrame(for textContainer: NSTextContainer,
                             proposedLineFragment lineFrag: NSRect,
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
-        let font = textContainer.layoutManager?.textStorage?.attribute(
-            .font, at: charIndex, effectiveRange: nil
-        ) as? NSFont ?? NSFont.systemFont(ofSize: 13)
-        return NSRect(
+        NSRect(
             x: 0,
-            y: ACPMentionChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPMentionChipMetrics.baselineOffset,
             width: size.width,
             height: size.height
         )
@@ -296,10 +288,9 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
             .font: ACPMentionChipMetrics.labelFont,
             .foregroundColor: ACPCommandPillStyle.nameColor,
         ]
-        let textSize = (label as NSString).size(withAttributes: attrs)
         (label as NSString).draw(at: NSPoint(
             x: capRect.maxX + ACPCommandPillStyle.nameHorizontalPadding,
-            y: frame.minY + (frame.height - textSize.height) / 2
+            y: ACPMentionChipMetrics.labelOriginY(in: frame)
         ), withAttributes: attrs)
     }
 

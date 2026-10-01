@@ -39,8 +39,8 @@ struct ACPComposerImageExtractTests {
         ])
     }
 
-    @Test("image chip frame centers on surrounding text")
-    func imageChipFrameCentersOnText() throws {
+    @Test("image chip shares the label chips' vertical center")
+    func imageChipSharesLabelChipCenter() throws {
         let font = NSFont.systemFont(ofSize: 13)
         let url = URL(string: "file:///tmp/shot.png")!
         let attachment = ACPImageChipAttachment(fileURL: url, mimeType: "image/png")
@@ -64,9 +64,8 @@ struct ACPComposerImageExtractTests {
             characterIndex: chipIndex
         )
 
-        let textCenter = (font.ascender + font.descender) / 2
-        #expect(abs(frame.midY - textCenter) < 0.001)
-        #expect(frame.minY < -5)
+        let labelChipCenter = -ACPMentionChipMetrics.labelBaselineInset + ACPMentionChipMetrics.height / 2
+        #expect(abs(frame.midY - labelChipCenter) < 0.001)
         #expect(frame.minX == 0)
     }
 }

@@ -38,14 +38,7 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
     }
 
     override func cellBaselineOffset() -> NSPoint {
-        let size = ACPMentionChipMetrics.cellSize(for: label)
-        return NSPoint(
-            x: 0,
-            y: ACPMentionChipMetrics.baselineOffset(
-                for: NSFont.systemFont(ofSize: 13),
-                attachmentHeight: size.height
-            )
-        )
+        NSPoint(x: 0, y: ACPMentionChipMetrics.baselineOffset)
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
@@ -66,7 +59,7 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
         let textSize = (label as NSString).size(withAttributes: attrs)
         let origin = NSPoint(
             x: frame.minX + (frame.width - textSize.width) / 2,
-            y: frame.minY + (frame.height - textSize.height) / 2
+            y: ACPMentionChipMetrics.labelOriginY(in: frame)
         )
         (label as NSString).draw(at: origin, withAttributes: attrs)
     }
@@ -80,14 +73,9 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
                             glyphPosition position: NSPoint,
                             characterIndex charIndex: Int) -> NSRect {
         let size = ACPMentionChipMetrics.cellSize(for: label)
-        let font = textContainer.layoutManager?.textStorage?.attribute(
-            .font,
-            at: charIndex,
-            effectiveRange: nil
-        ) as? NSFont ?? NSFont.systemFont(ofSize: 13)
         return NSRect(
             x: 0,
-            y: ACPMentionChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPMentionChipMetrics.baselineOffset,
             width: size.width,
             height: size.height
         )
@@ -107,9 +95,20 @@ enum ACPMentionChipMetrics {
         return NSSize(width: ceil(textSize.width) + 14, height: height)
     }
 
-    static func baselineOffset(for font: NSFont, attachmentHeight: CGFloat) -> CGFloat {
-        let letterCenterFromBaseline = (font.ascender + font.descender) / 2
-        return letterCenterFromBaseline - attachmentHeight / 2
+    /// Distance from a chip's bottom edge up to its label's baseline, with
+    /// the label vertically centered in the chip.
+    static var labelBaselineInset: CGFloat {
+        (height - labelFont.ascender - labelFont.descender) / 2
+    }
+
+    /// Where a chip's bottom edge sits relative to the text baseline. Every
+    /// chip puts its label on the surrounding text's baseline, so chips line
+    /// up with the text and with each other whatever font the line uses.
+    static var baselineOffset: CGFloat { -labelBaselineInset }
+
+    /// Top of the label drawn in `frame`, in a flipped (y-down) context.
+    static func labelOriginY(in frame: NSRect) -> CGFloat {
+        frame.maxY - labelBaselineInset - labelFont.ascender
     }
 }
 
