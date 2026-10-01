@@ -213,7 +213,8 @@ impl Kanban {
     fn navigate(&mut self, screen: Screen) {
         self.screen = screen;
         self.open_body = None;
-        if !self.load_failed {
+        // A failed load or save stays until it no longer holds; other notices go with the screen.
+        if !self.load_failed && !self.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)) {
             self.notice = None;
         }
         self.render();
@@ -687,6 +688,10 @@ mod tests {
         feed(&mut k, json!({"jsonrpc":"2.0","id":sets[1],"error":{"code":-32003,"message":"storage is full"}}));
         reply(&mut k, sets[2], json!({}));
         assert!(k.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)), "its own later writes do not hide it");
+        event(&mut k, "ticket-1", None);
+        event(&mut k, "back", None);
+        let render = test_host::take_sent().into_iter().rev().find(|m| m["method"] == "view/render").unwrap();
+        assert!(render["params"]["root"].to_string().contains(SAVE_FAILED), "navigating keeps it");
 
         event(&mut k, "status-1", Some("done"));
         for set in test_host::take_sent().iter().filter(|m| m["method"] == "storage/set") {
