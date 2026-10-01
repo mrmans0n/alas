@@ -116,6 +116,7 @@ private struct ACPUserReferenceSummaryItem: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(theme.color("bg-2").opacity(0.8), in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(store.url(for: reference) == nil)
