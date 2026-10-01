@@ -189,5 +189,11 @@ Two read-only requests. Both need the `workspace.read` capability and API 3
 
 ## Reference plugin
 
-[`plugins/kanban`](../../plugins/kanban) is a Kanban board built on all of
-the above: cards start agents in new worktrees and follow them automatically.
+[`plugins/kanban`](../../plugins/kanban) is a small ticket tracker built on all
+of the above. Tickets live in storage as a `meta` key, an `index` and one
+`ticket-<n>` key per body, so drawing the board reads only the index. **Start**
+runs `task/start` with the ticket in the prompt and the assignee picked from
+`agent/list`; the ticket then follows its session through `workspace/changed`,
+and when the session goes idle the plugin fetches `session/last_message` and
+adds it as a comment. Its README records how its caps were sized against the
+per-call fuel budget.

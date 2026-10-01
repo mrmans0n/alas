@@ -11,10 +11,12 @@ pub const MAX_LABELS: usize = 8;
 pub const MAX_LABEL_CHARS: usize = 32;
 pub const MAX_COMMENTS: usize = 50;
 pub const MAX_COMMENT_CHARS: usize = 4_000;
-/// Provisional; Task 6 sets it from the fuel probe.
-pub const MAX_INDEX: usize = 200;
-/// Provisional; closed tickets kept in the index.
-pub const ARCHIVE_KEEP: usize = 50;
+/// Measured: at 75 tickets with 200-char titles, all with sessions, the costliest board call
+/// (a snapshot that moves a ticket) uses 11.6M fuel, 12.3M for escape-heavy titles, against
+/// half the host's 25M per call. 85 tickets went over.
+pub const MAX_INDEX: usize = 75;
+/// Closed tickets kept in the index; older ones leave it, their bodies stay stored.
+pub const ARCHIVE_KEEP: usize = 15;
 pub const FORMAT_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
