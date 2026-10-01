@@ -140,8 +140,8 @@ text "Create worktrees and start agents in this project".
   worktree nor the selection. The agent's chat tab opens inside the new
   worktree, so the user's current view is not moved.
 - **Failure:** if the background launch fails, the host sends
-  `task/failed {sessionId, reason}` and records the failure on the worktree the
-  way scheduled runs do.
+  `task/failed {sessionId, reason}` and shows the reason as an in-app error for
+  the worktree, the way scheduled runs do.
 - **Rate limit:** one start in flight per plugin and project. A second request
   while one is launching returns `-32003` "a task is already starting".
 - `title` and `prompt` are required and non-empty (`-32602` otherwise); `prompt`

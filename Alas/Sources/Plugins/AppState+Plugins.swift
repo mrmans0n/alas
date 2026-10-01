@@ -114,17 +114,17 @@ extension AppState {
             try await launchWorktreeSurface(surface, worktree: worktree, project: project)
         } catch {
             if Task.isCancelled || error is CancellationError { return cancelled }
+            // Thrown only by the agent check before any session exists, so Retry Launch is safe.
             markWorktreeLaunchFailed(worktree: worktree, projectId: project.id, error: error, launchSurface: surface)
             return error.localizedDescription
         }
         // As for scheduled chat sessions: the launch returns normally when the session could not
         // be opened or its agent did not start, so check what it left behind.
         guard !Task.isCancelled else { return cancelled }
-        // Recorded on the worktree like a thrown launch error, so the sidebar offers a retry.
+        // Not marked as a failed launch: the session is already registered under its prepared id,
+        // so Retry Launch would create it a second time. Shown in the app, as for scheduled runs.
         func failed(_ message: String) -> String {
-            markWorktreeLaunchFailed(
-                worktree: worktree, projectId: project.id, error: PluginTaskLaunchFailure(message: message),
-                launchSurface: surface)
+            inAppNotifications.post(message, severity: .error, worktreeID: worktree.id)
             return message
         }
         guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
@@ -147,12 +147,6 @@ extension AppState {
             },
             selectedWorktreeId: selectedWorktreeId)
     }
-}
-
-/// A launch that returned normally but left no working agent session.
-private struct PluginTaskLaunchFailure: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
 }
 
 extension AppState {

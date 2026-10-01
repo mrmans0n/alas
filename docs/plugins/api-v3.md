@@ -126,7 +126,8 @@ Request `task/start {title, prompt, branch?, agent?}` returns
 - Follow the session through `workspace/changed`, and open it with
   `session/focus`.
 - If the background launch fails, the plugin gets a `task/failed {sessionId,
-  reason}` notification and the failure is recorded on the worktree.
+  reason}` notification and Alas shows the reason as an in-app error for that
+  worktree.
 - Only one start can be in flight per plugin and project.
 
 | Error | When |
