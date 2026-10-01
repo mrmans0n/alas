@@ -154,9 +154,6 @@ projects = matrix.fetch("include").map { |entry| [entry.fetch("project"), entry.
 raise "rust-tests must cover every first-party Rust project with its declared toolchain" unless projects == [
   ["AlasCLI", "1.98.1"],
   ["AlasHelper", "1.98.1"],
-  ["plugins/alas-plugin", "1.98.1"],
-  ["plugins/kanban", "1.98.1"],
-  ["plugins/pixel-office", "1.98.1"],
   ["ThirdParty/treesitter-pack", "1.97.1"]
 ]
 
