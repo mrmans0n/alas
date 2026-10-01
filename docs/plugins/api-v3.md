@@ -151,9 +151,8 @@ because the data is the plugin's own. It is API 3 only.
 - Keys are 1 to 128 bytes. Values are any valid JSON (UTF-8).
 - The total size of keys and values per plugin and project is at most 1 MiB.
 - Numbers are re-serialised by the host, so `1.0` is read back as `1`.
-- `storage/set` replies once the store is on disk; the file is written off the
-  main thread. A failed write is answered with "storage unavailable", but the
-  value is already readable and goes out with the next write.
+- `storage/set` replies once the value is readable; the file is written off the
+  main thread right after. A write that fails is retried with the next change.
 - A reply larger than the message limit (1 MiB), such as a very large stored
   value or many keys, is answered with `-32003` "the result of <method> is too
   large" and the plugin keeps running.

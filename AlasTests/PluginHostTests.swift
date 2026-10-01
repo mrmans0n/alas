@@ -543,7 +543,7 @@ struct PluginHostTests {
         defer { try? FileManager.default.removeItem(at: file) }
         let storage = PluginStorage(file: file)
         let big = Data(("\"" + String(repeating: "x", count: PluginStorage.maxTotalBytes - 100) + "\"").utf8)
-        try #require(await storage.set("big", value: big) == .stored)
+        try #require(storage.set("big", value: big) == .stored)
         func request(_ id: Int, _ method: String, _ params: String) -> PluginFixtureStep {
             .send(#"{"jsonrpc":"2.0","id":\#(id),"method":"\#(method)","params":\#(params)}"#)
         }

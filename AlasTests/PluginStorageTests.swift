@@ -12,9 +12,10 @@ struct PluginStorageTests {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let storage = PluginStorage(file: file)
-        #expect(await storage.set("board", value: Data(#"{"cards":[1,2]}"#.utf8)) == .stored)
-        #expect(await storage.set("other", value: Data("3".utf8)) == .stored)
-        #expect(await storage.set("other", value: nil) == .stored)
+        #expect(storage.set("board", value: Data(#"{"cards":[1,2]}"#.utf8)) == .stored)
+        #expect(storage.set("other", value: Data("3".utf8)) == .stored)
+        #expect(storage.set("other", value: nil) == .stored)
+        await storage.flush()
 
         let reopened = PluginStorage(file: file)
         #expect(reopened.keys() == ["board"])
@@ -23,12 +24,14 @@ struct PluginStorageTests {
         #expect(reopened.get("other") == nil)
     }
 
-    @Test func overlappingSetsAllReportStoredAndTheFileEndsWithTheLastValue() async throws {
+    @Test func aBurstOfSetsEndsOnTheLastValueAndAReloadedPluginSeesItBeforeTheFileCatchesUp() async throws {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
-        let storage = PluginStorage(file: file)
-        let sets = (0..<5).map { n in Task { await storage.set("k", value: Data("\(n)".utf8)) } }
-        for set in sets { #expect(await set.value == .stored) }
+        let storage = PluginStorage.shared(file: file)
+        for n in 0..<5 { #expect(storage.set("k", value: Data("\(n)".utf8)) == .stored) }
+        // A replacement host gets this same instance, so it cannot read the older file or write over the burst.
+        #expect(PluginStorage.shared(file: file).get("k") == Data("4".utf8))
+        await storage.flush()
         #expect(PluginStorage(file: file).get("k") == Data("4".utf8))
     }
 
@@ -37,7 +40,8 @@ struct PluginStorageTests {
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let storage = PluginStorage(file: file)
         let raw = Data(#"{"a":1.0,"big":12345678901234567890,"s":"x,}\"y"}"#.utf8)
-        #expect(await storage.set("k\"/", value: raw) == .stored)
+        #expect(storage.set("k\"/", value: raw) == .stored)
+        await storage.flush()
         #expect(PluginStorage(file: file).get("k\"/") == raw)
     }
 
@@ -45,17 +49,18 @@ struct PluginStorageTests {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let storage = PluginStorage(file: file)
-        #expect(await storage.set("a", value: Data("1".utf8)) == .stored)
+        #expect(storage.set("a", value: Data("1".utf8)) == .stored)
+        await storage.flush()
         let before = try Data(contentsOf: file)
         let huge = Data(("\"" + String(repeating: "x", count: PluginStorage.maxTotalBytes) + "\"").utf8)
-        #expect(await storage.set("b", value: huge) == .full)
+        #expect(storage.set("b", value: huge) == .full)
         #expect(try Data(contentsOf: file) == before)
         #expect(storage.keys() == ["a"])
     }
 
     @Test(arguments: ["", String(repeating: "k", count: 129)])
-    func invalidKeysAreRejected(key: String) async {
-        #expect(await PluginStorage(file: makeFile()).set(key, value: Data("1".utf8)) == .invalidKey)
+    func invalidKeysAreRejected(key: String) {
+        #expect(PluginStorage(file: makeFile()).set(key, value: Data("1".utf8)) == .invalidKey)
     }
 
     @Test(arguments: ["..", ".", "a/b", "../../x", ""])
@@ -75,9 +80,10 @@ struct PluginStorageTests {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let storage = PluginStorage(file: file)
-        #expect(await storage.set("a", value: Data("1".utf8)) == .stored)
+        #expect(storage.set("a", value: Data("1".utf8)) == .stored)
+        await storage.flush()
         let before = try Data(contentsOf: file)
-        #expect(await storage.set("b", value: value) == .invalidValue)
+        #expect(storage.set("b", value: value) == .invalidValue)
         #expect(try Data(contentsOf: file) == before)
     }
 
@@ -89,7 +95,8 @@ struct PluginStorageTests {
         try garbage.write(to: file)
         let storage = PluginStorage(file: file)
         #expect(storage.keys().isEmpty)
-        #expect(await storage.set("new", value: Data("1".utf8)) == .stored)
+        #expect(storage.set("new", value: Data("1".utf8)) == .stored)
+        await storage.flush()
         #expect(try Data(contentsOf: file.appendingPathExtension("corrupt")) == garbage)
         #expect(PluginStorage(file: file).keys() == ["new"])
     }
@@ -106,7 +113,7 @@ struct PluginStorageTests {
         let garbage = Data("not json".utf8)
         try garbage.write(to: file)
         let storage = PluginStorage(file: file)
-        #expect(await storage.set("new", value: Data("1".utf8)) == .failed)
+        #expect(storage.set("new", value: Data("1".utf8)) == .failed)
         #expect(!storage.isAvailable, "reads must not report an empty store")
         #expect(try Data(contentsOf: file) == garbage)
         #expect(try Data(contentsOf: marker) == Data("old".utf8))

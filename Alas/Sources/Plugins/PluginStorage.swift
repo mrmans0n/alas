@@ -7,7 +7,8 @@ import Foundation
 /// `1.0` or large integers are never re-typed by a `JSONSerialization` round trip.
 ///
 /// Reads and writes see memory at once; the file is written off the main actor, one write at a
-/// time and always the latest entries, so a burst of sets costs at most two writes.
+/// time and always the latest entries, so a burst of sets costs at most two writes. A reloaded plugin
+/// gets the same instance (`shared`), so it never reads a file that a pending write is about to replace.
 @MainActor
 final class PluginStorage {
     static let maxKeyBytes = 128
@@ -20,10 +21,21 @@ final class PluginStorage {
     /// Bumped by every change; `written` is the version last on disk.
     private var version = 0
     private var written = 0
-    private var writing: Task<Bool, Never>?
+    private var writing: Task<Void, Never>?
 
     init(file: URL) {
         self.file = file
+    }
+
+    private static var open: [URL: PluginStorage] = [:]
+
+    /// One store per file for the life of the app, however often its plugin is reloaded.
+    /// ponytail: kept for the app's lifetime, one small entry per plugin and project.
+    static func shared(file: URL) -> PluginStorage {
+        if let existing = open[file] { return existing }
+        let storage = PluginStorage(file: file)
+        open[file] = storage
+        return storage
     }
 
     /// `root/PluginData/<pluginID>/<projectID>.json`, with the project id percent-encoded so it
@@ -46,9 +58,9 @@ final class PluginStorage {
         load()?[key]
     }
 
-    /// Returns once the change is on disk, or `.failed` when it could not be written. A failed change
-    /// stays in memory and goes out with the next write.
-    func set(_ key: String, value: Data?) async -> SetResult {
+    /// Stored once it is in memory; the file follows. A write that fails leaves the change in memory
+    /// and it goes out with the next one.
+    func set(_ key: String, value: Data?) -> SetResult {
         guard Self.isValidKey(key) else { return .invalidKey }
         guard var next = load() else { return .failed }
         if let value {
@@ -68,31 +80,25 @@ final class PluginStorage {
         }
         entries = next
         version += 1
-        return await flush() ? .stored : .failed
+        if writing == nil { writing = Task { await drainWrites() } }
+        return .stored
     }
 
-    /// Writes until the file holds this caller's change, waiting out any write already running.
-    private func flush() async -> Bool {
-        let target = version
-        while written < target {
-            if let writing {
-                _ = await writing.value
-                continue
-            }
-            // The task updates `writing` and `written` itself, so a waiter that resumes after it
-            // always sees the finished state instead of spinning on a completed task.
-            let task = Task { @MainActor [file] () -> Bool in
-                let snapshot = entries ?? [:]
-                let version = version
-                let ok = await Task.detached { Self.write(snapshot, to: file) }.value
-                writing = nil
-                if ok { written = max(written, version) }
-                return ok
-            }
-            writing = task
-            guard await task.value else { return false }
+    /// Returns once everything stored so far is on disk, or a write failed.
+    func flush() async {
+        while let writing { await writing.value }
+    }
+
+    /// Writes the latest entries until the file has caught up, one write at a time.
+    private func drainWrites() async {
+        while written < version {
+            let snapshot = entries ?? [:]
+            let target = version
+            let task = Task.detached { [file] in Self.write(snapshot, to: file) }
+            guard await task.value else { break }
+            written = target
         }
-        return true
+        writing = nil
     }
 
     /// False when the file is unreadable and could not be moved aside: reads would wrongly look empty.

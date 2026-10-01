@@ -266,10 +266,7 @@ final class PluginHost {
             for data in delivery.messages {
                 guard isRunning, self.runtime === runtime else { return }
                 record(.fromPlugin, data)
-                let outcome = await process(data)
-                // A storage write awaits the disk; the instance may have stopped or been replaced meanwhile.
-                guard isRunning, self.runtime === runtime else { return }
-                switch outcome {
+                switch process(data) {
                 case .none: break
                 case .reply(let reply): queue.append(reply)
                 case .violation(let reason):
@@ -284,7 +281,7 @@ final class PluginHost {
         }
     }
 
-    private func process(_ data: Data) async -> Outcome {
+    private func process(_ data: Data) -> Outcome {
         guard let header = try? JSONDecoder().decode(PluginIncomingHeader.self, from: data),
               header.jsonrpc == "2.0"
         else { return .violation("plugin sent a malformed message") }
@@ -298,7 +295,7 @@ final class PluginHost {
             if case .string(let text) = id, text.utf8.count > limits.maxRequestIDBytes {
                 return .violation("plugin sent a request id longer than \(limits.maxRequestIDBytes) bytes")
             }
-            let reply = await handleRequest(method, id: id, data: data)
+            let reply = handleRequest(method, id: id, data: data)
             // A reply over the limit would stop the plugin (a large stored value, many keys), so refuse instead.
             guard reply.count <= limits.maxMessageBytes else {
                 return .reply(errorReply(id, code: -32003, "the result of \(method) is too large"))
@@ -318,7 +315,7 @@ final class PluginHost {
         }
     }
 
-    private func handleRequest(_ method: String, id: JSONRPCID, data: Data) async -> Data {
+    private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method], manifest.api >= 3 || !method.hasPrefix("storage/") else {
             return errorReply(id, code: -32601, "method not found: \(method)")
@@ -376,7 +373,7 @@ final class PluginHost {
                 }
                 bytes = encoded
             }
-            switch await storage.set(key, value: bytes) {
+            switch storage.set(key, value: bytes) {
             case .stored: return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
             case .invalidKey: return errorReply(id, code: -32602, "invalid storage key")
             case .invalidValue: return errorReply(id, code: -32602, "invalid storage value")
