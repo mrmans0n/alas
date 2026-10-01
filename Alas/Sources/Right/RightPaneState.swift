@@ -4347,23 +4347,58 @@ final class RightPaneState: GGSplitCommitServicing {
         pullInFlight = true
         Task { @MainActor in
             defer { pullInFlight = false }
-            do {
-                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
-                let result = try await git.pull(worktreePath: worktree.path)
-                await refresh()
-                // pull() already fetched upstream; skip the redundant network
-                // fetch and just recount against the already-fresh tracking ref.
-                await refreshSyncStatus()
-                handleOperationResult(result)
-                if case .error(let message) = result {
-                    sidebarError = message
-                }
-            } catch {
-                // Unlike the pure rebase/merge siblings, surface the failure to
-                // the user: a pull is the only signal they have that it ran.
-                sidebarError = error.localizedDescription
-                logger.error("pull failed: \(error.localizedDescription, privacy: .public)")
+            await performPull()
+        }
+    }
+
+    /// Sidebar-driven pull that the caller can await. Runs the same guarded
+    /// body as `pull()` but returns when the rebase (and the follow-up
+    /// refreshes) finish, so the sidebar keeps its spinner up for exactly as
+    /// long as the work runs. Sets `pullInFlight` for the duration — both to
+    /// keep concurrent pull entry points from double-starting and so that, if
+    /// the user selects the worktree mid-pull, the right pane shows the same
+    /// progress state as a changes-tab pull. Returns false when a guard
+    /// declined the pull.
+    ///
+    /// Unlike `pull()`, the checkpoint guard runs the journal revalidation
+    /// first: the sidebar can reach a worktree whose pane was never activated
+    /// (and therefore never ran journal discovery), and the cached
+    /// `checkpointMutationsDisabled` would otherwise silently veto the pull.
+    @discardableResult
+    @MainActor
+    func pullAwaited() async -> Bool {
+        guard showBehindUpstreamChip, mergeOp.current == nil, !pullInFlight,
+              await checkpointMutationAllowedAfterJournalRevalidation() else {
+            return false
+        }
+        sidebarError = nil
+        pullInFlight = true
+        defer { pullInFlight = false }
+        await performPull()
+        return true
+    }
+
+    /// The body shared by `pull()` and `pullAwaited()`. Both entry points own
+    /// their `pullInFlight` bookkeeping around this; the body only performs
+    /// the guarded work and records the outcome in `sidebarError`.
+    @MainActor
+    private func performPull() async {
+        do {
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
+            let result = try await git.pull(worktreePath: worktree.path)
+            await refresh()
+            // pull() already fetched upstream; skip the redundant network
+            // fetch and just recount against the already-fresh tracking ref.
+            await refreshSyncStatus()
+            handleOperationResult(result)
+            if case .error(let message) = result {
+                sidebarError = message
             }
+        } catch {
+            // Unlike the pure rebase/merge siblings, surface the failure to
+            // the user: a pull is the only signal they have that it ran.
+            sidebarError = error.localizedDescription
+            logger.error("pull failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

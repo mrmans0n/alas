@@ -6,7 +6,23 @@ import Observation
 final class WorktreeUpstreamStatusStore {
     nonisolated static let defaultFetchInterval: TimeInterval = 5 * 60
 
+    /// Sidebar-initiated upstream pulls, keyed by worktree id. Drives the
+    /// spinner in the sidebar's `↓N` badge; a second click while an entry is
+    /// set falls through to selecting the worktree instead.
+    private(set) var isPullingUpstreamByWorktreeID: Set<String> = []
     private(set) var statuses: [String: WorktreeUpstreamStatus] = [:]
+
+    func isPullingUpstream(worktreeID: String) -> Bool {
+        isPullingUpstreamByWorktreeID.contains(worktreeID)
+    }
+
+    func markPullingUpstream(worktreeID: String) {
+        isPullingUpstreamByWorktreeID.insert(worktreeID)
+    }
+
+    func clearPullingUpstream(worktreeID: String) {
+        isPullingUpstreamByWorktreeID.remove(worktreeID)
+    }
 
     @ObservationIgnored private let git = GitService()
     @ObservationIgnored private var refreshGenerationByWorktreeID: [String: Int] = [:]

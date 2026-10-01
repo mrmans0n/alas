@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
+
 ### 🐛 Fixes
 
 - Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.

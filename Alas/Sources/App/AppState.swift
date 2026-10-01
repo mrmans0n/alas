@@ -2944,22 +2944,52 @@ final class AppState {
         scheduleWorktreeSelectionFollowUp(id: id, acknowledgeSidebar: true)
     }
 
-    /// Backs the sidebar's `↓N` badge: selects the worktree so the right pane
-    /// can surface conflicts or errors, then pulls through the same guarded
-    /// path as the Commits header chip.
+    /// Backs the sidebar's `↓N` badge. The first click pulls without changing
+    /// the selection — the badge spins in the sidebar while the fetch + rebase
+    /// runs, so the user keeps their current worktree. A second click while
+    /// the pull is still in flight selects the worktree instead, matching the
+    /// changes tab's behavior of surfacing conflicts/errors in its right pane.
     func pullWorktreeFromSidebar(id: String) {
         guard let worktree = worktree(withId: id) else { return }
-        selectWorktreeFromSidebar(id: id)
+        if worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: id)
+            || rightPaneStore.activeState(worktreeId: id)?.pullInFlight == true {
+            // Second click while a pull is already running (sidebar- or
+            // changes-tab-initiated): route to selection instead.
+            selectWorktreeFromSidebar(id: id)
+            return
+        }
+        worktreeUpstreamStatusStore.markPullingUpstream(worktreeID: id)
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
+            comparisonMode: config.changes.comparisonMode,
+            activates: false
         )
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            defer { self?.worktreeUpstreamStatusStore.clearPullingUpstream(worktreeID: id) }
             // A freshly created pane has not probed its upstream yet, and
-            // `pull()` no-ops until it knows the branch is behind.
+            // `pullAwaited()` no-ops until it knows the branch is behind.
             if !pane.showBehindUpstreamChip { await pane.refreshSyncStatus() }
-            pane.pull()
+            let pulled = await pane.pullAwaited()
+            // The pull ran without switching the selection, so its outcome
+            // would otherwise only surface in the right pane of a worktree the
+            // user never selected. Report it where the click happened.
+            if pulled {
+                if let message = pane.sidebarError {
+                    self?.inAppNotifications.post(
+                        "Pull failed: \(message)",
+                        severity: .error,
+                        worktreeID: id
+                    )
+                } else {
+                    self?.inAppNotifications.post(
+                        "Pulled \(worktree.branch)",
+                        severity: .success,
+                        worktreeID: id
+                    )
+                }
+            }
+            await self?.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
         }
     }
 
