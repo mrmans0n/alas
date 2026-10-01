@@ -49,6 +49,7 @@ struct ACPInitializeOutcome: Equatable {
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
     let mcpCapabilities: ACPMCPServerCapabilities
     let providerCapabilities: EmptyObject?
+    let goalCapability: ACPGoalCapability?
     /// True when the agent answered our subagent opt-in — either with the
     /// standard `sessionCapabilities.subagents` or with OpenCode's
     /// `_meta["opencode/child-session-updates"]`.
@@ -65,6 +66,7 @@ struct ACPInitializeOutcome: Equatable {
         sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
         mcpCapabilities: ACPMCPServerCapabilities,
         providerCapabilities: EmptyObject?,
+        goalCapability: ACPGoalCapability? = nil,
         supportsSubagents: Bool = false,
         advertisesAuthStatus: Bool = false,
         agentInfo: ACPImplementationInfo? = nil
@@ -75,6 +77,7 @@ struct ACPInitializeOutcome: Equatable {
         self.sessionCapabilities = sessionCapabilities
         self.mcpCapabilities = mcpCapabilities
         self.providerCapabilities = providerCapabilities
+        self.goalCapability = goalCapability
         self.supportsSubagents = supportsSubagents
         self.advertisesAuthStatus = advertisesAuthStatus
         self.agentInfo = agentInfo
@@ -129,6 +132,7 @@ final class ACPConnection: @unchecked Sendable {
             sessionCapabilities: capabilities?.sessionCapabilities ?? .init(),
             mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
             providerCapabilities: capabilities?.providerCapabilities,
+            goalCapability: capabilities?.meta.goal,
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
@@ -269,6 +273,31 @@ final class ACPConnection: @unchecked Sendable {
         let resp = try await client.send(ACPRequest(method: "session/set_model",
                                                     params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
         resp.acknowledgeDurableConsumption()
+    }
+
+    func controlGoal(
+        sessionId: String,
+        capability: ACPGoalCapability,
+        action: ACPGoalAction,
+        objective: String? = nil
+    ) async throws {
+        guard capability.actions.contains(action) else {
+            throw ACPGoalControlError.unsupportedAction(action)
+        }
+        let normalizedObjective: String?
+        if action == .set {
+            let trimmed = objective?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty else { throw ACPGoalControlError.objectiveRequired }
+            normalizedObjective = trimmed
+        } else {
+            normalizedObjective = nil
+        }
+        let response = try await client.send(ACPRequest(
+            method: capability.controlMethod,
+            params: ACPGoalControlParams(sessionId: sessionId, action: action, objective: normalizedObjective)
+        ))
+        defer { response.acknowledgeDurableConsumption() }
+        _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
     }
 
     func listProviders() async throws -> [ACPProviderInfo] {

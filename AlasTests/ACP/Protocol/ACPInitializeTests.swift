@@ -333,6 +333,55 @@ struct ACPInitializeTests {
         #expect(noMeta.agentCapabilities?.advertisesAuthStatus == false)
     }
 
+    @Test("decodes the version 1 goal capability and ignores unknown actions")
+    func decodesGoalCapability() throws {
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "_meta": {
+              "goal": {
+                "version": 1,
+                "controlMethod": "_session/goal",
+                "actions": ["set", "pause", "resume", "clear", "future"]
+              }
+            }
+          }
+        }
+        """.utf8))
+
+        let capability = try #require(result.agentCapabilities?.meta.goal)
+        #expect(capability.version == 1)
+        #expect(capability.controlMethod == "_session/goal")
+        #expect(capability.actions == [.set, .pause, .resume, .clear])
+    }
+
+    @Test(
+        "invalid goal capabilities do not fail initialization",
+        arguments: [
+            #"{"controlMethod":"_session/goal","actions":["set"]}"#,
+            #"{"version":2,"controlMethod":"_session/goal","actions":["set"]}"#,
+            #"{"version":1,"controlMethod":"   ","actions":["set"]}"#,
+            #"{"version":"one","controlMethod":42,"actions":{}}"#,
+        ]
+    )
+    func ignoresInvalidGoalCapability(_ goalJSON: String) throws {
+        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "_meta": {
+              "goal": \(goalJSON),
+              "opencode/child-session-updates": true
+            }
+          }
+        }
+        """.utf8))
+
+        #expect(result.agentCapabilities?.meta.goal == nil)
+        #expect(result.agentCapabilities?.meta.openCodeChildSessionUpdates == true)
+    }
+
     @Test("decodes auth method type variants")
     func decodesAuthMethodTypeVariants() throws {
         let data = Data("""
