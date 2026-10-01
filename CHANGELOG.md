@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.
 - Make clickable plugin view cards a keyboard stop that Space or Return clicks.
+- Make the full issue and pull-request badge in ACP user messages trigger its hover card.
 
 ## [0.19.20] - 2026-10-01
 
