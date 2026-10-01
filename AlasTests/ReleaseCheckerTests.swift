@@ -54,6 +54,80 @@ struct ReleaseCheckerTests {
         #expect(result == .upToDate)
     }
 
+    @Test(arguments: ["\n", "\r\n"])
+    func includesSkippedVersionsFromTargetTagNewestFirst(lineEnding: String) async {
+        let changelog = """
+        # Changelog
+        ## [Unreleased]
+        future work
+        ## [0.7.0] - 2026-06-05
+        newer release
+        ## [0.6.0] - 2026-06-04
+        duplicate latest notes
+        ## [0.5.2] - 2026-06-02
+        ### Fixes
+        - older fix
+        ## [Invalid]
+        invalid section
+        ## [0.5.9-beta]
+        prerelease notes
+        ## [0.5.8]
+        ## [0.5.10] - 2026-06-03
+        ### Features
+        - newer feature
+        ## [0.5.2] - 2026-06-02
+        duplicate older fix
+        ## [0.5.1] - 2026-06-01
+        already installed
+        ## [0.5.0] - 2026-05-30
+        old release
+        """
+        let checker = ReleaseChecker(fetch: { url in
+            if url == URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/latest")! {
+                return self.json(tag: "v0.6.0")
+            }
+            #expect(url.absoluteString == "https://raw.githubusercontent.com/mrmans0n/alas/v0.6.0/CHANGELOG.md")
+            return Data(changelog.replacingOccurrences(of: "\n", with: lineEnding).utf8)
+        })
+        let result = await checker.check(identity: stableIdentity(version: SemanticVersion(parsing: "0.5.1")!))
+        guard case let .updateAvailable(.stable(info)) = result else {
+            Issue.record("expected stable update, got \(result)")
+            return
+        }
+        #expect(info.releaseNotes == """
+        ## [0.6.0] - 2026-06-04
+
+        notes
+
+        ## [0.5.10] - 2026-06-03
+
+        ### Features
+        - newer feature
+
+        ## [0.5.2] - 2026-06-02
+
+        ### Fixes
+        - older fix
+        """)
+    }
+
+    @Test(arguments: [nil, "not a changelog", "## [Unreleased]\nfuture work", "## [0.6.0]\nlatest only", "## [0.5.2]\nmissing target release"])
+    func preservesLatestNotesWhenHistoryIsUnavailable(changelog: String?) async {
+        let checker = ReleaseChecker(fetch: { url in
+            if url == URL(string: "https://api.github.com/repos/mrmans0n/alas/releases/latest")! {
+                return self.json(tag: "v0.6.0")
+            }
+            guard let changelog else { throw URLError(.timedOut) }
+            return Data(changelog.utf8)
+        })
+        let result = await checker.check(identity: stableIdentity(version: SemanticVersion(parsing: "0.5.1")!))
+        guard case let .updateAvailable(.stable(info)) = result else {
+            Issue.record("expected stable update, got \(result)")
+            return
+        }
+        #expect(info.releaseNotes == "notes")
+    }
+
     @Test func reportsUpToDateWhenRemoteOlder() async {
         let result = await checker(returning: json(tag: "v0.4.0"))
             .check(identity: stableIdentity(version: SemanticVersion(major: 0, minor: 5, patch: 1)))

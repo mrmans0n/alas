@@ -6,11 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
+
 ### 🐛 Fixes
 
 - Head Alas's own prompts about a delegated child (an escalated blocker, a turn without a result, a failure) as Alas notices in the parent transcript instead of as reports from the child, and say when the user cancelled a child's turn (#1663).
 - Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.
 - Make clickable plugin view cards a keyboard stop that Space or Return clicks.
+- Stop warning that the agent harness didn't start the Alas MCP server after a session re-attaches to an agent that survived an app restart. Its server started before the restart and won't announce itself again, so the badge stays neutral until the session's first Alas request confirms it. Sessions whose server never starts still get the warning (#1665).
 
 ## [0.19.20] - 2026-10-01
 

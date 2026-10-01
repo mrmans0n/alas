@@ -174,14 +174,29 @@ struct ACPUserInputFormStateTests {
         #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
     }
 
-    @Test("multi-field form keeps its message when a field label matches")
-    func matchingMultiFieldMessageIsShown() throws {
+    @Test("multi-field form hides a message that repeats the first field label")
+    func matchingFirstFieldMessageIsHiddenInMultiFieldForm() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Pick a design?",
+          "requestedSchema":{"properties":{
+            "choice":{"type":"string","title":"Pick a design?"},
+            "other":{"type":"string","title":"Other (type your own)"}
+          }}
+        }
+        """#)
+
+        #expect(!ACPUserInputPrompt.shouldShowMessage(for: request))
+    }
+
+    @Test("multi-field form keeps its message when only a later field label matches")
+    func laterFieldMatchKeepsMessage() throws {
         let request = try formRequest(#"""
         {
           "requestId":1,"mode":"form","message":"Authoring model",
           "requestedSchema":{"properties":{
-            "authoringModel":{"type":"string","title":"Authoring model"},
-            "enabled":{"type":"boolean","title":"Enabled"}
+            "a":{"type":"boolean","title":"Enabled"},
+            "b":{"type":"string","title":"Authoring model"}
           }}
         }
         """#)

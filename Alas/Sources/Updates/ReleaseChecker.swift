@@ -49,7 +49,25 @@ struct ReleaseChecker: Sendable {
             guard case let .stable(stable) = info else {
                 return .failed("The latest release could not be read.")
             }
-            return stable.version > identity.version ? .updateAvailable(info) : .upToDate
+            guard stable.version > identity.version else { return .upToDate }
+
+            // Read the target tag, not main: its changelog describes exactly
+            // the release offered by this check. History is best-effort and
+            // must never turn an available update into a failed check.
+            var notes = stable.releaseNotes
+            let changelogURL = URL(string: "https://raw.githubusercontent.com/mrmans0n/alas/\(release.tagName)/CHANGELOG.md")
+            if let changelogURL,
+               let data = try? await fetch(changelogURL),
+               let changelog = String(data: data, encoding: .utf8) {
+                notes = ReleaseNotesHistory.appendingSkippedVersions(
+                    to: notes, changelog: changelog,
+                    installed: identity.version, latest: stable.version
+                )
+            }
+            return .updateAvailable(.stable(StableReleaseInfo(
+                version: stable.version, releaseNotes: notes,
+                htmlURL: stable.htmlURL, dmgURL: stable.dmgURL
+            )))
         } catch {
             return .failed(error.localizedDescription)
         }
