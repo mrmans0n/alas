@@ -279,6 +279,8 @@ struct ACPSessionForkManagerTests {
         #expect(side.transcript.messages.count == 2)
         #expect(side.autoRunEnabled == false)
         #expect(side.forkRecord?.via == .btw)
+        // Attaching persists the session, which must not list it either.
+        manager.persist(side)
         #expect(!manager.recent.contains { $0.id == side.id })
         #expect(try store.loadSession(id: side.id)?.ephemeralParentId == parent.id)
         #expect(try !store.recentSessions().contains { $0.id == side.id })
