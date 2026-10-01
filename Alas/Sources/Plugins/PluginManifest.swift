@@ -7,15 +7,6 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case tasksStart = "tasks.start"
     case sessionRead = "session.read"
 
-    /// The first plugin API version that offers this capability.
-    var minimumAPI: Int {
-        switch self {
-        case .workspaceRead, .worktreeSwitch: 1
-        case .sessionFocus: 2
-        case .tasksStart, .sessionRead: 3
-        }
-    }
-
     /// Plain-language description shown when the user approves a plugin.
     var summary: String {
         switch self {
@@ -45,7 +36,6 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case unknownCapability(String)
     case invalidEntry(String)
     case invalidTab(String)
-    case capabilityNeedsNewerAPI(String, Int)
 
     var description: String {
         switch self {
@@ -55,23 +45,23 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "plugin.json is missing \"\(field)\""
         case .invalidID(let id):
             "invalid plugin id \"\(id)\"; use reverse-DNS such as io.example.plugin"
+        case .unsupportedAPI(let api) where (1...3).contains(api):
+            "built for plugin API \(api), the WebAssembly runtime, which Alas no longer supports; rebuild it for API \(PluginManifest.supportedAPIVersion)"
         case .unsupportedAPI(let api):
-            "requires plugin API \(api); this Alas supports \(PluginManifest.supportedAPIVersions.map(String.init).joined(separator: ", "))"
+            "requires plugin API \(api); this Alas supports \(PluginManifest.supportedAPIVersion)"
         case .unknownCapability(let name):
             "unknown capability \"\(name)\""
         case .invalidEntry(let entry):
             "entry \"\(entry)\" must be a relative path inside the plugin folder"
         case .invalidTab(let reason):
             "invalid tab contribution: \(reason)"
-        case let .capabilityNeedsNewerAPI(name, api):
-            "capability \"\(name)\" requires plugin API \(api); set \"api\": \(api) in plugin.json"
         }
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = [1, 2, 3]
+    static let supportedAPIVersion = 4
     static let maxTabs = 4
     static let maxTabTitleLength = 40
 
@@ -104,26 +94,23 @@ struct PluginManifest: Equatable, Sendable {
         let entry = try required(raw.entry, "entry")
 
         guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil else { throw .invalidID(id) }
-        guard supportedAPIVersions.contains(api) else { throw .unsupportedAPI(api) }
+        guard api == supportedAPIVersion else { throw .unsupportedAPI(api) }
         var capabilities: [PluginCapability] = []
         for name in raw.capabilities ?? [] {
             guard let capability = PluginCapability(rawValue: name) else { throw .unknownCapability(name) }
-            // An API 1 manifest must stay loadable by an API 1-only Alas, which rejects newer capabilities.
-            guard api >= capability.minimumAPI else { throw .capabilityNeedsNewerAPI(name, capability.minimumAPI) }
             capabilities.append(capability)
         }
         guard !entry.hasPrefix("/"), !entry.split(separator: "/").contains("..") else {
             throw .invalidEntry(entry)
         }
-        // `contributes` is inert before API 2, so older manifests are not validated against it.
-        if api >= 2, raw.contributesMalformed { throw .malformed }
-        let tabs = api >= 2 ? try parseTabs(raw.contributes?.tabs ?? [], api: api) : []
+        if raw.contributesMalformed { throw .malformed }
+        let tabs = try parseTabs(raw.contributes?.tabs ?? [])
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs)
     }
 
-    private static func parseTabs(_ raw: [Raw.RawTab], api: Int) throws(PluginManifestError) -> [PluginTabContribution] {
+    private static func parseTabs(_ raw: [Raw.RawTab]) throws(PluginManifestError) -> [PluginTabContribution] {
         guard raw.count <= maxTabs else { throw .invalidTab("at most \(maxTabs) tabs") }
         var tabs: [PluginTabContribution] = []
         for entry in raw {
@@ -136,7 +123,6 @@ struct PluginManifest: Equatable, Sendable {
             }
             var kind = PluginTabContribution.Kind.canvas
             if let rawKind = entry.kind {
-                guard api >= 3 else { throw .invalidTab("tab \"\(id)\" sets kind, which requires plugin API 3") }
                 guard let parsed = PluginTabContribution.Kind(rawValue: rawKind) else {
                     throw .invalidTab("tab \"\(id)\" has unknown kind \"\(rawKind)\"")
                 }
@@ -179,7 +165,7 @@ private struct Raw: Decodable {
         // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
         capabilities = container.contains(.capabilities)
             ? try container.decode([String].self, forKey: .capabilities) : nil
-        // Lenient here so API 1 keeps ignoring `contributes`; `parse` rejects a malformed one for API 2.
+        // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)
             && !((try? container.decodeNil(forKey: .contributes)) ?? false)

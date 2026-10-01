@@ -18,8 +18,7 @@ private func taskStart(id: Int = 1, title: String = "Fix it", prompt: String = "
 /// `PluginHost` is main-actor isolated because it applies actions to AppState.
 @MainActor
 struct PluginHostTests {
-    static let limits = PluginLimits(
-        fuelPerCall: 1_000_000, maxMemoryBytes: 1 << 20, maxMessageBytes: 4096, maxSendsPerCall: 8)
+    static let limits = PluginLimits(timePerCall: .milliseconds(500), maxMessageBytes: 4096, maxSendsPerCall: 8)
 
     final class Recorder {
         var switched: [String] = []
@@ -30,16 +29,16 @@ struct PluginHostTests {
         var rejections = 0
     }
 
-    static let v1Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":1,"entry":"p.wasm"}"#
-    static let v2Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
-    static let v3Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":3,"entry":"p.wasm","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}]}}"#
+    static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
+    static let canvasManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
+    static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
         grants: Set<PluginCapability> = [],
         recorder: Recorder = Recorder(),
         limits: PluginLimits = PluginHostTests.limits,
-        manifest: String = PluginHostTests.v1Manifest,
+        manifest: String = PluginHostTests.plainManifest,
         storage: PluginStorage? = nil
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
@@ -47,7 +46,7 @@ struct PluginHostTests {
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
         return PluginHost(
             manifest: try PluginManifest.parse(Data(manifest.utf8)),
-            wasm: try PluginWATFixture.wasm(script),
+            source: PluginJSFixture.source(script),
             project: PluginProjectRef(id: "proj", name: "Project"),
             grants: grants,
             actions: PluginHostActions(
@@ -93,7 +92,7 @@ struct PluginHostTests {
 
     /// Hiding the tab resets the clock, so the next tick does not carry the hidden time.
     @Test func ticksNeedAVisibleTabAndResumeWithZeroDelta() async throws {
-        let host = try makeHost([[.send(activateOK)]], manifest: Self.v2Manifest)
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.canvasManifest)
         await host.activate()
         let start = ContinuousClock.now
         await host.tick(at: start)
@@ -110,7 +109,7 @@ struct PluginHostTests {
     }
 
     @Test func aTickIsDroppedWhileADeliveryIsInFlight() async throws {
-        let host = try makeHost([[.send(activateOK)]], manifest: Self.v2Manifest)
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.canvasManifest)
         await host.activate()
         host.setViewVisible(true)
         let first = Task { await host.tick(at: .now) }
@@ -128,8 +127,8 @@ struct PluginHostTests {
 
     @Test func presentedFramesAndRegionsAreKeptUntilTheHostFails() async throws {
         let host = try makeHost(
-            [[.send(activateOK), .send(Self.regionsR), .present(tab: 0, ptr: 0, len: 16, width: 2)], [.trap]],
-            manifest: Self.v2Manifest)
+            [[.send(activateOK), .send(Self.regionsR), .present(tab: 0, length: 16, width: 2)], [.throw]],
+            manifest: Self.canvasManifest)
         await host.activate()
         #expect(host.frames[0]?.height == 2)
         #expect(host.regions[0]?.map(\.id) == ["r"])
@@ -140,7 +139,7 @@ struct PluginHostTests {
     }
 
     @Test func aClickOnAKnownRegionReachesThePlugin() async throws {
-        let host = try makeHost([[.send(activateOK), .send(Self.regionsR)]], manifest: Self.v2Manifest)
+        let host = try makeHost([[.send(activateOK), .send(Self.regionsR)]], manifest: Self.canvasManifest)
         await host.activate()
         await host.click(tab: 0, region: "nope")
         await host.click(tab: 0, region: "r")
@@ -155,7 +154,7 @@ struct PluginHostTests {
         #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0}}"#,
     ])
     func malformedRegionsStopThePlugin(message: String) async throws {
-        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: Self.v2Manifest)
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: Self.canvasManifest)
         await host.activate()
         guard case .failed(let reason) = host.state else {
             Issue.record("expected failed, got \(host.state)")
@@ -172,7 +171,7 @@ struct PluginHostTests {
         let host = try makeHost([[
             .send(activateOK),
             .send(#"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[{"id":"\#(id)","label":"\#(label)","rect":[0,0,1,1]}]}}"#),
-        ]], limits: limits, manifest: Self.v2Manifest)
+        ]], limits: limits, manifest: Self.canvasManifest)
         await host.activate()
         #expect(host.state == .active)
         #expect(host.regions[0]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
@@ -208,12 +207,9 @@ struct PluginHostTests {
         let params: String
         let grants: Set<PluginCapability>
         let reply: String
-        var api = 3
     }
 
     @Test(arguments: [
-        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.sessionRead], reply: #""code":-32601"#, api: 2),
-        ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [], reply: #""code":-32001"#),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""code":-32001"#),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.sessionRead], reply: #""message":"x""#),
@@ -223,7 +219,7 @@ struct PluginHostTests {
     ])
     func workspaceReadRequestsAreGatedAndShaped(_ c: ReadCase) async throws {
         let request = #"{"jsonrpc":"2.0","id":1,"method":"\#(c.method)","params":\#(c.params)}"#
-        let host = try makeHost([[.send(activateOK), .send(request)]], grants: c.grants, manifest: c.api == 3 ? Self.v3Manifest : Self.v2Manifest)
+        let host = try makeHost([[.send(activateOK), .send(request)]], grants: c.grants, manifest: Self.viewManifest)
         await host.activate()
         #expect(host.state == .active)
         #expect(lastReply(host)?.contains(c.reply) == true)
@@ -238,12 +234,11 @@ struct PluginHostTests {
         #expect(bounded.count == 2048)
     }
 
-    @Test(arguments: [1, 2])
-    func activationHandshakeMakesTheHostActive(api: Int) async throws {
-        let host = try makeHost([[.send(activateOK)]], manifest: api == 1 ? Self.v1Manifest : Self.v2Manifest)
+    @Test func activationHandshakeMakesTheHostActive() async throws {
+        let host = try makeHost([[.send(activateOK)]])
         await host.activate()
         #expect(host.state == .active)
-        #expect(lastReply(host)?.contains(#""api":\#(api)"#) == true)
+        #expect(lastReply(host)?.contains(#""api":4"#) == true)
     }
 
     @Test(arguments: [
@@ -254,7 +249,7 @@ struct PluginHostTests {
         ([.send(#"{"jsonrpc":"2.0","id":0,"result":{},"error":{"code":1,"message":"x"}}"#)], "malformed"),
         ([.send(#"{"jsonrpc":"2.0","id":0,"result":{},"error":null}"#)], "malformed"),
         ([.send(#"{"jsonrpc":"2.0","method":null,"id":0,"result":{}}"#)], "malformed"),
-        ([.trap], "unreachable"),
+        ([.throw], "boom"),
     ])
     func activationFailuresStopThePlugin(steps: [PluginFixtureStep], fragment: String) async throws {
         let host = try makeHost([steps])
@@ -300,10 +295,6 @@ struct PluginHostTests {
             grants: [.worktreeSwitch], expectedReply: #""code":-32602"#, expectedSwitches: []),
         RequestCase(
             request: #"{"jsonrpc":"2.0","id":1,"method":"nope/x"}"#,
-            grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
-        // Storage is API 3 only; the host under test runs an API 1 manifest.
-        RequestCase(
-            request: #"{"jsonrpc":"2.0","id":1,"method":"storage/get","params":{"key":"k"}}"#,
             grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
     ])
     func requestsAreCheckedAgainstGrants(_ testCase: RequestCase) async throws {
@@ -448,7 +439,7 @@ struct PluginHostTests {
     }
 
     @Test func aRestartedHostStartsWithAnEmptyLog() async throws {
-        let host = try makeHost([[.trap]])
+        let host = try makeHost([[.throw]])
         await host.activate()
         #expect(host.log.count == 1)
         await host.activate()
@@ -481,7 +472,7 @@ struct PluginHostTests {
     @Test func aValidRenderReplacesTheTabsTree() async throws {
         let host = try makeHost(
             [[.send(activateOK), .send(render(#"{"id":"root","kind":"vstack","children":[]}"#)), .send(render())]],
-            manifest: Self.v3Manifest)
+            manifest: Self.viewManifest)
         await host.activate()
         #expect(host.state == .active)
         #expect(host.views[0]?.children.count == 1)
@@ -493,10 +484,10 @@ struct PluginHostTests {
         ([.send(render(tab: 1))], "view/render"),
         ([.send(render(tab: 9))], "view/render"),
         ([.send(#"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[]}}"#)], "canvas/regions"),
-        ([.present(tab: 0, ptr: 0, len: 16, width: 2)], "view tab"),
+        ([.present(tab: 0, length: 16, width: 2)], "view tab"),
     ])
     func malformedOrMisdirectedViewMessagesStopThePlugin(steps: [PluginFixtureStep], fragment: String) async throws {
-        let host = try makeHost([[.send(activateOK)] + steps], manifest: Self.v3Manifest)
+        let host = try makeHost([[.send(activateOK)] + steps], manifest: Self.viewManifest)
         await host.activate()
         guard case .failed(let reason) = host.state else {
             Issue.record("expected failed, got \(host.state)")
@@ -506,7 +497,7 @@ struct PluginHostTests {
     }
 
     @Test func viewEventsOnlyReachNodesInTheCurrentTree() async throws {
-        let host = try makeHost([[.send(activateOK), .send(render())]], manifest: Self.v3Manifest)
+        let host = try makeHost([[.send(activateOK), .send(render())]], manifest: Self.viewManifest)
         await host.activate()
         await host.viewEvent(tab: 0, id: "nope", kind: "click", value: nil)
         await host.viewEvent(tab: 0, id: "go", kind: "click", value: nil)
@@ -517,7 +508,7 @@ struct PluginHostTests {
 
     @Test func taskStartNeedsTheGrant() async throws {
         let recorder = Recorder()
-        let host = try makeHost([[.send(activateOK), .send(taskStart())]], recorder: recorder, manifest: Self.v3Manifest)
+        let host = try makeHost([[.send(activateOK), .send(taskStart())]], recorder: recorder, manifest: Self.viewManifest)
         await host.activate()
         #expect(lastReply(host)?.contains(#""code":-32001"#) == true)
         #expect(recorder.tasks.isEmpty)
@@ -528,7 +519,7 @@ struct PluginHostTests {
         let recorder = Recorder()
         let host = try makeHost(
             [[.send(activateOK), .send(taskStart(id: 1)), .send(taskStart(id: 2))], [], [], [.send(taskStart(id: 3))]],
-            grants: [.tasksStart, .workspaceRead], recorder: recorder, manifest: Self.v3Manifest)
+            grants: [.tasksStart, .workspaceRead], recorder: recorder, manifest: Self.viewManifest)
         await host.activate()
         let first = replies(host)
         try #require(first.count == 3)
@@ -555,7 +546,7 @@ struct PluginHostTests {
         recorder.rejections = 1
         let host = try makeHost(
             [[.send(activateOK), .send(taskStart(id: 1)), .send(taskStart(id: 2))]],
-            grants: [.tasksStart], recorder: recorder, manifest: Self.v3Manifest)
+            grants: [.tasksStart], recorder: recorder, manifest: Self.viewManifest)
         await host.activate()
         let sent = replies(host)
         try #require(sent.count == 3)
@@ -574,7 +565,7 @@ struct PluginHostTests {
         limits.maxMessageBytes = 1 << 16
         let host = try makeHost(
             [[.send(activateOK), .send(taskStart(title: title, prompt: prompt))]],
-            grants: [.tasksStart], recorder: recorder, limits: limits, manifest: Self.v3Manifest)
+            grants: [.tasksStart], recorder: recorder, limits: limits, manifest: Self.viewManifest)
         await host.activate()
         #expect(lastReply(host)?.contains(#""code":-32602"#) == true)
         #expect(recorder.tasks.isEmpty)
@@ -598,7 +589,7 @@ struct PluginHostTests {
             request(4, "storage/set", #"{"key":"","value":1}"#),
             request(5, "storage/set", #"{"key":"k2","value":"\#(String(repeating: "y", count: 200))"}"#),
             request(6, "storage/get", #"{"key":"\#(String(repeating: "k", count: 129))"}"#),
-        ]], manifest: Self.v3Manifest, storage: storage)
+        ]], manifest: Self.viewManifest, storage: storage)
         await host.activate()
         #expect(host.state == .active)
         let sent = replies(host)

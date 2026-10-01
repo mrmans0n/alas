@@ -38,10 +38,6 @@ packages:
   BeautifulMermaidSwift:
     url: https://github.com/lukilabs/beautiful-mermaid-swift
     from: 1.0.4
-  # Plugin prototype (#1560). Pinned to main: fuel metering is not in 0.4.0.
-  WasmKit:
-    url: https://github.com/swiftwasm/WasmKit
-    revision: 1e9c513df0f246e7d9647665430e1f01f50fead2
 
 targets:
   Alas:
@@ -116,10 +112,6 @@ targets:
         product: Markdown
       - package: BeautifulMermaidSwift
         product: BeautifulMermaid
-      - package: WasmKit
-        product: WasmKit
-      - package: WasmKit
-        product: WAT
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
