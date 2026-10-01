@@ -3011,7 +3011,15 @@ final class AppState {
             // screen (peer session, workspace overview, forest preview,
             // empty state) post a macOS notification instead — its
             // click-through focuses the pulled worktree.
-            guard let self, let result else { return }
+            // Refresh the sidebar badge even when the pull was declined: the
+            // sync-status probe above may have found the branch no longer
+            // behind (e.g. updated by another Git client), and the stale
+            // `↓N` must not stay clickable repeating the no-op.
+            guard let self else { return }
+            guard let result else {
+                await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
+                return
+            }
             if let bannerWorktreeID = self.inAppBannerWorktreeID {
                 switch result {
                 case .clean:
