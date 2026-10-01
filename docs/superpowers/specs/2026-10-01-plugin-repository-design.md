@@ -142,7 +142,7 @@ JavaScript runtime switch):
 - **`http.fetch` with a host allowlist** declared in the manifest and shown in
   the approval sheet. Alas makes the request, so the plugin never gets sockets.
 - **Secrets.** The user enters the API token in Settings. Alas keeps it in the
-  Keychain and attaches it to allowed requests, so the plugin never sees it.
+  Keychain and attaches it only to requests for the hosts declared with it.
 - **Timers or polling.** Plugins are passive today, so syncing Linear issues needs
   Alas to wake the plugin on an interval it declares.
 - **Task completion events**, so a Linear bridge can move its issue when the

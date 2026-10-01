@@ -159,10 +159,14 @@ the plugin, and stores the values app-wide, not per project:
 
 - `settings/get` returns every non-secret value; `settings/changed` is sent when
   the user edits them.
-- **Secrets never reach the plugin.** They are stored in the Keychain. A plugin
-  refers to one in an HTTP header as `{{secret:token}}`. Alas substitutes it
-  only if the request goes to one of that secret's `hosts`. Otherwise the request
-  is refused with `-32001`.
+- **Secrets are not readable, but they are usable.** They are stored in the
+  Keychain and `settings/get` never returns them. A plugin refers to one in an
+  HTTP header as `{{secret:token}}`, and Alas substitutes it only if the request
+  goes to one of that secret's `hosts`; otherwise the request is refused with
+  `-32001`. An endpoint can still echo a header back, so this keeps the secret
+  out of plugin storage and logs, not out of reach: the approval sheet says the
+  plugin **can use** the credential with the listed hosts, and a user should
+  approve that only for a plugin they trust with it.
 - OAuth (PKCE run by Alas, token stored as a secret) is a follow-up. API keys
   cover Linear, Notion, GitHub, Sentry, Vercel and Slack webhooks today.
 
@@ -253,15 +257,16 @@ exact argv prefix:
 ]
 ```
 
-- `process/run {id, worktree, args?, stdin?, env?}` runs it with the worktree as
+- `process/run {id, worktree, args?, stdin?}` runs it with the worktree as
   the working directory and answers in a later delivery with
   `{exit, stdout, stderr}`. Output is capped at 1 MiB, the run at 10 minutes, and
   an instance may have 2 running at once.
 - `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
-  exactly what the manifest says. `env` takes plain values only: `{{secret:key}}`
-  is refused there. A process's output goes back to the plugin, and a command
-  can print a secret in any encoding, so no redaction could keep it hidden.
-  Commands that need credentials use their own login (`op signin`, `gh auth`).
+  exactly what the manifest says. Alas resolves the executable and runs it with
+  its own environment; a plugin cannot set environment variables, because ones
+  like `PATH` or `NODE_OPTIONS` would change what the approved command runs.
+  Secrets never go to processes: their output returns to the plugin. Commands
+  that need credentials use their own login (`op signin`, `gh auth`).
 - `longRunning` processes are started with `process/start` and show up in the
   Run tab as runs owned by the plugin: visible, with output, and stoppable by the
   user. Alas stops them when the plugin stops. There are no invisible processes.
