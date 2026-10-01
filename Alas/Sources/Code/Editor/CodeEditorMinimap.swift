@@ -11,7 +11,11 @@ final class CodeEditorScrollView: MinimapScrollView {
     private var needsViewportUpdate = false
     private var pendingViewportUpdate: DispatchWorkItem?
 
-    override var minimapBackgroundMaterial: NSVisualEffectView.Material? { .contentBackground }
+    /// The system material ignores the code theme, so a themed editor drops
+    /// it and paints the palette background instead.
+    override var minimapBackgroundMaterial: NSVisualEffectView.Material? {
+        minimapTheme?.codePalette == nil ? .contentBackground : nil
+    }
 
     func configureMinimap(shown: Bool, theme: Theme) {
         let wasShown = showsMinimap
@@ -21,7 +25,7 @@ final class CodeEditorScrollView: MinimapScrollView {
             minimap.update(drawing: MinimapDrawing())
             return
         }
-        minimap.backgroundColor = .clear
+        minimap.backgroundColor = theme.codePalette == nil ? .clear : EditorTheme(theme: theme).bg
         minimap.indicatorColor = NSColor(theme.color("fg-muted"))
         if !minimap.preservesLineScale { minimap.preservesLineScale = true }
         minimap.onNavigate = { [weak self] value in
@@ -62,6 +66,7 @@ final class CodeEditorScrollView: MinimapScrollView {
         }
         if minimapTheme != theme {
             minimapTheme = theme
+            superview?.needsLayout = true
             scheduleDrawing()
         }
         updateMinimapViewport()
