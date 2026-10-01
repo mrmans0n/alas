@@ -110,7 +110,7 @@ this one lands in `…/Plugins/my-plugin`. In **Settings → Plugins** click
 
 ## Next steps
 
-- [Pixel Office](../../plugins/pixel-office/README.md) is a full canvas-tab plugin
+- [Pixel Office](https://github.com/mrmans0n/alas-plugins/tree/main/plugins/pixel-office) is a full canvas-tab plugin
   to install and read.
 - [Writing plugins](writing-plugins.md) shows a structure that keeps your logic
   unit-testable and explains the pieces of the sample.

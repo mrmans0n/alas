@@ -1,9 +1,0 @@
-{
-  "id": "io.nlopez.pixel-office",
-  "name": "Pixel Office",
-  "version": "0.1.0",
-  "api": 2,
-  "entry": "plugin.wasm",
-  "capabilities": ["workspace.read", "worktree.switch", "session.focus"],
-  "contributes": { "tabs": [{ "id": "office", "title": "Office" }] }
-}
