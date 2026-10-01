@@ -160,25 +160,23 @@ impl Board {
         }
     }
 
+    /// The host refused a Start, so no new session exists: the card keeps any session it had
+    /// (a card moved back to Backlog can still open its old agent) and only shows the reason.
     pub fn start_failed(&mut self, id: u64, reason: &str) {
         if let Some(c) = self.card_mut(id) {
+            c.error = Some(reason.into());
+        }
+    }
+
+    /// An accepted start failed in the background: its session never came up.
+    pub fn task_failed(&mut self, session_id: &str, reason: &str) {
+        if let Some(c) = self.cards.iter_mut().find(|c| c.session_id.as_deref() == Some(session_id)) {
             c.column = Column::Backlog;
             c.error = Some(reason.into());
             c.session_id = None;
             c.following = false;
             c.seen = false;
             c.agent_state = None;
-        }
-    }
-
-    pub fn task_failed(&mut self, session_id: &str, reason: &str) {
-        if let Some(id) = self
-            .cards
-            .iter()
-            .find(|c| c.session_id.as_deref() == Some(session_id))
-            .map(|c| c.id)
-        {
-            self.start_failed(id, reason);
         }
     }
 
@@ -298,18 +296,20 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_start_returns_to_backlog_with_the_reason() {
+    fn a_refused_restart_keeps_the_old_session_and_a_failed_accepted_one_clears_it() {
         let (mut b, id) = started_board();
-        b.start_failed(id, "boom");
-        assert_eq!(b.cards[0].column, Column::Backlog);
-        assert_eq!(b.cards[0].error.as_deref(), Some("boom"));
-        assert_eq!(b.cards[0].session_id, None);
+        b.sync(&sess("idle"));
+        b.move_to(id, Column::Backlog);
+        b.start_failed(id, "a task is already starting");
+        let c = &b.cards[0];
+        assert_eq!((c.column, c.error.as_deref()), (Column::Backlog, Some("a task is already starting")));
+        assert_eq!((c.session_id.as_deref(), c.branch.as_deref()), (Some("s1"), Some("br")));
 
-        b.started(id, "s1".into(), "br".into());
+        b.started(id, "s2".into(), "br-2".into());
         assert_eq!(b.cards[0].error, None);
-        b.task_failed("s1", "later");
-        assert_eq!(b.cards[0].column, Column::Backlog);
-        assert_eq!(b.cards[0].error.as_deref(), Some("later"));
+        b.task_failed("s2", "later");
+        let c = &b.cards[0];
+        assert_eq!((c.column, c.error.as_deref(), c.session_id.as_deref()), (Column::Backlog, Some("later"), None));
     }
 
     #[test]
