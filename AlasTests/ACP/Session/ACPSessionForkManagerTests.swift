@@ -235,6 +235,55 @@ struct ACPSessionForkManagerTests {
         #expect(!manager._ownedLeases.contains(source.id))
     }
 
+    @Test("side-question fork of a streaming parent stays hidden and skips its unpersisted tail")
+    func sideQuestionForkOfStreamingParent() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let parent = manager.createSession(agentId: "claude", autoRunDefault: true)
+        await manager.flushPersistence()
+        let persisted: [ACPMessage] = [
+            .user(id: UUID(), text: "one", attachments: []),
+            .agent(id: UUID(), StreamingText("two")),
+            .user(id: UUID(), text: "three", attachments: []),
+        ]
+        for (index, message) in persisted.enumerated() {
+            parent.transcript.appendMessage(message)
+            try store.appendMessage(
+                sessionId: parent.id,
+                id: "msg-\(parent.id)-\(index)",
+                kind: message.kind,
+                seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message),
+                createdAt: Int64(index)
+            )
+        }
+        parent.transcript.appendMessage(.agent(id: UUID(), StreamingText("partial")))
+        parent.transcript.streamingState = .streaming
+        let boundary = try #require(ACPSideQuestionBoundaryPolicy.boundary(
+            messages: parent.transcript.messages,
+            isTurnActive: true
+        ))
+
+        await #expect(throws: ACPSessionForkSnapshotError.transcriptMismatch) {
+            try await manager.createFork(
+                sourceSessionID: parent.id, boundary: boundary,
+                targetAgentID: "claude", autoRunDefault: true
+            )
+        }
+        let side = try await manager.createFork(
+            sourceSessionID: parent.id, boundary: boundary,
+            targetAgentID: "claude", autoRunDefault: true,
+            ephemeralTitle: "/btw: why?"
+        )
+
+        #expect(side.transcript.messages.count == 2)
+        #expect(side.autoRunEnabled == false)
+        #expect(side.forkRecord?.via == .btw)
+        #expect(!manager.recent.contains { $0.id == side.id })
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == parent.id)
+        #expect(try !store.recentSessions().contains { $0.id == side.id })
+    }
+
     @Test("streaming agent is ineligible while earlier messages remain eligible")
     func messageEligibility() {
         let session = ACPSession(

@@ -120,6 +120,36 @@ struct ACPSessionForkPolicyTests {
         #expect(targets.map(\.id) == ["codex"])
     }
 
+    enum SideQuestionEntry: Sendable {
+        case user(String), agent(String), toolCall
+    }
+
+    @Test(
+        "side questions fork at the last completed turn",
+        arguments: [
+            ([SideQuestionEntry.user("q"), .agent("a")], false, Optional(1)),
+            ([.user("q"), .agent("a"), .toolCall], false, 1),
+            ([.user("q1"), .agent("a1"), .user("q2"), .agent("partial")], true, 1),
+            ([.user("q1"), .agent("a1"), .user("q2"), .toolCall], true, 1),
+            ([.user("q1"), .agent(""), .user("q2")], true, 0),
+            ([.user("q")], true, nil),
+            ([], false, nil),
+        ] as [([SideQuestionEntry], Bool, Int?)]
+    )
+    func sideQuestionBoundary(entries: [SideQuestionEntry], isTurnActive: Bool, expectedIndex: Int?) {
+        let messages: [ACPMessage] = entries.map {
+            switch $0 {
+            case .user(let text): .user(id: UUID(), text: text, attachments: [])
+            case .agent(let text): .agent(id: UUID(), StreamingText(text))
+            case .toolCall: .toolCall(.init(toolCallId: "tc", title: "read", status: "completed", content: "", preview: ""))
+            }
+        }
+
+        let boundary = ACPSideQuestionBoundaryPolicy.boundary(messages: messages, isTurnActive: isTurnActive)
+
+        #expect(boundary?.stableID == expectedIndex.map { messages[$0].stableId })
+    }
+
     @Test("snapshot is inclusive and conversation-only")
     func conversationOnlySnapshot() throws {
         let user: ACPMessage = .user(
