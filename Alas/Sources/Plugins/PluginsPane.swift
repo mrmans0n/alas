@@ -30,7 +30,7 @@ struct PluginsPane: View {
                     content(manager)
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 32).padding(.vertical, 24)
         }
         .sheet(item: $approving) { plugin in
             PluginApprovalSheet(plugin: plugin) { approved in
@@ -52,7 +52,7 @@ struct PluginsPane: View {
         }
         .padding(.bottom, 12)
         if manager.plugins.isEmpty {
-            Text("No plugins installed.").foregroundColor(theme.color("fg-dim"))
+            SettingsRow(name: "No plugins installed.", desc: nil) { }
         }
         ForEach(manager.plugins) { plugin in
             SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)") {
@@ -67,15 +67,28 @@ struct PluginsPane: View {
                     }
                 }
                 ForEach(manager.hosts(for: plugin), id: \.key) { entry in
-                    PluginHostLogRow(host: entry.host) { Task { await manager.restart(entry.key) } }
+                    SettingsRow(name: "\(entry.host.project.name) host", desc: entry.host.state.displayText) {
+                        AlasButton(title: "Restart", style: .subtle) { Task { await manager.restart(entry.key) } }
+                    }
+                    if !entry.host.log.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(entry.host.log.enumerated()), id: \.offset) { _, logEntry in
+                                Text("[\(logEntry.level)] \(logEntry.message)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .foregroundColor(theme.color("fg-dim"))
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                    }
                 }
             }
         }
         if !manager.invalid.isEmpty {
             SettingsGroup(title: "Not loaded") {
                 ForEach(manager.invalid) { entry in
-                    Text("\(entry.folder.lastPathComponent): \(entry.reason)")
-                        .font(.system(size: 11.5)).textSelection(.enabled)
+                    SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason) { }
                 }
             }
         }
@@ -85,27 +98,6 @@ struct PluginsPane: View {
         if !manager.isApproved(plugin) { return "Not approved" }
         if !manager.isEnabled(plugin) { return "Disabled" }
         return "Enabled"
-    }
-}
-
-private struct PluginHostLogRow: View {
-    let host: PluginHost
-    let restart: () -> Void
-
-    var body: some View {
-        DisclosureGroup {
-            ForEach(Array(host.log.enumerated()), id: \.offset) { _, entry in
-                Text("[\(entry.level)] \(entry.message)")
-                    .font(.caption.monospaced()).textSelection(.enabled)
-            }
-        } label: {
-            HStack {
-                Text("\(host.project.name): \(host.state.displayText)")
-                Spacer()
-                AlasButton(title: "Restart", style: .normal, action: restart)
-            }
-        }
-        .padding(.vertical, 4)
     }
 }
 
