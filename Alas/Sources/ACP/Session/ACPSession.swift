@@ -33,6 +33,34 @@ struct ACPGoalState: Equatable, Hashable, Sendable {
     let objective: String
     let status: String?
     let tokenBudget: Int?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let tokensUsed: Int?
+    let timeUsedSeconds: Double?
+    let iterations: Int?
+    let lastReason: String?
+
+    init(
+        objective: String,
+        status: String?,
+        tokenBudget: Int?,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil,
+        tokensUsed: Int? = nil,
+        timeUsedSeconds: Double? = nil,
+        iterations: Int? = nil,
+        lastReason: String? = nil
+    ) {
+        self.objective = objective
+        self.status = status
+        self.tokenBudget = tokenBudget
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.tokensUsed = tokensUsed
+        self.timeUsedSeconds = timeUsedSeconds
+        self.iterations = iterations
+        self.lastReason = lastReason
+    }
 }
 
 struct ACPRetryStatus: Equatable {
@@ -142,6 +170,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Runtime-only provider state learned from the adapter on each attach.
     @Published var providerCapabilities: EmptyObject?
+    @Published var goalCapability: ACPGoalCapability?
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
@@ -2825,6 +2854,17 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
+    private static func metadataDouble(_ value: AnyCodable?) -> Double? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        if let double = raw as? Double { return double }
+        if let int = raw as? Int { return Double(int) }
+        return nil
+    }
+
+    private static func metadataDate(_ value: AnyCodable?) -> Date? {
+        metadataDouble(value).map { Date(timeIntervalSince1970: $0 / 1_000) }
+    }
+
     private static func metadataArray(_ value: AnyCodable?) -> [AnyCodable]? {
         if let array = value?.value as? [AnyCodable] { return array }
         if let array = value?.value as? [Any] {
@@ -3154,7 +3194,13 @@ final class ACPSession: ObservableObject, Identifiable {
         currentGoal = ACPGoalState(
             objective: objective,
             status: goal.keys.contains("status") ? Self.metadataScalarString(goal["status"]) : currentGoal?.status,
-            tokenBudget: goal.keys.contains("tokenBudget") ? Self.metadataInt(goal["tokenBudget"]) : currentGoal?.tokenBudget)
+            tokenBudget: goal.keys.contains("tokenBudget") ? Self.metadataInt(goal["tokenBudget"]) : currentGoal?.tokenBudget,
+            createdAt: goal.keys.contains("createdAt") ? Self.metadataDate(goal["createdAt"]) : currentGoal?.createdAt,
+            updatedAt: goal.keys.contains("updatedAt") ? Self.metadataDate(goal["updatedAt"]) : currentGoal?.updatedAt,
+            tokensUsed: goal.keys.contains("tokensUsed") ? Self.metadataInt(goal["tokensUsed"]) : currentGoal?.tokensUsed,
+            timeUsedSeconds: goal.keys.contains("timeUsedSeconds") ? Self.metadataDouble(goal["timeUsedSeconds"]) : currentGoal?.timeUsedSeconds,
+            iterations: goal.keys.contains("iterations") ? Self.metadataInt(goal["iterations"]) : currentGoal?.iterations,
+            lastReason: goal.keys.contains("lastReason") ? Self.metadataScalarString(goal["lastReason"]) : currentGoal?.lastReason)
     }
 
     /// Best-effort strip of a single pair of markdown code fences that

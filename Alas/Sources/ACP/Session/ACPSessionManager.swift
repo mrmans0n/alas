@@ -408,6 +408,27 @@ final class ACPSessionManager: ObservableObject {
         await runner.userCancel()
     }
 
+    func controlGoal(
+        for id: ACPSession.ID,
+        action: ACPGoalAction,
+        objective: String? = nil
+    ) async throws {
+        guard let session = sessions[id],
+              let capability = session.goalCapability,
+              let runner = runners[id],
+              await confirmedWriterLease(for: id),
+              sessions[id] === session,
+              runners[id] === runner
+        else { throw ACPGoalControlError.unavailable }
+
+        try await runner.connection.controlGoal(
+            sessionId: session.remoteSessionId ?? id,
+            capability: capability,
+            action: action,
+            objective: objective
+        )
+    }
+
     /// Cancel one native subagent without touching the parent turn. Only
     /// offered when the spawn advertised `capabilities.cancel`; the agent
     /// reports the outcome back as a `subagent_state_update`.
@@ -4947,6 +4968,7 @@ extension ACPSessionManager {
         session.contextRestoreWarning = nil
         session.contextRecoveryStatus = nil
         session.providerCapabilities = nil
+        session.goalCapability = nil
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -6276,6 +6298,7 @@ extension ACPSessionManager {
             persistPromptSuggestions(session.promptSuggestions, for: sessionId)
             session.availableConfigOptions = result.configOptions
             session.providerCapabilities = initialized.providerCapabilities
+            session.goalCapability = initialized.goalCapability
             session.availableProviders = providers
             session.contextRestoreWarning = restoreWarning
             // An empty list tells the catalog this agent advertised no
