@@ -16,7 +16,7 @@ unchanged.
 ```json
 {
   "api": 3,
-  "capabilities": ["workspace.read", "session.focus", "tasks.start"],
+  "capabilities": ["workspace.read", "session.focus", "session.read", "tasks.start"],
   "contributes": { "tabs": [{ "id": "board", "title": "Board", "kind": "view" }] }
 }
 ```
@@ -25,8 +25,8 @@ unchanged.
   tab, and so is `kind` in a manifest with `"api"` below 3.
 - View tabs open from **View → Plugins** like canvas tabs, and are restored the
   same way. They never receive `tick`.
-- `tasks.start` is an API 3 capability; a manifest that requests it with a lower
-  `api` is rejected. `session.focus` stays an API 2 capability.
+- `tasks.start` and `session.read` are API 3 capabilities; a manifest that
+  requests either with a lower `api` is rejected. `session.focus` stays an API 2 capability.
 
 ## `view/render`
 
@@ -103,6 +103,12 @@ currently showing.
 
 Approval text: "Create worktrees and start agents in this project".
 
+## Capability: `session.read`
+
+Approval text: "Read agents' final replies in this project". It covers
+`session/last_message`, which exposes what an agent wrote, so it is a separate
+approval from `workspace.read`.
+
 ## `task/start`
 
 Request `task/start {title, prompt, branch?, agent?}` returns
@@ -171,8 +177,8 @@ rather than overwritten.
 
 ## Reading sessions and agents
 
-Two read-only requests. Both need the `workspace.read` capability and API 3
-(below API 3 they answer `-32601`).
+Two read-only requests, both API 3 (below API 3 they answer `-32601`).
+`session/last_message` needs `session.read`; `agent/list` needs `workspace.read`.
 
 | Request | Reply |
 |---|---|
@@ -186,7 +192,7 @@ Two read-only requests. Both need the `workspace.read` capability and API 3
 
 | Error | When |
 |---|---|
-| `-32001` | `workspace.read` was not granted |
+| `-32001` | the request's capability was not granted |
 | `-32003` | "unknown session <id>": not an active session of this project |
 | `-32602` | invalid params |
 

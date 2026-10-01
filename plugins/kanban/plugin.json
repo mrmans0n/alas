@@ -4,6 +4,6 @@
   "version": "0.2.0",
   "api": 3,
   "entry": "plugin.wasm",
-  "capabilities": ["workspace.read", "session.focus", "tasks.start"],
+  "capabilities": ["workspace.read", "session.focus", "session.read", "tasks.start"],
   "contributes": { "tabs": [{ "id": "board", "title": "Board", "kind": "view" }] }
 }

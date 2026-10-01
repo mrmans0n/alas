@@ -157,7 +157,9 @@ the reason, and `task/failed` for an accepted session clears that session.
 
 ### Host additions (additive to API 3)
 
-Both need `workspace.read` and appear in `docs/plugins/api-v3.md`.
+Both appear in `docs/plugins/api-v3.md`. `session/last_message` needs a new API 3
+capability, `session.read` ("Read agents' final replies in this project");
+`agent/list` needs `workspace.read`.
 
 - **`session/last_message {id}`** → `{message}`. `message` is the text of the
   session's last assistant message, at most 4,096 UTF-8 bytes cut on a
@@ -244,9 +246,11 @@ see it converted.
   and by measuring before setting caps.
 - **Index and body drift** after a crash: handled by write order and by
   treating the index as the source of truth.
-- **Last-message privacy:** a plugin with `workspace.read` can read the final
-  message of any session in its project. That is a new disclosure, so the
-  approval text for `workspace.read` should say so, and the message is bounded.
+- **Last-message privacy:** reading the final message of any session in the
+  project is a new disclosure, so it has its own capability, `session.read`.
+  Approvals are keyed by manifest and wasm, so widening `workspace.read` would
+  have granted it to already-approved plugins without asking. The message is
+  bounded.
 - **Agent list changes** while the board is open: the Assign menu refreshes on
   each ticket screen open, not live.
 

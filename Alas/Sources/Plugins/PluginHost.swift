@@ -74,7 +74,7 @@ final class PluginHost {
         "workspace/snapshot": .workspaceRead,
         "worktree/switch": .worktreeSwitch,
         "session/focus": .sessionFocus,
-        "session/last_message": .workspaceRead,
+        "session/last_message": .sessionRead,
         "agent/list": .workspaceRead,
         "task/start": .tasksStart,
         "storage/get": nil,

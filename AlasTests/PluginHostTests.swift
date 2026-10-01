@@ -212,12 +212,13 @@ struct PluginHostTests {
     }
 
     @Test(arguments: [
-        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.sessionRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [], reply: #""code":-32001"#),
-        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""message":"x""#),
-        ReadCase(method: "session/last_message", params: #"{"id":"quiet"}"#, grants: [.workspaceRead], reply: #""result":{"message":null}"#),
-        ReadCase(method: "session/last_message", params: #"{"id":"gone"}"#, grants: [.workspaceRead], reply: #""code":-32003"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""code":-32001"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.sessionRead], reply: #""message":"x""#),
+        ReadCase(method: "session/last_message", params: #"{"id":"quiet"}"#, grants: [.sessionRead], reply: #""result":{"message":null}"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"gone"}"#, grants: [.sessionRead], reply: #""code":-32003"#),
         ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""name":"Claude Code""#),
     ])
     func workspaceReadRequestsAreGatedAndShaped(_ c: ReadCase) async throws {
