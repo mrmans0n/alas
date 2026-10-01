@@ -281,7 +281,9 @@ exact argv prefix:
 - Paths are relative. Alas resolves them and refuses anything that leaves the
   worktree, including through symlinks. Nothing named `.git` is writable at any
   depth: in a linked worktree `.git` is a file pointing at the repository, and
-  writing it would redirect git.
+  writing it would redirect git. The check runs on the resolved destination and
+  compares case-folded components, so `.GIT/config` on a case-insensitive volume
+  and a symlink that resolves into `.git` are refused too.
 - Writes show up in the Changes tab like any other edit.
 
 **How the user sees the risk.**
@@ -334,7 +336,7 @@ Per the testing policy, tests pin decisions, not views:
 - Slot routing: which commands a slot shows, and the target a command receives.
 - Decorations: replace and clear semantics, caps, cleanup when a plugin stops.
 - Process and files: argv matching (`appendArgs` on and off), path escapes
-  (`..`, absolute paths, symlinks), `.git` writes refused (the linked-worktree file and any `.git` directory), output and time caps.
+  (`..`, absolute paths, symlinks), `.git` writes refused (the linked-worktree file, any `.git` directory, `.GIT` and symlink aliases), output and time caps.
 - Network: allowlist matching (subdomains, ports, redirects), secret substitution
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
