@@ -94,6 +94,80 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "skilled")?.promptSuggestions == nil)
     }
 
+    @Test("side-question forks stay out of history until promoted")
+    func ephemeralForkHiddenUntilPromoted() throws {
+        let store = try tmpStore()
+        func row(ephemeralParentId: String?) -> ACPSessionRow {
+            .init(
+                id: "side", agentId: "claude", title: "/btw: why?",
+                currentModel: nil, currentMode: nil,
+                ephemeralParentId: ephemeralParentId,
+                autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+            )
+        }
+        try store.createFork(
+            session: row(ephemeralParentId: "parent"),
+            messages: [],
+            record: .init(
+                targetSessionID: "side", sourceSessionID: "parent", sourceAgentID: "claude",
+                sourceBoundarySequence: 0, inheritedMessageCount: 0,
+                phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false,
+                via: .btw
+            )
+        )
+        // A runner rebuilding the row without the flag must not unhide it.
+        try store.upsertSession(row(ephemeralParentId: nil))
+        #expect(try store.recentSessions().isEmpty)
+
+        #expect(try store.promoteEphemeralSession(id: "side"))
+        #expect(try store.promoteEphemeralSession(id: "side") == false)
+        #expect(try store.recentSessions().map(\.id) == ["side"])
+        #expect(try store.loadFork(targetSessionID: "side")?.via == .btw)
+    }
+
+    enum SideSessionLease: Sendable {
+        case none, live, stale, deadOwner
+    }
+
+    @Test(
+        "orphaned side sessions are only those nobody is driving",
+        arguments: [
+            (SideSessionLease.none, Int64(100), true),
+            (.none, 0, false),
+            (.live, 100, false),
+            (.stale, 100, true),
+            (.deadOwner, 100, true),
+        ]
+    )
+    func orphanedEphemeralSessions(lease: SideSessionLease, idleSeconds: Int64, orphaned: Bool) throws {
+        let store = try tmpStore()
+        let now = Int64(Date().timeIntervalSince1970)
+        for (id, parent) in [("side", "parent" as String?), ("visible", nil)] {
+            try store.upsertSession(.init(
+                id: id, agentId: "claude", title: id,
+                currentModel: nil, currentMode: nil,
+                ephemeralParentId: parent,
+                autoRun: false, createdAt: now - idleSeconds, updatedAt: now - idleSeconds,
+                lastOpenedAt: now - idleSeconds, archived: false
+            ))
+        }
+        let livePid = Int64(ProcessInfo.processInfo.processIdentifier)
+        let leaseRow: (pid: Int64, heartbeatAt: Int64)? = switch lease {
+        case .none: nil
+        case .live: (livePid, now)
+        case .stale: (livePid, now - 100)
+        case .deadOwner: (-1, now)
+        }
+        if let leaseRow {
+            try store.db.exec("""
+            INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+            VALUES ('side', 'other', ?, ?, 'busy', 'token')
+            """, bindings: [leaseRow.pid, leaseRow.heartbeatAt])
+        }
+
+        #expect(try store.orphanedEphemeralSessionIds(now: now, staleAfter: 15) == (orphaned ? ["side"] : []))
+    }
+
     @Test("re-opening doesn't double-apply migrations")
     func idempotent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")

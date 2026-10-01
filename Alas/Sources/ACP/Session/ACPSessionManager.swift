@@ -2849,6 +2849,25 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    /// Deletes hidden `/btw` side sessions left behind by a crash or a quit
+    /// while a side question was open.
+    func purgeOrphanedEphemeralSessions() async {
+        let persistence = persistence
+        let ids: [String]
+        do {
+            ids = try await persistence.orphanedEphemeralSessionIds(
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: Self.leaseStaleAfter
+            )
+        } catch {
+            persistenceError = error.localizedDescription
+            return
+        }
+        for id in ids {
+            try? await deletePersistedSession(id: id)
+        }
+    }
+
     private func killRemoteHelperACPProcIfPossible(sessionId: ACPSession.ID) {
         guard let host = effectiveRemoteHost() else { return }
         let procId = Self.helperACPProcId(sessionId: sessionId)
