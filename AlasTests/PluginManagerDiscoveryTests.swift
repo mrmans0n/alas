@@ -14,6 +14,9 @@ struct PluginManagerDiscoveryTests {
             if script { try Data([0]).write(to: dir.appending(path: "plugin.js")) }
         }
         try install("good", id: "io.x.good")
+        // Refused by its size, before it is read.
+        try install("too-big", id: "io.x.toobig", script: false)
+        try Data(count: PluginLimits().maxSourceBytes + 1).write(to: root.appending(path: "too-big/plugin.js"))
         try install("no-script", id: "io.x.noscript", script: false)
         try install("dup-a", id: "io.x.dup")
         try install("dup-b", id: "io.x.dup")
@@ -35,7 +38,7 @@ struct PluginManagerDiscoveryTests {
         let result = PluginManager.discover(in: root)
 
         #expect(result.plugins.map(\.id) == ["io.x.good"])
-        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-script", "dup-a", "dup-b", "linked-out", "linked-dir"])
+        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-script", "dup-a", "dup-b", "linked-out", "linked-dir", "too-big"])
     }
 
     /// The user approves what a row showed. If the files changed and were rescanned since, that

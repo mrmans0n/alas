@@ -250,10 +250,15 @@ final class PluginManager {
                 let entry = folder.appending(path: manifest.entry)
                 // `folder` is already resolved, so the resolved entry must stay beneath it. That catches a
                 // symlinked directory in the path; the regular-file check catches a symlink as the file.
-                guard entry.resolvingSymlinksInPath().path.hasPrefix(folder.path + "/"),
-                      (try? entry.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+                let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard entry.resolvingSymlinksInPath().path.hasPrefix(folder.path + "/"), values?.isRegularFile == true
                 else {
                     throw PluginManifestError.invalidEntry(manifest.entry)
+                }
+                // Checked before reading, so an oversized entry is never loaded or hashed.
+                let size = values?.fileSize ?? 0
+                guard size <= PluginLimits().maxSourceBytes else {
+                    throw PluginRuntimeError.instantiation("script of \(size) bytes exceeds the size limit")
                 }
                 let source = try Data(contentsOf: entry)
                 found.append(Plugin(
