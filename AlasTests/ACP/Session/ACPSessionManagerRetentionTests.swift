@@ -141,4 +141,25 @@ struct ACPSessionManagerRetentionTests {
         let loaded = try await mgr.persistence.loadComposerDraftRecord(sessionId: id)?.draft
         #expect(loaded == draft)
     }
+
+    @Test("hydration restores the persisted agent command/skill list for pills")
+    func hydrationRestoresPromptSuggestions() async throws {
+        let mgr = makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        let id = s.id
+        await mgr.flushPersistence()   // the row's INSERT drains before the UPDATE
+        let suggestions = [
+            ACPPromptSuggestion(command: "/read-jira-ticket", description: "Read", hint: "<CPCL-XXXX>"),
+            ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas"),
+        ]
+        try await mgr.persistence.setPromptSuggestions(sessionId: id, suggestions: suggestions, fence: nil)
+        await mgr.flushPersistence()
+
+        mgr.retainSession(id: id)
+        mgr.releaseSession(id: id)
+        let reopened = try #require(mgr.placeholderSession(id: id))
+        #expect(reopened.promptSuggestions.isEmpty)   // restored on hydration, not at placeholder time
+        await mgr.hydrateIfNeeded(id: id)
+        #expect(reopened.promptSuggestions == suggestions)
+    }
 }

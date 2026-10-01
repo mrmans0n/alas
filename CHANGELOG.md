@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Persist an agent's advertised slash commands and skills so their pills and composer chips survive an app restart, appear in mirrors and forks before any attach, and keep their hover cards.
 - Show peer branch changes as an expandable folder tree and compare them using the viewing Mac's configured commit comparison mode.
 - Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only (#1643).
 

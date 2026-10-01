@@ -368,6 +368,39 @@ import Foundation
         }
     }
 
+    @Test("mirror refresh applies the writer's persisted agent command/skill list")
+    func mirrorRefreshAppliesPromptSuggestions() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-suggestions-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let sessionA = mgrA.createSession(agentId: "claude")
+        #expect(await mgrA.acquireWriterLease(sessionId: sessionA.id) == true)
+        await mgrA.flushAllPersistence()
+        let suggestions = [
+            ACPPromptSuggestion(command: "/review", description: "Review"),
+            ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas"),
+        ]
+        try storeA.setPromptSuggestions(sessionId: sessionA.id, suggestions: suggestions)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        #expect(await mgrB.acquireWriterLease(sessionId: sessionA.id) == false)
+        guard let mirrorSession = mgrB.placeholderSession(id: sessionA.id) else {
+            Issue.record("expected a placeholder session for the mirrored id")
+            return
+        }
+        mgrB.beginMirroring(sessionId: sessionA.id)
+
+        await mgrB.refreshMirror(sessionId: sessionA.id)
+
+        // Mirrors never run their own attach, so the persisted list is the
+        // only source for their skill/command pills.
+        #expect(mirrorSession.promptSuggestions == suggestions)
+
+        mgrB.endMirroring(sessionId: sessionA.id)
+    }
+
     @Test("shutdownBackgroundTasks cancels mirror pollers")
     func disposeStopsMirrorPoll() async throws {
         let url = FileManager.default.temporaryDirectory

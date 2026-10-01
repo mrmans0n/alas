@@ -1766,6 +1766,78 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
     }
 
+    @Test("commands update is acknowledged only after the suggestion catalog persists")
+    func commandsUpdateAcknowledgesAfterSuggestionsPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let suggestions = [
+            ACPPromptSuggestion(command: "/review", description: "Review"),
+            ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas", hint: "[topic]"),
+        ]
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .availableCommandsUpdate(suggestions),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        // The broker cursor must not advance until the catalog write has
+        // landed — otherwise a crash in that window loses the pills on the
+        // next hydration.
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadSession(id: "s")?.promptSuggestions == suggestions)
+    }
+
+    @Test("an empty commands update acknowledges through the persistence barrier without erasing the stored catalog")
+    func emptyCommandsUpdateAcknowledgesWithoutErasingCatalog() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let remembered = [ACPPromptSuggestion(command: "/review", description: "Review")]
+        try store.setPromptSuggestions(sessionId: "s", suggestions: remembered)
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .availableCommandsUpdate([]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        // Deliberately non-persisted, but consumed: an unacknowledged cursor
+        // would defer every later durable acknowledgement and replay this
+        // empty update on every reconnect.
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        // The retracted list never erased the stored catalog.
+        #expect(try store.loadSession(id: "s")?.promptSuggestions == remembered)
+        #expect(session.promptSuggestions.isEmpty)
+    }
+
     @Test(
         "config update removing the config model is acknowledged only after persisting the fallback model",
         arguments: [false, true]

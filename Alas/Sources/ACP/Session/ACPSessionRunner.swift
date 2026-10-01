@@ -831,6 +831,64 @@ final class ACPSessionRunner {
         await task?.value
     }
 
+    /// Persists an `available_commands_update` list (slash commands and
+    /// skills) so their pills and chips survive an app restart and appear in
+    /// mirror sessions. Fenced like every other runner-owned mutation; only
+    /// a non-empty list is written, so an agent that later retracts the list
+    /// never erases the stored one — a replayed pill beats a guaranteed
+    /// absence.
+    private func persistPromptSuggestions(_ suggestions: [ACPPromptSuggestion]) {
+        guard !suggestions.isEmpty else { return }
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.setPromptSuggestions(
+                sessionId: sessionId, suggestions: suggestions, fence: fence
+            )
+        }
+    }
+
+    /// Ack variant of `persistPromptSuggestions`: the broker's replay cursor
+    /// only advances once the catalog write is durable, mirroring how
+    /// `persistSessionRow` gates the config-options ack on its own write.
+    /// A failure leaves the cursor where it is, so the broker replays the
+    /// update (and its acknowledgement) on the next attach.
+    ///
+    /// An EMPTY catalog is intentionally not persisted (a retracted list
+    /// never erases the stored one), but the update itself was delivered and
+    /// applied to the live session — leaving it unacknowledged would starve
+    /// every later durable acknowledgement (`ack(cursor:)` defers anything
+    /// behind an unresolved cursor) and replay the same empty update on
+    /// every reconnect. It acknowledges through
+    /// `acknowledgeAfterQueuedPersistence`, whose empty write still
+    /// re-validates the lease fence behind this cursor.
+    private func persistPromptSuggestionsAndAcknowledge(
+        _ suggestions: [ACPPromptSuggestion],
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else {
+            persistPromptSuggestions(suggestions)
+            return
+        }
+        if suggestions.isEmpty {
+            acknowledgeAfterQueuedPersistence(acknowledgement)
+            return
+        }
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            try await persistence.setPromptSuggestionsAndReport(
+                sessionId: sessionId, suggestions: suggestions, fence: fence
+            )
+        }, completion: { persisted in
+            if persisted == true {
+                acknowledgement()
+            }
+        })
+    }
+
     /// Applies a `_auth/status_update` notification. Unlike a failed-prompt
     /// `authRequired`, the connection here is healthy — the agent is simply
     /// reporting it has no signed-in credentials yet — so this shows the
@@ -1173,12 +1231,38 @@ final class ACPSessionRunner {
             } else {
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
+                var suggestionsHandled: Bool = false
+                if case .availableCommandsUpdate(let suggestions) = params.update {
+                    if durableConsumptionAcknowledgement != nil {
+                        // The catalog write must land before the broker's replay
+                        // cursor advances, or a crash/failed write in between
+                        // loses the pills on the next hydration. Route the
+                        // acknowledgement through the suggestion write itself —
+                        // same ordering `persistSessionRow` gives config options.
+                        persistPromptSuggestionsAndAcknowledge(
+                            suggestions,
+                            acknowledging: durableConsumptionAcknowledgement
+                        )
+                        suggestionsHandled = true
+                    } else {
+                        persistPromptSuggestions(suggestions)
+                    }
+                }
+                // A suggestions update with a durable ack already routed the
+                // acknowledgement through its own catalog write; skip the
+                // paths below, none of which carry anything to persist for
+                // this kind (`dirty` is always empty) and all of which would
+                // otherwise ack immediately without waiting for that write.
+                // The tail below (models observation, boundary check) still
+                // runs either way.
                 let isSubagentLifecycleUpdate: Bool
                 switch params.update {
                 case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
                 default: isSubagentLifecycleUpdate = false
                 }
-                if case .sessionConfigOptionsUpdate = params.update {
+                if suggestionsHandled {
+                    // fall through to the tail only
+                } else if case .sessionConfigOptionsUpdate = params.update {
                     persistIndices(dirty)
                     persistSessionRow { persisted in
                         if persisted {
