@@ -67,7 +67,8 @@ Running, Needs you and Review are no longer columns. They are the ticket's
 - A ticket in the index without a body is shown with an empty description and
   no comments; a body not in the index is not shown.
 - **Archive:** Done and Cancelled tickets past a threshold are removed from the
-  index, oldest-closed first, and their bodies stay stored. The measured caps
+  index, oldest-closed first, and their bodies are deleted (nothing can open
+  them). The measured caps
   are 75 tickets in the index and 15 closed tickets kept (see Fuel).
 - A failed read never overwrites what is stored. The board shows a notice and
   does not save, as the current plugin does.
