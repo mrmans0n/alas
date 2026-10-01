@@ -81,6 +81,10 @@ final class ACPHorizontalNSScrollView: NSScrollView {
     /// True while a phased horizontal gesture (and its momentum) is owned by this view.
     private var latchesHorizontalGesture = false
 
+    #if DEBUG
+    var latchesHorizontalGestureForTests: Bool { latchesHorizontalGesture }
+    #endif
+
     /// Keeps horizontal gestures and passes the rest up the responder chain to
     /// the transcript, which scrolls it with AppKit responsive scrolling.
     /// A phased gesture that turns horizontal latches to this view for its whole
@@ -92,7 +96,7 @@ final class ACPHorizontalNSScrollView: NSScrollView {
             latchesHorizontalGesture = false
         }
 
-        if latchesHorizontalGesture {
+        if isPhased && latchesHorizontalGesture {
             super.scrollWheel(with: event)
         } else if Self.isHorizontalDominant(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
             if isPhased { latchesHorizontalGesture = true }

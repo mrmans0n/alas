@@ -80,7 +80,7 @@ struct ACPHorizontalScrollViewTests {
             cgEvent.setIntegerValueField(CGEventField.scrollWheelEventScrollPhase, value: cgScrollPhaseRawValue(for: phase))
         }
         if !momentumPhase.isEmpty {
-            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventMomentumPhase, value: cgScrollPhaseRawValue(for: momentumPhase))
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventMomentumPhase, value: cgMomentumPhaseRawValue(for: momentumPhase))
         }
         return try #require(NSEvent(cgEvent: cgEvent))
     }
@@ -93,6 +93,14 @@ struct ACPHorizontalScrollViewTests {
         if phase.contains(.cancelled) { rawValue |= CGScrollPhase.cancelled.rawValue }
         if phase.contains(.mayBegin) { rawValue |= CGScrollPhase.mayBegin.rawValue }
         return Int64(rawValue)
+    }
+
+    /// CG momentum phases use their own encoding (begin 1, continue 2, end 3).
+    private func cgMomentumPhaseRawValue(for phase: NSEvent.Phase) -> Int64 {
+        if phase.contains(.began) { return Int64(CGMomentumScrollPhase.begin.rawValue) }
+        if phase.contains(.changed) { return Int64(CGMomentumScrollPhase.continuous.rawValue) }
+        if phase.contains(.ended) { return Int64(CGMomentumScrollPhase.end.rawValue) }
+        return 0
     }
 
     private func horizontalGesture() throws -> [NSEvent] {
@@ -118,6 +126,44 @@ struct ACPHorizontalScrollViewTests {
         for event in events { scrollView.scrollWheel(with: event) }
 
         #expect(next.receivedEvents == [events[0]])
+    }
+
+    @Test("momentum events carry the intended phase")
+    func momentumEncoding() throws {
+        #expect(try phasedEvent(momentumPhase: .began).momentumPhase == .began)
+        #expect(try phasedEvent(momentumPhase: .changed).momentumPhase == .changed)
+        #expect(try phasedEvent(momentumPhase: .ended).momentumPhase == .ended)
+    }
+
+    @Test("the latch clears when momentum ends, so later wheel events are forwarded")
+    func momentumEndClearsLatch() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        for event in try horizontalGesture() { scrollView.scrollWheel(with: event) }
+        #expect(!scrollView.latchesHorizontalGestureForTests)
+        next.clear()
+
+        let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
+        scrollView.scrollWheel(with: wheel)
+
+        #expect(next.receivedEvents == [wheel])
+    }
+
+    @Test("a gesture that ends without momentum does not capture later wheel events")
+    func endedWithoutMomentumDoesNotCaptureWheel() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        scrollView.scrollWheel(with: try phasedEvent(phase: .began))
+        scrollView.scrollWheel(with: try phasedEvent(deltaX: 20, phase: .changed))
+        scrollView.scrollWheel(with: try phasedEvent(phase: .ended))
+        next.clear()
+
+        let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
+        scrollView.scrollWheel(with: wheel)
+
+        #expect(next.receivedEvents == [wheel])
     }
 
     @Test("a vertical gesture is forwarded entirely")
