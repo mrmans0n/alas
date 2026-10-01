@@ -35,6 +35,7 @@ final class PluginManager {
     private(set) var hostsByKey: [HostKey: PluginHost] = [:]
 
     @ObservationIgnored let directory: URL
+    @ObservationIgnored let catalog: PluginCatalog
     @ObservationIgnored private let approvals: PluginApprovalStore
     @ObservationIgnored private let projects: () -> [ProjectConfig]
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
@@ -48,9 +49,11 @@ final class PluginManager {
         directory: URL = PluginManager.defaultDirectory,
         approvals: PluginApprovalStore = PluginApprovalStore(),
         projects: @escaping () -> [ProjectConfig],
-        actions: @escaping (ProjectConfig) -> PluginHostActions
+        actions: @escaping (ProjectConfig) -> PluginHostActions,
+        catalog: PluginCatalog = PluginCatalog()
     ) {
         self.directory = directory
+        self.catalog = catalog
         self.approvals = approvals
         self.projects = projects
         self.actions = actions
@@ -121,6 +124,57 @@ final class PluginManager {
         await serialized {
             self.approvals.revoke(id: plugin.id)
             await self.stopHosts { $0.pluginID == plugin.id }
+        }
+    }
+
+    /// Downloads `version` of the catalog entry `id`, checks it against the catalog's hash, and replaces
+    /// the folder named after the id. The new files are unapproved, so nothing runs until the user approves.
+    /// Returns the failure to show, or nil.
+    func install(id: String, _ version: PluginCatalogIndex.Version) async -> String? {
+        var failure: String?
+        await serialized {
+            do {
+                try await self.performInstall(id: id, version)
+            } catch {
+                failure = (error as? PluginCatalogError)?.description ?? error.localizedDescription
+            }
+            await self.performReload()
+        }
+        return failure
+    }
+
+    /// Deletes a plugin the catalog installed. Its approval and stored data stay, so reinstalling keeps them.
+    func uninstall(_ plugin: Plugin) async {
+        await serialized {
+            await self.stopHosts { $0.pluginID == plugin.id }
+            try? FileManager.default.removeItem(at: plugin.folder)
+            await self.performReload()
+        }
+    }
+
+    private func performInstall(id: String, _ version: PluginCatalogIndex.Version) async throws {
+        guard let entryURL = version.entry else { throw PluginCatalogError.hashMismatch }
+        let manifestData = try await catalog.fetch(version.manifest)
+        let source = try await catalog.fetch(entryURL)
+        guard PluginTrust.hash(manifest: manifestData, entry: source) == version.hash else {
+            throw PluginCatalogError.hashMismatch
+        }
+        let manifest = try PluginManifest.parse(manifestData)
+        guard manifest.id == id else { throw PluginCatalogError.wrongPlugin(manifest.id) }
+        // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
+        let fileManager = FileManager.default
+        let staging = directory.appending(path: ".staging/\(id)")
+        try? fileManager.removeItem(at: staging)
+        try fileManager.createDirectory(
+            at: staging.appending(path: manifest.entry).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try manifestData.write(to: staging.appending(path: "plugin.json"))
+        try source.write(to: staging.appending(path: manifest.entry))
+        await stopHosts { $0.pluginID == id }
+        let target = directory.appending(path: id)
+        if fileManager.fileExists(atPath: target.path) {
+            _ = try fileManager.replaceItemAt(target, withItemAt: staging)
+        } else {
+            try fileManager.moveItem(at: staging, to: target)
         }
     }
 
@@ -237,7 +291,8 @@ final class PluginManager {
     /// all folders sharing a duplicate id, are reported instead of loaded.
     nonisolated static func discover(in directory: URL) -> (plugins: [Plugin], invalid: [Invalid]) {
         let fileManager = FileManager.default
-        let folders = ((try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
+        let folders = ((try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [])
             .map { $0.resolvingSymlinksInPath() }
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
             .sorted { $0.path < $1.path }

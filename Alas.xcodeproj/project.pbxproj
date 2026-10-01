@@ -602,6 +602,7 @@
 		42502D6356225A4304C93818 /* TerminalTabStateCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */; };
 		4262F32CB96356E13E3F6608 /* session-update-tool-call.json in Resources */ = {isa = PBXBuildFile; fileRef = 21FCF9A0DD5C474C9E5EC50A /* session-update-tool-call.json */; };
 		4272DA5A4AB30C72A694CAE5 /* CommitContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4865995B2D4B92166321201F /* CommitContextBuilder.swift */; };
+		42913D3A78AD2085DDB354F7 /* PluginCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A790B5264313ADCF5431D2B6 /* PluginCatalog.swift */; };
 		4298EEB78022505605DC2D39 /* CheckpointRestoreTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1114EC8A4F5E38B99EAE6B /* CheckpointRestoreTransaction.swift */; };
 		42C0AE388E5CF8B2AAEADE3C /* SearchEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */; };
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
@@ -1388,6 +1389,7 @@
 		A2E1FD8035E30CF785E9CF44 /* RightPaneCheckpointStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99D2B248B372F47870C5AE /* RightPaneCheckpointStateTests.swift */; };
 		A3330B4FEA9E45978CC2F9D2 /* RightPaneCardChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC96C3C3BB39C7372DEEC3D5 /* RightPaneCardChrome.swift */; };
 		A3655FEDF6C5E3C128401DA7 /* AppKitDiffScrollerReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2967A37F842D09F43063F3 /* AppKitDiffScrollerReconciler.swift */; };
+		A36FB6F46DF0DFEBE9FA5E0C /* PluginCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC6C264ED843EB84702106E /* PluginCatalogTests.swift */; };
 		A376933929049D190A12FCAF /* PaneCollapseMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA92DF8763DF7CC38F321E8A /* PaneCollapseMotion.swift */; };
 		A383AB30B3097591509DBE56 /* RemoteKeepAwakeControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB304238E5457AE2A3F25EF2 /* RemoteKeepAwakeControllerTests.swift */; };
 		A383F1C9B0B00B2805576209 /* ACPScrollDirectionClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D0190EE078ADB537982F7DC /* ACPScrollDirectionClassifierTests.swift */; };
@@ -2834,6 +2836,7 @@
 		4AA4014F03AFB7CB1DDA8048 /* WorktreeCheckpointStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCheckpointStoreTests.swift; sourceTree = "<group>"; };
 		4ABDCAC817EEE92E784C36B2 /* EditorDisplayInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDisplayInputTests.swift; sourceTree = "<group>"; };
 		4AC5721A309B06845548B46B /* WorkspaceSpacePersistenceBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSpacePersistenceBridge.swift; sourceTree = "<group>"; };
+		4AC6C264ED843EB84702106E /* PluginCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginCatalogTests.swift; sourceTree = "<group>"; };
 		4AED8A6EE8EF0CC317D7A4C7 /* AgentBuiltinsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuiltinsTests.swift; sourceTree = "<group>"; };
 		4B05E0E44B026AE7E8EA3101 /* ReviewEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewEvidenceTests.swift; sourceTree = "<group>"; };
 		4B1FE6E8E631C115C1AF02F9 /* GatekeeperAssessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatekeeperAssessor.swift; sourceTree = "<group>"; };
@@ -3588,6 +3591,7 @@
 		A7599B73CF1DC717E45FBF60 /* ClosedTabAppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosedTabAppStateTests.swift; sourceTree = "<group>"; };
 		A77AA40A1700F0AF21335876 /* AlasHookCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasHookCommandTests.swift; sourceTree = "<group>"; };
 		A78C23951DE157A38A9ED899 /* AgentHookSocketServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookSocketServerTests.swift; sourceTree = "<group>"; };
+		A790B5264313ADCF5431D2B6 /* PluginCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginCatalog.swift; sourceTree = "<group>"; };
 		A79A06E48E215BF7B9EC2408 /* RemoteServerIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteServerIntegrationTests.swift; sourceTree = "<group>"; };
 		A7A1961A7FEA8DC28BD6C87A /* AttachedIssueDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachedIssueDraft.swift; sourceTree = "<group>"; };
 		A7F019D14D6FEFFE084FA498 /* ACPSessionOrchestrationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionOrchestrationPolicyTests.swift; sourceTree = "<group>"; };
@@ -4951,6 +4955,7 @@
 				F66CF7F86AACAAEA759C8A1B /* PendingStashDropTests.swift */,
 				7EAE4B623CC10B4544E8D17A /* PersistenceStoreTests.swift */,
 				4749A35B3BEF89C8E7B92CD7 /* PiInstallerTests.swift */,
+				4AC6C264ED843EB84702106E /* PluginCatalogTests.swift */,
 				186E0DE469C2DDC76B5C202D /* PluginHostTests.swift */,
 				DEDC1B8D023D07B13FACB957 /* PluginJSFixture.swift */,
 				777330C95CE4B57B565E5A2A /* PluginManagerDiscoveryTests.swift */,
@@ -7663,6 +7668,7 @@
 			isa = PBXGroup;
 			children = (
 				7F6602E3EE8B43A85FB5C881 /* AppState+Plugins.swift */,
+				A790B5264313ADCF5431D2B6 /* PluginCatalog.swift */,
 				AC10D39329569C06E5BC2D82 /* PluginHost.swift */,
 				E6E5EADE023F1BB6BF4ABC13 /* PluginManager.swift */,
 				B7C91A5C7EA37E4FF35F48E0 /* PluginManifest.swift */,
@@ -8926,6 +8932,7 @@
 				5E687CE659E83EF3B71CA86F /* PiInstaller.swift in Sources */,
 				64FC756BD56C4997B7B3ADB2 /* PiMCPAdapterInspector.swift in Sources */,
 				CE3F1650AEEC80D937F8E0E9 /* PiMCPConfigWriter.swift in Sources */,
+				42913D3A78AD2085DDB354F7 /* PluginCatalog.swift in Sources */,
 				A17CA5FB1DD1FD864037B5EC /* PluginHost.swift in Sources */,
 				149FE77C3B5D2C7F43D9E948 /* PluginManager.swift in Sources */,
 				1FE191F15E75A5038B26EAF4 /* PluginManifest.swift in Sources */,
@@ -9959,6 +9966,7 @@
 				04EC051D5AEE99A4841B29C7 /* PiInstallerTests.swift in Sources */,
 				137BF3AED8FFF6D42228EFC0 /* PiMCPAdapterInspectorTests.swift in Sources */,
 				019CF838931D47EB13E8C107 /* PiMCPConfigWriterTests.swift in Sources */,
+				A36FB6F46DF0DFEBE9FA5E0C /* PluginCatalogTests.swift in Sources */,
 				92FBB80D988472494C8BF617 /* PluginHostTests.swift in Sources */,
 				7A3FBE81DC4C23A7FB3A6E2C /* PluginJSFixture.swift in Sources */,
 				A8BB1BFE7733ED7F4E683235 /* PluginManagerDiscoveryTests.swift in Sources */,

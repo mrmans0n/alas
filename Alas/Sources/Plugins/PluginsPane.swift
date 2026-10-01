@@ -18,6 +18,9 @@ struct PluginsPane: View {
     let state: AppState
     @Environment(\.theme) var theme
     @State private var approving: PluginManager.Plugin?
+    /// Install or update failures, by catalog entry id, until the next attempt.
+    @State private var installFailures: [String: String] = [:]
+    @State private var busy: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -76,6 +79,7 @@ struct PluginsPane: View {
                 }
             }
         }
+        catalogSection(manager)
         if !manager.invalid.isEmpty {
             SettingsGroup(title: "Not loaded") {
                 ForEach(manager.invalid) { entry in
@@ -83,6 +87,79 @@ struct PluginsPane: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func catalogSection(_ manager: PluginManager) -> some View {
+        let catalog = manager.catalog
+        SettingsGroup(title: "Available") {
+            switch catalog.state {
+            case .idle, .loading:
+                SettingsRow(name: "Loading the plugin catalog…", desc: nil) { }
+            case .failed(let reason):
+                SettingsRow(name: "Catalog unavailable", desc: reason, selectable: true) {
+                    AlasButton(title: "Retry", style: .subtle) { Task { await catalog.refresh(force: true) } }
+                }
+            case .loaded(let index):
+                ForEach(index.plugins) { entry in
+                    catalogRow(manager, entry, PluginCatalogRow(entry: entry, installed: manager.plugin(id: entry.id)))
+                }
+            }
+        }
+        .task { await catalog.refresh() }
+    }
+
+    private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
+        SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row, failure: installFailures[entry.id]), selectable: true) {
+            if busy.contains(entry.id) {
+                ProgressView().controlSize(.small)
+            } else {
+                switch row {
+                case .install(let version):
+                    AlasButton(title: "Install \(version.version)", style: .normal) { install(manager, entry.id, version) }
+                case .update(let version):
+                    AlasButton(title: "Update to \(version.version)", style: .normal) { install(manager, entry.id, version) }
+                    removeButton(manager, entry.id)
+                case .installed:
+                    removeButton(manager, entry.id)
+                case .installedLocally, .incompatible:
+                    EmptyView()
+                }
+            }
+        }
+    }
+
+    private func removeButton(_ manager: PluginManager, _ id: String) -> some View {
+        AlasButton(title: "Remove", style: .subtle) {
+            guard let plugin = manager.plugin(id: id) else { return }
+            Task {
+                busy.insert(id)
+                await manager.uninstall(plugin)
+                busy.remove(id)
+            }
+        }
+    }
+
+    private func install(_ manager: PluginManager, _ id: String, _ version: PluginCatalogIndex.Version) {
+        Task {
+            busy.insert(id)
+            installFailures[id] = await manager.install(id: id, version)
+            busy.remove(id)
+        }
+    }
+
+    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow, failure: String?) -> String {
+        var lines = [entry.summary].compactMap { $0 }
+        switch row {
+        case .install(let version), .update(let version):
+            let asks = version.capabilities.map { PluginCapability(rawValue: $0)?.summary ?? $0 }
+            lines.append(asks.isEmpty ? "Asks for no capabilities." : "Asks to: " + asks.joined(separator: "; ") + ".")
+        case .installed: lines.append("Installed from the catalog.")
+        case .installedLocally: lines.append("Installed locally; the catalog leaves it alone.")
+        case .incompatible: lines.append("No version runs on this Alas.")
+        }
+        if let failure { lines.append(failure) }
+        return lines.joined(separator: "\n")
     }
 
     private static func status(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> String {
