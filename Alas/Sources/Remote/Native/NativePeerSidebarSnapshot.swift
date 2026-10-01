@@ -155,8 +155,12 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         let sortedOthers: [NativePeerWorktreeGroup]
         switch ordering {
         case .manual: sortedOthers = others
-        case .creationDesc: sortedOthers = by({ $0.worktree?.createdAt ?? 0 }, descending: true)
-        case .creationAsc: sortedOthers = by { $0.worktree?.createdAt ?? 0 }
+        // A peer that predates `createdAt` sends none; keep arrival order
+        // rather than letting the id tie-break reshuffle the list.
+        case .creationDesc, .creationAsc:
+            sortedOthers = others.allSatisfy({ $0.worktree?.createdAt != nil })
+                ? by({ $0.worktree?.createdAt ?? 0 }, descending: ordering == .creationDesc)
+                : others
         case .lastUpdateDesc: sortedOthers = by({ $0.worktree?.lastActivity ?? Double($0.updatedAt) }, descending: true)
         case .lastUpdateAsc: sortedOthers = by { $0.worktree?.lastActivity ?? Double($0.updatedAt) }
         case .branchAsc: sortedOthers = by { $0.title.localizedLowercase }

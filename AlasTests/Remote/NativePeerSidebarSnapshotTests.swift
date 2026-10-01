@@ -122,6 +122,14 @@ struct NativePeerSidebarSnapshotTests {
         #expect(titles(.manual) == ["main", "beta", "alpha"])
     }
 
+    @Test func peerWorktreesKeepArrivalOrderWhenCreationTimeIsMissing() {
+        let sessions = ["z", "a", "m"].enumerated().map { i, name in
+            worktreeRow(name, project: "alas", worktreeId: "w\(name)", branch: name, updatedAt: Int64(30 - i))
+        }
+        let titles = NativePeerRepoGroup.build(sessions: sessions, ordering: .creationAsc)[0].worktrees.map(\.title)
+        #expect(titles == ["z", "a", "m"])
+    }
+
     @Test func peerReposGroupByProjectIdentityNotDisplayName() {
         // Two distinct projects that happen to share a display name must not
         // merge into one repo group, and a rename must not split one project

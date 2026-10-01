@@ -9,6 +9,7 @@ enum RemoteWorktreeSummaryBuilder {
     static func make(
         projectName: String,
         worktree: Worktree,
+        isMain: Bool,
         metrics: RemoteWorktreeSummaryMetrics
     ) -> RemoteWorktreeSummary {
         switch metrics {
@@ -26,7 +27,7 @@ enum RemoteWorktreeSummaryBuilder {
                 addedLines: changes.reduce(0) { $0 + $1.add },
                 deletedLines: changes.reduce(0) { $0 + $1.del },
                 conflictCount: changes.filter { $0.conflict != nil }.count,
-                isMain: worktree.isMainWorktree,
+                isMain: isMain,
                 createdAt: worktree.createdAt.timeIntervalSince1970,
                 lastActivity: worktree.lastActivity.timeIntervalSince1970
             )
@@ -43,7 +44,7 @@ enum RemoteWorktreeSummaryBuilder {
                 addedLines: 0,
                 deletedLines: 0,
                 conflictCount: 0,
-                isMain: worktree.isMainWorktree,
+                isMain: isMain,
                 createdAt: worktree.createdAt.timeIntervalSince1970,
                 lastActivity: worktree.lastActivity.timeIntervalSince1970
             )
