@@ -228,7 +228,7 @@ private struct ACPSessionView: View {
                 if isMirror {
                     mirrorBanner()
                 }
-                if let err = session.lastError, showsGenericFailureBanner {
+                if let err = session.lastError {
                     errorBanner(err)
                 } else if case .failed(let reason) = session.agentState,
                           showsGenericFailureBanner {
