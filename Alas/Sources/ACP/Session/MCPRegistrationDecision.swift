@@ -33,6 +33,13 @@ enum MCPRegistrationDecision {
         return recordedHelloTransport == nil || recordedHelloTransport == .stdio
     }
 
+    /// Whether the recorded hello counts for this attach: any hello does,
+    /// except the one a superseded server sent before the attach started.
+    static func isCurrentHello(_ sequence: Int?, staleSequence: Int?) -> Bool {
+        guard let sequence else { return false }
+        return sequence != staleSequence
+    }
+
     /// - Parameter reattachedToRunningServer: the attach adopted an agent
     ///   process that was already running with a stdio server (e.g. one that
     ///   survived an app restart in its broker). That server said hello to the

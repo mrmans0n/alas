@@ -156,12 +156,11 @@ final class ACPSessionManager: ObservableObject {
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
     private let builtInMCPProvider: BuiltInMCPProvider?
-    /// The transport the built-in MCP server announced itself (hello) over for
-    /// a local session id, or nil without a hello. Read after the post-attach
-    /// grace to decide between `.registered` and `.notRegistered`, and at
-    /// attach to tell whether a recorded hello came from the server this
-    /// attach keeps.
-    private let builtInMCPHelloTransport: (@MainActor (String) -> MCPTransportKind?)?
+    /// The built-in MCP server's last hello for a local session id, or nil
+    /// without one. Read after the post-attach grace to decide between
+    /// `.registered` and `.notRegistered`, and at attach to tell whether a
+    /// recorded hello came from the server this attach keeps.
+    private let builtInMCPHello: (@MainActor (String) -> MCPRegistrationRegistry.Record?)?
     /// Clears any recorded hello for a local session id so each attach epoch
     /// re-proves registration.
     private let clearMCPRegistration: (@MainActor (String) -> Void)?
@@ -1437,7 +1436,7 @@ final class ACPSessionManager: ObservableObject {
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
          frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider? = nil,
-         builtInMCPHelloTransport: (@MainActor (String) -> MCPTransportKind?)? = nil,
+         builtInMCPHello: (@MainActor (String) -> MCPRegistrationRegistry.Record?)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
          onModelsObserved: (@MainActor (_ agentId: String, _ host: String?, _ models: [ChipSpec.Item]) -> Void)? = nil,
@@ -1473,7 +1472,7 @@ final class ACPSessionManager: ObservableObject {
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { $0 }
         self.builtInMCPProvider = builtInMCPProvider
-        self.builtInMCPHelloTransport = builtInMCPHelloTransport
+        self.builtInMCPHello = builtInMCPHello
         self.clearMCPRegistration = clearMCPRegistration
         self.onSessionEnded = onSessionEnded
         self.onModelsObserved = onModelsObserved
@@ -5394,11 +5393,12 @@ extension ACPSessionManager {
             // app restart). That server said its one hello back then and won't
             // again, so this attach must not demand a fresh one. An HTTP server
             // is supervised by the app and respawned per attach, so it does.
-            let reattachedToRunningServer = shouldTrackBuiltInRegistration
+            let helloBeforeAttach = builtInMCPHello?(sessionId)
+            var reattachedToRunningServer = shouldTrackBuiltInRegistration
                 && MCPRegistrationDecision.reattachesRunningServer(
                     builtInTransport: builtInMCP?.status.transport,
                     adoptedRunningAgent: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true,
-                    recordedHelloTransport: builtInMCPHelloTransport?(sessionId)
+                    recordedHelloTransport: helloBeforeAttach?.transport
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
             // Bump the attach epoch so a grace timer left over from a previous
@@ -6132,7 +6132,20 @@ extension ACPSessionManager {
             // by the attach epoch so a stale timer cannot clobber a newer row; a
             // late hello (or, for a reattached server, its first request) still
             // heals the row via AppState.
+            // A remote session created on the adopted agent (a failed load
+            // falls back to `session/new`) gets the MCP config again and
+            // starts its own server, which must say hello. A hello the kept
+            // server sent before this attach no longer proves anything.
+            let staleHelloSequence: Int?
+            if reattachedToRunningServer && createdFreshRemoteSession {
+                reattachedToRunningServer = false
+                session.builtInMCPReattachedToRunningServer = false
+                staleHelloSequence = helloBeforeAttach?.sequence
+            } else {
+                staleHelloSequence = nil
+            }
             if shouldTrackBuiltInRegistration {
+                let reattachedToRunningServer = reattachedToRunningServer
                 Task { @MainActor [weak self, weak session] in
                     try? await Task.sleep(for: .seconds(12))
                     guard let self, let session,
@@ -6140,7 +6153,9 @@ extension ACPSessionManager {
                     else { return }
                     // Don't downgrade a row that already registered.
                     if session.builtInMCPRegistration == .registered { return }
-                    let helloSeen = self.builtInMCPHelloTransport?(sessionId) != nil
+                    let helloSeen = MCPRegistrationDecision.isCurrentHello(
+                        self.builtInMCPHello?(sessionId)?.sequence,
+                        staleSequence: staleHelloSequence)
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
                         evidence: helloSeen ? .hello : .none,
                         graceElapsed: true,

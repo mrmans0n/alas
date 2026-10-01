@@ -61,4 +61,21 @@ struct MCPRegistrationDecisionTests {
             recordedHelloTransport: c.recordedHello
         ) == c.expected)
     }
+
+    @Test(arguments: [
+        (HelloCase(sequence: nil, stale: nil), false),
+        (HelloCase(sequence: 3, stale: nil), true),
+        // Only the superseded server's hello is on record.
+        (HelloCase(sequence: 3, stale: 3), false),
+        // The new server said hello after the attach started.
+        (HelloCase(sequence: 4, stale: 3), true),
+    ])
+    func isCurrentHello(_ c: HelloCase, expected: Bool) {
+        #expect(MCPRegistrationDecision.isCurrentHello(c.sequence, staleSequence: c.stale) == expected)
+    }
+
+    struct HelloCase: Sendable {
+        let sequence: Int?
+        let stale: Int?
+    }
 }
