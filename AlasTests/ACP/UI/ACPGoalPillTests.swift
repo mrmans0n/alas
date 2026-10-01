@@ -41,6 +41,11 @@ struct ACPGoalPillTests {
         #expect(ACPGoalPill.actions(for: goal, capability: capability) == [.set, .clear])
     }
 
+    @Test("duration formatting handles values larger than Int")
+    func durationFormattingHandlesOversizedValues() {
+        #expect(ACPGoalControl.formattedDuration(1e20) == "100000000000000000000s")
+    }
+
     @Test("summary includes objective, normalized status, and rounded token budget")
     func summaryWithStatusAndBudget() {
         let goal = ACPGoalState(

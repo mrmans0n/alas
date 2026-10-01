@@ -2849,14 +2849,14 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let raw = value?.value, !(raw is NSNull) else { return nil }
         if let int = raw as? Int { return int }
         if let double = raw as? Double, double.rounded(.towardZero) == double {
-            return Int(double)
+            return Int(exactly: double)
         }
         return nil
     }
 
     private static func metadataDouble(_ value: AnyCodable?) -> Double? {
         guard let raw = value?.value, !(raw is NSNull) else { return nil }
-        if let double = raw as? Double { return double }
+        if let double = raw as? Double, double.isFinite { return double }
         if let int = raw as? Int { return Double(int) }
         return nil
     }

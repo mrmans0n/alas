@@ -1434,6 +1434,23 @@ struct ACPSessionTests {
         #expect(goal.lastReason == nil)
     }
 
+    @Test("oversized goal integers are ignored", arguments: ["tokensUsed", "iterations"])
+    func oversizedGoalIntegersAreIgnored(_ key: String) throws {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "goal": AnyCodable([
+                    "objective": AnyCodable("Stay safe"),
+                    key: AnyCodable(1e20)
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(goal.tokensUsed == nil)
+        #expect(goal.iterations == nil)
+    }
+
     @Test("tool duration starts with active execution and stops at completion")
     func toolCallExecutionDuration() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

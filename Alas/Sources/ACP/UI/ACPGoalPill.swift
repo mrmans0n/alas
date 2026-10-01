@@ -128,6 +128,7 @@ struct ACPGoalControl: View {
             if actions.contains(.set) {
                 TextField("Goal objective", text: $objective)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(isSubmitting)
                     .onSubmit { perform(.set) }
                 Button("Set Goal") { perform(.set) }
                     .disabled(!canMutate || objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -211,8 +212,11 @@ struct ACPGoalControl: View {
         }
     }
 
-    private static func formattedDuration(_ seconds: Double) -> String {
-        let total = max(0, Int(seconds.rounded()))
+    static func formattedDuration(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "—" }
+        guard seconds > 0 else { return "0s" }
+        if seconds >= Double(Int.max) { return String(format: "%.0fs", seconds) }
+        let total = Int(seconds.rounded())
         return total >= 60 ? "\(total / 60)m \(total % 60)s" : "\(total)s"
     }
 }
