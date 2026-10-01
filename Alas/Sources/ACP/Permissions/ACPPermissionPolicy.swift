@@ -39,8 +39,9 @@ final class ACPPermissionPolicy {
         if session.readOnlyRestricted {
             switch ACPSideQuestionPermissionRule.decide(kind: params.toolCall.kind) {
             case .allow:
-                if let allow = options.first(where: { $0.kind == "allow_once" })
-                    ?? options.first(where: { $0.kind.hasPrefix("allow") }) {
+                // Never a persistent allow: the adapter could stop asking for
+                // that scope, and later calls would skip this gate.
+                if let allow = options.first(where: { $0.kind == "allow_once" }) {
                     return .init(outcome: .selected(optionId: allow.optionId))
                 }
             case .reject:

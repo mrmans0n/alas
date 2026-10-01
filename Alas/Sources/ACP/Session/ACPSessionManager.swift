@@ -1858,7 +1858,12 @@ final class ACPSessionManager: ObservableObject {
         }
         await flushPersistence()
         _ = try await persistence.promoteEphemeralSession(id: sideID)
-        sideQuestions[parentID] = nil
+        // A concurrent dismissal may have deleted the side session meanwhile,
+        // and a concurrent /btw may have replaced it; leave the replacement.
+        guard sessions[sideID] === side, persistedRows[sideID] != nil else { return nil }
+        if sideQuestions[parentID]?.sessionID == sideID {
+            sideQuestions[parentID] = nil
+        }
         // Auto-run stays off; the session keeps running without the bypass
         // flag until its next launch.
         side.readOnlyRestricted = false
@@ -3026,7 +3031,8 @@ final class ACPSessionManager: ObservableObject {
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
-        guard !row.archived else { return }
+        // Hidden `/btw` side sessions join history only once promoted.
+        guard !row.archived, row.ephemeralParentId == nil else { return }
         let insertionIndex = recent.firstIndex { $0.lastOpenedAt < row.lastOpenedAt } ?? recent.endIndex
         recent.insert(row, at: insertionIndex)
     }
@@ -5326,6 +5332,8 @@ extension ACPSessionManager {
             session: session,
             client: connection.client,
             onInputAwaiting: { [weak self] session, request in
+                // Hidden side sessions never notify or block orchestration.
+                guard !session.readOnlyRestricted else { return }
                 self?.onInputAwaiting?(session, request)
                 let trimmedTitle = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let trimmedMessage = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5341,6 +5349,7 @@ extension ACPSessionManager {
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
             onPlanAwaiting: { [weak self] session, request in
+                guard !session.readOnlyRestricted else { return }
                 self?.onPlanAwaiting?(session, request)
                 let trimmedName = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 self?.onChildBlocked?(ACPChildBlocker(

@@ -65,9 +65,10 @@ enum ACPSideQuestionPhase: Equatable {
     }
 }
 
-/// Where a `/btw` side question forks its parent: the last completed turn.
-/// A turn still running is left out, so the side session never inherits a
-/// prompt without its answer.
+/// Where a `/btw` side question forks its parent: the last agent answer
+/// with text. A running turn is left out, and so is a prompt interrupted
+/// before any answer, so the side session never inherits a prompt without
+/// its answer. Nil when there is no answer yet; the side session starts blank.
 enum ACPSideQuestionBoundaryPolicy {
     @MainActor
     static func boundary(messages: [ACPMessage], isTurnActive: Bool) -> ACPForkMessageBoundary? {
@@ -78,10 +79,10 @@ enum ACPSideQuestionBoundaryPolicy {
             }
             candidates = messages[..<inFlightPrompt]
         }
-        guard let message = candidates.last(where: { $0.forkBoundaryKind != nil && $0.hasForkableText }),
-              let kind = message.forkBoundaryKind
-        else { return nil }
-        return ACPForkMessageBoundary(stableID: message.stableId, kind: kind)
+        guard let message = candidates.last(where: { $0.forkBoundaryKind == .agent && $0.hasForkableText }) else {
+            return nil
+        }
+        return ACPForkMessageBoundary(stableID: message.stableId, kind: .agent)
     }
 
     static func title(for question: String) -> String {
