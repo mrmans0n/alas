@@ -18,6 +18,21 @@ enum MCPRegistrationEvidence: Equatable {
 /// Pure policy for resolving registration from observable signals so the
 /// timing wiring in the session manager stays thin and this stays testable.
 enum MCPRegistrationDecision {
+    /// Whether an attach keeps a stdio built-in server that was already
+    /// running, so it won't send a new hello. Only a broker-adopted agent
+    /// keeps its servers, and only a stdio server lives under the agent; an
+    /// HTTP one is respawned by the app on each attach. A hello recorded over
+    /// another transport earlier in this app run means the previous attach
+    /// used a different server, so this stdio one is new and must say hello.
+    static func reattachesRunningServer(
+        builtInTransport: MCPTransportKind?,
+        adoptedRunningAgent: Bool,
+        recordedHelloTransport: MCPTransportKind?
+    ) -> Bool {
+        guard builtInTransport == .stdio, adoptedRunningAgent else { return false }
+        return recordedHelloTransport == nil || recordedHelloTransport == .stdio
+    }
+
     /// - Parameter reattachedToRunningServer: the attach adopted an agent
     ///   process that was already running with a stdio server (e.g. one that
     ///   survived an app restart in its broker). That server said hello to the

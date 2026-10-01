@@ -12693,8 +12693,8 @@ final class AppState {
                     parentSessionId: parentSessionId
                 )
             },
-            isBuiltInMCPRegistered: { [weak self] sessionId in
-                self?.mcpRegistrationRegistry.isRegistered(sessionId: sessionId) ?? false
+            builtInMCPHelloTransport: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.transport(sessionId: sessionId)
             },
             clearMCPRegistration: { [weak self] sessionId in
                 self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
