@@ -552,9 +552,9 @@ struct ACPComposerDraftBridgeTests {
         #expect(typingColor == NSColor.labelColor)
     }
 
-    @Test("mention chip frame centers on surrounding text")
-    func mentionChipFrameCentersOnText() throws {
-        let font = NSFont.systemFont(ofSize: 13)
+    @Test("mention chip puts its label on the baseline whatever the line font", arguments: [13, 20] as [CGFloat])
+    func mentionChipLabelSitsOnTextBaseline(fontSize: CGFloat) throws {
+        let font = NSFont.systemFont(ofSize: fontSize)
         let attachment = ACPMentionChipAttachment(displayName: "build.yml", uri: "file:///tmp/build.yml")
         let storage = NSTextStorage(string: "x", attributes: [.font: font])
         let chip = NSMutableAttributedString(attachment: attachment)
@@ -574,15 +574,9 @@ struct ACPComposerDraftBridgeTests {
             characterIndex: 1
         )
 
-        let textCenter = (font.ascender + font.descender) / 2
-        #expect(abs(frame.midY - textCenter) < 0.001)
-        // The chip's fixed 18pt height is taller than a 13pt line's own
-        // ascender+descender span, so centering on the text always pushes
-        // the frame below the baseline — checked as `< 0` rather than a
-        // fixed magic offset, which was only ~0.4pt from this font's own
-        // actual value and could flip on a font-metric difference between
-        // OS builds or CI runner images unrelated to any real regression.
-        #expect(frame.minY < 0)
+        // The label baseline sits `labelBaselineInset` above the chip's
+        // bottom edge, so the bottom edge is that far below the text baseline.
+        #expect(abs(frame.minY + ACPMentionChipMetrics.labelBaselineInset) < 0.001)
     }
 
     @Test("slash panel closes when filtering has no command matches")
