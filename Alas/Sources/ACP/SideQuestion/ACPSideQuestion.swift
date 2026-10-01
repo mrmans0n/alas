@@ -1,5 +1,70 @@
 import Foundation
 
+/// A parent session's open `/btw` side question. `sessionID` is nil until
+/// the hidden side session exists; `id` tells a replaced question apart.
+struct ACPSideQuestion: Equatable, Sendable {
+    let id = UUID()
+    let question: String
+    var sessionID: ACPSession.ID?
+    var error: String?
+}
+
+/// Slash commands Alas handles itself instead of sending to the agent.
+enum ACPAlasSlashCommand: Equatable {
+    case btw(question: String)
+
+    static let btwSuggestion = ACPPromptSuggestion(
+        command: "/btw",
+        description: "Ask a side question in a read-only fork. The current turn keeps running.",
+        hint: "question"
+    )
+
+    static func parse(_ text: String) -> ACPAlasSlashCommand? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(btwSuggestion.command) else { return nil }
+        let rest = trimmed.dropFirst(btwSuggestion.command.count)
+        guard rest.first.map({ $0.isWhitespace }) ?? true else { return nil }
+        return .btw(question: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func isAlasCommand(_ suggestion: ACPPromptSuggestion) -> Bool {
+        suggestion == btwSuggestion
+    }
+
+    /// Alas commands first; an agent command with the same name is hidden,
+    /// because Alas intercepts it before it could reach the agent.
+    static func suggestions(
+        alas: [ACPPromptSuggestion],
+        agent: [ACPPromptSuggestion]
+    ) -> [ACPPromptSuggestion] {
+        let alasCommands = Set(alas.map(\.command))
+        return alas + agent.filter { !alasCommands.contains($0.command) }
+    }
+}
+
+/// What the side card shows, derived from the question and its session.
+enum ACPSideQuestionPhase: Equatable {
+    case composing
+    case starting
+    case streaming
+    case answered
+    case failed(String)
+
+    static func resolve(
+        question: String,
+        creationError: String?,
+        hasSession: Bool,
+        sessionError: String?,
+        isTurnActive: Bool,
+        hasAnswer: Bool
+    ) -> ACPSideQuestionPhase {
+        if let error = creationError ?? sessionError { return .failed(error) }
+        guard hasSession else { return question.isEmpty ? .composing : .starting }
+        if isTurnActive { return hasAnswer ? .streaming : .starting }
+        return hasAnswer ? .answered : .starting
+    }
+}
+
 /// Where a `/btw` side question forks its parent: the last completed turn.
 /// A turn still running is left out, so the side session never inherits a
 /// prompt without its answer.

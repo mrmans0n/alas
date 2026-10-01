@@ -13,6 +13,9 @@ struct ACPSessionForkPresentationTests {
             sourceAgentName: "Claude", mechanism: .transcriptTransfer
         )
         #expect(imported.title == "Conversation imported from Claude")
+        #expect(ACPSessionForkPresentation(
+            sourceAgentName: "Claude", mechanism: .transcriptTransfer, via: .btw
+        ).title == "Conversation imported from Claude via /btw")
         #expect(imported.notice ==
             "Provider-specific tool state, hidden context, and attachments were not transferred. This chat shares the source chat’s current worktree.")
     }

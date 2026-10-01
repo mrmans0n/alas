@@ -9215,6 +9215,7 @@ final class AppState {
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
         guard let manager = acpManagers[owner] else { return }
+        Task { await manager.dismissSideQuestion(parentID: sessionId) }
         if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
             scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
             return
@@ -13776,6 +13777,31 @@ final class AppState {
             } catch {
                 manager.liveSession(for: sourceSessionID)?.lastError =
                     "Could not create fork: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Keeps a `/btw` side question as a regular forked session and opens it
+    /// in a new tab next to its parent.
+    func keepACPSideQuestion(worktree: Worktree, owner: SessionOwnerID?, parentID: ACPSession.ID) {
+        guard let manager = owner.flatMap({ acpManager(for: $0) }) ?? acpManager(for: worktree) else { return }
+        Task { @MainActor in
+            do {
+                guard let side = try await manager.promoteSideQuestion(parentID: parentID) else { return }
+                let tabState = ACPSessionTabState(sessionId: side.id, title: side.title)
+                if let owner {
+                    let tab = tabs.append(acpSession: tabState, to: owner)
+                    tabs.activate(owner: owner, tabId: tab.id)
+                    if let selectedWorktreeId {
+                        tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+                    }
+                } else {
+                    let tab = tabs.append(acpSession: tabState, to: worktree.id)
+                    activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+                }
+            } catch {
+                manager.liveSession(for: parentID)?.lastError =
+                    "Could not keep side question: \(error.localizedDescription)"
             }
         }
     }

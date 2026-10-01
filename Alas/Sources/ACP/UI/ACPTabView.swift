@@ -304,6 +304,14 @@ private struct ACPSessionView: View {
         }
     }
 
+    private func insertSideAnswer(_ answer: String) {
+        var draft = session.composerDraft
+        let separator = draft.isEmpty ? "" : "\n\n"
+        draft.segments.append(.text(separator + answer))
+        manager.persistComposerDraft(draft, for: session)
+        composerFocusRequest += 1
+    }
+
     private func insertStarterPrompt(_ starter: ACPStarterPrompt) {
         let next = starter.applying(to: session.composerDraft)
         manager.persistComposerDraft(next, for: session)
@@ -468,11 +476,24 @@ private struct ACPSessionView: View {
                         .transition(.opacity)
                 }
 
-                composerView(
-                    placement: composerPlacement,
-                    contentMaxWidth: contentMaxWidth,
-                    typography: chatTypography
-                )
+                VStack(spacing: 8) {
+                    ACPSideQuestionSlot(
+                        manager: manager,
+                        parentID: sessionId,
+                        typography: chatTypography,
+                        onInsert: insertSideAnswer,
+                        onKeep: {
+                            state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
+                        }
+                    )
+                    .frame(maxWidth: contentMaxWidth)
+                    .padding(.horizontal, 20)
+                    composerView(
+                        placement: composerPlacement,
+                        contentMaxWidth: contentMaxWidth,
+                        typography: chatTypography
+                    )
+                }
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
             }
         }
@@ -749,6 +770,17 @@ private struct ACPSessionView: View {
             // clear state - if the user has typed a new draft by the
             // time the completion fires, the conditional checks in
             // purge/reinstate skip and the new draft survives.
+            // `/btw` never reaches the main session: it opens a side question.
+            if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror {
+                Task { @MainActor in
+                    if question.isEmpty {
+                        await manager.composeSideQuestion(parentID: sessionId)
+                    } else {
+                        _ = try? await manager.startSideQuestion(parentID: sessionId, question: question)
+                    }
+                }
+                return true
+            }
             let suspendedRevision = ACPSuspendedRevisionBox()
             let accepted = manager.submit(
                 sessionId: sessionId,
@@ -1223,4 +1255,40 @@ enum ACPSetupNudgeDismissal {
 @MainActor
 private final class ACPSuspendedRevisionBox {
     var value: Int = -1
+}
+
+/// Hosts the parent's `/btw` card, if any. Observes the manager so the card
+/// appears, updates, and goes away with the side question.
+private struct ACPSideQuestionSlot: View {
+    @ObservedObject var manager: ACPSessionManager
+    let parentID: ACPSession.ID
+    let typography: ACPChatTypography
+    let onInsert: (String) -> Void
+    let onKeep: () -> Void
+
+    var body: some View {
+        if let entry = manager.sideQuestions[parentID] {
+            let side = entry.sessionID.flatMap { manager.liveSession(for: $0) }
+            ACPSideQuestionCard(
+                entry: entry,
+                side: side,
+                policy: side.flatMap { manager.permissionPolicy(for: $0.id) },
+                typography: typography,
+                onAsk: { text in
+                    if let side {
+                        _ = manager.submit(sessionId: side.id, text: text, attachments: [], intent: .auto) { _ in }
+                    } else {
+                        Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
+                    }
+                },
+                onDismiss: {
+                    Task { await manager.dismissSideQuestion(parentID: parentID) }
+                },
+                onInsert: onInsert,
+                onKeep: onKeep
+            )
+            .id(entry.id)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
 }

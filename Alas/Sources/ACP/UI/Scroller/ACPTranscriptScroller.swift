@@ -914,7 +914,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 ACPSessionForkDivider(
                                     presentation: .init(
                                         sourceAgentName: host.agentDisplayName(fork.sourceAgentID),
-                                        mechanism: mechanism
+                                        mechanism: mechanism,
+                                        via: fork.via
                                     ),
                                     onOpenSource: { host.onOpenForkSource(fork.sourceSessionID) }
                                 )
