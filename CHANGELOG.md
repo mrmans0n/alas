@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
+
 ### 🐛 Fixes
 
 - Head Alas's own prompts about a delegated child (an escalated blocker, a turn without a result, a failure) as Alas notices in the parent transcript instead of as reports from the child, and say when the user cancelled a child's turn (#1663).
