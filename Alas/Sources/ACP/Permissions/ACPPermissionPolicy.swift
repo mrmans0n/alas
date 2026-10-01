@@ -34,6 +34,26 @@ final class ACPPermissionPolicy {
                   requestID: JSONRPCID) async -> ACPPermissionResponse {
         pendingRequestID = requestID
         cancelledBeforeParked = false
+        // Ahead of auto-run and remembered decisions: a project-wide "always
+        // allow" must not let a read-only side session write.
+        if session.readOnlyRestricted {
+            switch ACPSideQuestionPermissionRule.decide(kind: params.toolCall.kind) {
+            case .allow:
+                if let allow = options.first(where: { $0.kind == "allow_once" })
+                    ?? options.first(where: { $0.kind.hasPrefix("allow") }) {
+                    return .init(outcome: .selected(optionId: allow.optionId))
+                }
+            case .reject:
+                session.readOnlyBlockedTools.append(params.toolCall.title ?? params.toolCall.kind ?? "tool")
+                if let reject = options.first(where: { $0.kind.hasPrefix("reject") }) {
+                    return .init(outcome: .selected(optionId: reject.optionId))
+                }
+                return .init(outcome: .cancelled)
+            case .ask:
+                break
+            }
+            return await awaitUserDecision(scopeKey: scopeKey, params: params)
+        }
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }

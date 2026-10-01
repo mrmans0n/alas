@@ -75,7 +75,8 @@ final class ACPHarnessBridge {
 
         // Newly added: observe.
         for id in current.subtracting(previous) {
-            if let session = sessions[id] { observe(session: session) }
+            // Hidden `/btw` side sessions never badge or notify.
+            if let session = sessions[id], !session.readOnlyRestricted { observe(session: session) }
         }
         // Removed: forget.
         for id in previous.subtracting(current) {

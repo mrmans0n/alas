@@ -43,6 +43,39 @@ struct ACPPermissionPolicyTests {
         #expect(resp.outcome == .selected(optionId: "deny"))
     }
 
+    @Test(
+        "read-only side sessions run only reads, despite auto-run and remembered allows",
+        arguments: [
+            ("read", true), ("search", true), ("think", true),
+            ("edit", false), ("execute", false), ("delete", false), ("switch_mode", false),
+            (nil, false),
+        ] as [(String?, Bool)]
+    )
+    func readOnlyGate(kind: String?, allowed: Bool) async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        session.readOnlyRestricted = true
+        let log = ACPPermissionDecisionLog(store: store)
+        try await log.record(sessionId: "s", scopeKey: "tool:x", decision: .allow, scope: .project)
+        let policy = ACPPermissionPolicy(session: session, log: log)
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "always", name: "Always", kind: "allow_always"),
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "tc", title: "Tool", kind: kind),
+            options: opts
+        )
+
+        let resp = await policy.evaluate(scopeKey: "tool:x", options: opts, params: params, requestID: .number(1))
+
+        #expect(resp.outcome == .selected(optionId: allowed ? "allow" : "deny"))
+        #expect(session.readOnlyBlockedTools == (allowed ? [] : ["Tool"]))
+    }
+
     @Test("cancelRequest resolves a parked permission matching its id as cancelled")
     func cancelRequestResolvesMatchingParkedPermission() async throws {
         let store = try makeStore()

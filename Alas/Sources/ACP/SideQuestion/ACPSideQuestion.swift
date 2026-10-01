@@ -25,6 +25,34 @@ enum ACPSideQuestionBoundaryPolicy {
     }
 }
 
+/// What a read-only `/btw` side session may run. Reads are allowed so the
+/// side agent can look things up; `fetch` asks because it sends data off the
+/// machine; anything else, including unknown kinds, is rejected.
+enum ACPSideQuestionPermissionRule {
+    enum Decision: Equatable { case allow, ask, reject }
+
+    static func decide(kind: String?) -> Decision {
+        switch kind {
+        case "read", "search", "think": .allow
+        case "fetch": .ask
+        default: .reject
+        }
+    }
+}
+
+/// The mode a side session switches to: plan when the agent has one,
+/// otherwise away from modes that approve tool calls on their own.
+enum ACPSideQuestionModePolicy {
+    static func preferredModeID(modes: [ACPModeInfo], currentModeID: String?) -> String? {
+        if let plan = modes.first(where: { $0.kind == .plan }) {
+            return plan.id == currentModeID ? nil : plan.id
+        }
+        let current = modes.first { $0.id == currentModeID }
+        guard current?.kind == .fullAccess || current?.kind == .autoReview else { return nil }
+        return modes.first { $0.kind == .standard }?.id
+    }
+}
+
 private extension ACPMessage {
     @MainActor
     var hasForkableText: Bool {

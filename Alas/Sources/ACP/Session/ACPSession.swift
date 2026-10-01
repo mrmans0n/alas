@@ -195,6 +195,13 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
+    /// A hidden `/btw` side session: only read-only tools run (see
+    /// `ACPSideQuestionPermissionRule`), and the agent launches without the
+    /// project's bypass-permissions flag. In-memory only; side sessions never
+    /// outlive the app.
+    @Published var readOnlyRestricted = false
+    /// Titles of tool calls the read-only gate rejected, for the side card.
+    @Published var readOnlyBlockedTools: [String] = []
     @Published var setupState: SetupState = .checking { willSet { nextPromptActivity.send() } }
     @Published var lastError: String?
     /// Runtime-only state reported by Codex while its current turn retries.
