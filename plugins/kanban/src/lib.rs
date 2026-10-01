@@ -682,6 +682,10 @@ mod tests {
         assert!(idle_again(&mut k, "s", "Fixed it.", body).is_empty(), "the same reply is not added twice");
         assert_eq!(comments(&idle_again(&mut k, "s", "Fixed more.", body)).as_array().unwrap().len(), 2);
 
+        // A reply saved before comments carried a source is still recognised by its text.
+        let old = json!({"description":"d","comments":[{"author":"agent","text":"Fixed it."}]});
+        assert!(idle_again(&mut k, "s", "Fixed it.", &old).is_empty());
+
         // A restarted ticket (a new session) can reply with the same text.
         k.tracker.index[0].session_id = Some("s2".into());
         assert_eq!(comments(&idle_again(&mut k, "s2", "Fixed it.", body)).as_array().unwrap().len(), 2);

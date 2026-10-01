@@ -189,7 +189,9 @@ impl Body {
     pub fn agent_reply(&mut self, session: &str, text: &str) -> bool {
         let source = reply_source(session, text);
         let last = self.comments.iter().rev().find(|c| c.author == Author::Agent);
-        if last.is_some_and(|c| c.source.as_deref() == Some(&source)) || clip_comment(text).is_empty() {
+        // Comments saved before `source` existed are compared by text.
+        let repeat = |c: &Comment| c.source.as_deref() == Some(&source) || (c.source.is_none() && c.text == clip_comment(text));
+        if last.is_some_and(repeat) || clip_comment(text).is_empty() {
             return false;
         }
         self.comment(Author::Agent, text);

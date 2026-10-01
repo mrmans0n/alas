@@ -26,6 +26,10 @@ pub enum Loaded {
 /// whenever the index is absent.
 pub fn load(meta: Option<&str>, index: Option<&str>, legacy: Option<&str>) -> Loaded {
     let unreadable = |what: &str, e: serde_json::Error, tail: &str| Loaded::Unreadable(format!("The {what} could not be read ({e}); {tail}"));
+    // Checked before any migration: saving would rewrite newer data with this version's schema.
+    if meta.and_then(|m| serde_json::from_str::<Meta>(m).ok()).is_some_and(|m| m.version > FORMAT_VERSION) {
+        return Loaded::Unreadable("These tickets were saved by a newer version of the Kanban plugin; they are left untouched and nothing will be saved.".into());
+    }
     let index = match index {
         Some(index) => index,
         None => match legacy.map(serde_json::from_str::<Board>) {
@@ -44,10 +48,6 @@ pub fn load(meta: Option<&str>, index: Option<&str>, legacy: Option<&str>) -> Lo
         Ok(m) => m,
         Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
     };
-    // Saving would rewrite newer data with this version's schema and strip what it does not know.
-    if meta.version > FORMAT_VERSION {
-        return Loaded::Unreadable("These tickets were saved by a newer version of the Kanban plugin; they are left untouched and nothing will be saved.".into());
-    }
     let mut index = match serde_json::from_str::<Vec<Entry>>(index) {
         Ok(i) => i,
         Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
@@ -132,6 +132,7 @@ mod tests {
             (Some("garbage"), Some(index), None, "unreadable"),
             (Some(meta), Some("garbage"), None, "unreadable"),
             (Some(newer), Some(index), None, "unreadable"),
+            (Some(newer), None, Some(legacy), "unreadable"),
             (Some(meta), Some(index), Some(legacy), "tracker"),
             (Some(meta), None, Some(legacy), "migrated"),
             (None, Some(index), None, "tracker"),
