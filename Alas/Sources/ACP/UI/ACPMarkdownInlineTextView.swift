@@ -241,7 +241,7 @@ extension NSAttributedString.Key {
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     private var upstreamRevisionObservation: AnyCancellable?
-    private var scrollObserver: (any NSObjectProtocol)?
+    private var scrollObservers: [any NSObjectProtocol] = []
     private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
 
     /// Set on user-message paragraphs that render reference chips. A lookup
@@ -263,31 +263,40 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
 
     /// Markdown text no longer overrides `scrollWheel` (that would opt prose out
     /// of AppKit responsive scrolling), so a hover card left open at its old
-    /// screen position is closed when the enclosing clip view scrolls instead.
+    /// screen position is closed when any enclosing clip view scrolls instead.
+    /// Every ancestor scroll view counts: a chip inside a table cell sits in a
+    /// nested horizontal scroll view while the transcript scrolls vertically.
     /// Only views that render chips observe.
     private func updateScrollObservation() {
-        removeScrollObserver()
-        guard upstreamReferences != nil, let clipView = enclosingScrollView?.contentView else { return }
-        clipView.postsBoundsChangedNotifications = true
-        // Block-based observer: Combine's NotificationCenter publisher retains
-        // `object`, which would form a text view -> clip view -> document view
-        // cycle that only detaching from the window breaks.
-        scrollObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: clipView,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+        removeScrollObservers()
+        guard upstreamReferences != nil else { return }
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? NSScrollView {
+                let clipView = scrollView.contentView
+                clipView.postsBoundsChangedNotifications = true
+                // Block-based observer: Combine's NotificationCenter publisher
+                // retains `object`, which would form a text view -> clip view ->
+                // document view cycle that only detaching from the window breaks.
+                scrollObservers.append(NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+                })
+            }
+            ancestor = view.superview
         }
     }
 
-    private func removeScrollObserver() {
-        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
-        scrollObserver = nil
+    private func removeScrollObservers() {
+        for observer in scrollObservers { NotificationCenter.default.removeObserver(observer) }
+        scrollObservers.removeAll()
     }
 
     isolated deinit {
-        removeScrollObserver()
+        removeScrollObservers()
     }
 
     /// Marks every reference-chip attachment range as attribute-edited.
