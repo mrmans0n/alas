@@ -225,7 +225,8 @@ mod tests {
         let root = sent.iter().rev().find(|m| m["method"] == "view/render").expect("a render")["params"]["root"].clone();
         let scroll = root["children"].as_array().unwrap().last().unwrap();
         for col in scroll["child"]["children"].as_array().unwrap() {
-            if let Some(node) = col["children"].as_array().unwrap().iter().find(|n| n["id"] == card) {
+            let cards = col["children"].as_array().unwrap().last().unwrap()["child"]["children"].as_array().unwrap();
+            if let Some(node) = cards.iter().find(|n| n["id"] == card) {
                 return (col["id"].as_str().unwrap().to_string(), node.clone());
             }
         }

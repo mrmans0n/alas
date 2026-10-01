@@ -67,11 +67,18 @@ fn column(board: &Board, col: Column, form: u64) -> Node {
     }
     // The newest cards stay visible; older ones are summarised first.
     let hidden = cards.len().saturating_sub(MAX_CARDS_PER_COLUMN);
+    let mut stack = Vec::with_capacity(cards.len() - hidden + 1);
     if hidden > 0 {
         let older = format!("+{hidden} older");
-        children.push(text(format!("col-{key}-older"), &older, Some(TextStyle::Caption), Some(Tone::Dim)));
+        stack.push(text(format!("col-{key}-older"), &older, Some(TextStyle::Caption), Some(Tone::Dim)));
     }
-    children.extend(cards[hidden..].iter().map(|c| card(c)));
+    stack.extend(cards[hidden..].iter().map(|c| card(c)));
+    // Cards scroll on their own, under the header, so every card's buttons stay reachable.
+    children.push(Node::Scroll {
+        id: format!("col-{key}-scroll"),
+        axis: Axis::Vertical,
+        child: Box::new(Node::Vstack { id: format!("col-{key}-cards"), children: stack, spacing: Some(8), width: None }),
+    });
     Node::Vstack { id: format!("col-{key}"), children, spacing: Some(8), width: Some(280) }
 }
 
@@ -216,6 +223,11 @@ mod tests {
         let tree = render(&b, 0, None);
         assert!(b.cards.iter().all(|c| find(&tree, &format!("card-{}", c.id)).is_some()));
         assert!(find(&tree, "col-review-older").is_none());
+        for col in Column::ALL {
+            let Some(Node::Scroll { axis: Axis::Vertical, .. }) = find(&tree, &format!("col-{}-scroll", col.key())) else {
+                panic!("{col:?} has no vertical scroll")
+            };
+        }
         let mut ids = Vec::new();
         flatten(&tree, &mut ids);
         let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
