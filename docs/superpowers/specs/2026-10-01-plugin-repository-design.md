@@ -104,12 +104,14 @@ merging a PR does not publish it.
   compatible version for its id. Updating downloads, verifies and stages the new
   files the same way while the old version keeps running, then validates the
   staged folder with the same checks discovery applies (manifest, capabilities,
-  id, entry file) and checks that its `id`, `version` and `api` match the index
-  record it was picked from. Only once all of that passed does it stop the plugin's
+  id, entry file) and checks that its `id`, `version`, `api` and capabilities
+  match the index record it was picked from, so the download asks for exactly
+  what the catalog showed. Only once all of that passed does it stop the plugin's
   instances and swap the folder in with
   `FileManager.replaceItemAt(_:withItemAt:)`, which replaces it in one step, then
   rescan. A failed download, hash check or validation leaves the installed
-  version running. A script that only fails when it runs shows as stopped after
+  version running. If the swap itself fails, Alas rescans at once, which restarts
+  the version still in place, and then reports the error. A script that only fails when it runs shows as stopped after
   the swap, like any broken plugin. Because the hash changed, the plugin asks
   for approval again, which is the right moment to review any new capabilities.
 - **Remove** is offered for plugins installed from the catalog (folder name is

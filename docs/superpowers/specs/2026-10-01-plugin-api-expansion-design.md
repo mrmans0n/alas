@@ -38,7 +38,7 @@ Ranked by how often they show up across these ecosystems.
 | 4 | Deploy previews (Vercel, Netlify, Cloudflare) | net, secrets, timer, worktree badge, "Open preview" command |
 | 5 | Prompt and template library | slash commands, settings |
 | 6 | Docs and context (Notion, Confluence) attached to a prompt | net, secrets, prompt context provider |
-| 7 | Cost and usage tracker | usage events, panel, toolbar item |
+| 7 | Cost and usage tracker | usage events (not scheduled yet, see Rollout), panel, toolbar item |
 | 8 | Review checklist / AI reviewer on hunks | Changes file menu, review comments, `git.changed` |
 | 9 | Run failure helpers ("explain", "file an issue", "rerun with…") | Run report section, run events, `session/send` |
 | 10 | Scheduled agent tasks (nightly triage, dependency bumps) | timer, `task/start` |
@@ -316,7 +316,7 @@ version by one.
 | 5 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.state`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
 | 6 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `worktree.removed`, `focus.changed`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
 | 7 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
-| — | OAuth PKCE, app-scoped instances | when a plugin needs them |
+| — | OAuth PKCE, app-scoped instances, `session.usage` events (tokens and cost per turn, once the agent sessions report them consistently) | when a plugin needs them |
 
 API 5 also introduces `right` panels because the Linear bridge needs a place to
 list issues, and adding the right-pane rail later means changing the same files.
