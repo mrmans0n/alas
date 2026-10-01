@@ -13,6 +13,15 @@ struct ACPAdapterUpdateBannerDeciderTests {
         #expect(decision == .showInstall)
     }
 
+    @Test("setup errors take precedence over cached updates")
+    func setupErrorTakesPrecedence() {
+        let decision = ACPAdapterUpdateBannerDecider.decide(
+            setupState: .setupError(reason: "broken"),
+            updateState: .available(current: "1", latest: "2"),
+            dismissedLatest: nil)
+        #expect(decision == .none)
+    }
+
     @Test("ready + available + no dismissal renders update")
     func readyShowsUpdate() {
         let decision = ACPAdapterUpdateBannerDecider.decide(
