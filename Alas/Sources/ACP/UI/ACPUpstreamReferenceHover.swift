@@ -147,6 +147,8 @@ final class ACPUpstreamReferenceHoverController {
         DispatchQueue.main.asyncAfter(deadline: .now() + ACPImageChipHoverController.hoverDelay, execute: work)
     }
 
+    var isShowingCard: Bool { popover?.isShown == true }
+
     func hide() {
         showWork?.cancel()
         showWork = nil

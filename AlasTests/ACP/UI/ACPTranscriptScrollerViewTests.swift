@@ -5,6 +5,21 @@ import Testing
 @MainActor
 @Suite("ACPTranscriptScrollerView")
 struct ACPTranscriptScrollerViewTests {
+    /// Overriding `scrollWheel(with:)` silently opts a scroll view out of
+    /// AppKit responsive scrolling, and without it every main-thread stall
+    /// (a row mounting) shows as a scroll hitch.
+    @Test("transcript scroller keeps AppKit responsive scrolling")
+    func keepsResponsiveScrolling() {
+        #expect(ACPTranscriptScrollerView.isCompatibleWithResponsiveScrolling)
+    }
+
+    /// A text view that overrides `scrollWheel` opts the whole scroller out of
+    /// responsive scrolling for any gesture that starts over prose.
+    @Test("markdown text views keep AppKit responsive scrolling too")
+    func markdownTextKeepsResponsiveScrolling() {
+        #expect(ACPMarkdownInlineNSTextView.isCompatibleWithResponsiveScrolling)
+    }
+
     private func scroller(viewport: CGFloat = 800, document: CGFloat = 5000) -> ACPTranscriptScrollerView {
         let s = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: viewport))
         s.setDocumentHeight(document)

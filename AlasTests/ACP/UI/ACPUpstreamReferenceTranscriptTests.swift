@@ -97,4 +97,104 @@ struct ACPUpstreamReferenceTranscriptTests {
 
         #expect(chipped.naturalFittingSize().width > plain.naturalFittingSize().width + 30)
     }
+
+    @Test("a hover-card scroll observer does not keep the scroll view's clip view alive")
+    func scrollObserverDoesNotRetainClipView() async {
+        let store = await UpstreamReferenceFixtures.store()
+        weak var weakScrollView: NSScrollView?
+        weak var weakClipView: NSClipView?
+        weak var weakOuterClipView: NSClipView?
+        autoreleasepool {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+            let textView = ACPMarkdownInlineNSTextView(
+                frame: NSRect(x: 0, y: 0, width: 300, height: 40),
+                textContainer: NSTextContainer()
+            )
+            let outer = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+            outer.documentView = scrollView
+            scrollView.documentView = textView
+            textView.upstreamReferences = store
+            weakOuterClipView = outer.contentView
+            weakScrollView = scrollView
+            weakClipView = scrollView.contentView
+        }
+
+        // Autoreleased AppKit temporaries drain on the next run-loop turn; a
+        // real retain cycle never drains, so poll against a deadline. The clip
+        // view is asserted rather than the text view because AppKit keeps a
+        // text view that has a superview alive on its own, independent of the
+        // observer; only a retaining observer pins the clip view.
+        Self.spinRunLoop(until: { weakScrollView == nil && weakClipView == nil && weakOuterClipView == nil }, timeout: 2)
+
+        #expect(weakScrollView == nil)
+        #expect(weakClipView == nil)
+        #expect(weakOuterClipView == nil)
+    }
+
+    @Test("scrolling an outer scroll view hides a hover card opened inside a nested scroll view")
+    func outerScrollHidesHoverCardInNestedScrollView() async throws {
+        let store = await UpstreamReferenceFixtures.store()
+        let chipping = ACPUpstreamReferenceChipping(store: store, host: .github)
+        let text = rendered("see #12")
+        ACPUpstreamReferenceChip.chipifyRendered(text, chipping: chipping)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let outer = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let column = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 1200))
+        let inner = NSScrollView(frame: NSRect(x: 0, y: 100, width: 400, height: 60))
+        let textView = ACPMarkdownInlineNSTextView()
+        textView.isEditable = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textStorage?.setAttributedString(text)
+        textView.frame = NSRect(x: 0, y: 0, width: 400, height: 60)
+        inner.documentView = textView
+        column.addSubview(inner)
+        outer.documentView = column
+        window.contentView = outer
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        textView.upstreamReferences = store
+        window.layoutIfNeeded()
+        textView.frame = NSRect(x: 0, y: 0, width: 400, height: 60)
+        textView.layoutSubtreeIfNeeded()
+        textView.displayIfNeeded()
+
+        let chipLocation = try #require(text.string.firstIndex(of: "\u{FFFC}")).utf16Offset(in: text.string)
+        let anchor = try #require(textView.upstreamReferenceAnchorRect(for: NSRange(location: chipLocation, length: 1)))
+        let point = textView.convert(NSPoint(x: anchor.midX, y: anchor.midY), to: nil)
+        let move = try #require(NSEvent.mouseEvent(
+            with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        ))
+        textView.mouseMoved(with: move)
+        await Self.poll(until: { textView.isShowingUpstreamReferenceCard }, timeout: 3)
+        #expect(textView.isShowingUpstreamReferenceCard)
+
+        outer.contentView.setBoundsOrigin(NSPoint(x: 0, y: 40))
+        await Self.poll(until: { !textView.isShowingUpstreamReferenceCard }, timeout: 3)
+
+        #expect(!textView.isShowingUpstreamReferenceCard)
+    }
+
+    /// Polls with a deadline while yielding the main queue, which a hover
+    /// card's `asyncAfter` needs; a nested run loop cannot drain it from
+    /// inside a main-actor test.
+    private static func poll(until condition: () -> Bool, timeout: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func spinRunLoop(until condition: () -> Bool, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
 }
