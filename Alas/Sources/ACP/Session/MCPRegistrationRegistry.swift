@@ -8,13 +8,18 @@ import Foundation
 final class MCPRegistrationRegistry {
     struct Record: Equatable {
         let transport: MCPTransportKind
+        /// Increases with every hello, so an attach can tell a hello that
+        /// arrived after it started from one an earlier server sent.
+        let sequence: Int
     }
     private var records: [String: Record] = [:]
+    private var nextSequence = 0
 
     func recordHello(sessionId: String, transport: MCPTransportKind) {
-        records[sessionId] = Record(transport: transport)
+        nextSequence += 1
+        records[sessionId] = Record(transport: transport, sequence: nextSequence)
     }
     func clear(sessionId: String) { records[sessionId] = nil }
     func isRegistered(sessionId: String) -> Bool { records[sessionId] != nil }
-    func transport(sessionId: String) -> MCPTransportKind? { records[sessionId]?.transport }
+    func record(sessionId: String) -> Record? { records[sessionId] }
 }
