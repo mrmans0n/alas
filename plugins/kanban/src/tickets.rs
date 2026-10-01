@@ -149,6 +149,7 @@ impl Body {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(default)]
 pub struct Meta {
     pub version: u32,
     pub next_number: u64,
@@ -157,7 +158,9 @@ pub struct Meta {
 #[derive(Default)]
 pub struct Tracker {
     pub meta: Meta,
-    /// In creation order, so the oldest ticket comes first.
+    /// Open tickets in creation order; a ticket moves to the end when it is closed, so closed
+    /// tickets are in closing order and `archive` drops the oldest-closed. Not number order:
+    /// callers that display by number must sort by number.
     pub index: Vec<Entry>,
 }
 
@@ -197,10 +200,16 @@ impl Tracker {
     }
 
     /// Done and Cancelled stop following; any other status follows while there is a session.
+    /// Closing an open ticket moves it to the end of the index (see `index`).
     pub fn set_status(&mut self, number: u64, status: Status) {
-        if let Some(e) = self.entry_mut(number) {
-            e.status = status;
-            e.following = !status.closed() && e.session_id.is_some();
+        let Some(i) = self.index.iter().position(|e| e.number == number) else { return };
+        let e = &mut self.index[i];
+        let closing = status.closed() && !e.status.closed();
+        e.status = status;
+        e.following = !status.closed() && e.session_id.is_some();
+        if closing {
+            let e = self.index.remove(i);
+            self.index.push(e);
         }
     }
 
@@ -389,8 +398,9 @@ mod tests {
         }
 
         let mut t = started();
+        t.set_status(1, Status::Todo);
         t.sync(&sess("unknown"));
-        assert_eq!(t.index[0].status, Status::InProgress);
+        assert_eq!(t.index[0].status, Status::Todo);
         assert!(t.index[0].seen);
 
         // Absent: unchanged until seen, then In review.
@@ -414,10 +424,10 @@ mod tests {
         for closed in [Status::Done, Status::Cancelled] {
             let mut t = started();
             t.set_status(1, closed);
-            assert!(!t.sync(&sess("idle")).0);
-            assert_eq!(t.index[0].status, closed);
-            assert!(t.sync(&[("s1".into(), "idle".into(), "br-2".into())]).0);
-            assert_eq!(t.index[0].branch.as_deref(), Some("br-2"));
+            assert!(!t.sync(&sess("idle")).0, "{closed:?}");
+            assert_eq!(t.index[0].status, closed, "{closed:?}");
+            assert!(t.sync(&[("s1".into(), "idle".into(), "br-2".into())]).0, "{closed:?}");
+            assert_eq!(t.index[0].branch.as_deref(), Some("br-2"), "{closed:?}");
         }
     }
 
@@ -518,7 +528,10 @@ mod tests {
         }
         assert_eq!(t.archive(), vec![2, 3]);
         assert_eq!(t.index.len(), ARCHIVE_KEEP + 1);
-        assert!(t.entry(1).is_some());
         assert!(t.archive().is_empty());
+        // Closing the old open ticket keeps it; the oldest-closed goes instead.
+        t.set_status(1, Status::Done);
+        assert_eq!(t.archive(), vec![4]);
+        assert!(t.entry(1).is_some());
     }
 }
