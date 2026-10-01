@@ -74,10 +74,11 @@ and `/tmp/jsc-spike`.
     (the first call also evaluates the script).
   - Hitting the limit fails the plugin (`stopped: took longer than 250 ms`), the
     same rule as running out of fuel today.
-  - Memory: after each delivery Alas checks the process footprint. If the plugin
-    raised it by more than 256 MB since activation, Alas stops the plugin and
-    releases its context group. This is a coarse guard, not a cap; a helper
-    process is the upgrade if a plugin ever needs a real one.
+  - Memory: no cap for now. JSC's per-VM heap statistics leave out typed-array
+    storage (100 MB of typed arrays reported as 3.8 MB of heap), and the process
+    footprint is shared with Alas, so neither can attribute memory to one plugin.
+    The time limit bounds growth per call. A helper process is the upgrade if a
+    plugin ever needs a real cap.
 - **Entry point.** `"entry": "plugin.js"`, one file, evaluated once at
   activation. An ES module, a bundle produced by esbuild, or a plain script all
   work, because the plugin only has to assign `globalThis.handle`.
