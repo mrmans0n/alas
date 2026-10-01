@@ -43,13 +43,13 @@ Ranked by how often they show up across these ecosystems.
 | 10 | Scheduled agent tasks (nightly triage, dependency bumps) | timer, `task/start` |
 | 11 | Error tracking (Sentry, Datadog) → worktree with stack trace | net, secrets, palette command, `task/start` |
 | 12 | Time tracking (Toggl, Harvest) | focus events, net, toolbar item |
-| 13 | Worktree setup, ports, env and secrets | **Not a plugin.** Repo hooks and run configs already run scripts. |
-| 14 | Dev server / port manager | **Not a plugin.** Run tab already owns processes and endpoints. |
-| 15 | Database viewer | Out of scope: needs sockets and a table view. |
+| 13 | Worktree setup: copy `.env`, install dependencies, pull secrets from 1Password or Doppler | `worktree.created` event, `process.exec`, `files.write`, secrets |
+| 14 | Dev server / port manager | `process.exec` (long-running, shown in the Run tab), worktree badge, "Open preview" command |
+| 15 | Database viewer | Out of scope: needs sockets and a table view. A CLI client through `process.exec` covers simple queries. |
 
-Rows 13–15 are deliberate gaps: they need to spawn processes or open sockets,
-which would end the sandbox. Alas keeps owning processes; a plugin can
-*trigger* a run configuration it doesn't own (`run/start`, below).
+Rows 13 and 14 need to run processes and touch files, which the sandbox
+forbids by default. They get it through two high-trust capabilities
+(section 10) rather than by dropping the sandbox for everyone.
 
 ## Design
 
@@ -235,13 +235,60 @@ New requests that forward to code that already exists (mostly `AlasActionService
   A provider that is slow (over its fuel budget) or errors is skipped for that
   prompt.
 
+### 10. High-trust capabilities: processes and files
+
+The sandbox stays the default. A plugin that needs more asks for it by name, the
+user grants it per plugin, and everything else about the plugin stays sandboxed.
+This is Zed's model: a call without the grant fails, whatever the code does.
+
+**`process.exec`.** The manifest lists every command the plugin may run, as an
+exact argv prefix:
+
+```json
+"processes": [
+  { "id": "install", "command": ["pnpm", "install"] },
+  { "id": "op", "command": ["op", "read"], "appendArgs": true },
+  { "id": "dev", "command": ["pnpm", "dev"], "longRunning": true }
+]
+```
+
+- `process/run {id, worktree, args?, stdin?, env?}` runs it with the worktree as
+  the working directory and answers in a later delivery with
+  `{exit, stdout, stderr}`. Output is capped at 1 MiB, the run at 10 minutes, and
+  an instance may have 2 running at once.
+- `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
+  exactly what the manifest says. `env` values may use `{{secret:key}}`, so a
+  token can reach a CLI without the plugin seeing it.
+- `longRunning` processes are started with `process/start` and show up in the
+  Run tab as runs owned by the plugin: visible, with output, and stoppable by the
+  user. Alas stops them when the plugin stops. There are no invisible processes.
+- A worktree must belong to the plugin's project. The process runs with the
+  user's permissions, outside any sandbox, and the approval sheet says so in
+  those words, listing each command.
+
+**`files.read` and `files.write`.** Scoped to the project's worktrees:
+
+- `file/read {worktree, path}` (≤ 1 MiB), `file/list {worktree, dir}`,
+  `file/write {worktree, path, content}`.
+- Paths are relative. Alas resolves them and refuses anything that leaves the
+  worktree, including through symlinks. `.git/` is never writable.
+- Writes show up in the Changes tab like any other edit.
+
+**How the user sees the risk.**
+
+- The approval sheet groups capabilities into *sandboxed* and *full access*
+  (`process.exec`, `files.write`), and full-access ones need a separate checkbox.
+- The catalog marks plugins that ask for full access, and the alas-plugins
+  review checks that each declared command is needed.
+- Changing `processes` changes the manifest hash, so a plugin can't add a
+  command in an update without asking again.
+
 ### What stays out
 
-- **Spawning processes and opening sockets.** That ends the sandbox. Scripts
-  belong in repo hooks and run configs, which plugins can trigger.
-- **File access.** Deferred until a plugin needs more than the diff, the
-  review comments and run output it can already get. When it lands it is
-  read-only, scoped to one worktree, and size-capped.
+- **Sockets.** Plugins talk to the network only through `http/fetch`.
+- **Running arbitrary commands.** Only commands declared in the manifest.
+- **A fully trusted native plugin tier.** Not until a real plugin can't be built
+  with the capabilities above.
 - **Workspace (multi-repo checkout) slots.** Plugin instances are per project; a
   workspace has no project. Needs an app-scoped instance first.
 - **Webviews.** Native slots first, as #1560 says.
@@ -254,9 +301,9 @@ version by one.
 | API | Adds | Reference plugin |
 |---|---|---|
 | 4 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
-| 5 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `session/send`, `run/start`, `review/comment` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent |
+| 5 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
 | 6 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
-| — | OAuth PKCE, file read, app-scoped instances | when a plugin needs them |
+| — | OAuth PKCE, app-scoped instances | when a plugin needs them |
 
 API 4 also introduces `right` panels because the Linear bridge needs a place to
 list issues, and adding the right-pane rail later means changing the same files.
@@ -275,6 +322,8 @@ Per the testing policy, tests pin decisions, not views:
 
 - Slot routing: which commands a slot shows, and the target a command receives.
 - Decorations: replace and clear semantics, caps, cleanup when a plugin stops.
+- Process and files: argv matching (`appendArgs` on and off), path escapes
+  (`..`, absolute paths, symlinks), `.git/` writes refused, output and time caps.
 - Network: allowlist matching (subdomains, ports, redirects), secret substitution
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
