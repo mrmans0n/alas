@@ -619,7 +619,8 @@ struct PluginHostTests {
         let runs = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("command/run") }
         #expect(runs.count == 1)
         #expect(runs.first?.text.contains(#""command":"fix""#) == true)
-        #expect(runs.first?.text.contains(#""target":{"kind":"worktree","worktree":"w1"}"#) == true)
+        // JSONEncoder does not fix key order, so check the target's fields one by one.
+        #expect(runs.first.map { $0.text.contains(#""kind":"worktree""#) && $0.text.contains(#""worktree":"w1""#) } == true)
     }
 
     private static func notify(_ title: String, body: String = "b") -> PluginFixtureStep {
