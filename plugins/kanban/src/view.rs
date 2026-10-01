@@ -45,6 +45,8 @@ pub struct ViewState<'a> {
     pub notice: Option<&'a str>,
     /// Tickets with a Start in flight.
     pub starting: &'a [u64],
+    /// The open ticket's stored body could not be decoded, so it is shown read-only.
+    pub body_unreadable: bool,
 }
 
 fn clip(s: &str, max: usize) -> String {
@@ -113,7 +115,6 @@ fn new_ticket(s: &ViewState) -> Node {
         },
         priority_menu(format!("new-priority-{f}"), s.draft.priority),
         assignee_menu(format!("new-assignee-{f}"), s.draft.assignee.as_deref(), s.agents),
-        button("create".into(), "Create", Some("plus"), ButtonStyle::Primary, false),
     ];
     let children = vec![
         text("new-heading".into(), "New ticket", Some(TextStyle::Title), None),
@@ -121,7 +122,7 @@ fn new_ticket(s: &ViewState) -> Node {
         Node::TextField {
             id: format!("new-description-{f}"),
             value: String::new(),
-            placeholder: Some("Description — ⌘Return creates the ticket; without a title, its first line is the title".into()),
+            placeholder: Some("Description — ⌘Return to create; without a title, its first line is the title".into()),
             multiline: true,
         },
     ];
@@ -263,6 +264,7 @@ fn ticket(s: &ViewState, e: &Entry) -> Node {
     }
 
     match s.body {
+        None if s.body_unreadable => out.push(text("unreadable".into(), "Details unavailable", None, Some(Tone::Dim))),
         None => out.push(text("loading".into(), "Loading…", None, Some(Tone::Dim))),
         Some(body) => body_nodes(n, s.form, s.comment_form, body, &mut out),
     }
@@ -327,7 +329,7 @@ mod tests {
 
     fn tree(tracker: &Tracker, screen: Screen, body: Option<&Body>, agents: &[Agent]) -> Value {
         let draft = Draft::default();
-        let state = ViewState { tracker, screen: &screen, body, agents, draft: &draft, form: 0, comment_form: 0, notice: None, starting: &[] };
+        let state = ViewState { tracker, screen: &screen, body, agents, draft: &draft, form: 0, comment_form: 0, notice: None, starting: &[], body_unreadable: false };
         serde_json::to_value(render(&state)).unwrap()
     }
 

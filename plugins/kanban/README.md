@@ -22,7 +22,8 @@ plugins/kanban/build.sh
 
 Then turn on **Settings → Debug → Experimental → Plugins** (it only shows when
 `~/.alas/.debug` exists), open **Settings → Plugins**, click **Approve…** on
-Kanban, and open **View → Plugins → Board**.
+Kanban (it asks to read the workspace, open sessions, read agents' final replies
+and start agents), and open **View → Plugins → Board**.
 
 ## Tickets
 
@@ -41,8 +42,7 @@ ticket screen.
 The **New ticket** form sits above the board. Type a title (Return keeps it),
 pick a priority and an assignee, then type the description and press ⌘Return
 to create the ticket. Without a title, the description's first line becomes
-the title. **Create** makes a ticket from the title alone. New tickets start in
-Backlog.
+the title. New tickets start in Backlog.
 
 ### The ticket screen
 
@@ -107,8 +107,6 @@ refused until you delete some.
 
 ## Known limits
 
-- **Create** drops a description you have typed but not submitted. Press
-  ⌘Return in the description instead.
 - If Alas quits while a ticket is starting, the ticket is not linked to the
   worktree and agent that were created: after a relaunch it moves to In review,
   and **Start again** makes a second worktree.

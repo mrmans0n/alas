@@ -58,7 +58,13 @@ pub struct Kanban {
     /// The session/focus request of the last Open session click.
     focus_request: Option<i64>,
     /// storage/set ids awaiting a reply.
-    saves: Vec<i64>,
+    saves: Vec<(i64, u64)>,
+    /// The last save batch issued, and the latest one with a failed write. A failure notice
+    /// clears only when a later batch completes with every write accepted.
+    save_batch: u64,
+    last_failed_batch: Option<u64>,
+    /// Tickets whose stored body could not be decoded this session: read-only, never written.
+    unreadable: Vec<u64>,
     /// The latest (session id, state, branch) list, kept so a snapshot that beats the load still applies.
     /// `None` until the first snapshot, so a tracker loaded first is not synced against no sessions.
     sessions: Option<Vec<(String, String, String)>>,
@@ -93,6 +99,7 @@ impl Kanban {
                 comment_form: self.comment_form,
                 notice: self.notice.as_deref(),
                 starting: &starting,
+                body_unreadable: matches!(self.screen, Screen::Ticket(n) if self.unreadable.contains(&n)),
             }),
         );
     }
@@ -117,8 +124,13 @@ impl Kanban {
         if self.load_failed {
             return;
         }
+        self.save_batch += 1;
         for (key, value) in writes {
-            self.saves.push(storage_set(&key, &value));
+            // ponytail: a linear scan; at most MAX_INDEX tickets ever fail to decode.
+            if key.strip_prefix("ticket-").and_then(|n| n.parse().ok()).is_some_and(|n| self.unreadable.contains(&n)) {
+                continue;
+            }
+            self.saves.push((storage_set(&key, &value), self.save_batch));
         }
     }
 
@@ -212,9 +224,14 @@ impl Kanban {
             return;
         }
         self.body_loads.retain(|(_, _, then)| !matches!(then, Then::Open));
-        self.body_loads.push((storage_get(&body_key(n)), n, Then::Open));
         // Agents may have been installed since the last screen.
         self.agent_request = Some(agent_list());
+        if self.unreadable.contains(&n) {
+            self.screen = Screen::Ticket(n);
+            self.open_body = None;
+            return self.unreadable_notice(n, "read earlier");
+        }
+        self.body_loads.push((storage_get(&body_key(n)), n, Then::Open));
         self.navigate(Screen::Ticket(n));
     }
 
@@ -246,6 +263,11 @@ impl Kanban {
         self.render();
     }
 
+    fn unreadable_notice(&mut self, n: u64, problem: &str) {
+        let problem: String = problem.chars().take(200).collect();
+        self.set_notice(format!("KAN-{n}: this ticket's saved details could not be read; they are left untouched ({problem})."));
+    }
+
     fn open_body_mut(&mut self, n: u64) -> Option<&mut Body> {
         self.open_body.as_mut().filter(|(open, _)| *open == n).map(|(_, b)| b)
     }
@@ -259,6 +281,9 @@ impl Kanban {
         if self.starting(n) {
             return;
         }
+        if self.unreadable.contains(&n) {
+            return self.set_notice(format!("Could not start KAN-{n}: its saved details could not be read."));
+        }
         let Some(e) = self.tracker.entry(n).filter(|e| !e.status.closed()) else { return };
         match self.open_body.as_ref().filter(|(open, _)| *open == n) {
             Some((_, body)) => self.pending_starts.push((send_start(e, &body.description), n)),
@@ -271,6 +296,9 @@ impl Kanban {
     fn agent_comment(&mut self, n: u64, text: String, loaded: Option<Body>) {
         if self.tracker.entry(n).is_none() {
             return;
+        }
+        if self.unreadable.contains(&n) {
+            return self.set_notice(format!("KAN-{n}: the agent's reply was not saved because the ticket's saved details could not be read."));
         }
         if let Some(body) = self.open_body_mut(n) {
             body.comment(Author::Agent, &text);
@@ -291,8 +319,18 @@ impl Kanban {
     fn body_loaded(&mut self, id: i64, value: Result<Option<String>, RpcError>) {
         let Some(i) = self.body_loads.iter().position(|(r, _, _)| *r == id) else { return };
         let (_, n, then) = self.body_loads.remove(i);
-        let body = match value {
-            Ok(raw) => store::parse_body(raw.as_deref()),
+        let body = match value.map(|raw| store::parse_body(raw.as_deref())) {
+            Ok(Ok(body)) => body,
+            Ok(Err(problem)) => {
+                if !self.unreadable.contains(&n) {
+                    self.unreadable.push(n);
+                }
+                return match then {
+                    Then::Open => self.unreadable_notice(n, &problem),
+                    Then::Comment(text) => self.agent_comment(n, text, None),
+                    Then::Start => self.start(n),
+                };
+            }
             // Nothing is written without the body, so a failed read loses nothing.
             Err(e) => return self.set_notice(format!("Could not read KAN-{n}: {}", e.message)),
         };
@@ -352,8 +390,6 @@ impl Kanban {
                 *show_cancelled = !*show_cancelled;
             }
             self.render();
-        } else if id == "create" {
-            self.create("");
         } else if id.starts_with("new-title-") {
             // Kept for Create; the field keeps showing what was typed.
             self.draft.title = value.trim().chars().take(MAX_TITLE_CHARS).collect();
@@ -442,15 +478,20 @@ impl Plugin for Kanban {
                     self.commit(true, false, &[]);
                 }
             }
-            Event::Reply { id, result } if self.saves.contains(&id) => {
-                self.saves.retain(|&s| s != id);
-                match result {
-                    Err(e) => self.set_notice(format!("{SAVE_FAILED}{}", e.message)),
-                    Ok(_) if self.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)) => {
-                        self.notice = None;
-                        self.render();
-                    }
-                    Ok(_) => {}
+            Event::Reply { id, result } if self.saves.iter().any(|&(r, _)| r == id) => {
+                let i = self.saves.iter().position(|&(r, _)| r == id).expect("contained");
+                let (_, batch) = self.saves.remove(i);
+                if let Err(e) = result {
+                    self.last_failed_batch = Some(batch);
+                    return self.set_notice(format!("{SAVE_FAILED}{}", e.message));
+                }
+                // A batch's own later writes never clear its failure; a newer batch that fully
+                // succeeded does.
+                let batch_done = !self.saves.iter().any(|&(_, b)| b == batch);
+                let after_failure = self.last_failed_batch.is_none_or(|f| batch > f);
+                if batch_done && after_failure && self.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)) {
+                    self.notice = None;
+                    self.render();
                 }
             }
             Event::Reply { id, result } if self.pending_starts.iter().any(|&(r, _)| r == id) => {
@@ -634,5 +675,37 @@ mod tests {
             start["params"],
             json!({"title":"Fix it","prompt":"KAN-1: Fix it\n\nMake it work.","branch":"task/kan-1","agent":"claude"})
         );
+    }
+
+    #[test]
+    fn a_failed_write_stays_visible_until_a_later_save_fully_succeeds() {
+        let mut k = with_ticket(json!({}));
+        event(&mut k, "new-description-0", Some("New ticket\nwith a body"));
+        let sets: Vec<i64> = test_host::take_sent().iter().filter(|m| m["method"] == "storage/set").map(|m| m["id"].as_i64().unwrap()).collect();
+        assert_eq!(sets.len(), 3, "meta, body, index");
+        reply(&mut k, sets[0], json!({}));
+        feed(&mut k, json!({"jsonrpc":"2.0","id":sets[1],"error":{"code":-32003,"message":"storage is full"}}));
+        reply(&mut k, sets[2], json!({}));
+        assert!(k.notice.as_deref().is_some_and(|n| n.starts_with(SAVE_FAILED)), "its own later writes do not hide it");
+
+        event(&mut k, "status-1", Some("done"));
+        for set in test_host::take_sent().iter().filter(|m| m["method"] == "storage/set") {
+            reply(&mut k, set["id"].as_i64().unwrap(), json!({}));
+        }
+        assert_eq!(k.notice, None);
+    }
+
+    #[test]
+    fn an_undecodable_body_is_shown_read_only_and_never_written() {
+        let mut k = with_ticket(json!({}));
+        event(&mut k, "ticket-1", None);
+        let read = sent_one(&test_host::take_sent(), "storage/get");
+        reply(&mut k, read["id"].as_i64().unwrap(), json!({"value":"not a body"}));
+        let root = sent_one(&test_host::take_sent(), "view/render")["params"]["root"].to_string();
+        assert!(root.contains("could not be read") && !root.contains("description-1-") && !root.contains("comment-1-"));
+
+        event(&mut k, "comment-1-0", Some("hi"));
+        event(&mut k, "delete-1", None);
+        assert!(writes(&test_host::take_sent()).iter().all(|(key, _)| key != "ticket-1"));
     }
 }

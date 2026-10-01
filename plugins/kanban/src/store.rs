@@ -72,8 +72,13 @@ fn relaunched(tracker: &mut Tracker) {
     }
 }
 
-pub fn parse_body(raw: Option<&str>) -> Body {
-    raw.and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default()
+/// A missing body is empty. One that is stored but cannot be decoded is an error, so the caller
+/// leaves it untouched instead of saving an empty body over recoverable data.
+pub fn parse_body(raw: Option<&str>) -> Result<Body, String> {
+    match raw {
+        None | Some("null") => Ok(Body::default()),
+        Some(raw) => serde_json::from_str(raw).map_err(|e| e.to_string()),
+    }
 }
 
 /// The writes for one change, in order: meta, bodies, the index (only if `index_changed`), then
@@ -160,8 +165,8 @@ mod tests {
             [k("meta", true), k("ticket-1", true), k("index", true), k("ticket-7", false)]
         );
         assert_eq!(keys(writes(&t, &[], &[], false)), [k("meta", true)]);
-        assert_eq!(parse_body(Some(r#"{"description":"d"}"#)), body);
-        assert_eq!(parse_body(Some("x")), Body::default());
-        assert_eq!(parse_body(None), Body::default());
+        assert_eq!(parse_body(Some(r#"{"description":"d"}"#)), Ok(body));
+        assert!(parse_body(Some("x")).is_err());
+        assert_eq!(parse_body(None), Ok(Body::default()));
     }
 }
