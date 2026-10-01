@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Stop warning that the agent harness didn't start the Alas MCP server after a session re-attaches to an agent that survived an app restart. Its server started before the restart and won't announce itself again, so the badge stays neutral until the session's first Alas request confirms it. Sessions whose server never starts still get the warning.
+
 ## [0.19.20] - 2026-10-01
 
 ### ✨ Features

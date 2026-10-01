@@ -5387,11 +5387,22 @@ extension ACPSessionManager {
                 return true
             }()
             let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
+            // A broker-adopted agent that was already running keeps the stdio
+            // `alas mcp` it spawned for an earlier attach (possibly before an
+            // app restart). That server said its one hello back then and won't
+            // again, so this attach must not demand a fresh one. An HTTP server
+            // is supervised by the app and respawned per attach, so it does.
+            let reattachedToRunningServer = shouldTrackBuiltInRegistration
+                && builtInMCP?.status.transport == .stdio
+                && (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true
+            session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
             // Bump the attach epoch so a grace timer left over from a previous
             // attach of this session can never write the current row.
             let mcpRegistrationEpoch = (mcpRegistrationAttachEpoch[sessionId] ?? 0) + 1
             mcpRegistrationAttachEpoch[sessionId] = mcpRegistrationEpoch
-            if shouldTrackBuiltInRegistration {
+            // A hello recorded earlier in this app run by the same surviving
+            // server is still valid evidence, so only a fresh process re-proves.
+            if shouldTrackBuiltInRegistration && !reattachedToRunningServer {
                 clearMCPRegistration?(sessionId)
             }
             // Reset to `.unknown` on every attach: either we are about to track
@@ -6114,7 +6125,8 @@ extension ACPSessionManager {
             // slow auth or a >12s restore marking a healthy session
             // `.notRegistered` before the harness ever saw the config. Guarded
             // by the attach epoch so a stale timer cannot clobber a newer row; a
-            // late hello still heals the row via AppState.onMCPHello.
+            // late hello (or, for a reattached server, its first request) still
+            // heals the row via AppState.
             if shouldTrackBuiltInRegistration {
                 Task { @MainActor [weak self, weak session] in
                     try? await Task.sleep(for: .seconds(12))
@@ -6125,7 +6137,9 @@ extension ACPSessionManager {
                     if session.builtInMCPRegistration == .registered { return }
                     let helloSeen = self.isBuiltInMCPRegistered?(sessionId) ?? false
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
-                        helloSeen: helloSeen, graceElapsed: true)
+                        evidence: helloSeen ? .hello : .none,
+                        graceElapsed: true,
+                        reattachedToRunningServer: reattachedToRunningServer)
                 }
             }
             // Sessions that start from loaded context (native fork, imported

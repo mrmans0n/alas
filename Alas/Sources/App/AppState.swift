@@ -6694,6 +6694,7 @@ final class AppState {
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
             guard let self else { return .error("Alas is not available.") }
+            self.noteBuiltInMCPRequest(sessionId: request.sessionId)
             return await self.handleCLIRequest(request)
         }
         // The socket server dispatches this on the main queue, so the closure
@@ -6731,6 +6732,26 @@ final class AppState {
         // to call here: it reads live managers lazily, so no session state is
         // required at this point.
         syncRemoteServer()
+    }
+
+    /// A request carrying an ACP session's id shows its stdio `alas mcp` is
+    /// alive. That counts only for a session re-attached to a server that
+    /// already said its one hello (see `MCPRegistrationDecision`).
+    @MainActor
+    private func noteBuiltInMCPRequest(sessionId: String?) {
+        guard let sessionId else { return }
+        for manager in acpManagers.values {
+            guard let session = manager.liveSession(for: sessionId) else { continue }
+            if session.builtInMCPRegistration != .registered,
+               MCPRegistrationDecision.resolve(
+                   evidence: .request,
+                   graceElapsed: false,
+                   reattachedToRunningServer: session.builtInMCPReattachedToRunningServer
+               ) == .registered {
+                session.builtInMCPRegistration = .registered
+            }
+            return
+        }
     }
 
     @MainActor
