@@ -132,7 +132,8 @@ The rules of the current plugin carry over, applied to `agent_state` and
 | `awaiting_input`, `permission_request` | `agent_state` set, `status` in progress. |
 | `idle` | `status` in review. |
 | not in the snapshot, after it was seen | `status` in review. |
-| not in the snapshot, never seen yet | unchanged (still starting). |
+| not in the snapshot, never seen yet | unchanged (still starting) — except after a relaunch, which ends any in-flight start: a followed session that was never seen is treated as seen, so the first snapshot without it moves the ticket to In review and offers Start again. |
+| not in the snapshot, after it already reported `idle` | unchanged (a manual status survives a relaunch). |
 | `unknown` | unchanged. |
 
 - A ticket follows only while it has a session and its status is not `done` or

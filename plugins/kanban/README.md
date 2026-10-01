@@ -63,7 +63,7 @@ while the ticket is open (not Done or Cancelled) and has no running session.
 If the start is refused, the ticket keeps its status and shows the reason.
 
 A started ticket follows its session: running, waiting for input or for
-permission → **In progress**; idle or ended → **In review**. A status you set
+permission → **In progress**; idle → **In review**; a session that has gone missing after it was seen also → **In review** (unless it had already gone idle, so a status you set by hand survives a relaunch). A status you set
 by hand holds until the session's state changes again. Done and Cancelled stop
 following. **Open session** focuses the agent's session.
 
