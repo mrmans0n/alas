@@ -74,6 +74,7 @@ impl Canvas {
 
     /// Draws `src` from `sheet` at (dx, dy). `palette[index]` gives each colour; index 0 is skipped.
     /// `dim` halves brightness, for the `unknown` state.
+    #[allow(clippy::too_many_arguments)]
     pub fn blit(&mut self, sheet: &Sheet, src: Rect, dx: i32, dy: i32, palette: &[Rgba], flip: bool, dim: bool) {
         for sy in 0..src.h {
             for sx in 0..src.w {

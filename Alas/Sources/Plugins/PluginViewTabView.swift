@@ -53,6 +53,7 @@ private struct PluginViewNodeView: View {
     let events: PluginViewEvents
     @Environment(\.theme) var theme
     @Environment(\.inClickableCard) private var inClickableCard
+    @FocusState private var cardFocused: Bool
 
     var body: some View {
         switch node.kind {
@@ -124,6 +125,15 @@ private struct PluginViewNodeView: View {
             content
                 .environment(\.inClickableCard, true)
                 .onTapGesture { events.send(node.id, "click") }
+                // A keyboard stop like a button: Tab reaches it with keyboard navigation on, Space or Return clicks.
+                .focusable(interactions: .activate)
+                .focused($cardFocused)
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    // Keys bubble up from inner controls, such as the card's menus; those are not the card's.
+                    guard cardFocused else { return .ignored }
+                    events.send(node.id, "click")
+                    return .handled
+                }
                 .accessibilityElement(children: .contain)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { events.send(node.id, "click") }

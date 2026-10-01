@@ -190,7 +190,7 @@ final class PluginManager {
                 manifest: plugin.manifest, wasm: plugin.wasm,
                 project: PluginProjectRef(id: project.id, name: project.name),
                 grants: Set(approval.capabilities), actions: actions(project),
-                storage: PluginStorage(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)))
+                storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)))
             hostsByKey[key] = host
             await host.activate()
         }
