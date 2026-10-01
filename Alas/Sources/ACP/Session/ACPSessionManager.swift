@@ -2937,21 +2937,20 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Deletes hidden `/btw` side sessions left behind by a crash or a quit
-    /// while a side question was open.
+    /// while a side question was open. No runner of this instance drives
+    /// them, so only the rows and any remote helper process need cleanup.
     func purgeOrphanedEphemeralSessions() async {
         let persistence = persistence
-        let ids: [String]
         do {
-            ids = try await persistence.orphanedEphemeralSessionIds(
+            let ids = try await persistence.deleteOrphanedEphemeralSessions(
                 now: Int64(Date().timeIntervalSince1970),
                 staleAfter: Self.leaseStaleAfter
             )
+            for id in ids where runners[id] == nil {
+                forgetSession(id: id)
+            }
         } catch {
             persistenceError = error.localizedDescription
-            return
-        }
-        for id in ids {
-            try? await deletePersistedSession(id: id)
         }
     }
 

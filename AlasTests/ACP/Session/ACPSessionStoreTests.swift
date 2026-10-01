@@ -130,7 +130,7 @@ struct ACPSessionStoreSchemaTests {
     }
 
     @Test(
-        "orphaned side sessions are only those nobody is driving",
+        "purging side sessions deletes only those nobody is driving",
         arguments: [
             (SideSessionLease.none, Int64(100), true),
             (.none, 0, false),
@@ -139,7 +139,7 @@ struct ACPSessionStoreSchemaTests {
             (.deadOwner, 100, true),
         ]
     )
-    func orphanedEphemeralSessions(lease: SideSessionLease, idleSeconds: Int64, orphaned: Bool) throws {
+    func purgesOrphanedEphemeralSessions(lease: SideSessionLease, idleSeconds: Int64, orphaned: Bool) throws {
         let store = try tmpStore()
         let now = Int64(Date().timeIntervalSince1970)
         for (id, parent) in [("side", "parent" as String?), ("visible", nil)] {
@@ -165,7 +165,9 @@ struct ACPSessionStoreSchemaTests {
             """, bindings: [leaseRow.pid, leaseRow.heartbeatAt])
         }
 
-        #expect(try store.orphanedEphemeralSessionIds(now: now, staleAfter: 15) == (orphaned ? ["side"] : []))
+        #expect(try store.deleteOrphanedEphemeralSessions(now: now, staleAfter: 15) == (orphaned ? ["side"] : []))
+        #expect(try (store.loadSession(id: "side") == nil) == orphaned)
+        #expect(try store.loadSession(id: "visible") != nil)
     }
 
     @Test("re-opening doesn't double-apply migrations")
