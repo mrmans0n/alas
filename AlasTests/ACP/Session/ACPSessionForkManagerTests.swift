@@ -321,7 +321,8 @@ struct ACPSessionForkManagerTests {
 
         #expect(client.sent.contains { $0.method == "session/set_mode" })
         #expect(!client.sent.contains { $0.method == "session/prompt" })
-        #expect(manager.sideQuestionSessionIDs[parent.id] == nil)
+        #expect(manager.sideQuestions[parent.id]?.sessionID == nil)
+        #expect(manager.sideQuestions[parent.id]?.error == ACPSideQuestionError.unsafeMode.errorDescription)
     }
 
     @Test("streaming agent is ineligible while earlier messages remain eligible")
