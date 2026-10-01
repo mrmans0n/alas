@@ -208,9 +208,12 @@ struct PluginHostTests {
         let params: String
         let grants: Set<PluginCapability>
         let reply: String
+        var api = 3
     }
 
     @Test(arguments: [
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
+        ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [], reply: #""code":-32001"#),
         ReadCase(method: "session/last_message", params: #"{"id":"quiet"}"#, grants: [.workspaceRead], reply: #""result":{"message":null}"#),
         ReadCase(method: "session/last_message", params: #"{"id":"gone"}"#, grants: [.workspaceRead], reply: #""code":-32003"#),
@@ -218,7 +221,7 @@ struct PluginHostTests {
     ])
     func workspaceReadRequestsAreGatedAndShaped(_ c: ReadCase) async throws {
         let request = #"{"jsonrpc":"2.0","id":1,"method":"\#(c.method)","params":\#(c.params)}"#
-        let host = try makeHost([[.send(activateOK), .send(request)]], grants: c.grants, manifest: Self.v3Manifest)
+        let host = try makeHost([[.send(activateOK), .send(request)]], grants: c.grants, manifest: c.api == 3 ? Self.v3Manifest : Self.v2Manifest)
         await host.activate()
         #expect(host.state == .active)
         #expect(lastReply(host)?.contains(c.reply) == true)
