@@ -30,6 +30,8 @@ struct NativePeerSidebarView: View {
     /// metadata, so the caller can match a local project of the same name.
     var icon: (String) -> ProjectIcon = { _ in .default() }
     var onAddPeer: (() -> Void)?
+    /// The local sidebar's worktree ordering, applied to every peer's worktrees.
+    var worktreeOrdering: AppConfig.WorktreeSortMode = .lastUpdateDesc
     @Environment(\.theme) private var theme
     @State private var expandedPeerIDs: Set<String> = []
     /// Peer ids this view has already decided an expansion state for. Lets a
@@ -112,7 +114,7 @@ struct NativePeerSidebarView: View {
     private func peerGroup(_ group: NativePeerGroup) -> some View {
         let online = group.state.carriesSessions
         let expanded = online && expandedPeerIDs.contains(group.id)
-        let repos = group.repos
+        let repos = group.repos(ordering: worktreeOrdering)
         VStack(alignment: .leading, spacing: 0) {
             NativePeerHeaderRow(
                 group: group,

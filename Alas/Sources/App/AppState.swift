@@ -14489,6 +14489,7 @@ extension AppState: RemoteSessionsProvider {
             return RemoteWorktreeSummaryBuilder.make(
                 projectName: project.name,
                 worktree: worktree,
+                isMain: projectsManager.isMain(worktree, in: project),
                 metrics: .available(
                     comparisonRef: commitResult.comparisonRef,
                     commitCount: commitResult.commits.count,
@@ -14504,6 +14505,7 @@ extension AppState: RemoteSessionsProvider {
         RemoteWorktreeSummaryBuilder.make(
             projectName: project.name,
             worktree: worktree,
+            isMain: projectsManager.isMain(worktree, in: project),
             metrics: .unavailable
         )
     }

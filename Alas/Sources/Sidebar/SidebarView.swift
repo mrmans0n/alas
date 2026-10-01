@@ -254,7 +254,8 @@ struct SidebarView: View {
                                     onAddPeer: {
                                         state.pendingSettingsSection = .remote
                                         onSettings()
-                                    }
+                                    },
+                                    worktreeOrdering: state.config.worktrees.defaultOrdering
                                 )
                             }
                             Color.clear

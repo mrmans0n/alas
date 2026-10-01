@@ -39,6 +39,11 @@ struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     let addedLines: Int
     let deletedLines: Int
     let conflictCount: Int
+    /// Ordering inputs for a peer's sidebar, so it can follow the owning
+    /// Mac's own worktree ordering. Nil from an older peer that predates them.
+    var isMain: Bool? = nil
+    var createdAt: Double? = nil
+    var lastActivity: Double? = nil
 }
 
 struct RemoteWorktreeOption: Codable, Equatable, Sendable {
