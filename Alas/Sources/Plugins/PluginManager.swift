@@ -135,10 +135,11 @@ final class PluginManager {
         await serialized {
             do {
                 try await self.performInstall(id: id, version)
+                await self.performReload()
             } catch {
+                // Nothing was stopped or replaced, so the installed version keeps running untouched.
                 failure = (error as? PluginCatalogError)?.description ?? error.localizedDescription
             }
-            await self.performReload()
         }
         return failure
     }
@@ -171,10 +172,15 @@ final class PluginManager {
         try source.write(to: staging.appending(path: manifest.entry))
         await stopHosts { $0.pluginID == id }
         let target = directory.appending(path: id)
-        if fileManager.fileExists(atPath: target.path) {
-            _ = try fileManager.replaceItemAt(target, withItemAt: staging)
-        } else {
-            try fileManager.moveItem(at: staging, to: target)
+        do {
+            if fileManager.fileExists(atPath: target.path) {
+                _ = try fileManager.replaceItemAt(target, withItemAt: staging)
+            } else {
+                try fileManager.moveItem(at: staging, to: target)
+            }
+        } catch {
+            await performReload()  // restarts the version still in place
+            throw error
         }
     }
 
