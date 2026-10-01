@@ -1,5 +1,5 @@
 {
-  "originHash" : "291f0c219d766caef4b69b289474ee0b3e5921f5763699da3fa0e792cebebff0",
+  "originHash" : "4317a09013376be6633d43827d3c563e53c692b1485b773a891a9daa115a1829",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -161,14 +161,6 @@
       "state" : {
         "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
         "version" : "0.25.10"
-      }
-    },
-    {
-      "identity" : "wasmkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swiftwasm/WasmKit",
-      "state" : {
-        "revision" : "1e9c513df0f246e7d9647665430e1f01f50fead2"
       }
     },
     {

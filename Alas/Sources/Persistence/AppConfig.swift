@@ -50,7 +50,7 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
-    /// Opt-in gate for WebAssembly plugins. Off: nothing is scanned, loaded or run.
+    /// Opt-in gate for plugins. Off: nothing is scanned, loaded or run.
     var pluginsEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]

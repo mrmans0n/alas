@@ -9,7 +9,7 @@ final class PluginManager {
     struct Plugin: Identifiable, Sendable {
         let folder: URL
         let manifest: PluginManifest
-        let wasm: [UInt8]
+        let source: Data
         let hash: String
         var id: String { manifest.id }
     }
@@ -68,13 +68,7 @@ final class PluginManager {
         hostsByKey[HostKey(pluginID: pluginID, projectID: projectID)]
     }
 
-    static var tickInterval: Duration {
-        #if DEBUG
-        .milliseconds(200)  // 5 fps: unoptimized WasmKit is ~400x slower
-        #else
-        .milliseconds(66)   // 15 fps
-        #endif
-    }
+    static let tickInterval: Duration = .milliseconds(66)  // 15 fps
 
     func hosts(for plugin: Plugin) -> [(key: HostKey, host: PluginHost)] {
         hostsByKey.filter { $0.key.pluginID == plugin.id }
@@ -187,7 +181,7 @@ final class PluginManager {
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
             let host = PluginHost(
-                manifest: plugin.manifest, wasm: plugin.wasm,
+                manifest: plugin.manifest, source: plugin.source,
                 project: PluginProjectRef(id: project.id, name: project.name),
                 grants: Set(approval.capabilities), actions: actions(project),
                 storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)))
@@ -261,10 +255,10 @@ final class PluginManager {
                 else {
                     throw PluginManifestError.invalidEntry(manifest.entry)
                 }
-                let wasm = try Data(contentsOf: entry)
+                let source = try Data(contentsOf: entry)
                 found.append(Plugin(
-                    folder: folder, manifest: manifest, wasm: [UInt8](wasm),
-                    hash: PluginTrust.hash(manifest: manifestData, wasm: wasm)))
+                    folder: folder, manifest: manifest, source: source,
+                    hash: PluginTrust.hash(manifest: manifestData, entry: source)))
             } catch {
                 invalid.append(Invalid(folder: folder, reason: String(describing: error)))
             }
