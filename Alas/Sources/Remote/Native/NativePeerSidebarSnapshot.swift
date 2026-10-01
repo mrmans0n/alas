@@ -54,7 +54,9 @@ struct NativePeerGroup: Identifiable, Equatable {
     /// The peer's sessions folded into the same repo → worktree shape the
     /// local sidebar uses, so a peer reads like another Mac's workspace tree
     /// rather than a flat list of chats.
-    var repos: [NativePeerRepoGroup] { NativePeerRepoGroup.build(sessions: sessions) }
+    func repos(ordering: AppConfig.WorktreeSortMode) -> [NativePeerRepoGroup] {
+        NativePeerRepoGroup.build(sessions: sessions, ordering: ordering)
+    }
 }
 
 struct NativePeerRepoGroup: Identifiable, Equatable {
@@ -77,10 +79,15 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         session.projectId.map { "id:\($0)" } ?? unassignedKey
     }
 
-    /// Groups sessions by project, then by worktree. Repos and worktrees keep
-    /// the order of their most recently updated session, which is the order
-    /// `sessions` already arrives in.
-    static func build(sessions: [RemoteSessionSummary]) -> [NativePeerRepoGroup] {
+    /// Groups sessions by project, then by worktree. Repos keep the order of
+    /// their most recently updated session, which is the order `sessions`
+    /// already arrives in. Worktrees follow the local sidebar's rule: the main
+    /// worktree is pinned first, the rest are sorted by `ordering`. `.manual`
+    /// has no peer-side order to follow, so it keeps arrival order.
+    static func build(
+        sessions: [RemoteSessionSummary],
+        ordering: AppConfig.WorktreeSortMode = .lastUpdateDesc
+    ) -> [NativePeerRepoGroup] {
         var repoOrder: [String] = []
         var repoNames: [String: String] = [:]
         var worktreeOrder: [String: [String]] = [:]
@@ -105,10 +112,13 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
             NativePeerRepoGroup(
                 id: repo,
                 name: repoNames[repo] ?? unassignedName,
-                worktrees: (worktreeOrder[repo] ?? []).compactMap { key in
-                    guard let rows = buckets[repo]?[key], !rows.isEmpty else { return nil }
-                    return NativePeerWorktreeGroup(id: key, sessions: rows)
-                }
+                worktrees: NativePeerWorktreeGroup.sorted(
+                    (worktreeOrder[repo] ?? []).compactMap { key in
+                        guard let rows = buckets[repo]?[key], !rows.isEmpty else { return nil }
+                        return NativePeerWorktreeGroup(id: key, sessions: rows)
+                    },
+                    ordering: ordering
+                )
             )
         }
     }
@@ -128,6 +138,31 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
     }
 
     var worktree: RemoteWorktreeSummary? { sessions.lazy.compactMap(\.worktree).first }
+    var isMain: Bool { worktree?.isMain == true }
+
+    /// Main first, then `ordering` over the rest — the same shape as
+    /// `ProjectsManager.sortedWorktrees`. Ties fall back to the id.
+    static func sorted(_ groups: [NativePeerWorktreeGroup], ordering: AppConfig.WorktreeSortMode) -> [NativePeerWorktreeGroup] {
+        let main = groups.filter(\.isMain)
+        let others = groups.filter { !$0.isMain }
+        func by<K: Comparable>(_ key: @escaping (NativePeerWorktreeGroup) -> K, descending: Bool = false) -> [NativePeerWorktreeGroup] {
+            others.sorted { l, r in
+                let (lk, rk) = (key(l), key(r))
+                if lk != rk { return descending ? lk > rk : lk < rk }
+                return l.id < r.id
+            }
+        }
+        let sortedOthers: [NativePeerWorktreeGroup]
+        switch ordering {
+        case .manual: sortedOthers = others
+        case .creationDesc: sortedOthers = by({ $0.worktree?.createdAt ?? 0 }, descending: true)
+        case .creationAsc: sortedOthers = by { $0.worktree?.createdAt ?? 0 }
+        case .lastUpdateDesc: sortedOthers = by({ $0.worktree?.lastActivity ?? Double($0.updatedAt) }, descending: true)
+        case .lastUpdateAsc: sortedOthers = by { $0.worktree?.lastActivity ?? Double($0.updatedAt) }
+        case .branchAsc: sortedOthers = by { $0.title.localizedLowercase }
+        }
+        return main + sortedOthers
+    }
     /// The session a click on the row opens.
     var primarySession: RemoteSessionSummary { sessions[0] }
     var updatedAt: Int64 { sessions.map(\.updatedAt).max() ?? 0 }

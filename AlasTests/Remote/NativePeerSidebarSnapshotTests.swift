@@ -65,14 +65,15 @@ struct NativePeerSidebarSnapshotTests {
 
     private func worktreeRow(
         _ id: String, project: String?, worktreeId: String?, branch: String = "main",
-        status: String = "idle", updatedAt: Int64 = 0, projectId: String? = nil
+        status: String = "idle", updatedAt: Int64 = 0, projectId: String? = nil,
+        isMain: Bool? = nil, createdAt: Double? = nil, lastActivity: Double? = nil
     ) -> RemoteSessionSummary {
         let worktree = project.map {
             RemoteWorktreeSummary(
                 projectName: $0, worktreeName: branch, branch: branch,
                 path: "/\($0)/\(branch)", metricsAvailable: false, comparisonRef: nil,
                 commitCount: 0, changedFileCount: 0, addedLines: 0, deletedLines: 0,
-                conflictCount: 0
+                conflictCount: 0, isMain: isMain, createdAt: createdAt, lastActivity: lastActivity
             )
         }
         return RemoteSessionSummary(
@@ -101,6 +102,24 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos[0].worktrees[0].updatedAt == 30)
         #expect(repos[0].attentionCount == 1)
         #expect(repos[2].worktrees.map(\.title) == ["s5"])
+    }
+
+    @Test func peerWorktreesPinMainFirstThenFollowOrdering() {
+        let sessions = [
+            worktreeRow("a", project: "alas", worktreeId: "wa", branch: "beta", updatedAt: 50, createdAt: 1, lastActivity: 30),
+            worktreeRow("m", project: "alas", worktreeId: "wm", branch: "main", updatedAt: 1, isMain: true, createdAt: 0, lastActivity: 0),
+            worktreeRow("b", project: "alas", worktreeId: "wb", branch: "alpha", updatedAt: 40, createdAt: 2, lastActivity: 40)
+        ]
+        func titles(_ mode: AppConfig.WorktreeSortMode) -> [String] {
+            NativePeerRepoGroup.build(sessions: sessions, ordering: mode)[0].worktrees.map(\.title)
+        }
+
+        #expect(titles(.lastUpdateDesc) == ["main", "alpha", "beta"])
+        #expect(titles(.lastUpdateAsc) == ["main", "beta", "alpha"])
+        #expect(titles(.creationDesc) == ["main", "alpha", "beta"])
+        #expect(titles(.creationAsc) == ["main", "beta", "alpha"])
+        #expect(titles(.branchAsc) == ["main", "alpha", "beta"])
+        #expect(titles(.manual) == ["main", "beta", "alpha"])
     }
 
     @Test func peerReposGroupByProjectIdentityNotDisplayName() {

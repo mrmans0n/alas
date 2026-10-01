@@ -25,7 +25,10 @@ enum RemoteWorktreeSummaryBuilder {
                 changedFileCount: uniquePaths.count,
                 addedLines: changes.reduce(0) { $0 + $1.add },
                 deletedLines: changes.reduce(0) { $0 + $1.del },
-                conflictCount: changes.filter { $0.conflict != nil }.count
+                conflictCount: changes.filter { $0.conflict != nil }.count,
+                isMain: worktree.isMainWorktree,
+                createdAt: worktree.createdAt.timeIntervalSince1970,
+                lastActivity: worktree.lastActivity.timeIntervalSince1970
             )
         case .unavailable:
             return RemoteWorktreeSummary(
@@ -39,7 +42,10 @@ enum RemoteWorktreeSummaryBuilder {
                 changedFileCount: 0,
                 addedLines: 0,
                 deletedLines: 0,
-                conflictCount: 0
+                conflictCount: 0,
+                isMain: worktree.isMainWorktree,
+                createdAt: worktree.createdAt.timeIntervalSince1970,
+                lastActivity: worktree.lastActivity.timeIntervalSince1970
             )
         }
     }
