@@ -27,6 +27,74 @@ struct ACPConnectionTests {
         #expect(mock.sent.map(\.method) == ["session/delete"])
     }
 
+    @Test(
+        "goal controls use the advertised method and exact payload",
+        arguments: [
+            (ACPGoalAction.set, Optional("  Ship goal controls  "), Optional("Ship goal controls")),
+            (ACPGoalAction.clear, nil, nil),
+        ]
+    )
+    func goalControlRPC(
+        action: ACPGoalAction,
+        objective: String?,
+        expectedObjective: String?
+    ) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "_session/goal") { _ in Data("{}".utf8) }
+        let capability = ACPGoalCapability(
+            version: 1,
+            controlMethod: "_session/goal",
+            actions: [.set, .clear]
+        )
+
+        try await ACPConnection(client: mock).controlGoal(
+            sessionId: "remote-42",
+            capability: capability,
+            action: action,
+            objective: objective
+        )
+
+        #expect(mock.sent.count == 1)
+        let request = try #require(mock.sent.first)
+        #expect(request.method == "_session/goal")
+        let params = try #require(request.params as? ACPGoalControlParams)
+        #expect(params.sessionId == "remote-42")
+        #expect(params.action == action)
+        #expect(params.objective == expectedObjective)
+    }
+
+    @Test(
+        "invalid goal controls fail before dispatch",
+        arguments: [
+            (ACPGoalAction.pause, Optional<String>.none),
+            (ACPGoalAction.set, Optional(" \n ")),
+        ]
+    )
+    func invalidGoalControl(action: ACPGoalAction, objective: String?) async {
+        let mock = ACPMockClient()
+        let capability = ACPGoalCapability(
+            version: 1,
+            controlMethod: "_session/goal",
+            actions: [.set]
+        )
+
+        do {
+            try await ACPConnection(client: mock).controlGoal(
+                sessionId: "remote-42",
+                capability: capability,
+                action: action,
+                objective: objective
+            )
+            Issue.record("Expected invalid goal control to fail")
+        } catch is ACPGoalControlError {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(mock.sent.isEmpty)
+    }
+
     @Test("initialize + new session populates sessionId, models, modes")
     func newSession() async throws {
         let mock = ACPMockClient()
@@ -70,6 +138,13 @@ struct ACPConnectionTests {
                 "mcpCapabilities": {
                   "http": true,
                   "sse": true
+                },
+                "_meta": {
+                  "goal": {
+                    "version": 1,
+                    "controlMethod": "_session/goal",
+                    "actions": ["set", "clear"]
+                  }
                 }
               },
               "authMethods": [
@@ -87,6 +162,8 @@ struct ACPConnectionTests {
         #expect(initialized.promptCapabilities.embeddedContext == true)
         #expect(initialized.authMethods.map(\.id) == ["claude-ai-login"])
         #expect(initialized.mcpCapabilities == .init(http: true, sse: true))
+        #expect(initialized.goalCapability?.controlMethod == "_session/goal")
+        #expect(initialized.goalCapability?.actions == [.set, .clear])
     }
 
     @Test("initialize reports whether the agent advertises the auth status marker")

@@ -4,6 +4,48 @@ import Testing
 
 @Suite("ACPGoalPill")
 struct ACPGoalPillTests {
+    @Test(
+        "actions follow goal status and advertised capability",
+        arguments: [
+            (Optional<String>.none, [ACPGoalAction.set]),
+            (Optional("active"), [.set, .pause, .clear]),
+            (Optional("in_progress"), [.set, .pause, .clear]),
+            (Optional("paused"), [.set, .resume, .clear]),
+            (Optional("complete"), [.set, .clear]),
+            (Optional("completed"), [.set, .clear]),
+            (Optional("blocked"), [.set, .clear]),
+            (Optional("limited"), [.set, .clear]),
+            (Optional("future"), [.set, .clear]),
+        ]
+    )
+    func actionsFollowStatus(status: String?, expected: [ACPGoalAction]) {
+        let goal = status.map { ACPGoalState(objective: "Ship it", status: $0, tokenBudget: nil) }
+        let capability = ACPGoalCapability(
+            version: 1,
+            controlMethod: "_session/goal",
+            actions: Set(ACPGoalAction.allCases)
+        )
+
+        #expect(ACPGoalPill.actions(for: goal, capability: capability) == expected)
+    }
+
+    @Test("actions never include unadvertised controls")
+    func actionsRequireAdvertisement() {
+        let capability = ACPGoalCapability(
+            version: 1,
+            controlMethod: "_session/goal",
+            actions: [.set, .clear]
+        )
+        let goal = ACPGoalState(objective: "Ship it", status: "paused", tokenBudget: nil)
+
+        #expect(ACPGoalPill.actions(for: goal, capability: capability) == [.set, .clear])
+    }
+
+    @Test("duration formatting handles values larger than Int")
+    func durationFormattingHandlesOversizedValues() {
+        #expect(ACPGoalControl.formattedDuration(1e20) == "100000000000000000000s")
+    }
+
     @Test("summary includes objective, normalized status, and rounded token budget")
     func summaryWithStatusAndBudget() {
         let goal = ACPGoalState(

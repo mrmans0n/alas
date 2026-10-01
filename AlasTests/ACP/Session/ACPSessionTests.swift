@@ -1224,7 +1224,13 @@ struct ACPSessionTests {
                     "goal": AnyCodable([
                         "objective": AnyCodable("Surface richer ACP events"),
                         "status": AnyCodable("in_progress"),
-                        "tokenBudget": AnyCodable(12_000)
+                        "tokenBudget": AnyCodable(12_000),
+                        "createdAt": AnyCodable(1_750_000_000_000),
+                        "updatedAt": AnyCodable(1_750_000_060_000.0),
+                        "tokensUsed": AnyCodable(1_250.0),
+                        "timeUsedSeconds": AnyCodable(42.5),
+                        "iterations": AnyCodable(3),
+                        "lastReason": AnyCodable("Checkpoint reached")
                     ])
                 ])
             ]))))
@@ -1235,6 +1241,12 @@ struct ACPSessionTests {
         #expect(goal.objective == "Surface richer ACP events")
         #expect(goal.status == "in_progress")
         #expect(goal.tokenBudget == 12_000)
+        #expect(goal.createdAt == Date(timeIntervalSince1970: 1_750_000_000))
+        #expect(goal.updatedAt == Date(timeIntervalSince1970: 1_750_000_060))
+        #expect(goal.tokensUsed == 1_250)
+        #expect(goal.timeUsedSeconds == 42.5)
+        #expect(goal.iterations == 3)
+        #expect(goal.lastReason == "Checkpoint reached")
     }
 
     @Test("retryable Codex session error exposes only its safe message")
@@ -1305,6 +1317,11 @@ struct ACPSessionTests {
                     "objective": AnyCodable("Surface generic ACP events"),
                     "status": AnyCodable("in_progress"),
                     "tokenBudget": AnyCodable(500)
+                ]),
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "objective": AnyCodable("Nested value must lose")
+                    ])
                 ])
             ]))))
 
@@ -1379,7 +1396,13 @@ struct ACPSessionTests {
                     "goal": AnyCodable([
                         "objective": AnyCodable("Original goal"),
                         "status": AnyCodable("in_progress"),
-                        "tokenBudget": AnyCodable(200)
+                        "tokenBudget": AnyCodable(200),
+                        "createdAt": AnyCodable(1_750_000_000_000),
+                        "updatedAt": AnyCodable(1_750_000_010_000),
+                        "tokensUsed": AnyCodable(100),
+                        "timeUsedSeconds": AnyCodable(10),
+                        "iterations": AnyCodable(2),
+                        "lastReason": AnyCodable("Working")
                     ])
                 ])
             ]))))
@@ -1390,7 +1413,11 @@ struct ACPSessionTests {
                 "codex": AnyCodable([
                     "goal": AnyCodable([
                         "status": AnyCodable("completed"),
-                        "tokenBudget": AnyCodable(300)
+                        "tokenBudget": AnyCodable(NSNull()),
+                        "updatedAt": AnyCodable(1_750_000_020_000),
+                        "tokensUsed": AnyCodable(150.0),
+                        "timeUsedSeconds": AnyCodable(NSNull()),
+                        "lastReason": AnyCodable(NSNull())
                     ])
                 ])
             ]))))
@@ -1398,7 +1425,30 @@ struct ACPSessionTests {
         let goal = try #require(session.currentGoal)
         #expect(goal.objective == "Original goal")
         #expect(goal.status == "completed")
-        #expect(goal.tokenBudget == 300)
+        #expect(goal.tokenBudget == nil)
+        #expect(goal.createdAt == Date(timeIntervalSince1970: 1_750_000_000))
+        #expect(goal.updatedAt == Date(timeIntervalSince1970: 1_750_000_020))
+        #expect(goal.tokensUsed == 150)
+        #expect(goal.timeUsedSeconds == nil)
+        #expect(goal.iterations == 2)
+        #expect(goal.lastReason == nil)
+    }
+
+    @Test("oversized goal integers are ignored", arguments: ["tokensUsed", "iterations"])
+    func oversizedGoalIntegersAreIgnored(_ key: String) throws {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "goal": AnyCodable([
+                    "objective": AnyCodable("Stay safe"),
+                    key: AnyCodable(1e20)
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(goal.tokensUsed == nil)
+        #expect(goal.iterations == nil)
     }
 
     @Test("tool duration starts with active execution and stops at completion")

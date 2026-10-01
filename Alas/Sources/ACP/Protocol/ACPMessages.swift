@@ -152,6 +152,76 @@ struct ACPSessionCapabilities: Codable, Equatable {
 
 struct EmptyObject: Codable, Equatable {}
 
+enum ACPGoalAction: String, Codable, CaseIterable, Hashable, Sendable {
+    case set
+    case pause
+    case resume
+    case clear
+}
+
+struct ACPGoalCapability: Decodable, Equatable, Sendable {
+    let version: Int
+    let controlMethod: String
+    let actions: Set<ACPGoalAction>
+
+    private enum CodingKeys: String, CodingKey {
+        case version, controlMethod, actions
+    }
+
+    init(version: Int, controlMethod: String, actions: Set<ACPGoalAction>) {
+        self.version = version
+        self.controlMethod = controlMethod
+        self.actions = actions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        guard version == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .version,
+                in: container,
+                debugDescription: "Unsupported ACP goal capability version \(version)"
+            )
+        }
+        let method = try container.decode(String.self, forKey: .controlMethod)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !method.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .controlMethod,
+                in: container,
+                debugDescription: "ACP goal control method is empty"
+            )
+        }
+        controlMethod = method
+        actions = Set((try container.decodeIfPresent([String].self, forKey: .actions) ?? [])
+            .compactMap(ACPGoalAction.init(rawValue:)))
+    }
+}
+
+struct ACPGoalControlParams: Encodable {
+    let sessionId: String
+    let action: ACPGoalAction
+    let objective: String?
+}
+
+enum ACPGoalControlError: LocalizedError {
+    case unavailable
+    case unsupportedAction(ACPGoalAction)
+    case objectiveRequired
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            "Goal controls are not available for this session."
+        case .unsupportedAction(let action):
+            "The agent does not support the \(action.rawValue) goal action."
+        case .objectiveRequired:
+            "Enter a goal objective."
+        }
+    }
+}
+
 struct ACPAuthCapabilities: Codable, Equatable {
     let terminal: Bool
 
@@ -314,21 +384,25 @@ struct ACPInitializeResult: Codable, Equatable {
 
         /// Agent-side `_meta`. Only the keys Alas acts on are modelled;
         /// everything else is ignored rather than failing the handshake.
-        struct Meta: Codable, Equatable {
+        struct Meta: Decodable, Equatable {
             let openCodeChildSessionUpdates: Bool
+            let goal: ACPGoalCapability?
 
-            init(openCodeChildSessionUpdates: Bool = false) {
+            init(openCodeChildSessionUpdates: Bool = false, goal: ACPGoalCapability? = nil) {
                 self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
+                self.goal = goal
             }
 
             enum CodingKeys: String, CodingKey {
                 case openCodeChildSessionUpdates = "opencode/child-session-updates"
+                case goal
             }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 let flag = try? c.decodeIfPresent(Bool.self, forKey: .openCodeChildSessionUpdates)
                 openCodeChildSessionUpdates = (flag ?? nil) ?? false
+                goal = (try? c.decodeIfPresent(ACPGoalCapability.self, forKey: .goal)) ?? nil
             }
         }
     }
