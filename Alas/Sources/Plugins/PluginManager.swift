@@ -162,14 +162,28 @@ final class PluginManager {
         }
         let manifest = try PluginManifest.parse(manifestData)
         guard manifest.id == id else { throw PluginCatalogError.wrongPlugin(manifest.id) }
+        // A record that names another release would keep offering itself as an update after installing.
+        guard manifest.version == version.version, manifest.api == version.api else {
+            throw PluginCatalogError.invalidDownload("it is \(manifest.version) for API \(manifest.api), not the \(version.version) the catalog lists")
+        }
+        // The row showed the record's capabilities; the download may not ask for anything else.
+        guard Set(manifest.capabilities.map(\.rawValue)) == Set(version.capabilities) else {
+            throw PluginCatalogError.invalidDownload("it asks for different capabilities than the catalog lists")
+        }
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
-        let staging = directory.appending(path: ".staging/\(id)")
+        let stagingRoot = directory.appending(path: ".staging")
+        let staging = stagingRoot.appending(path: id)
         try? fileManager.removeItem(at: staging)
         try fileManager.createDirectory(
             at: staging.appending(path: manifest.entry).deletingLastPathComponent(), withIntermediateDirectories: true)
         try manifestData.write(to: staging.appending(path: "plugin.json"))
         try source.write(to: staging.appending(path: manifest.entry))
+        // The same checks a rescan applies, before anything running is touched.
+        let staged = Self.discover(in: stagingRoot)
+        guard staged.plugins.contains(where: { $0.id == id && $0.hash == version.hash }) else {
+            throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
+        }
         await stopHosts { $0.pluginID == id }
         let target = directory.appending(path: id)
         do {

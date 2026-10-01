@@ -78,6 +78,7 @@ enum PluginCatalogError: Error, Equatable, CustomStringConvertible {
     case hashMismatch
     case wrongPlugin(String)
     case tooLarge
+    case invalidDownload(String)
 
     var description: String {
         switch self {
@@ -85,6 +86,7 @@ enum PluginCatalogError: Error, Equatable, CustomStringConvertible {
         case .hashMismatch: "The download does not match the catalog, so it was not installed."
         case .wrongPlugin(let id): "The download is a different plugin (\(id)), so it was not installed."
         case .tooLarge: "The download is too large."
+        case .invalidDownload(let reason): "The download is not a valid plugin, so it was not installed: \(reason)"
         }
     }
 }
