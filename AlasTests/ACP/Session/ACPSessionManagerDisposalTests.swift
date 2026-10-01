@@ -90,6 +90,24 @@ struct ACPSessionManagerDisposalTests {
         #expect(client.shutdownCount == 1)
     }
 
+    @Test("dismissing a side question whose close fails still discards it")
+    func failedSideQuestionCloseStillDiscards() async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/close") { _ in throw TestError.closeFailed }
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        #expect(manager.runners[side.id] != nil)
+
+        await manager.dismissSideQuestion(parentID: parent.id)
+        await manager.flushPersistence()
+
+        #expect(manager.runners[side.id] == nil)
+        #expect(manager.liveSession(for: side.id) == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+        #expect(manager.runners[parent.id] != nil)
+        await manager.detach(sessionId: parent.id)
+    }
+
     @Test("unresponsive close times out and still tears down")
     func unresponsiveCloseTimesOutAndTearsDown() async throws {
         let client = ACPMockClient()
