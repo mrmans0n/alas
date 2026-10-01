@@ -60,7 +60,7 @@ enum PluginCatalogRow: Equatable {
             self = entry.newestCompatible.map(PluginCatalogRow.install) ?? .incompatible
             return
         }
-        guard installed.folder.lastPathComponent == entry.id, entry.versions.contains(where: { $0.hash == installed.hash }) else {
+        guard installed.isCatalogFolder, entry.versions.contains(where: { $0.hash == installed.hash }) else {
             self = .installedLocally
             return
         }
@@ -78,6 +78,7 @@ enum PluginCatalogError: Error, Equatable, CustomStringConvertible {
     case hashMismatch
     case wrongPlugin(String)
     case tooLarge
+    case installedLocally
     case invalidDownload(String)
 
     var description: String {
@@ -86,6 +87,7 @@ enum PluginCatalogError: Error, Equatable, CustomStringConvertible {
         case .hashMismatch: "The download does not match the catalog, so it was not installed."
         case .wrongPlugin(let id): "The download is a different plugin (\(id)), so it was not installed."
         case .tooLarge: "The download is too large."
+        case .installedLocally: "A local copy of this plugin is linked in, so the catalog leaves it alone."
         case .invalidDownload(let reason): "The download is not a valid plugin, so it was not installed: \(reason)"
         }
     }
@@ -136,11 +138,17 @@ final class PluginCatalog {
     }
 
     nonisolated static func download(_ url: URL) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (bytes, response) = try await URLSession.shared.bytes(from: url)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
-        guard data.count <= maxDownloadBytes else { throw PluginCatalogError.tooLarge }
+        guard response.expectedContentLength <= Int64(maxDownloadBytes) else { throw PluginCatalogError.tooLarge }
+        // Counted while receiving, so an oversized body is cut off instead of buffered; leaving the loop cancels it.
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            guard data.count <= maxDownloadBytes else { throw PluginCatalogError.tooLarge }
+        }
         return data
     }
 }
