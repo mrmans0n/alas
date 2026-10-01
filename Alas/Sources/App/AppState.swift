@@ -1612,6 +1612,7 @@ final class AppState {
             self?.cancelAllRunScriptCompletionTasks()
             await self?.flushRunHistoryPersistence()
             await self?.flushAllACPComposerDrafts()
+            await PluginStorage.flushAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()

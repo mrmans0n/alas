@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Head Alas's own prompts about a delegated child (an escalated blocker, a turn without a result, a failure) as Alas notices in the parent transcript instead of as reports from the child, and say when the user cancelled a child's turn (#1663).
+- Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.
+- Make clickable plugin view cards a keyboard stop that Space or Return clicks.
 
 ## [0.19.20] - 2026-10-01
 
