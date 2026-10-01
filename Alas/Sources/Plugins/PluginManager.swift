@@ -11,7 +11,12 @@ final class PluginManager {
         let manifest: PluginManifest
         let source: Data
         let hash: String
+        /// Reached through a symlink in the plugins folder: someone else's files, which the catalog never
+        /// replaces or deletes.
+        var isLinked = false
         var id: String { manifest.id }
+        /// In `Plugins/<id>` itself, where the catalog installs: the only copies it may update or remove.
+        var isCatalogFolder: Bool { !isLinked && folder.lastPathComponent == id }
     }
 
     struct Invalid: Identifiable, Sendable {
@@ -146,6 +151,8 @@ final class PluginManager {
 
     /// Deletes a plugin the catalog installed. Its approval and stored data stay, so reinstalling keeps them.
     func uninstall(_ plugin: Plugin) async {
+        // Only a real folder the catalog owns; a symlink's target is never deleted.
+        guard plugin.isCatalogFolder else { return }
         await serialized {
             await self.stopHosts { $0.pluginID == plugin.id }
             try? FileManager.default.removeItem(at: plugin.folder)
@@ -184,8 +191,11 @@ final class PluginManager {
         guard staged.plugins.contains(where: { $0.id == id && $0.hash == version.hash }) else {
             throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
         }
-        await stopHosts { $0.pluginID == id }
         let target = directory.appending(path: id)
+        if (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            throw PluginCatalogError.installedLocally
+        }
+        await stopHosts { $0.pluginID == id }
         do {
             if fileManager.fileExists(atPath: target.path) {
                 _ = try fileManager.replaceItemAt(target, withItemAt: staging)
@@ -315,14 +325,15 @@ final class PluginManager {
     /// all folders sharing a duplicate id, are reported instead of loaded.
     nonisolated static func discover(in directory: URL) -> (plugins: [Plugin], invalid: [Invalid]) {
         let fileManager = FileManager.default
-        let folders = ((try? fileManager.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? [])
-            .map { $0.resolvingSymlinksInPath() }
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { $0.path < $1.path }
+        let entries = ((try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey], options: .skipsHiddenFiles)) ?? [])
+        let folders = entries
+            .map { (url: $0.resolvingSymlinksInPath(), isLinked: (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true) }
+            .filter { (try? $0.url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.url.path < $1.url.path }
         var found: [Plugin] = []
         var invalid: [Invalid] = []
-        for folder in folders {
+        for (folder, isLinked) in folders {
             do {
                 let manifestData = try Data(contentsOf: folder.appending(path: "plugin.json"))
                 let manifest = try PluginManifest.parse(manifestData)
@@ -342,7 +353,7 @@ final class PluginManager {
                 let source = try Data(contentsOf: entry)
                 found.append(Plugin(
                     folder: folder, manifest: manifest, source: source,
-                    hash: PluginTrust.hash(manifest: manifestData, entry: source)))
+                    hash: PluginTrust.hash(manifest: manifestData, entry: source), isLinked: isLinked))
             } catch {
                 invalid.append(Invalid(folder: folder, reason: String(describing: error)))
             }
@@ -355,8 +366,8 @@ final class PluginManager {
                 continue
             }
             // A copy built by hand beats the one the catalog put in `Plugins/<id>`; any other duplicate is ambiguous.
-            let catalogCopies = copies.filter { $0.folder.lastPathComponent == $0.id }
-            if copies.count == 2, catalogCopies.count == 1, let local = copies.first(where: { $0.folder.lastPathComponent != $0.id }) {
+            let catalogCopies = copies.filter(\.isCatalogFolder)
+            if copies.count == 2, catalogCopies.count == 1, let local = copies.first(where: { !$0.isCatalogFolder }) {
                 if plugin.folder == local.folder {
                     loaded.append(plugin)
                 } else {
