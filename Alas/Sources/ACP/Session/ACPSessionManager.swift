@@ -1781,9 +1781,8 @@ final class ACPSessionManager: ObservableObject {
     /// during creation makes this call discard its side session.
     @discardableResult
     func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
-        await dismissSideQuestion(parentID: parentID)
         let entry = ACPSideQuestion(question: question)
-        sideQuestions[parentID] = entry
+        await replaceSideQuestion(parentID: parentID, with: entry)
         let side: ACPSession
         do {
             guard let parent = sessions[parentID], parent.hydrationState == .ready else {
@@ -1829,6 +1828,15 @@ final class ACPSessionManager: ObservableObject {
         return side
     }
 
+    /// Installs `entry` as the parent's side question, then discards the one
+    /// it replaces. Installing first lets the latest command win even while
+    /// the old session's teardown is still awaited.
+    func replaceSideQuestion(parentID: ACPSession.ID, with entry: ACPSideQuestion) async {
+        if let previous = sideQuestions.updateValue(entry, forKey: parentID)?.sessionID {
+            await discardSideSession(id: previous)
+        }
+    }
+
     /// Keeps a failed question's entry, with its error and without a session.
     private func failSideQuestion(_ entry: ACPSideQuestion, parentID: ACPSession.ID, error: Error) {
         guard sideQuestions[parentID]?.id == entry.id else { return }
@@ -1867,7 +1875,16 @@ final class ACPSessionManager: ObservableObject {
         else { return nil }
         sideQuestions[parentID]?.isPromoting = true
         await flushPersistence()
-        let promoted = try await persistence.promoteEphemeralSession(id: sideID)
+        let promoted: Bool
+        do {
+            promoted = try await persistence.promoteEphemeralSession(id: sideID)
+        } catch {
+            // Let the user retry Keep.
+            if sideQuestions[parentID]?.id == entry.id {
+                sideQuestions[parentID]?.isPromoting = false
+            }
+            throw error
+        }
         guard promoted, sideQuestions[parentID]?.id == entry.id, sessions[sideID] === side else {
             return nil
         }
