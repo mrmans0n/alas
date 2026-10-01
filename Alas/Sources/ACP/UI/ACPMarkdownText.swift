@@ -147,7 +147,7 @@ struct ACPMarkdownText: View {
             availableWidth: tableViewportWidth,
             columnCount: columnCount
         )
-        return ScrollView(.horizontal, showsIndicators: false) {
+        return ACPHorizontalScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(
                     cells: header,
@@ -178,7 +178,6 @@ struct ACPMarkdownText: View {
             tableViewportWidth = width
         }
         .background(theme.color("bg-1").opacity(0.4))
-        .background(ACPBlockWheelRouter())
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
