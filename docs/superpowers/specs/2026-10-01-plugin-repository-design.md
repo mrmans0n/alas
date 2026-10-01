@@ -96,8 +96,11 @@ merging a PR does not publish it.
   the pane opens, at most once every 10 minutes, and always on **Refresh**. Each
   row shows the name, version, summary, and the capabilities written out in
   words, with an **Install** button.
-- **Install** downloads both files, verifies the hash, and writes them to
-  `Plugins/.staging/<id>/`. Discovery skips hidden entries, so the staging folder
+- **Install** downloads both files, verifies the hash, parses the manifest, and
+  requires its `id` to equal the record's before touching the filesystem. Manifest
+  ids are reverse-DNS (`[a-z0-9-]+(\.[a-z0-9-]+)+`), so a record id such as
+  `../installed-plugin` can never match and no path is built from it. Only then
+  does it write them to `Plugins/.staging/<id>/`. Discovery skips hidden entries, so the staging folder
   is never scanned as a plugin. The staged folder then goes through the same
   validation as an update (below) before anything is moved, so a malformed
   release never lands in `Plugins/<id>/`. Install then moves that folder there
