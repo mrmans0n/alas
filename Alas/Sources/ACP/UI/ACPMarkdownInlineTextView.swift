@@ -241,6 +241,7 @@ extension NSAttributedString.Key {
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     private var upstreamRevisionObservation: AnyCancellable?
+    private var scrollObservation: AnyCancellable?
     private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
 
     /// Set on user-message paragraphs that render reference chips. A lookup
@@ -255,8 +256,24 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                     MainActor.assumeIsolated { self?.invalidateUpstreamReferenceChips() }
                 }
             if upstreamReferences == nil { upstreamReferenceHover.hide() }
+            updateScrollObservation()
             updateTrackingAreas()
         }
+    }
+
+    /// Markdown text no longer overrides `scrollWheel` (that would opt prose out
+    /// of AppKit responsive scrolling), so a hover card left open at its old
+    /// screen position is closed when the enclosing clip view scrolls instead.
+    /// Only views that render chips observe.
+    private func updateScrollObservation() {
+        scrollObservation = nil
+        guard upstreamReferences != nil, let clipView = enclosingScrollView?.contentView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        scrollObservation = NotificationCenter.default
+            .publisher(for: NSView.boundsDidChangeNotification, object: clipView)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+            }
     }
 
     /// Marks every reference-chip attachment range as attribute-edited.
@@ -300,6 +317,12 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { upstreamReferenceHover.hide() }
+        updateScrollObservation()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        updateScrollObservation()
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -400,16 +423,6 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         )
         cachedNaturalFittingSize = size
         return size
-    }
-
-    /// Markdown text never scrolls itself. Hand wheel events up the
-    /// responder chain: over a table cell they reach the table's horizontal
-    /// scroll view, elsewhere the transcript scroller. Also hides a hover
-    /// card left open at its old screen position, since the card only updates
-    /// on `mouseMoved`/`mouseExited`.
-    override func scrollWheel(with event: NSEvent) {
-        if upstreamReferences != nil { upstreamReferenceHover.hide() }
-        nextResponder?.scrollWheel(with: event)
     }
 
     /// Measure the current text wrapped at `width`, as a pure function of the

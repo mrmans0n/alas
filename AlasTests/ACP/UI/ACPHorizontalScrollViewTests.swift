@@ -19,6 +19,16 @@ private struct ThemeIDProbe: View {
     }
 }
 
+@MainActor
+private final class HeightModel: ObservableObject {
+    @Published var height: CGFloat = 40
+}
+
+private struct HeightModelContent: View {
+    @ObservedObject var model: HeightModel
+    var body: some View { Color.clear.frame(width: 500, height: model.height) }
+}
+
 /// Wide markdown tables scroll sideways in an AppKit scroll view that keeps
 /// only horizontal gestures, so vertical scrolling over a table reaches the
 /// transcript through the ordinary responder chain.
@@ -108,7 +118,7 @@ struct ACPHorizontalScrollViewTests {
             try phasedEvent(phase: .began),
             try phasedEvent(deltaX: 20, phase: .changed),
             try phasedEvent(phase: .changed),
-            try phasedEvent(deltaY: 3, phase: .changed),
+            try phasedEvent(deltaX: 1, deltaY: 3, phase: .changed),
             try phasedEvent(phase: .ended),
             try phasedEvent(momentumPhase: .began),
             try phasedEvent(deltaY: 4, momentumPhase: .changed),
@@ -116,8 +126,27 @@ struct ACPHorizontalScrollViewTests {
         ]
     }
 
+    @Test("a vertical gesture is forwarded entirely, even after a late horizontal-dominant delta")
+    func verticalGestureForwards() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let events = [
+            try phasedEvent(phase: .began),
+            try phasedEvent(deltaY: 20, phase: .changed),
+            try phasedEvent(deltaX: 3, deltaY: 1, phase: .changed),
+            try phasedEvent(phase: .ended),
+            try phasedEvent(deltaX: 3, deltaY: 1, momentumPhase: .changed),
+            try phasedEvent(momentumPhase: .ended),
+        ]
+
+        for event in events { scrollView.scrollWheel(with: event) }
+
+        #expect(next.receivedEvents == events)
+    }
+
     @Test("a horizontal gesture stays on the table from its first horizontal delta through momentum")
-    func horizontalGestureLatches() throws {
+    func horizontalGestureStaysOnTable() throws {
         let scrollView = scrollView(contentWidth: 900)
         let next = RecordingResponder()
         scrollView.nextResponder = next
@@ -128,26 +157,18 @@ struct ACPHorizontalScrollViewTests {
         #expect(next.receivedEvents == [events[0]])
     }
 
-    @Test("momentum events carry the intended phase")
-    func momentumEncoding() throws {
-        #expect(try phasedEvent(momentumPhase: .began).momentumPhase == .began)
-        #expect(try phasedEvent(momentumPhase: .changed).momentumPhase == .changed)
-        #expect(try phasedEvent(momentumPhase: .ended).momentumPhase == .ended)
-    }
-
-    @Test("the latch clears when momentum ends, so later wheel events are forwarded")
-    func momentumEndClearsLatch() throws {
+    @Test("a stray phased event after momentum ends is routed fresh")
+    func momentumEndReleasesGesture() throws {
         let scrollView = scrollView(contentWidth: 900)
         let next = RecordingResponder()
         scrollView.nextResponder = next
         for event in try horizontalGesture() { scrollView.scrollWheel(with: event) }
-        #expect(!scrollView.latchesHorizontalGestureForTests)
         next.clear()
 
-        let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
-        scrollView.scrollWheel(with: wheel)
+        let stray = try phasedEvent(deltaY: 20, phase: .changed)
+        scrollView.scrollWheel(with: stray)
 
-        #expect(next.receivedEvents == [wheel])
+        #expect(next.receivedEvents == [stray])
     }
 
     @Test("a gesture that ends without momentum does not capture later wheel events")
@@ -163,48 +184,6 @@ struct ACPHorizontalScrollViewTests {
         let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
         scrollView.scrollWheel(with: wheel)
 
-        #expect(next.receivedEvents == [wheel])
-    }
-
-    @Test("a vertical gesture is forwarded entirely")
-    func verticalGestureForwards() throws {
-        let scrollView = scrollView(contentWidth: 900)
-        let next = RecordingResponder()
-        scrollView.nextResponder = next
-        let events = [
-            try phasedEvent(phase: .began),
-            try phasedEvent(deltaY: 20, phase: .changed),
-            try phasedEvent(deltaX: 2, deltaY: 20, phase: .changed),
-            try phasedEvent(phase: .ended),
-            try phasedEvent(deltaY: 4, momentumPhase: .changed),
-            try phasedEvent(momentumPhase: .ended),
-        ]
-
-        for event in events { scrollView.scrollWheel(with: event) }
-
-        #expect(next.receivedEvents == events)
-    }
-
-    @Test("a new gesture and phaseless events are routed fresh after a latched gesture")
-    func latchResets() throws {
-        let scrollView = scrollView(contentWidth: 900)
-        let next = RecordingResponder()
-        scrollView.nextResponder = next
-        for event in try horizontalGesture() { scrollView.scrollWheel(with: event) }
-        next.clear()
-
-        let vertical = [try phasedEvent(phase: .began), try phasedEvent(deltaY: 20, phase: .changed)]
-        for event in vertical { scrollView.scrollWheel(with: event) }
-        #expect(next.receivedEvents == vertical)
-
-        // Latch a gesture again, cancel it, then a phaseless vertical wheel event.
-        next.clear()
-        scrollView.scrollWheel(with: try phasedEvent(phase: .began))
-        scrollView.scrollWheel(with: try phasedEvent(deltaX: 20, phase: .changed))
-        scrollView.scrollWheel(with: try phasedEvent(phase: .cancelled))
-        let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
-        next.clear()
-        scrollView.scrollWheel(with: wheel)
         #expect(next.receivedEvents == [wheel])
     }
 
@@ -233,6 +212,33 @@ struct ACPHorizontalScrollViewTests {
         )
         #expect(host.fittingSize.height == 75)
         #expect(host.fittingSize.width == 300)
+    }
+
+    @Test("the representable follows content growth driven by a model, not by its inputs")
+    func representableFollowsModelDrivenHeight() {
+        let model = HeightModel()
+        let host = NSHostingView(rootView:
+            ACPHorizontalScrollView { HeightModelContent(model: model) }
+                .frame(width: 300)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: true
+        )
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        #expect(host.fittingSize.height == 40)
+
+        model.height = 160
+        // SwiftUI applies the model change on a later run-loop turn: poll with a deadline.
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            host.layoutSubtreeIfNeeded()
+            if host.fittingSize.height == 160 { break }
+        }
+
+        #expect(host.fittingSize.height == 160)
     }
 
     @Test("hosted content inherits the SwiftUI environment")

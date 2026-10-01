@@ -36,41 +36,67 @@ struct ACPHorizontalScrollView<Content: View>: NSViewRepresentable {
     /// A nested `NSHostingView` does not inherit the SwiftUI environment, so
     /// carry it over explicitly (theme, color scheme, chipping flags, ...).
     private func hostedContent(_ context: Context) -> AnyView {
-        AnyView(content.environment(\.self, context.environment))
+        AnyView(
+            content
+                .environment(\.self, context.environment)
+                // The document can be wider than the viewport; keep narrow content leading-aligned.
+                .frame(maxWidth: .infinity, alignment: .leading)
+        )
     }
+}
+
+/// Document view that reports SwiftUI-driven size changes (for example an image
+/// loading inside a cell) so the owning scroll view can re-measure itself.
+@MainActor
+private final class ACPHorizontalHostingView: NSHostingView<AnyView> {
+    var onIntrinsicSizeInvalidated: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onIntrinsicSizeInvalidated?()
+    }
+}
+
+/// Routing owner of one phased wheel gesture over the table.
+private enum GestureOwner {
+    case undecided, table, transcript
 }
 
 /// The AppKit side of `ACPHorizontalScrollView`.
 @MainActor
 final class ACPHorizontalNSScrollView: NSScrollView {
-    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+    private let hostingView = ACPHorizontalHostingView(rootView: AnyView(EmptyView()))
+    private var lastFittingSize: CGSize = .zero
+    private var isRefreshingFittingSize = false
 
     init() {
         super.init(frame: .zero)
         drawsBackground = false
         borderType = .noBorder
         hasVerticalScroller = false
-        hasHorizontalScroller = true
-        autohidesScrollers = true
-        scrollerStyle = .overlay
+        // No scroller: a legacy-style bar would take space inside a frame sized
+        // to the content height and clip the last row. Trackpads still scroll.
+        hasHorizontalScroller = false
         verticalScrollElasticity = .none
         horizontalScrollElasticity = .automatic
         documentView = hostingView
+        hostingView.onIntrinsicSizeInvalidated = { [weak self] in
+            self?.hostingContentSizeChanged()
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    var contentFittingSize: CGSize { hostingView.fittingSize }
+    var contentFittingSize: CGSize { lastFittingSize }
 
     func setContent(_ view: AnyView) {
         hostingView.rootView = view
-        sizeDocumentToContent()
-        invalidateIntrinsicContentSize()
+        refreshFittingSize()
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: contentFittingSize.height)
+        NSSize(width: NSView.noIntrinsicMetric, height: lastFittingSize.height)
     }
 
     override func layout() {
@@ -78,28 +104,34 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         sizeDocumentToContent()
     }
 
-    /// True while a phased horizontal gesture (and its momentum) is owned by this view.
-    private var latchesHorizontalGesture = false
-
-    #if DEBUG
-    var latchesHorizontalGestureForTests: Bool { latchesHorizontalGesture }
-    #endif
+    private var gestureOwner = GestureOwner.undecided
 
     /// Keeps horizontal gestures and passes the rest up the responder chain to
     /// the transcript, which scrolls it with AppKit responsive scrolling.
-    /// A phased gesture that turns horizontal latches to this view for its whole
-    /// lifecycle, including momentum, so no phase event is split between the
-    /// table and the transcript. Phaseless (mouse wheel) events route per event.
+    /// A phased gesture is decided by its first non-zero delta and owned by the
+    /// table or the transcript through momentum, so no phase event is split
+    /// between them. Phaseless (mouse wheel) events route per event.
     override func scrollWheel(with event: NSEvent) {
         let isPhased = !event.phase.isEmpty || !event.momentumPhase.isEmpty
-        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
-            latchesHorizontalGesture = false
+        let dx = event.scrollingDeltaX
+        let dy = event.scrollingDeltaY
+        guard isPhased else {
+            if Self.isHorizontalDominant(deltaX: dx, deltaY: dy) {
+                super.scrollWheel(with: event)
+            } else {
+                nextResponder?.scrollWheel(with: event)
+            }
+            return
         }
 
-        if isPhased && latchesHorizontalGesture {
-            super.scrollWheel(with: event)
-        } else if Self.isHorizontalDominant(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
-            if isPhased { latchesHorizontalGesture = true }
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            gestureOwner = .undecided
+        }
+        if gestureOwner == .undecided, dx != 0 || dy != 0 {
+            gestureOwner = Self.isHorizontalDominant(deltaX: dx, deltaY: dy) ? .table : .transcript
+        }
+
+        if gestureOwner == .table {
             super.scrollWheel(with: event)
         } else {
             nextResponder?.scrollWheel(with: event)
@@ -109,7 +141,7 @@ final class ACPHorizontalNSScrollView: NSScrollView {
             || event.momentumPhase.contains(.ended)
             || event.momentumPhase.contains(.cancelled)
         {
-            latchesHorizontalGesture = false
+            gestureOwner = .undecided
         }
     }
 
@@ -117,8 +149,28 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         abs(deltaX) > abs(deltaY)
     }
 
+    private func hostingContentSizeChanged() {
+        refreshFittingSize()
+    }
+
+    /// Re-measures the hosted content and invalidates this view only when the
+    /// fitting size actually changed, which also stops invalidation loops.
+    private func refreshFittingSize() {
+        guard !isRefreshingFittingSize else { return }
+        isRefreshingFittingSize = true
+        defer { isRefreshingFittingSize = false }
+        let fitting = hostingView.fittingSize
+        sizeDocument(to: fitting)
+        guard fitting != lastFittingSize else { return }
+        lastFittingSize = fitting
+        invalidateIntrinsicContentSize()
+    }
+
     private func sizeDocumentToContent() {
-        let fitting = contentFittingSize
+        refreshFittingSize()
+    }
+
+    private func sizeDocument(to fitting: CGSize) {
         let size = NSSize(width: max(fitting.width, contentView.bounds.width), height: fitting.height)
         if hostingView.frame.size != size {
             hostingView.setFrameSize(size)
