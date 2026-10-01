@@ -17,6 +17,14 @@ struct ACPSideQuestionPolicyTests {
     static let fullAccessOnly: [ChipSpec.Item] = [
         .init(id: "yolo", name: "YOLO", description: nil, kind: .fullAccess),
     ]
+    /// An adapter that predates `_meta.kind`.
+    static let unclassifiedClaude: [ChipSpec.Item] = [
+        .init(id: "default", name: "Manual", description: nil),
+        .init(id: "bypassPermissions", name: "Bypass", description: nil),
+    ]
+    static let unknownModes: [ChipSpec.Item] = [
+        .init(id: "turbo", name: "Turbo", description: nil),
+    ]
 
     @Test(
         "side sessions switch to plan, or away from self-approving modes",
@@ -27,6 +35,9 @@ struct ACPSideQuestionPolicyTests {
             (codexModes, "agent", "read-only", false),
             (codexModes, "read-only", nil, true),
             (fullAccessOnly, "yolo", nil, false),
+            (unclassifiedClaude, "bypassPermissions", "default", false),
+            (unclassifiedClaude, "default", nil, true),
+            (unknownModes, "turbo", nil, false),
             ([], nil, nil, true),
         ] as [([ChipSpec.Item], String?, String?, Bool)]
     )

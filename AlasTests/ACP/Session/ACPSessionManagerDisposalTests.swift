@@ -108,6 +108,50 @@ struct ACPSessionManagerDisposalTests {
         await manager.detach(sessionId: parent.id)
     }
 
+    @Test("dismissing a side question while its fork is created discards the fork")
+    func dismissDuringSideQuestionCreation() async throws {
+        let client = ACPMockClient()
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let answer: ACPMessage = .agent(id: UUID(), StreamingText("answer"))
+        parent.transcript.appendMessage(answer)
+        try store.appendMessage(
+            sessionId: parent.id, id: "msg-\(parent.id)-0", kind: answer.kind, seq: 0,
+            payload: try ACPMessageCodec.encode(answer), createdAt: 0
+        )
+        let start = Task { @MainActor in
+            try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while manager.sideQuestions[parent.id] == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+
+        await manager.dismissSideQuestion(parentID: parent.id)
+        let side = try await start.value
+        await manager.flushPersistence()
+
+        #expect(manager.sideQuestions[parent.id] == nil)
+        #expect(manager.liveSession(for: side.id) == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+        await manager.detach(sessionId: parent.id)
+    }
+
+    @Test("keeping a side question twice promotes it once")
+    func sideQuestionPromotesOnce() async throws {
+        let client = ACPMockClient()
+        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+
+        async let first = manager.promoteSideQuestion(parentID: parent.id)
+        async let second = manager.promoteSideQuestion(parentID: parent.id)
+        let promoted = try await [first, second].compactMap { $0?.id }
+
+        #expect(promoted == [side.id])
+        #expect(manager.recent.filter { $0.id == side.id }.count == 1)
+        await manager.detach(sessionId: side.id)
+        await manager.detach(sessionId: parent.id)
+    }
+
     @Test("unresponsive close times out and still tears down")
     func unresponsiveCloseTimesOutAndTearsDown() async throws {
         let client = ACPMockClient()

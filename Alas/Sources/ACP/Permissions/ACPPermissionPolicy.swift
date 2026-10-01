@@ -46,7 +46,9 @@ final class ACPPermissionPolicy {
                 }
             case .reject:
                 session.readOnlyBlockedTools.append(params.toolCall.title ?? params.toolCall.kind ?? "tool")
-                if let reject = options.first(where: { $0.kind.hasPrefix("reject") }) {
+                // Never a persistent rejection either: a kept session must be
+                // able to use the tool.
+                if let reject = options.first(where: { $0.kind == "reject_once" }) {
                     return .init(outcome: .selected(optionId: reject.optionId))
                 }
                 return .init(outcome: .cancelled)
