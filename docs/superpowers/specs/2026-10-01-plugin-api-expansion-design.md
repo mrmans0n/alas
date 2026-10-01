@@ -259,7 +259,10 @@ exact argv prefix:
   an instance may have 2 running at once.
 - `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
   exactly what the manifest says. `env` values may use `{{secret:key}}`, so a
-  token can reach a CLI without the plugin seeing it.
+  token can reach a CLI without the plugin seeing it. A command can still print
+  its environment, so Alas replaces every substituted secret value in `stdout`
+  and `stderr` with `[secret]` before replying, and does the same to output it
+  shows for long-running processes.
 - `longRunning` processes are started with `process/start` and show up in the
   Run tab as runs owned by the plugin: visible, with output, and stoppable by the
   user. Alas stops them when the plugin stops. There are no invisible processes.
@@ -301,8 +304,8 @@ version by one.
 
 | API | Adds | Reference plugin |
 |---|---|---|
-| 5 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
-| 6 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
+| 5 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.state`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
+| 6 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `worktree.removed`, `focus.changed`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
 | 7 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
 | — | OAuth PKCE, app-scoped instances | when a plugin needs them |
 

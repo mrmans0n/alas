@@ -110,9 +110,11 @@ merging a PR does not publish it.
   the id and the hash matches some catalog version). It stops the instances and
   deletes the folder. Approvals and storage stay, so reinstalling keeps the
   plugin's data. Clearing data stays a separate action.
-- A locally built plugin with the same id in another folder wins. The catalog
-  row says "Installed locally" and offers no Install or Update, which avoids the
-  duplicate-id error that `PluginManager.discover` already reports.
+- A locally built plugin with the same id in another folder wins. Discovery
+  treats a duplicate id specially when exactly one copy sits in the catalog's
+  `Plugins/<id>` folder: the other copy loads, and the catalog copy is listed
+  under Not loaded as shadowed. Any other duplicate still quarantines every copy.
+  The catalog row then says "Installed locally" and offers no Install or Update.
 - Network failures, a bad hash, or a malformed index show one line in the
   section and never touch installed plugins.
 
