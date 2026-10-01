@@ -2,8 +2,9 @@ import Foundation
 import JavaScriptCore
 
 struct PluginLimits: Sendable, Equatable {
-    /// Wall-clock limit for one call into the plugin. Enforced by JavaScriptCore's watchdog, which only
-    /// fires while the JIT is off: `Alas.entitlements` must never gain `com.apple.security.cs.allow-jit`.
+    /// Limit for one call into the plugin, in CPU time of the thread running it, so a busy machine does not
+    /// stop a cheap plugin. Enforced by JavaScriptCore's watchdog, which only fires while the JIT is off:
+    /// `Alas.entitlements` must never gain `com.apple.security.cs.allow-jit`.
     var timePerCall: Duration = .milliseconds(250)
     /// For evaluating the plugin's script, once at load. Every `handle` call, `alas/activate` included,
     /// gets `timePerCall`.
@@ -84,6 +85,8 @@ final class PluginRuntime: @unchecked Sendable {
     /// Why a host function refused. Set once per call; it wins over the exception it raised, which the
     /// script may have caught.
     private var hostFailure: PluginRuntimeError?
+    /// Set by the watchdog's callback, which runs on the thread executing the script, so on `queue`.
+    private let terminated = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
 
     private init(limits: PluginLimits, tabCount: Int) {
         self.limits = limits
@@ -96,6 +99,7 @@ final class PluginRuntime: @unchecked Sendable {
 
     deinit {
         JSContextGroupRelease(group)
+        terminated.deallocate()
     }
 
     /// `tabCount` is the number of tabs the manifest declares; `alas.present` exists only when it is positive.
@@ -129,8 +133,9 @@ final class PluginRuntime: @unchecked Sendable {
 
     private func installHost() {
         let global = context.globalObject!
-        // A bare context still has `console`; the only host object a plugin gets is `alas`.
+        // A bare context still has these; the only host object a plugin gets is `alas`.
         global.deleteProperty("console")
+        global.deleteProperty("WebAssembly")
         let alas = JSValue(newObjectIn: context)!
         let send: @convention(block) (JSValue) -> Void = { [unowned self] value in receive(value) }
         alas.setValue(send, forProperty: "send")
@@ -158,17 +163,18 @@ final class PluginRuntime: @unchecked Sendable {
     private func call(limit: Duration, _ body: () -> Void) throws {
         hostFailure = nil
         context.exception = nil
-        JSContextGroupSetExecutionTimeLimit(group, Self.seconds(limit), { _, _ in true }, nil)
-        let start = ContinuousClock.now
+        terminated.pointee = false
+        JSContextGroupSetExecutionTimeLimit(group, Self.seconds(limit), { _, flag in
+            flag?.assumingMemoryBound(to: Bool.self).pointee = true
+            return true
+        }, UnsafeMutableRawPointer(terminated))
         body()
-        let elapsed = ContinuousClock.now - start
         JSContextGroupClearExecutionTimeLimit(group)
         let exception = context.exception
         context.exception = nil
         if let hostFailure { throw hostFailure }
         guard let exception else { return }
-        // The watchdog's exception is an ordinary error object, so elapsed time is what tells it apart.
-        if elapsed >= limit { throw PluginRuntimeError.timeout(milliseconds: Int(limit / .milliseconds(1))) }
+        if terminated.pointee { throw PluginRuntimeError.timeout(milliseconds: Int(limit / .milliseconds(1))) }
         throw PluginRuntimeError.exception(Self.firstLine(exception.toString() ?? "exception"))
     }
 

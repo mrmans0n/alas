@@ -80,17 +80,18 @@ per plugin per project) gets its own VM, so instances share no objects and no
 heap. Top-level code runs during evaluation, so module state set up there
 persists for the life of the instance.
 
-The script can be a plain script or a bundle, for example the output of
-`esbuild --bundle --format=iife`. The only requirement is that, once evaluated,
-`globalThis.handle` is a function. Otherwise activation fails with
+The script is evaluated as a classic script: a plain script, or a bundle such as
+the output of `esbuild --bundle --format=iife`. ES module syntax (`import`,
+`export`) does not parse, so bundle a multi-file plugin first. Once evaluated,
+`globalThis.handle` must be a function. Otherwise activation fails with
 `plugin does not define globalThis.handle`.
 
 ### Globals
 
 The global object has the ECMAScript built-ins (`JSON`, `Map`, `Promise`, typed
 arrays, `Math`, and so on) and `alas`. Nothing else: no `console`, `fetch`,
-timers (`setTimeout`, `setInterval`), `require`, `process`, `TextEncoder`, or
-DOM. `Math.random()` and `Date.now()` are the built-in ones.
+timers (`setTimeout`, `setInterval`), `require`, `process`, `TextEncoder`,
+`WebAssembly`, or DOM. `Math.random()` and `Date.now()` are the built-in ones.
 
 Promises work, and their microtasks run before the call returns. Work that waits
 on anything outside the call never resumes, because nothing outside the call
@@ -177,8 +178,8 @@ before any request of your own.
 | Limit | Value | When exceeded |
 |---|---|---|
 | Script size | 8 MiB | The plugin fails to load. |
-| Script evaluation | 1 s | The plugin stops: `plugin took longer than 1000 ms`. |
-| Each `handle` call, including the `alas/activate` one | 250 ms wall clock | The plugin stops: `plugin took longer than 250 ms`. |
+| Script evaluation | 1 s of CPU time | The plugin stops: `plugin took longer than 1000 ms`. |
+| Each `handle` call, including the `alas/activate` one | 250 ms of CPU time | The plugin stops: `plugin took longer than 250 ms`. |
 | Message size, either direction | 1 MiB | The plugin stops. |
 | `alas.send` calls per `handle` call | 64 | The plugin stops. |
 | `handle` calls per delivery (the message plus replies to the plugin's requests) | 64 | The plugin stops. |

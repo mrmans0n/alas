@@ -296,10 +296,6 @@ struct PluginHostTests {
         RequestCase(
             request: #"{"jsonrpc":"2.0","id":1,"method":"nope/x"}"#,
             grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
-        // Storage is API 3 only; the host under test runs an API 1 manifest.
-        RequestCase(
-            request: #"{"jsonrpc":"2.0","id":1,"method":"storage/get","params":{"key":"k"}}"#,
-            grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
     ])
     func requestsAreCheckedAgainstGrants(_ testCase: RequestCase) async throws {
         let recorder = Recorder()

@@ -162,7 +162,7 @@ compare. Alas does not send differences.
 
 Read the full [limits table](api-v4.md#4-limits). What matters day to day:
 
-- **Work per message.** Each call gets 250 ms of wall-clock time, and the same
+- **Work per message.** Each call gets 250 ms of CPU time, and the same
   limit applies in Debug and Release builds of Alas. Alas runs JavaScriptCore
   without the JIT, so code runs in an interpreter: parsing a snapshot or
   rendering a board takes well under a millisecond, but sorting large lists or

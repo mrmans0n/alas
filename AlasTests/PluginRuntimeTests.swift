@@ -95,8 +95,8 @@ struct PluginRuntimeTests {
     @Test func thePluginSeesNoHostGlobalsButAlas() async throws {
         let runtime = try await Self.load([[.script("""
             alas.send(JSON.stringify([typeof fetch, typeof setTimeout, typeof console, typeof require,
-                                      typeof process, typeof alas.present]));
+                                      typeof process, typeof WebAssembly, typeof alas.present]));
             """)]])
-        #expect(Self.strings(try await runtime.handle(Data())) == [#"["undefined","undefined","undefined","undefined","undefined","undefined"]"#])
+        #expect(Self.strings(try await runtime.handle(Data())) == [#"["undefined","undefined","undefined","undefined","undefined","undefined","undefined"]"#])
     }
 }
