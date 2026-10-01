@@ -42,6 +42,8 @@ struct ACPSideQuestionCard: View {
                 modelName: nil,
                 answer: nil,
                 hasContent: false,
+                // Retry after a failure; not while the question is starting.
+                canAsk: entry.question.isEmpty || entry.error != nil,
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
@@ -108,6 +110,8 @@ struct ACPSideQuestionCard: View {
                 modelName: side.currentModelDisplayName,
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
                 hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty,
+                // A follow-up before the first question is sent would run first.
+                canAsk: entry.isSubmitted,
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
@@ -199,6 +203,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     /// The latest answer, for Copy and Insert; nil until there is one.
     let answer: String?
     let hasContent: Bool
+    let canAsk: Bool
     let onAsk: (String) -> Void
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
@@ -318,6 +323,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
                 .focused($fieldFocused)
+                .disabled(!canAsk)
                 .onSubmit(submit)
                 .onExitCommand(perform: onDismiss)
             if let answer {
@@ -337,7 +343,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
 
     private func submit() {
         let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard canAsk, !text.isEmpty else { return }
         followUp = ""
         onAsk(text)
     }

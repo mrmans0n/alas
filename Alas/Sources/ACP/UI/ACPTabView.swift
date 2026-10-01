@@ -292,6 +292,12 @@ private struct ACPSessionView: View {
     /// Esc cancels the in-flight request. Idempotent — safe to press
     /// when nothing's streaming.
     private func handleEscape() {
+        // An open side question goes first: Esc discards it, and only the
+        // next Esc cancels the main turn.
+        if manager.sideQuestions[sessionId] != nil {
+            Task { await manager.dismissSideQuestion(parentID: sessionId) }
+            return
+        }
         guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
               || session.transcript.streamingState == .awaitingPermission
               || session.transcript.streamingState == .awaitingInput
@@ -779,6 +785,12 @@ private struct ACPSessionView: View {
             // purge/reinstate skip and the new draft survives.
             // `/btw` never reaches the main session: it opens a side question.
             if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror {
+                // Side questions don't take attachments yet; keep the draft
+                // rather than drop them.
+                guard attachments.isEmpty else {
+                    session.lastError = "/btw doesn't support attachments yet. Remove them to ask a side question."
+                    return false
+                }
                 // Complete the composer's submission like a sent prompt, so
                 // its persisted draft is cleared and `/btw …` doesn't come
                 // back. Deferred: the composer records the pending submit
