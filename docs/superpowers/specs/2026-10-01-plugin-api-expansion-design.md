@@ -237,8 +237,9 @@ New requests that forward to code that already exists (mostly `AlasActionService
   text. Alas adds it to the wire-only `privateBlocks` in `ACPSessionRunner`, so
   the agent sees it and the transcript doesn't. The composer shows a chip naming
   the plugin while a provider is active, so this is never invisible to the user.
-  A provider that is slow (over the per-call time limit) or errors is skipped for that
-  prompt.
+  A provider that answers with an error is skipped for that prompt. One that
+  runs past the per-call time limit stops its plugin like any other call; the
+  prompt goes out without its context rather than waiting.
 
 ### 10. High-trust capabilities: processes and files
 
@@ -340,6 +341,6 @@ Per the testing policy, tests pin decisions, not views:
 - Network: allowlist matching (subdomains, ports, redirects), secret substitution
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
-- Context provider: size cap, skip on failure.
+- Context provider: size cap, skipped on an error reply, prompt still sent when the provider's plugin stops.
 - One `PluginHostTests` case per new host call for the capability check, using
   the JavaScript fixture (`PluginJSFixture`) that replaced the WAT one.
