@@ -515,6 +515,8 @@ final class ACPSessionOrchestrationCoordinator {
         let context = outcomeContext(for: record)
         let prompt: String
         switch (disposition, completion.result) {
+        case (.notice, .cancelled):
+            prompt = ACPDelegatedOutcomeText.cancelled(context)
         case (.notice, _):
             prompt = ACPDelegatedOutcomeText.notice(context)
         case (.wake, .failed(let message)):

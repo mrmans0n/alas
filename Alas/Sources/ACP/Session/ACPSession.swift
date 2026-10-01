@@ -247,6 +247,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Registration state of the built-in "alas" MCP server for the current
     /// attach. Drives the MCP status control's warning + transport-switch action.
     @Published var builtInMCPRegistration: MCPServerRegistration = .unknown
+    /// Whether the current attach adopted an already-running agent whose
+    /// stdio built-in server started before this attach, so it won't send a
+    /// new hello. See `MCPRegistrationDecision`.
+    var builtInMCPReattachedToRunningServer = false
     /// Whether the attached adapter advertised HTTP MCP support on `initialize`.
     /// Learned on each attach. Gates the "switch to HTTP transport" action: an
     /// adapter without HTTP MCP falls back to stdio, so offering the switch

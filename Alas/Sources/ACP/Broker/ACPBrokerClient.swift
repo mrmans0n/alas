@@ -136,6 +136,7 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
     private var isTerminated = false
+    private var _adoptedRunningAgent = false
     private var terminationRequest: TerminationRequest?
     private var backgroundPollingTask: Task<Void, Never>?
     private let backgroundPollActiveIntervalNanoseconds: UInt64
@@ -174,6 +175,17 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return turnState
+    }
+
+    /// True when `start()` adopted a broker whose agent process was already
+    /// running (e.g. it survived an app restart) rather than spawning one.
+    /// Child processes the agent started before — such as a stdio `alas mcp`
+    /// server — are still the original ones and won't announce themselves
+    /// again.
+    var adoptedRunningAgent: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _adoptedRunningAgent
     }
 
     init(
@@ -361,6 +373,7 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
             await cleanUpLateOpen(generation: opened.snapshot.metadata.generation)
             throw CancellationError()
         }
+        stateLock.withLock { _adoptedRunningAgent = opened.adopted }
         _ = try await attachAndReplay()
         startBackgroundPolling()
         return opened
