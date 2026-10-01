@@ -6141,6 +6141,14 @@ extension ACPSessionManager {
                 reattachedToRunningServer = false
                 session.builtInMCPReattachedToRunningServer = false
                 staleHelloSequence = helloBeforeAttach?.sequence
+                // A request or the old hello may have marked the row while the
+                // load was still in flight; only the new server's hello counts.
+                if !MCPRegistrationDecision.isCurrentHello(
+                    builtInMCPHello?(sessionId)?.sequence,
+                    staleSequence: staleHelloSequence
+                ) {
+                    session.builtInMCPRegistration = .unknown
+                }
             } else {
                 staleHelloSequence = nil
             }
