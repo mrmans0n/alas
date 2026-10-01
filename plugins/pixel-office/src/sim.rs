@@ -193,7 +193,7 @@ impl World {
                 }
                 c.dwell_ms = c.dwell_ms.saturating_sub(dt_ms);
                 if c.dwell_ms == 0 {
-                    if c.activity == Activity::Lounging && c.next_random() % 2 == 0 {
+                    if c.activity == Activity::Lounging && c.next_random().is_multiple_of(2) {
                         let seat = c.seat;
                         c.walk_to(seat, Activity::Seated);
                     } else {

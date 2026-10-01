@@ -64,7 +64,8 @@ Every node has `id` (a string, unique within the tree, 1 to 64 bytes) and `kind`
 - Numbers in a tree (and in stored values) are re-serialised by the host, so
   `1.0` reaches the tree as `1`. Do not rely on a number keeping its written form.
 - Buttons, menus and clickable cards take their accessibility label from their
-  visible text.
+  visible text. A clickable card is a keyboard stop like a button; Space or
+  Return clicks it.
 
 ### Limits and what stops the plugin
 
@@ -150,6 +151,9 @@ because the data is the plugin's own. It is API 3 only.
 - Keys are 1 to 128 bytes. Values are any valid JSON (UTF-8).
 - The total size of keys and values per plugin and project is at most 1 MiB.
 - Numbers are re-serialised by the host, so `1.0` is read back as `1`.
+- `storage/set` replies once the store is on disk; the file is written off the
+  main thread. A failed write is answered with "storage unavailable", but the
+  value is already readable and goes out with the next write.
 - A reply larger than the message limit (1 MiB), such as a very large stored
   value or many keys, is answered with `-32003` "the result of <method> is too
   large" and the plugin keeps running.

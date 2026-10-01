@@ -5,6 +5,9 @@ import Foundation
 /// Values are arbitrary JSON kept as raw bytes. The file is assembled by splicing each value's
 /// bytes into the object text, and read back with a small top-level scanner, so numbers such as
 /// `1.0` or large integers are never re-typed by a `JSONSerialization` round trip.
+///
+/// Reads and writes see memory at once; the file is written off the main actor, one write at a
+/// time and always the latest entries, so a burst of sets costs at most two writes.
 @MainActor
 final class PluginStorage {
     static let maxKeyBytes = 128
@@ -14,6 +17,10 @@ final class PluginStorage {
 
     private let file: URL
     private var entries: [String: Data]?
+    /// Bumped by every change; `written` is the version last on disk.
+    private var version = 0
+    private var written = 0
+    private var writing: Task<Bool, Never>?
 
     init(file: URL) {
         self.file = file
@@ -39,7 +46,9 @@ final class PluginStorage {
         load()?[key]
     }
 
-    func set(_ key: String, value: Data?) -> SetResult {
+    /// Returns once the change is on disk, or `.failed` when it could not be written. A failed change
+    /// stays in memory and goes out with the next write.
+    func set(_ key: String, value: Data?) async -> SetResult {
         guard Self.isValidKey(key) else { return .invalidKey }
         guard var next = load() else { return .failed }
         if let value {
@@ -57,9 +66,33 @@ final class PluginStorage {
         guard next.reduce(0, { $0 + $1.key.utf8.count + $1.value.count }) <= Self.maxTotalBytes else {
             return .full
         }
-        guard write(next) else { return .failed }
         entries = next
-        return .stored
+        version += 1
+        return await flush() ? .stored : .failed
+    }
+
+    /// Writes until the file holds this caller's change, waiting out any write already running.
+    private func flush() async -> Bool {
+        let target = version
+        while written < target {
+            if let writing {
+                _ = await writing.value
+                continue
+            }
+            // The task updates `writing` and `written` itself, so a waiter that resumes after it
+            // always sees the finished state instead of spinning on a completed task.
+            let task = Task { @MainActor [file] () -> Bool in
+                let snapshot = entries ?? [:]
+                let version = version
+                let ok = await Task.detached { Self.write(snapshot, to: file) }.value
+                writing = nil
+                if ok { written = max(written, version) }
+                return ok
+            }
+            writing = task
+            guard await task.value else { return false }
+        }
+        return true
     }
 
     /// False when the file is unreadable and could not be moved aside: reads would wrongly look empty.
@@ -102,7 +135,7 @@ final class PluginStorage {
         return loaded
     }
 
-    private func write(_ entries: [String: Data]) -> Bool {
+    private nonisolated static func write(_ entries: [String: Data], to file: URL) -> Bool {
         var out = Data("{".utf8)
         for (index, key) in entries.keys.sorted().enumerated() {
             guard let keyJSON = try? JSONSerialization.data(withJSONObject: key, options: .fragmentsAllowed) else {
@@ -114,7 +147,7 @@ final class PluginStorage {
             out.append(entries[key]!)
         }
         out.append(UInt8(ascii: "}"))
-        guard Self.parse(out) != nil else { return false }
+        guard parse(out) != nil else { return false }
         do {
             try FileManager.default.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -126,7 +159,7 @@ final class PluginStorage {
     }
 
     /// Splits a top-level JSON object into key -> raw value bytes; nil when malformed.
-    private static func parse(_ data: Data) -> [String: Data]? {
+    private nonisolated static func parse(_ data: Data) -> [String: Data]? {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         let bytes = [UInt8](data)
         var i = 0

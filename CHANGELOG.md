@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Write plugin storage off the main thread, coalescing a burst of `storage/set` calls, so a plugin saving large values cannot stall the UI.
+- Make clickable plugin view cards a keyboard stop that Space or Return clicks.
+
 ## [0.19.20] - 2026-10-01
 
 ### ✨ Features
