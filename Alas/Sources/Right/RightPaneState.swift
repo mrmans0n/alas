@@ -4347,7 +4347,7 @@ final class RightPaneState: GGSplitCommitServicing {
         pullInFlight = true
         Task { @MainActor in
             defer { pullInFlight = false }
-            await performPull()
+            await performPull(autoOpenConflicts: true)
         }
     }
 
@@ -4363,6 +4363,11 @@ final class RightPaneState: GGSplitCommitServicing {
     /// than here: the sidebar can reach a worktree whose pane was never
     /// activated (and therefore never ran journal discovery), and the cached
     /// `checkpointMutationsDisabled` would silently veto the pull.
+    ///
+    /// Conflict auto-open is suppressed: the pulled worktree is not selected,
+    /// so `openConflict`'s tab activation would happen invisibly and would
+    /// also clear a viewing native peer session's selection, ejecting the
+    /// user from what they were reading.
     @discardableResult
     @MainActor
     func pullAwaited() async -> MergeResult? {
@@ -4370,15 +4375,19 @@ final class RightPaneState: GGSplitCommitServicing {
         sidebarError = nil
         pullInFlight = true
         defer { pullInFlight = false }
-        return await performPull()
+        return await performPull(autoOpenConflicts: false)
     }
 
     /// The body shared by `pull()` and `pullAwaited()`. Both entry points own
     /// their `pullInFlight` bookkeeping around this; the body performs the
     /// guarded work, records the failure message in `sidebarError`, and
     /// returns the pull outcome (nil when a checkpoint guard rejected it).
+    ///
+    /// - Parameter autoOpenConflicts: Whether a `.conflict` result auto-opens
+    ///   the first conflicted file's tab. False for background (sidebar)
+    ///   pulls, whose worktree is not selected — see `pullAwaited()`.
     @MainActor
-    private func performPull() async -> MergeResult? {
+    private func performPull(autoOpenConflicts: Bool) async -> MergeResult? {
         do {
             guard await checkpointMutationAllowedAfterJournalRevalidation() else { return nil }
             let result = try await git.pull(worktreePath: worktree.path)
@@ -4386,7 +4395,9 @@ final class RightPaneState: GGSplitCommitServicing {
             // pull() already fetched upstream; skip the redundant network
             // fetch and just recount against the already-fresh tracking ref.
             await refreshSyncStatus()
-            handleOperationResult(result)
+            if autoOpenConflicts {
+                handleOperationResult(result)
+            }
             if case .error(let message) = result {
                 sidebarError = message
             }

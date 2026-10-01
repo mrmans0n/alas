@@ -2974,29 +2974,54 @@ final class AppState {
             // The pull ran without switching the selection, so its outcome
             // would otherwise only surface in the right pane of a worktree
             // the user never selected. `InAppNotificationStack` mounts only
-            // for the center-visible worktree, so route the banner to the
-            // currently selected worktree; the message names the pulled one.
+            // inside `CenterPaneView`, which is not on screen while a native
+            // peer session or document is open — post a macOS notification
+            // there (its click-through focuses the pulled worktree), and the
+            // in-app banner on the currently selected worktree otherwise.
             guard let self, let result else { return }
-            let visibleWorktreeID = self.selectedWorktreeId ?? id
-            switch result {
-            case .clean:
-                self.inAppNotifications.post(
-                    "Pulled \(worktree.branch)",
-                    severity: .success,
-                    worktreeID: visibleWorktreeID
-                )
-            case .conflict:
-                self.inAppNotifications.post(
-                    "Pull of \(worktree.branch) hit conflicts",
-                    severity: .error,
-                    worktreeID: visibleWorktreeID
-                )
-            case .error(let message):
-                self.inAppNotifications.post(
-                    "Pull of \(worktree.branch) failed: \(message)",
-                    severity: .error,
-                    worktreeID: visibleWorktreeID
-                )
+            if self.nativePeerSessions?.selectedSessionId != nil {
+                switch result {
+                case .clean:
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pulled \(worktree.branch)",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                case .conflict:
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pull of \(worktree.branch) hit conflicts — click to resolve.",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                case .error(let message):
+                    self.harness.notifications.notifyWorktreePull(
+                        body: "Pull of \(worktree.branch) failed: \(message)",
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id
+                    )
+                }
+            } else {
+                let visibleWorktreeID = self.selectedWorktreeId ?? id
+                switch result {
+                case .clean:
+                    self.inAppNotifications.post(
+                        "Pulled \(worktree.branch)",
+                        severity: .success,
+                        worktreeID: visibleWorktreeID
+                    )
+                case .conflict:
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) hit conflicts",
+                        severity: .error,
+                        worktreeID: visibleWorktreeID
+                    )
+                case .error(let message):
+                    self.inAppNotifications.post(
+                        "Pull of \(worktree.branch) failed: \(message)",
+                        severity: .error,
+                        worktreeID: visibleWorktreeID
+                    )
+                }
             }
             await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
         }
