@@ -62,7 +62,7 @@ struct PluginHostTests {
                 },
                 lastMessage: { id in
                     switch id {
-                    case "s1": .text(String(repeating: "é", count: 3000))
+                    case "s1": .text("x")
                     case "quiet": .none
                     default: .unknownSession
                     }
@@ -215,6 +215,7 @@ struct PluginHostTests {
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""code":-32601"#, api: 2),
         ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [], reply: #""code":-32001"#),
+        ReadCase(method: "session/last_message", params: #"{"id":"s1"}"#, grants: [.workspaceRead], reply: #""message":"x""#),
         ReadCase(method: "session/last_message", params: #"{"id":"quiet"}"#, grants: [.workspaceRead], reply: #""result":{"message":null}"#),
         ReadCase(method: "session/last_message", params: #"{"id":"gone"}"#, grants: [.workspaceRead], reply: #""code":-32003"#),
         ReadCase(method: "agent/list", params: "{}", grants: [.workspaceRead], reply: #""name":"Claude Code""#),
