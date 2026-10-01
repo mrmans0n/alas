@@ -7,6 +7,7 @@ import Testing
 private final class RecordingResponder: NSResponder {
     private(set) var receivedEvents: [NSEvent] = []
     override func scrollWheel(with event: NSEvent) { receivedEvents.append(event) }
+    func clear() { receivedEvents.removeAll() }
 }
 
 private struct ThemeIDProbe: View {
@@ -65,6 +66,100 @@ struct ACPHorizontalScrollViewTests {
         scrollView.scrollWheel(with: try wheelEvent(deltaX: -40, deltaY: 0))
 
         #expect(next.receivedEvents.isEmpty)
+    }
+
+    private func phasedEvent(
+        deltaX: Int32 = 0, deltaY: Int32 = 0,
+        phase: NSEvent.Phase = [], momentumPhase: NSEvent.Phase = []
+    ) throws -> NSEvent {
+        let cgEvent = try #require(CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel,
+            wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0
+        ))
+        if !phase.isEmpty {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventScrollPhase, value: cgScrollPhaseRawValue(for: phase))
+        }
+        if !momentumPhase.isEmpty {
+            cgEvent.setIntegerValueField(CGEventField.scrollWheelEventMomentumPhase, value: cgScrollPhaseRawValue(for: momentumPhase))
+        }
+        return try #require(NSEvent(cgEvent: cgEvent))
+    }
+
+    private func cgScrollPhaseRawValue(for phase: NSEvent.Phase) -> Int64 {
+        var rawValue: UInt32 = 0
+        if phase.contains(.began) { rawValue |= CGScrollPhase.began.rawValue }
+        if phase.contains(.changed) { rawValue |= CGScrollPhase.changed.rawValue }
+        if phase.contains(.ended) { rawValue |= CGScrollPhase.ended.rawValue }
+        if phase.contains(.cancelled) { rawValue |= CGScrollPhase.cancelled.rawValue }
+        if phase.contains(.mayBegin) { rawValue |= CGScrollPhase.mayBegin.rawValue }
+        return Int64(rawValue)
+    }
+
+    private func horizontalGesture() throws -> [NSEvent] {
+        [
+            try phasedEvent(phase: .began),
+            try phasedEvent(deltaX: 20, phase: .changed),
+            try phasedEvent(phase: .changed),
+            try phasedEvent(deltaY: 3, phase: .changed),
+            try phasedEvent(phase: .ended),
+            try phasedEvent(momentumPhase: .began),
+            try phasedEvent(deltaY: 4, momentumPhase: .changed),
+            try phasedEvent(momentumPhase: .ended),
+        ]
+    }
+
+    @Test("a horizontal gesture stays on the table from its first horizontal delta through momentum")
+    func horizontalGestureLatches() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let events = try horizontalGesture()
+
+        for event in events { scrollView.scrollWheel(with: event) }
+
+        #expect(next.receivedEvents == [events[0]])
+    }
+
+    @Test("a vertical gesture is forwarded entirely")
+    func verticalGestureForwards() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let events = [
+            try phasedEvent(phase: .began),
+            try phasedEvent(deltaY: 20, phase: .changed),
+            try phasedEvent(deltaX: 2, deltaY: 20, phase: .changed),
+            try phasedEvent(phase: .ended),
+            try phasedEvent(deltaY: 4, momentumPhase: .changed),
+            try phasedEvent(momentumPhase: .ended),
+        ]
+
+        for event in events { scrollView.scrollWheel(with: event) }
+
+        #expect(next.receivedEvents == events)
+    }
+
+    @Test("a new gesture and phaseless events are routed fresh after a latched gesture")
+    func latchResets() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        for event in try horizontalGesture() { scrollView.scrollWheel(with: event) }
+        next.clear()
+
+        let vertical = [try phasedEvent(phase: .began), try phasedEvent(deltaY: 20, phase: .changed)]
+        for event in vertical { scrollView.scrollWheel(with: event) }
+        #expect(next.receivedEvents == vertical)
+
+        // Latch a gesture again, cancel it, then a phaseless vertical wheel event.
+        next.clear()
+        scrollView.scrollWheel(with: try phasedEvent(phase: .began))
+        scrollView.scrollWheel(with: try phasedEvent(deltaX: 20, phase: .changed))
+        scrollView.scrollWheel(with: try phasedEvent(phase: .cancelled))
+        let wheel = try wheelEvent(deltaX: 0, deltaY: 30)
+        next.clear()
+        scrollView.scrollWheel(with: wheel)
+        #expect(next.receivedEvents == [wheel])
     }
 
     @Test("only horizontal-dominant deltas are kept", arguments: [

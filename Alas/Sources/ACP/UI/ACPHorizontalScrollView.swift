@@ -78,14 +78,34 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         sizeDocumentToContent()
     }
 
-    /// Keeps only horizontal-dominant events. Everything else, including
-    /// vertical gestures and their momentum, continues up the responder chain
-    /// to the transcript, which scrolls it with AppKit responsive scrolling.
+    /// True while a phased horizontal gesture (and its momentum) is owned by this view.
+    private var latchesHorizontalGesture = false
+
+    /// Keeps horizontal gestures and passes the rest up the responder chain to
+    /// the transcript, which scrolls it with AppKit responsive scrolling.
+    /// A phased gesture that turns horizontal latches to this view for its whole
+    /// lifecycle, including momentum, so no phase event is split between the
+    /// table and the transcript. Phaseless (mouse wheel) events route per event.
     override func scrollWheel(with event: NSEvent) {
-        if Self.isHorizontalDominant(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+        let isPhased = !event.phase.isEmpty || !event.momentumPhase.isEmpty
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            latchesHorizontalGesture = false
+        }
+
+        if latchesHorizontalGesture {
+            super.scrollWheel(with: event)
+        } else if Self.isHorizontalDominant(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+            if isPhased { latchesHorizontalGesture = true }
             super.scrollWheel(with: event)
         } else {
             nextResponder?.scrollWheel(with: event)
+        }
+
+        if event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended)
+            || event.momentumPhase.contains(.cancelled)
+        {
+            latchesHorizontalGesture = false
         }
     }
 
