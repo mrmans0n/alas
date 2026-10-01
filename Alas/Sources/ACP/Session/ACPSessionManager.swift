@@ -1838,7 +1838,12 @@ final class ACPSessionManager: ObservableObject {
         }
         await flushPersistence()
         _ = try await persistence.promoteEphemeralSession(id: sideID)
-        sideQuestionSessionIDs[parentID] = nil
+        // A concurrent dismissal may have deleted the side session meanwhile,
+        // and a concurrent /btw may have replaced it; leave the replacement.
+        guard sessions[sideID] === side, persistedRows[sideID] != nil else { return nil }
+        if sideQuestionSessionIDs[parentID] == sideID {
+            sideQuestionSessionIDs[parentID] = nil
+        }
         // Auto-run stays off; the session keeps running without the bypass
         // flag until its next launch.
         side.readOnlyRestricted = false
@@ -3005,7 +3010,8 @@ final class ACPSessionManager: ObservableObject {
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
-        guard !row.archived else { return }
+        // Hidden `/btw` side sessions join history only once promoted.
+        guard !row.archived, row.ephemeralParentId == nil else { return }
         let insertionIndex = recent.firstIndex { $0.lastOpenedAt < row.lastOpenedAt } ?? recent.endIndex
         recent.insert(row, at: insertionIndex)
     }

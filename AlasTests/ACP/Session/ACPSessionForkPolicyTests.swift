@@ -131,7 +131,8 @@ struct ACPSessionForkPolicyTests {
             ([.user("q"), .agent("a"), .toolCall], false, 1),
             ([.user("q1"), .agent("a1"), .user("q2"), .agent("partial")], true, 1),
             ([.user("q1"), .agent("a1"), .user("q2"), .toolCall], true, 1),
-            ([.user("q1"), .agent(""), .user("q2")], true, 0),
+            ([.user("q1"), .agent("a1"), .user("interrupted")], false, 1),
+            ([.user("q1"), .agent(""), .user("q2")], true, nil),
             ([.user("q")], true, nil),
             ([], false, nil),
         ] as [([SideQuestionEntry], Bool, Int?)]
