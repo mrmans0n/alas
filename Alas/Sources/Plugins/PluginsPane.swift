@@ -88,7 +88,7 @@ struct PluginsPane: View {
         if !manager.invalid.isEmpty {
             SettingsGroup(title: "Not loaded") {
                 ForEach(manager.invalid) { entry in
-                    SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason) { }
+                    SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason, selectable: true) { }
                 }
             }
         }
