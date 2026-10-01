@@ -184,7 +184,7 @@ the plugin, and stores the values app-wide, not per project:
 ### 6. Timers
 
 - Capability `timers`. `timer/set {id, seconds, repeat}` and `timer/cancel {id}`.
-  Fires `timer/fired {id}` as a normal delivery with the normal fuel budget.
+  Fires `timer/fired {id}` as a normal delivery under the normal per-call time limit.
 - Minimum 60 s. At most 8 timers per instance. Timers die with the instance.
   They don't survive a restart: the plugin sets them again on activation.
 
@@ -233,7 +233,7 @@ New requests that forward to code that already exists (mostly `AlasActionService
   text. Alas adds it to the wire-only `privateBlocks` in `ACPSessionRunner`, so
   the agent sees it and the transcript doesn't. The composer shows a chip naming
   the plugin while a provider is active, so this is never invisible to the user.
-  A provider that is slow (over its fuel budget) or errors is skipped for that
+  A provider that is slow (over the per-call time limit) or errors is skipped for that
   prompt.
 
 ### 10. High-trust capabilities: processes and files
@@ -274,7 +274,9 @@ exact argv prefix:
 - `file/read {worktree, path}` (≤ 1 MiB), `file/list {worktree, dir}`,
   `file/write {worktree, path, content}`.
 - Paths are relative. Alas resolves them and refuses anything that leaves the
-  worktree, including through symlinks. `.git/` is never writable.
+  worktree, including through symlinks. Nothing named `.git` is writable at any
+  depth: in a linked worktree `.git` is a file pointing at the repository, and
+  writing it would redirect git.
 - Writes show up in the Changes tab like any other edit.
 
 **How the user sees the risk.**
@@ -327,7 +329,7 @@ Per the testing policy, tests pin decisions, not views:
 - Slot routing: which commands a slot shows, and the target a command receives.
 - Decorations: replace and clear semantics, caps, cleanup when a plugin stops.
 - Process and files: argv matching (`appendArgs` on and off), path escapes
-  (`..`, absolute paths, symlinks), `.git/` writes refused, output and time caps.
+  (`..`, absolute paths, symlinks), `.git` writes refused (the linked-worktree file and any `.git` directory), output and time caps.
 - Network: allowlist matching (subdomains, ports, redirects), secret substitution
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
