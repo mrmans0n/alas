@@ -231,7 +231,10 @@ private struct ACPSessionView: View {
                 if let err = session.lastError {
                     errorBanner(err)
                 } else if case .failed(let reason) = session.agentState,
-                          ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: session.setupState) {
+                          ACPAdapterUpdateBannerDecider.showsGenericFailure(
+                              setupState: session.setupState,
+                              setupNudgeDismissed: isSetupNudgeDismissed
+                          ) {
                     errorBanner(reason, dismissible: false)
                 }
                 if case .failed(let msg) = session.hydrationState {
@@ -823,6 +826,13 @@ private struct ACPSessionView: View {
         return true
     }
 
+    private var isSetupNudgeDismissed: Bool {
+        ACPSetupNudgeDismissal.isDismissed(
+            state.config.harness.dismissedACPSetupNudges,
+            key: adapterUpdateKey
+        )
+    }
+
     @ViewBuilder
     private func adapterBanner() -> some View {
         if case .needsAuth(let methods, let reason) = session.setupState {
@@ -836,17 +846,13 @@ private struct ACPSessionView: View {
                 onReconnect: { Task { await reattachAndRefreshAdapterUpdateState() } }
             )
         } else {
-            let dismissedSetup = ACPSetupNudgeDismissal.isDismissed(
-                state.config.harness.dismissedACPSetupNudges,
-                key: adapterUpdateKey
-            )
             let decision = ACPAdapterUpdateBannerDecider.decide(
                 setupState: session.setupState,
                 updateState: updateState,
                 dismissedLatest: dismissedLatest)
 
             switch decision {
-            case .showInstall where !dismissedSetup:
+            case .showInstall where !isSetupNudgeDismissed:
                 if ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil {
                     ACPSetupNudgeBanner(
                         agentID: session.agentId,

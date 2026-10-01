@@ -85,15 +85,22 @@ struct ACPAdapterUpdateBannerDeciderTests {
         #expect(decision == .none)
     }
 
-    @Test("specialized setup banners suppress the generic failure banner")
-    func setupBannerSuppressesGenericFailure() {
-        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
-            setupState: .needsSetup(reason: "missing")))
-        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
-            setupState: .setupError(reason: "broken")))
-        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
-            setupState: .needsAuth(methods: [], reason: nil)))
-        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: .checking))
-        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: .ready))
+    @Test("generic failure visibility follows specialized setup banners", arguments: [
+        (ACPSession.SetupState.checking, false, true),
+        (.ready, false, true),
+        (.needsSetup(reason: "missing"), false, false),
+        (.needsSetup(reason: "missing"), true, true),
+        (.setupError(reason: "broken"), false, false),
+        (.needsAuth(methods: [], reason: nil), false, false),
+    ])
+    func genericFailureVisibility(
+        setupState: ACPSession.SetupState,
+        setupNudgeDismissed: Bool,
+        expected: Bool
+    ) {
+        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: setupState,
+            setupNudgeDismissed: setupNudgeDismissed
+        ) == expected)
     }
 }

@@ -18,10 +18,14 @@ enum ACPAdapterUpdateBannerDecider {
         return .showUpdate(current: current, latest: latest)
     }
 
-    static func showsGenericFailure(setupState: ACPSession.SetupState) -> Bool {
+    static func showsGenericFailure(
+        setupState: ACPSession.SetupState,
+        setupNudgeDismissed: Bool
+    ) -> Bool {
         switch setupState {
         case .checking, .ready: true
-        case .needsSetup, .setupError, .needsAuth: false
+        case .needsSetup: setupNudgeDismissed
+        case .setupError, .needsAuth: false
         }
     }
 }
