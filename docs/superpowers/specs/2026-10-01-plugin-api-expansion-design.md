@@ -38,7 +38,7 @@ Ranked by how often they show up across these ecosystems.
 | 4 | Deploy previews (Vercel, Netlify, Cloudflare) | net, secrets, timer, worktree badge, "Open preview" command |
 | 5 | Prompt and template library | slash commands, settings |
 | 6 | Docs and context (Notion, Confluence) attached to a prompt | net, secrets, prompt context provider |
-| 7 | Cost and usage tracker | usage events, panel, toolbar item |
+| 7 | Cost and usage tracker | usage events (not scheduled yet, see Rollout), panel, toolbar item |
 | 8 | Review checklist / AI reviewer on hunks | Changes file menu, review comments, `git.changed` |
 | 9 | Run failure helpers ("explain", "file an issue", "rerun with…") | Run report section, run events, `session/send` |
 | 10 | Scheduled agent tasks (nightly triage, dependency bumps) | timer, `task/start` |
@@ -159,10 +159,14 @@ the plugin, and stores the values app-wide, not per project:
 
 - `settings/get` returns every non-secret value; `settings/changed` is sent when
   the user edits them.
-- **Secrets never reach the plugin.** They are stored in the Keychain. A plugin
-  refers to one in an HTTP header as `{{secret:token}}`. Alas substitutes it
-  only if the request goes to one of that secret's `hosts`. Otherwise the request
-  is refused with `-32001`.
+- **Secrets are not readable, but they are usable.** They are stored in the
+  Keychain and `settings/get` never returns them. A plugin refers to one in an
+  HTTP header as `{{secret:token}}`, and Alas substitutes it only if the request
+  goes to one of that secret's `hosts`; otherwise the request is refused with
+  `-32001`. An endpoint can still echo a header back, so this keeps the secret
+  out of plugin storage and logs, not out of reach: the approval sheet says the
+  plugin **can use** the credential with the listed hosts, and a user should
+  approve that only for a plugin they trust with it.
 - OAuth (PKCE run by Alas, token stored as a secret) is a follow-up. API keys
   cover Linear, Notion, GitHub, Sentry, Vercel and Slack webhooks today.
 
@@ -184,7 +188,7 @@ the plugin, and stores the values app-wide, not per project:
 ### 6. Timers
 
 - Capability `timers`. `timer/set {id, seconds, repeat}` and `timer/cancel {id}`.
-  Fires `timer/fired {id}` as a normal delivery with the normal fuel budget.
+  Fires `timer/fired {id}` as a normal delivery under the normal per-call time limit.
 - Minimum 60 s. At most 8 timers per instance. Timers die with the instance.
   They don't survive a restart: the plugin sets them again on activation.
 
@@ -233,8 +237,9 @@ New requests that forward to code that already exists (mostly `AlasActionService
   text. Alas adds it to the wire-only `privateBlocks` in `ACPSessionRunner`, so
   the agent sees it and the transcript doesn't. The composer shows a chip naming
   the plugin while a provider is active, so this is never invisible to the user.
-  A provider that is slow (over its fuel budget) or errors is skipped for that
-  prompt.
+  A provider that answers with an error is skipped for that prompt. One that
+  runs past the per-call time limit stops its plugin like any other call; the
+  prompt goes out without its context rather than waiting.
 
 ### 10. High-trust capabilities: processes and files
 
@@ -253,15 +258,16 @@ exact argv prefix:
 ]
 ```
 
-- `process/run {id, worktree, args?, stdin?, env?}` runs it with the worktree as
+- `process/run {id, worktree, args?, stdin?}` runs it with the worktree as
   the working directory and answers in a later delivery with
   `{exit, stdout, stderr}`. Output is capped at 1 MiB, the run at 10 minutes, and
   an instance may have 2 running at once.
 - `args` is accepted only when the entry has `appendArgs`; otherwise the argv is
-  exactly what the manifest says. `env` takes plain values only: `{{secret:key}}`
-  is refused there. A process's output goes back to the plugin, and a command
-  can print a secret in any encoding, so no redaction could keep it hidden.
-  Commands that need credentials use their own login (`op signin`, `gh auth`).
+  exactly what the manifest says. Alas resolves the executable and runs it with
+  its own environment; a plugin cannot set environment variables, because ones
+  like `PATH` or `NODE_OPTIONS` would change what the approved command runs.
+  Secrets never go to processes: their output returns to the plugin. Commands
+  that need credentials use their own login (`op signin`, `gh auth`).
 - `longRunning` processes are started with `process/start` and show up in the
   Run tab as runs owned by the plugin: visible, with output, and stoppable by the
   user. Alas stops them when the plugin stops. There are no invisible processes.
@@ -274,7 +280,11 @@ exact argv prefix:
 - `file/read {worktree, path}` (≤ 1 MiB), `file/list {worktree, dir}`,
   `file/write {worktree, path, content}`.
 - Paths are relative. Alas resolves them and refuses anything that leaves the
-  worktree, including through symlinks. `.git/` is never writable.
+  worktree, including through symlinks. Nothing named `.git` is writable at any
+  depth: in a linked worktree `.git` is a file pointing at the repository, and
+  writing it would redirect git. The check runs on the resolved destination and
+  compares case-folded components, so `.GIT/config` on a case-insensitive volume
+  and a symlink that resolves into `.git` are refused too.
 - Writes show up in the Changes tab like any other edit.
 
 **How the user sees the risk.**
@@ -306,7 +316,7 @@ version by one.
 | 5 | Commands (`palette`, `menubar`, `toolbar`, `worktree.menu`, `repo.menu`), settings and secrets, `network`, `timers`, `notify`, `session.state`, `session.finished` | **Linear bridge**: palette "New worktree from issue", right-pane issue panel, comment on finish |
 | 6 | Decorations, Changes and Run slots and panels, `git.changed`, `run.*`, `review.*`, `worktree.created`, `worktree.removed`, `focus.changed`, `session/send`, `run/start`, `review/comment`, `process.exec`, `files.*` | **GitHub checks**: CI badge on worktree rows, "Fix failing checks" sends the failure to the agent. **Worktree setup**: copies `.env`, installs dependencies, starts the dev server |
 | 7 | Message and session menus, slash prompts, context providers | **Prompt library** and **Notion context** |
-| — | OAuth PKCE, app-scoped instances | when a plugin needs them |
+| — | OAuth PKCE, app-scoped instances, `session.usage` events (tokens and cost per turn, once the agent sessions report them consistently) | when a plugin needs them |
 
 API 5 also introduces `right` panels because the Linear bridge needs a place to
 list issues, and adding the right-pane rail later means changing the same files.
@@ -327,10 +337,10 @@ Per the testing policy, tests pin decisions, not views:
 - Slot routing: which commands a slot shows, and the target a command receives.
 - Decorations: replace and clear semantics, caps, cleanup when a plugin stops.
 - Process and files: argv matching (`appendArgs` on and off), path escapes
-  (`..`, absolute paths, symlinks), `.git/` writes refused, output and time caps.
+  (`..`, absolute paths, symlinks), `.git` writes refused (the linked-worktree file, any `.git` directory, `.GIT` and symlink aliases), output and time caps.
 - Network: allowlist matching (subdomains, ports, redirects), secret substitution
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
-- Context provider: size cap, skip on failure.
+- Context provider: size cap, skipped on an error reply, prompt still sent when the provider's plugin stops.
 - One `PluginHostTests` case per new host call for the capability check, using
   the JavaScript fixture (`PluginJSFixture`) that replaced the WAT one.
