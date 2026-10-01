@@ -24,12 +24,18 @@ enum MCPRegistrationDecision {
     /// HTTP one is respawned by the app on each attach. A hello recorded over
     /// another transport earlier in this app run means the previous attach
     /// used a different server, so this stdio one is new and must say hello.
+    /// A previous attach in this app run that already found no server (a
+    /// reconnect after the warning) has nothing that could have survived, so
+    /// it keeps the fresh-launch rules and the warning.
     static func reattachesRunningServer(
         builtInTransport: MCPTransportKind?,
         adoptedRunningAgent: Bool,
-        recordedHelloTransport: MCPTransportKind?
+        recordedHelloTransport: MCPTransportKind?,
+        previousAttachFoundNoServer: Bool = false
     ) -> Bool {
-        guard builtInTransport == .stdio, adoptedRunningAgent else { return false }
+        guard builtInTransport == .stdio, adoptedRunningAgent, !previousAttachFoundNoServer else {
+            return false
+        }
         return recordedHelloTransport == nil || recordedHelloTransport == .stdio
     }
 

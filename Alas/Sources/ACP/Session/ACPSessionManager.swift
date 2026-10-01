@@ -5398,7 +5398,8 @@ extension ACPSessionManager {
                 && MCPRegistrationDecision.reattachesRunningServer(
                     builtInTransport: builtInMCP?.status.transport,
                     adoptedRunningAgent: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true,
-                    recordedHelloTransport: helloBeforeAttach?.transport
+                    recordedHelloTransport: helloBeforeAttach?.transport,
+                    previousAttachFoundNoServer: session.builtInMCPRegistration == .notRegistered
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
             // Bump the attach epoch so a grace timer left over from a previous

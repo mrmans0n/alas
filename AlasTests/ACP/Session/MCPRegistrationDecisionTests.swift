@@ -38,9 +38,11 @@ struct MCPRegistrationDecisionTests {
         let builtIn: MCPTransportKind
         let adopted: Bool
         let recordedHello: MCPTransportKind?
+        var previouslyNotRegistered = false
         let expected: Bool
         var testDescription: String {
             "\(builtIn), \(adopted ? "adopted" : "spawned"), hello \(recordedHello.map { "\($0)" } ?? "none")"
+                + (previouslyNotRegistered ? ", previously not registered" : "")
         }
     }
 
@@ -50,6 +52,8 @@ struct MCPRegistrationDecisionTests {
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .stdio, expected: true),
         // The previous attach used HTTP, so this stdio server is new.
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .http, expected: false),
+        // A reconnect after this app run already warned: nothing survived.
+        ReattachCase(builtIn: .stdio, adopted: true, recordedHello: nil, previouslyNotRegistered: true, expected: false),
         // A freshly spawned agent, or an app-supervised HTTP server.
         ReattachCase(builtIn: .stdio, adopted: false, recordedHello: nil, expected: false),
         ReattachCase(builtIn: .http, adopted: true, recordedHello: nil, expected: false),
@@ -58,7 +62,8 @@ struct MCPRegistrationDecisionTests {
         #expect(MCPRegistrationDecision.reattachesRunningServer(
             builtInTransport: c.builtIn,
             adoptedRunningAgent: c.adopted,
-            recordedHelloTransport: c.recordedHello
+            recordedHelloTransport: c.recordedHello,
+            previousAttachFoundNoServer: c.previouslyNotRegistered
         ) == c.expected)
     }
 
