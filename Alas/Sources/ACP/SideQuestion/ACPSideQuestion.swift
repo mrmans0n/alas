@@ -9,6 +9,22 @@ struct ACPSideQuestion: Equatable, Sendable {
     var error: String?
     /// Set once the question reached the side session; Keep needs it.
     var isSubmitted = false
+    /// Set while Keep is storing the promotion, so it runs once.
+    var isPromoting = false
+}
+
+enum ACPSideQuestionError: LocalizedError, Equatable {
+    case notAccepted
+    case unsafeMode
+
+    var errorDescription: String? {
+        switch self {
+        case .notAccepted:
+            "The side session couldn't accept the question."
+        case .unsafeMode:
+            "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
+        }
+    }
 }
 
 /// Slash commands Alas handles itself instead of sending to the agent.
@@ -111,41 +127,44 @@ enum ACPSideQuestionPermissionRule {
 /// The mode a side session switches to: plan when the agent has one,
 /// otherwise away from modes that approve tool calls on their own. Works on
 /// the mode chip's options, whether the agent backs them with
-/// `session/set_mode` or a config option.
+/// `session/set_mode` or a config option. Adapters that don't send
+/// `_meta.kind` fall back to well-known mode ids; a current mode that stays
+/// unclassified is not trusted.
 enum ACPSideQuestionModePolicy {
     /// Nil when the current mode can stay.
     static func preferredModeID(options: [ChipSpec.Item], currentID: String?) -> String? {
-        if let plan = options.first(where: { $0.kind == .plan }) {
+        if let plan = options.first(where: { kind(of: $0) == .plan }) {
             return plan.id == currentID ? nil : plan.id
         }
-        guard let current = options.first(where: { $0.id == currentID }), selfApproves(current) else {
-            return nil
-        }
-        return options.first { $0.kind == .standard }?.id
+        guard !allows(options: options, currentID: currentID) else { return nil }
+        return options.first { kind(of: $0) == .standard }?.id
     }
 
     /// Whether a side session may ask its question in `currentID`.
     static func allows(options: [ChipSpec.Item], currentID: String?) -> Bool {
-        guard let current = options.first(where: { $0.id == currentID }) else { return true }
-        return !selfApproves(current)
+        guard !options.isEmpty else { return true }
+        guard let current = options.first(where: { $0.id == currentID }),
+              let kind = kind(of: current)
+        else { return false }
+        // These run tool calls without asking, so the read-only permission
+        // gate would never see them.
+        return kind != .fullAccess && kind != .autoReview
     }
 
-    /// These modes run tool calls without asking, so the read-only
-    /// permission gate would never see them.
-    private static func selfApproves(_ item: ChipSpec.Item) -> Bool {
-        item.kind == .fullAccess || item.kind == .autoReview
+    private static func kind(of item: ChipSpec.Item) -> ACPModeKind? {
+        item.kind ?? knownKinds[item.id]
     }
-}
 
-enum ACPSideQuestionError: LocalizedError, Equatable {
-    case unsafeMode
-
-    var errorDescription: String? {
-        switch self {
-        case .unsafeMode:
-            "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
-        }
-    }
+    /// Mode ids of Claude and Codex adapters that predate `_meta.kind`.
+    private static let knownKinds: [String: ACPModeKind] = [
+        "default": .standard,
+        "read-only": .standard,
+        "plan": .plan,
+        "auto": .autoReview,
+        "agent": .autoReview,
+        "bypassPermissions": .fullAccess,
+        "agent-full-access": .fullAccess,
+    ]
 }
 
 private extension ACPMessage {

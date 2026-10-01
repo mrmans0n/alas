@@ -76,6 +76,27 @@ struct ACPPermissionPolicyTests {
         #expect(session.readOnlyBlockedTools == (allowed ? [] : ["Tool"]))
     }
 
+    @Test("a read-only rejection without a one-shot option cancels instead of persisting")
+    func readOnlyRejectionNeverPersists() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.readOnlyRestricted = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            .init(optionId: "never", name: "Never", kind: "reject_always")
+        ]
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "tc", title: "Edit", kind: "edit"),
+            options: opts
+        )
+
+        let resp = await policy.evaluate(scopeKey: "tool:Edit", options: opts, params: params, requestID: .number(1))
+
+        #expect(resp.outcome == .cancelled)
+    }
+
     @Test("a read-only read with only a persistent allow asks instead of taking it")
     func readOnlyReadNeverPicksPersistentAllow() async throws {
         let store = try makeStore()

@@ -1787,7 +1787,9 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Asks `question` in a hidden side session forked from `parentID` at its
-    /// last answer, replacing the parent's current side question.
+    /// last answer, replacing the parent's current side question. The entry
+    /// is registered before any await, so a dismissal or a newer question
+    /// during creation makes this call discard its side session.
     @discardableResult
     func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
         await dismissSideQuestion(parentID: parentID)
@@ -1822,7 +1824,6 @@ final class ACPSessionManager: ObservableObject {
             failSideQuestion(entry, parentID: parentID, error: error)
             throw error
         }
-        // Dismissed or replaced while the fork was being created.
         guard sideQuestions[parentID]?.id == entry.id else {
             await discardSideSession(id: side.id)
             return side
@@ -1836,7 +1837,11 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSideQuestionError.unsafeMode
         }
         guard sideQuestions[parentID]?.id == entry.id else { return side }
-        _ = submit(sessionId: side.id, text: question, attachments: [], intent: .auto) { _ in }
+        guard submit(sessionId: side.id, text: question, attachments: [], intent: .auto, onCompleted: { _ in }) else {
+            await discardSideSession(id: side.id)
+            failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.notAccepted)
+            throw ACPSideQuestionError.notAccepted
+        }
         sideQuestions[parentID]?.isSubmitted = true
         return side
     }
@@ -1887,7 +1892,7 @@ final class ACPSessionManager: ObservableObject {
         return true
     }
 
-    /// Keeps a failed question's card up with its error, without a session.
+    /// Keeps a failed question's entry, with its error and without a session.
     private func failSideQuestion(_ entry: ACPSideQuestion, parentID: ACPSession.ID, error: Error) {
         guard sideQuestions[parentID]?.id == entry.id else { return }
         sideQuestions[parentID]?.sessionID = nil
@@ -1916,21 +1921,20 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Keeps the parent's side session as a regular forked session, listed in
-    /// history. Returns nil when the parent has no running side session.
+    /// history. Returns nil unless its question was sent and the side
+    /// question is still current once the promotion is stored, so a second
+    /// Keep, a dismissal, or a newer question in the meantime wins.
     func promoteSideQuestion(parentID: ACPSession.ID) async throws -> ACPSession? {
-        // Only once the question was sent: promoting during attach would
-        // drop the entry, and the question would never be asked.
-        guard let current = sideQuestions[parentID], current.isSubmitted,
-              let sideID = current.sessionID, let side = sessions[sideID]
+        guard let entry = sideQuestions[parentID], entry.isSubmitted, !entry.isPromoting,
+              let sideID = entry.sessionID, let side = sessions[sideID]
         else { return nil }
+        sideQuestions[parentID]?.isPromoting = true
         await flushPersistence()
-        _ = try await persistence.promoteEphemeralSession(id: sideID)
-        // A concurrent dismissal may have deleted the side session meanwhile,
-        // and a concurrent /btw may have replaced it; leave the replacement.
-        guard sessions[sideID] === side, persistedRows[sideID] != nil else { return nil }
-        if sideQuestions[parentID]?.sessionID == sideID {
-            sideQuestions[parentID] = nil
+        let promoted = try await persistence.promoteEphemeralSession(id: sideID)
+        guard promoted, sideQuestions[parentID]?.id == entry.id, sessions[sideID] === side else {
+            return nil
         }
+        sideQuestions[parentID] = nil
         // Auto-run stays off; the session keeps running without the bypass
         // flag until its next launch.
         side.readOnlyRestricted = false
