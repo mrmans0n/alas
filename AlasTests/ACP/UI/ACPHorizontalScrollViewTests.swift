@@ -212,6 +212,28 @@ struct ACPHorizontalScrollViewTests {
         #expect(next.receivedEvents == [nextBegan, vertical])
     }
 
+    @Test("a gesture that started outside the table stays with the transcript, and the next gesture is routed fresh")
+    func gestureStartedElsewhereStaysWithTranscript() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let events = [
+            try phasedEvent(deltaX: 20, deltaY: 2, phase: .changed),
+            try phasedEvent(deltaX: 15, phase: .changed),
+            try phasedEvent(phase: .ended),
+            try phasedEvent(momentumPhase: .began),
+            try phasedEvent(deltaX: 8, momentumPhase: .changed),
+            try phasedEvent(momentumPhase: .ended),
+        ]
+
+        for event in events { scrollView.scrollWheel(with: event) }
+        #expect(next.receivedEvents == events)
+        next.clear()
+
+        for event in try horizontalGesture() { scrollView.scrollWheel(with: event) }
+        #expect(next.receivedEvents.isEmpty)
+    }
+
     @Test("a stray phased event after momentum ends is routed fresh")
     func momentumEndReleasesGesture() throws {
         let scrollView = scrollView(contentWidth: 900)

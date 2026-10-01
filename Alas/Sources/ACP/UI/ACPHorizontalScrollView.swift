@@ -105,6 +105,10 @@ final class ACPHorizontalNSScrollView: NSScrollView {
     }
 
     private var gestureOwner = GestureOwner.undecided
+    /// Whether this view saw the current gesture's `.began`/`.mayBegin`. A
+    /// gesture that started elsewhere (over prose) and slid under the table
+    /// belongs to the transcript for its whole life.
+    private var sawGestureStart = false
     /// Zero-delta phased events held while the owner is undecided.
     private var pendingEvents: [NSEvent] = []
     private static let pendingEventLimit = 8
@@ -129,11 +133,18 @@ final class ACPHorizontalNSScrollView: NSScrollView {
 
         if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
             gestureOwner = .undecided
+            sawGestureStart = true
             // `.began` legitimately follows its own `.mayBegin`; anything else
             // buffered belongs to an abandoned gesture.
             let continuesMayBegin = event.phase.contains(.began)
                 && pendingEvents.last?.phase.contains(.mayBegin) == true
             if !continuesMayBegin { pendingEvents.removeAll() }
+        }
+
+        if gestureOwner == .undecided, !sawGestureStart {
+            // Mid-gesture arrival: the transcript received the start, so it
+            // owns this event and everything after it, whatever its delta.
+            gestureOwner = .transcript
         }
 
         if gestureOwner == .undecided {
@@ -148,6 +159,7 @@ final class ACPHorizontalNSScrollView: NSScrollView {
                 // sequence to the transcript so its begin/end stay paired.
                 let flushed = pendingEvents + [event]
                 pendingEvents.removeAll()
+                sawGestureStart = false
                 for pending in flushed { nextResponder?.scrollWheel(with: pending) }
                 resetOwnerIfGestureOver(event)
                 return
@@ -180,6 +192,7 @@ final class ACPHorizontalNSScrollView: NSScrollView {
             || event.momentumPhase.contains(.cancelled)
         {
             gestureOwner = .undecided
+            sawGestureStart = false
         }
     }
 
