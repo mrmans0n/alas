@@ -78,6 +78,45 @@ enum ACPDelegatedOutcomeText {
         "Delegated session \(label(context)) finished its turn."
     }
 
+    /// A child turn the user cancelled. A notice only: the human intervened,
+    /// so it never wakes the parent.
+    static func cancelled(_ context: Context) -> String {
+        "Delegated session \(label(context)) had its turn cancelled by the user."
+    }
+
+    /// The kinds of prompt Alas itself sends a parent about one of its
+    /// children, as opposed to a report the child sent. Raw values are
+    /// persisted with the transcript row.
+    enum NoticeKind: String, CaseIterable, Sendable {
+        case needsDecision = "needs_decision"
+        case noResult = "no_result"
+        case failed
+    }
+
+    /// Recognizes a delivered prompt as one of Alas's own notices about a
+    /// child, from its first line. That line is always Alas's: a child's
+    /// `session_send` to its parent is wrapped in `childReport` at enqueue,
+    /// so a report's body can never be mistaken for a notice. Matching the
+    /// text, not the inbox id, also classifies rows an older build queued.
+    static func noticeKind(ofDelivered prompt: String) -> NoticeKind? {
+        let firstLine = prompt.prefix { $0 != "\n" }
+        guard firstLine.hasPrefix(systemPrefix + "Delegated session ") else { return nil }
+        // The verb follows the session label, and agent text (a failure
+        // message, a blocker summary) only follows the verb, so the earliest
+        // match is the real one.
+        let verbs: [(String, NoticeKind)] = [
+            (") finished its turn without sending a result.", .noResult),
+            (") has been waiting ", .needsDecision),
+            (") failed: ", .failed),
+        ]
+        return verbs
+            .compactMap { verb, kind in firstLine.range(of: verb).map { ($0.lowerBound, kind) } }
+            .min { $0.0 < $1.0 }?
+            .1
+    }
+
+    private static let systemPrefix = "[alas system] "
+
     /// Trims whitespace and keeps at most `limit` characters from the end,
     /// prefixing an ellipsis when anything was dropped.
     static func tail(_ text: String, limit: Int) -> String {
