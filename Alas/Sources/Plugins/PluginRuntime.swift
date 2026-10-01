@@ -123,8 +123,13 @@ final class PluginRuntime: @unchecked Sendable {
 
     private func evaluate(_ script: String) throws {
         installHost()
-        try call(limit: limits.timeForActivation) { _ = context.evaluateScript(script) }
-        guard let handle = context.globalObject.forProperty("handle"),
+        var handle: JSValue?
+        try call(limit: limits.timeForActivation) {
+            _ = context.evaluateScript(script)
+            // Reading `handle` can run a getter the plugin defined, so it happens under the watchdog too.
+            if context.exception == nil { handle = context.globalObject.forProperty("handle") }
+        }
+        guard let handle,
               let object = JSValueToObject(context.jsGlobalContextRef, handle.jsValueRef, nil),
               handle.isObject, JSObjectIsFunction(context.jsGlobalContextRef, object)
         else { throw PluginRuntimeError.missingHandle }
@@ -169,19 +174,28 @@ final class PluginRuntime: @unchecked Sendable {
             return true
         }, UnsafeMutableRawPointer(terminated))
         body()
+        // Converting a thrown value can run plugin code (a custom `toString`), so it stays under the watchdog.
+        let message = context.exception.map { Self.firstLine(prefix(of: $0, units: 2000) ?? "exception") }
         JSContextGroupClearExecutionTimeLimit(group)
-        let exception = context.exception
         context.exception = nil
         if let hostFailure { throw hostFailure }
-        guard let exception else { return }
         if terminated.pointee { throw PluginRuntimeError.timeout(milliseconds: Int(limit / .milliseconds(1))) }
-        throw PluginRuntimeError.exception(Self.firstLine(exception.toString() ?? "exception"))
+        if let message { throw PluginRuntimeError.exception(message) }
     }
 
     private func receive(_ value: JSValue) {
         guard hostFailure == nil else { return }
-        guard value.isString, let text = value.toString() else { return refuse(.badSend) }
+        guard value.isString else { return refuse(.badSend) }
         guard outbox.count < limits.maxSendsPerCall else { return refuse(.tooManySends(limits.maxSendsPerCall)) }
+        // UTF-8 never takes fewer bytes than UTF-16 code units, so a string that is too long by that count is
+        // refused before any of it is copied out of JavaScriptCore.
+        guard let jsString = JSValueToStringCopy(context.jsGlobalContextRef, value.jsValueRef, nil) else {
+            return refuse(.badSend)
+        }
+        let units = JSStringGetLength(jsString)
+        JSStringRelease(jsString)
+        guard units <= limits.maxMessageBytes else { return refuse(.messageTooLarge(units)) }
+        guard let text = value.toString() else { return refuse(.badSend) }
         let data = Data(text.utf8)
         guard data.count <= limits.maxMessageBytes else { return refuse(.messageTooLarge(data.count)) }
         outbox.append(data)
@@ -213,6 +227,13 @@ final class PluginRuntime: @unchecked Sendable {
         // The pointer is the start of the whole buffer, not of this view.
         let offset = JSObjectGetTypedArrayByteOffset(ref, object, nil)
         frames[tab] = PluginFrame(width: width, height: length / rowBytes, pixels: Data(bytes: base + offset, count: length))
+    }
+
+    /// At most `units` UTF-16 code units of `value` as text, without copying the rest out of JavaScriptCore.
+    private func prefix(of value: JSValue, units: Int) -> String? {
+        guard let string = JSValueToStringCopy(context.jsGlobalContextRef, value.jsValueRef, nil) else { return nil }
+        defer { JSStringRelease(string) }
+        return String(utf16CodeUnits: JSStringGetCharactersPtr(string), count: min(JSStringGetLength(string), units))
     }
 
     /// Records why a host function refused and throws into the script, which ends the call as failed.
