@@ -1810,7 +1810,7 @@ final class ACPSessionManager: ObservableObject {
         }
         // A concurrent /btw on the same parent may have registered first.
         if let replaced = sideQuestionSessionIDs.updateValue(side.id, forKey: parentID) {
-            try? await deletePersistedSession(id: replaced)
+            await discardSideSession(id: replaced)
         }
         await attach(to: side.id, freshlyCreated: true)
         guard sideQuestionSessionIDs[parentID] == side.id else { return side }
@@ -1827,7 +1827,20 @@ final class ACPSessionManager: ObservableObject {
     /// Closes the parent's side session and deletes it with its transcript.
     func dismissSideQuestion(parentID: ACPSession.ID) async {
         guard let sideID = sideQuestionSessionIDs.removeValue(forKey: parentID) else { return }
-        try? await deletePersistedSession(id: sideID)
+        await discardSideSession(id: sideID)
+    }
+
+    /// Deletes a side session. When the remote close or teardown fails, it
+    /// still drops the local runner and row: nothing else could reach a
+    /// hidden session to retry, and the launch purge skips fresh rows.
+    private func discardSideSession(id: ACPSession.ID) async {
+        do {
+            try await deletePersistedSession(id: id)
+        } catch {
+            await detach(sessionId: id)
+            try? await persistence.deleteSession(id: id)
+            forgetSession(id: id)
+        }
     }
 
     /// Keeps the parent's side session as a regular forked session, listed in
