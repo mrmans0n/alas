@@ -90,6 +90,35 @@ enum RemotePath {
         guard let host = split(anchor)?.host, path.hasPrefix("/"), split(path) == nil else { return path }
         return virtual(host: host, realPath: path)
     }
+
+    /// Resolve existing ancestors on the host without creating the destination.
+    /// Git reports physical paths, so optimistic rows must use the same identity.
+    static func resolvedWorktreeDestination(
+        _ path: String,
+        anchor: String,
+        runCommand: @Sendable (String) async throws -> ProcessResult
+    ) async throws -> URL {
+        let script = """
+        target=\(SSHCommand.shellQuote(realPath(path)))
+        parent=${target%/*}; leaf=${target##*/}; suffix=
+        [ -n "$parent" ] || parent=/
+        while [ ! -d "$parent" ]; do
+            [ ! -e "$parent" ] && [ ! -L "$parent" ] || exit 1
+            suffix="/${parent##*/}$suffix"
+            parent=${parent%/*}
+            [ -n "$parent" ] || parent=/
+        done
+        physical=$(cd "$parent" && pwd -P) || exit 1
+        printf '%s%s/%s' "${physical%/}" "$suffix" "$leaf"
+        """
+        let result = try await runCommand(script)
+        guard result.exitCode == 0, result.stdout.hasPrefix("/") else {
+            throw NSError(domain: "RemoteWorktreeDestination", code: Int(result.exitCode), userInfo: [
+                NSLocalizedDescriptionKey: "Could not resolve remote worktree destination: \(display(path)).",
+            ])
+        }
+        return URL(fileURLWithPath: virtualizing(result.stdout, like: anchor))
+    }
 }
 
 /// Strips this host's virtual paths from every ACP request and notification
