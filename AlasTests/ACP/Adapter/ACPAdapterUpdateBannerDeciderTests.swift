@@ -75,4 +75,16 @@ struct ACPAdapterUpdateBannerDeciderTests {
             dismissedLatest: nil)
         #expect(decision == .none)
     }
+
+    @Test("specialized setup banners suppress the generic failure banner")
+    func setupBannerSuppressesGenericFailure() {
+        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: .needsSetup(reason: "missing")))
+        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: .setupError(reason: "broken")))
+        #expect(!ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: .needsAuth(methods: [], reason: nil)))
+        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: .checking))
+        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: .ready))
+    }
 }

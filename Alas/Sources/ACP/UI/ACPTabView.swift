@@ -230,7 +230,8 @@ private struct ACPSessionView: View {
                 }
                 if let err = session.lastError {
                     errorBanner(err)
-                } else if case .failed(let reason) = session.agentState {
+                } else if case .failed(let reason) = session.agentState,
+                          ACPAdapterUpdateBannerDecider.showsGenericFailure(setupState: session.setupState) {
                     errorBanner(reason, dismissible: false)
                 }
                 if case .failed(let msg) = session.hydrationState {

@@ -16,4 +16,11 @@ enum ACPAdapterUpdateBannerDecider {
         if dismissedLatest == latest { return .none }
         return .showUpdate(current: current, latest: latest)
     }
+
+    static func showsGenericFailure(setupState: ACPSession.SetupState) -> Bool {
+        switch setupState {
+        case .checking, .ready: true
+        case .needsSetup, .setupError, .needsAuth: false
+        }
+    }
 }
