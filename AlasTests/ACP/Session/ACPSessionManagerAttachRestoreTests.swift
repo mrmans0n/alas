@@ -4600,7 +4600,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/new"])
         #expect(session.authMethods == [method])
         #expect(session.setupState == .needsAuth(methods: [method], reason: "401 Unauthorized"))
-        #expect(session.lastError?.contains("401 Unauthorized") == true)
+        #expect(session.lastError == nil)
         #expect(manager.runners[session.id] == nil)
         if case .failed(let message) = session.agentState {
             #expect(message == "401 Unauthorized")
@@ -4638,7 +4638,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.remoteSessionId == "remote-old")
         #expect(session.authMethods == [method])
         #expect(session.setupState == .needsAuth(methods: [method], reason: "auth_required: 401"))
-        #expect(session.lastError?.contains("auth_required: 401") == true)
+        #expect(session.lastError == nil)
         #expect(session.contextRecoveryStatus == nil)
         if case .failed(let message) = session.agentState {
             #expect(message == "auth_required: 401")
