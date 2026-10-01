@@ -7,7 +7,8 @@ enum RightPaneRailAction: Equatable {
     case expand(RightPaneTab)
     case select(RightPaneTab)
 
-    static func resolve(tapped: RightPaneTab, active: RightPaneTab, collapsed: Bool) -> Self {
+    /// `active` is nil while a plugin panel is selected.
+    static func resolve(tapped: RightPaneTab, active: RightPaneTab?, collapsed: Bool) -> Self {
         if collapsed { return .expand(tapped) }
         return tapped == active ? .collapse : .select(tapped)
     }
@@ -62,7 +63,7 @@ enum RightPaneRailModel {
 
     static func tabState(
         for tab: RightPaneTab,
-        active: RightPaneTab,
+        active: RightPaneTab?,
         collapsed: Bool
     ) -> RightPaneRailTabState {
         guard tab == active else { return .inactive }

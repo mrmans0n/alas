@@ -20,14 +20,20 @@ enum PluginTextFieldSync {
 }
 
 /// Renders a plugin's validated view tree with native controls and sends its `view/event`s.
+/// Renders a tab's tree or, with `panel`, a panel's.
 struct PluginViewTabView: View {
     let host: PluginHost
-    let tabIndex: Int
+    var tabIndex = 0
+    var panel: String?
+
+    private var root: PluginViewNode? {
+        if let panel { host.panelViews[panel] } else { host.views[tabIndex] }
+    }
 
     var body: some View {
-        if let root = host.views[tabIndex] {
+        if let root {
             // Every node is keyed by its id, so a re-render keeps focus, scroll position and typing.
-            PluginViewNodeView(node: root, events: PluginViewEvents(host: host, tabIndex: tabIndex))
+            PluginViewNodeView(node: root, events: PluginViewEvents(host: host, tabIndex: tabIndex, panel: panel))
                 .id(root.id)
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -38,9 +44,16 @@ struct PluginViewTabView: View {
 private struct PluginViewEvents {
     let host: PluginHost
     let tabIndex: Int
+    let panel: String?
 
     func send(_ id: String, _ kind: String, _ value: String? = nil) {
-        Task { await host.viewEvent(tab: tabIndex, id: id, kind: kind, value: value) }
+        Task {
+            if let panel {
+                await host.viewEvent(panel: panel, id: id, kind: kind, value: value)
+            } else {
+                await host.viewEvent(tab: tabIndex, id: id, kind: kind, value: value)
+            }
+        }
     }
 }
 

@@ -70,6 +70,11 @@ struct PluginTickParams: Codable, Equatable, Sendable {
     let dt: Int
 }
 
+struct PluginPanelVisibleParams: Codable, Equatable, Sendable {
+    let panel: String
+    let visible: Bool
+}
+
 struct PluginClickParams: Codable, Equatable, Sendable {
     let tab: Int
     let region: String
@@ -132,12 +137,15 @@ enum PluginLastMessageText {
 
 // API 3. `view/render`'s `root` and `storage/set`'s `value` are arbitrary JSON, read with `JSONSerialization`.
 
+/// Exactly one of `tab` and `panel` (API 5) says which tree the message is about.
 struct PluginViewRenderHeader: Decodable {
-    let tab: Int
+    let tab: Int?
+    let panel: String?
 }
 
 struct PluginViewEventParams: Codable, Equatable, Sendable {
-    let tab: Int
+    var tab: Int?
+    var panel: String?
     let id: String
     let kind: String
     let value: String?

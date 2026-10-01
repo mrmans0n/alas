@@ -52,6 +52,16 @@ struct PluginTabContribution: Equatable, Sendable {
     var kind: Kind = .canvas
 }
 
+/// A view tree the plugin describes with `view/render {panel}`, shown outside the center tabs.
+/// The right pane's rail is the only location so far.
+struct PluginPanelContribution: Equatable, Sendable {
+    static let defaultIcon = "puzzlepiece.extension"
+
+    let id: String
+    let title: String
+    var icon: String = defaultIcon
+}
+
 /// A value the user sets for the plugin in Settings → Plugins.
 struct PluginSetting: Equatable, Sendable {
     enum Kind: String, Sendable { case string, bool, secret }
@@ -101,6 +111,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case needsNewerAPI(String)
     case invalidSetting(String)
     case invalidNetwork(String)
+    case invalidPanel(String)
 
     var description: String {
         switch self {
@@ -132,6 +143,8 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "invalid setting: \(reason)"
         case .invalidNetwork(let reason):
             "invalid network list: \(reason)"
+        case .invalidPanel(let reason):
+            "invalid panel contribution: \(reason)"
         }
     }
 }
@@ -143,6 +156,7 @@ struct PluginManifest: Equatable, Sendable {
     static let maxTabTitleLength = 40
     static let maxCommands = 16
     static let maxSettings = 16
+    static let maxPanels = 2
 
     let id: String
     let name: String
@@ -151,6 +165,7 @@ struct PluginManifest: Equatable, Sendable {
     let entry: String
     let capabilities: [PluginCapability]
     var tabs: [PluginTabContribution] = []
+    var panels: [PluginPanelContribution] = []
     var commands: [PluginCommandContribution] = []
     var events: [PluginEvent] = []
     var settings: [PluginSetting] = []
@@ -200,6 +215,8 @@ struct PluginManifest: Equatable, Sendable {
         let tabs = try parseTabs(raw.contributes?.tabs ?? [])
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
         let commands = try parseCommands(raw.contributes?.commands ?? [])
+        if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
+        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs)
         if raw.network != nil || raw.settings != nil, api < 5 {
             throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
         }
@@ -215,7 +232,7 @@ struct PluginManifest: Equatable, Sendable {
         let settings = try parseSettings(raw.settings ?? [], network: network)
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
-            capabilities: capabilities, tabs: tabs, commands: commands, events: events,
+            capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
             settings: settings, network: network)
     }
 
@@ -278,6 +295,29 @@ struct PluginManifest: Equatable, Sendable {
         return commands
     }
 
+    private static func parsePanels(
+        _ raw: [Raw.RawPanel], tabs: [PluginTabContribution]
+    ) throws(PluginManifestError) -> [PluginPanelContribution] {
+        guard raw.count <= maxPanels else { throw .invalidPanel("at most \(maxPanels) panels") }
+        var panels: [PluginPanelContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidPanel("invalid panel id \"\(id)\"") }
+            guard !panels.contains(where: { $0.id == id }) else { throw .invalidPanel("duplicate panel id \"\(id)\"") }
+            guard !tabs.contains(where: { $0.id == id }) else { throw .invalidPanel("panel id \"\(id)\" is also a tab id") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidPanel("panel \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            // Locations will keep growing, so one this Alas does not know is skipped rather than refused.
+            guard (entry.location ?? "right") == "right" else { continue }
+            let icon = (entry.icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            panels.append(PluginPanelContribution(
+                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon))
+        }
+        return panels
+    }
+
     private static func parseTabs(_ raw: [Raw.RawTab]) throws(PluginManifestError) -> [PluginTabContribution] {
         guard raw.count <= maxTabs else { throw .invalidTab("at most \(maxTabs) tabs") }
         var tabs: [PluginTabContribution] = []
@@ -326,9 +366,16 @@ private struct Raw: Decodable {
             case defaultValue = "default"
         }
     }
+    struct RawPanel: Decodable {
+        let id: String?
+        let title: String?
+        let icon: String?
+        let location: String?
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
+        let panels: [RawPanel]?
     }
 
     let id: String?

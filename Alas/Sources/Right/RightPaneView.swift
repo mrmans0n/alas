@@ -115,9 +115,16 @@ struct RightPaneView: View {
         return "\(rps.fileTreeGeneration):\(rps.fileTreeRevision):\(rps.fileTreeRefreshRevision):\(rps.loadedFileTreeChildPaths.count):\(bookmarks.joined(separator: "|"))"
     }
 
+    private var pluginPanels: [PluginPanelItem] {
+        state.pluginPanels(projectID: worktree.projectId)
+    }
+
     @ViewBuilder
-    private func tabContent(rps: RightPaneState) -> some View {
-        if rps.hasLoadedSnapshot || rps.activeTab == .agent {
+    private func tabContent(rps: RightPaneState, panel: PluginPanelItem?) -> some View {
+        if let panel {
+            PluginPanelView(state: state, projectID: worktree.projectId, item: panel)
+                .id(panel.ref)
+        } else if rps.hasLoadedSnapshot || rps.activeTab == .agent {
             switch rps.activeTab {
             case .changes:
                 ChangesTabView(
@@ -212,15 +219,17 @@ struct RightPaneView: View {
 
     @ViewBuilder
     private func presentation(rps: RightPaneState) -> some View {
+        let panels = pluginPanels
+        let panel = PluginPanelItem.selected(rps.activePluginPanel, in: panels)
         HStack(spacing: 0) {
             if !collapsed {
                 VStack(spacing: 0) {
-                    paneToolbar(rps: rps)
+                    paneToolbar(rps: rps, panelTitle: panel?.title)
                     // Hides the indicators of every SwiftUI ScrollView in
                     // the tab bodies (Files, Agent, Run). The Changes tab
                     // scrolls through AppKit, which this cannot reach — it
                     // opts out via `AppKitDiffScroller.hidesScroller`.
-                    tabContent(rps: rps)
+                    tabContent(rps: rps, panel: panel)
                         .scrollIndicators(.hidden)
                 }
                 // The rail stays put at the window edge; the body keeps
@@ -234,20 +243,24 @@ struct RightPaneView: View {
                 ))
             }
             RightPaneRail(
-                activeTab: rps.activeTab,
+                activeTab: panel == nil ? rps.activeTab : nil,
                 collapsed: collapsed,
                 changesCount: rps.displayChanges.count,
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
                 activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
+                panels: panels,
+                activePanel: panel?.ref,
+                onPanel: { handlePanel($0, active: panel?.ref, rps: rps) },
                 onAction: { action in handle(action, rps: rps) }
             )
         }
     }
 
-    private func paneToolbar(rps: RightPaneState) -> some View {
+    private func paneToolbar(rps: RightPaneState, panelTitle: String?) -> some View {
         RightPaneToolbar(
             tab: rps.activeTab,
+            panelTitle: panelTitle,
             branch: rps.currentBranch,
             totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
             totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
@@ -278,8 +291,9 @@ struct RightPaneView: View {
               let tab = RightPaneTab(rawValue: raw),
               state.acceptsRightPaneTabShortcut(tab)
         else { return }
+        let panelShown = PluginPanelItem.selected(rps.activePluginPanel, in: pluginPanels) != nil
         handle(
-            RightPaneRailAction.resolve(tapped: tab, active: rps.activeTab, collapsed: collapsed),
+            RightPaneRailAction.resolve(tapped: tab, active: panelShown ? nil : rps.activeTab, collapsed: collapsed),
             rps: rps
         )
     }
@@ -293,8 +307,23 @@ struct RightPaneView: View {
         if rps.activeTab != outcome.tab {
             rps.activeTab = outcome.tab
         }
-        if state.config.rightPaneVisible != outcome.visible {
-            state.config.rightPaneVisible = outcome.visible
+        if action != .collapse { rps.activePluginPanel = nil }
+        setVisible(outcome.visible)
+    }
+
+    /// A panel button works like a tab's: it opens a collapsed pane on the panel and collapses the pane when already shown.
+    private func handlePanel(_ ref: PluginPanelRef, active: PluginPanelRef?, rps: RightPaneState) {
+        if !collapsed, ref == active {
+            setVisible(false)
+            return
+        }
+        rps.activePluginPanel = ref
+        setVisible(true)
+    }
+
+    private func setVisible(_ visible: Bool) {
+        if state.config.rightPaneVisible != visible {
+            state.config.rightPaneVisible = visible
             state.saveConfig()
         }
     }

@@ -11,6 +11,10 @@ private func render(tab: Int = 0, _ root: String = buttonTree) -> String {
     #"{"jsonrpc":"2.0","method":"view/render","params":{"tab":\#(tab),"root":\#(root)}}"#
 }
 
+private func render(panel: String, _ root: String = buttonTree) -> String {
+    #"{"jsonrpc":"2.0","method":"view/render","params":{"panel":"\#(panel)","root":\#(root)}}"#
+}
+
 private func taskStart(id: Int = 1, title: String = "Fix it", prompt: String = "Please fix it") -> String {
     #"{"jsonrpc":"2.0","id":\#(id),"method":"task/start","params":{"title":"\#(title)","prompt":"\#(prompt)"}}"#
 }
@@ -41,7 +45,7 @@ struct PluginHostTests {
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
     static let canvasManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
-    static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}]}}"#
+    static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
@@ -496,13 +500,16 @@ struct PluginHostTests {
         host.trace.filter { $0.direction == .toPlugin && $0.text.contains(#""id":"#) }.map(\.text)
     }
 
-    @Test func aValidRenderReplacesTheTabsTree() async throws {
+    @Test func aValidRenderReplacesTheTabsOrPanelsTree() async throws {
         let host = try makeHost(
-            [[.send(activateOK), .send(render(#"{"id":"root","kind":"vstack","children":[]}"#)), .send(render())]],
+            [[.send(activateOK), .send(render(#"{"id":"root","kind":"vstack","children":[]}"#)), .send(render()),
+              .send(render(panel: "p", #"{"id":"side","kind":"vstack","children":[]}"#))]],
             manifest: Self.viewManifest)
         await host.activate()
         #expect(host.state == .active)
         #expect(host.views[0]?.children.count == 1)
+        #expect(host.panelViews["p"]?.id == "side")
+        #expect(host.views.count == 1)
     }
 
     @Test(arguments: [
@@ -510,6 +517,8 @@ struct PluginHostTests {
         ([.send(render(#"{"id":"a","kind":"nope"}"#))], "view/render"),
         ([.send(render(tab: 1))], "view/render"),
         ([.send(render(tab: 9))], "view/render"),
+        ([.send(render(panel: "nope"))], #"panel "nope""#),
+        ([.send(#"{"jsonrpc":"2.0","method":"view/render","params":{"tab":0,"panel":"p","root":\#(buttonTree)}}"#)], "exactly one"),
         ([.send(#"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[]}}"#)], "canvas/regions"),
         ([.present(tab: 0, length: 16, width: 2)], "view tab"),
     ])
@@ -524,13 +533,39 @@ struct PluginHostTests {
     }
 
     @Test func viewEventsOnlyReachNodesInTheCurrentTree() async throws {
-        let host = try makeHost([[.send(activateOK), .send(render())]], manifest: Self.viewManifest)
+        let host = try makeHost(
+            [[.send(activateOK), .send(render()), .send(render(panel: "p", #"{"id":"side","kind":"button","label":"S"}"#))]],
+            manifest: Self.viewManifest)
         await host.activate()
         await host.viewEvent(tab: 0, id: "nope", kind: "click", value: nil)
         await host.viewEvent(tab: 0, id: "go", kind: "click", value: nil)
-        let events = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("view/event") }
-        #expect(events.count == 1)
-        #expect(events.first?.text.contains(#""id":"go""#) == true)
+        // Each tree answers only for its own nodes.
+        await host.viewEvent(panel: "p", id: "go", kind: "click", value: nil)
+        await host.viewEvent(panel: "p", id: "side", kind: "click", value: nil)
+        let events = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("view/event") }.map(\.text)
+        try #require(events.count == 2)
+        #expect(events[0].contains(#""id":"go""#) && events[0].contains(#""tab":0"#) && !events[0].contains("panel"))
+        #expect(events[1].contains(#""id":"side""#) && events[1].contains(#""panel":"p""#) && !events[1].contains("tab"))
+    }
+
+    /// Sent when the first place shows the panel and when the last one stops, and again to a restarted instance.
+    @Test func panelVisibilityIsSentOnTransitionsAndToANewInstance() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.viewManifest)
+        func sent() -> [Bool] {
+            host.trace.filter { $0.direction == .toPlugin && $0.text.contains("panel/visible") }
+                .map { $0.text.contains(#""visible":true"#) }
+        }
+        await host.activate()
+        await host.setPanelVisible("p", true)
+        await host.setPanelVisible("p", true)
+        await host.setPanelVisible("nope", true)
+        await host.setPanelVisible("p", false)
+        await host.setPanelVisible("p", false)
+        await host.setPanelVisible("p", true)
+        #expect(sent() == [true, false, true])
+        await host.deactivate()
+        await host.activate()
+        #expect(sent() == [true])
     }
 
     @Test func taskStartNeedsTheGrant() async throws {

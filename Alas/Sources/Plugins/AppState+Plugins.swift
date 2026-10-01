@@ -195,6 +195,14 @@ extension AppState {
             }
     }
 
+    /// The right pane's plugin panels for `projectID`.
+    func pluginPanels(projectID: String) -> [PluginPanelItem] {
+        guard let manager = pluginManager else { return [] }
+        return PluginPanelItem.items(manager.plugins.map {
+            ($0.manifest, manager.host(pluginID: $0.id, projectID: projectID) != nil)
+        })
+    }
+
     /// The commands `slot` shows for `projectID`, from plugins running there.
     func pluginCommands(_ slot: PluginCommandSlot, projectID: String?) -> [PluginCommandItem] {
         guard let manager = pluginManager, let projectID else { return [] }

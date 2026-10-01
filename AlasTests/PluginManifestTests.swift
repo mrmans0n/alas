@@ -9,6 +9,10 @@ private func manifest(api: Int = 5, _ extra: String = "") -> String {
 
 private func commands(_ list: String) -> String { #","contributes":{"commands":[\#(list)]}"# }
 
+private func panels(_ list: String, tabs: String = "") -> String {
+    #","contributes":{"tabs":[\#(tabs)],"panels":[\#(list)]}"#
+}
+
 private func network(_ hosts: String) -> String { #","capabilities":["network"],"network":[\#(hosts)]"# }
 
 private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
@@ -46,6 +50,12 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":5}"#, .malformed),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.write"]}"#, .unknownCapability("files.write")),
+        (manifest(api: 4, panels(#"{"id":"p","title":"P"}"#)), .needsNewerAPI(#""contributes.panels""#)),
+        (manifest(panels(#"{"id":"P!","title":"P"}"#)), .invalidPanel(#"invalid panel id "P!""#)),
+        (manifest(panels(#"{"id":"p","title":"P"},{"id":"p","title":"Q"}"#)), .invalidPanel(#"duplicate panel id "p""#)),
+        (manifest(panels(#"{"id":"p","title":"P"}"#, tabs: #"{"id":"p","title":"T","kind":"view"}"#)), .invalidPanel(#"panel id "p" is also a tab id"#)),
+        (manifest(panels(#"{"id":"p","title":"\#(String(repeating: "x", count: 41))"}"#)), .invalidPanel(#"panel "p" needs a title of 1 to 40 characters"#)),
+        (manifest(panels(#"{"id":"a","title":"A"},{"id":"b","title":"B"},{"id":"c","title":"C"}"#)), .invalidPanel("at most 2 panels")),
         (manifest(api: 4, #","settings":[]"#), .needsNewerAPI(#""settings""#)),
         (manifest(#","capabilities":["network"]"#), .invalidNetwork(#"capability "network" needs at least one host"#)),
         (manifest(#","network":["a.com"]"#), .invalidNetwork(#""network" needs capability "network""#)),
@@ -78,6 +88,13 @@ struct PluginManifestTests {
             #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar"]}]}"#).utf8))
         #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: [.worktreeMenu])])
         #expect(parsed.events == [.sessionFinished])
+    }
+
+    /// Unknown locations are skipped like unknown command slots; the icon defaults.
+    @Test func panelsDefaultTheirIconAndSkipUnknownLocations() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(panels(
+            #"{"id":"a","title":"A","location":"right"},{"id":"b","title":"B","icon":"checklist","location":"changes.section"}"#)).utf8))
+        #expect(parsed.panels == [PluginPanelContribution(id: "a", title: "A")])
     }
 
     @Test(arguments: [
