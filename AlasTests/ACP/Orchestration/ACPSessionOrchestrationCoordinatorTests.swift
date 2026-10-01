@@ -980,6 +980,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
         #expect(pending.map(\.kind) == [.prompt, .notice])
         #expect(pending.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) failed: prompt failed: boom.")
+        #expect(pending.last?.prompt == "Delegated session child (codex, worktree feature-x) had its turn cancelled by the user.")
     }
 
     @Test("duplicate completion events enqueue nothing new")

@@ -11,6 +11,12 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     var senderRelationship: String? = nil
     /// The sender's agent id, recorded with `senderRelationship`.
     var senderAgentId: String? = nil
+    /// Set when the prompt is Alas's own notice about the child named by
+    /// `sessionId` (an escalated blocker, a turn without a result, a
+    /// failure) rather than a report the child sent: an
+    /// `ACPDelegatedOutcomeText.NoticeKind` raw value. A plain string so a
+    /// value from a newer build still decodes.
+    var childNoticeKind: String? = nil
 
     static let childRelationship = "child"
 
@@ -27,6 +33,7 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
            senderDelegation.parentSessionId == message.targetSessionId {
             self.senderRelationship = Self.childRelationship
             self.senderAgentId = senderDelegation.agentId
+            self.childNoticeKind = ACPDelegatedOutcomeText.noticeKind(ofDelivered: message.prompt)?.rawValue
         }
     }
 
@@ -34,12 +41,14 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         sessionId: String,
         messageId: String,
         senderRelationship: String? = nil,
-        senderAgentId: String? = nil
+        senderAgentId: String? = nil,
+        childNoticeKind: String? = nil
     ) {
         self.sessionId = sessionId
         self.messageId = messageId
         self.senderRelationship = senderRelationship
         self.senderAgentId = senderAgentId
+        self.childNoticeKind = childNoticeKind
     }
 
     /// Whether both describe the same inbox delivery. Ignores the sender
@@ -49,16 +58,26 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         sessionId == other.sessionId && messageId == other.messageId
     }
 
-    /// The caption above a delivered prompt in the receiving transcript.
+    /// The caption above a delivered prompt in the receiving transcript:
+    /// a child's own report, Alas's notice about a child, or a generic
+    /// delegated prompt.
     static func transcriptLabel(
         for source: ACPDelegatedPromptSource,
         agentDisplayName: (String) -> String
     ) -> String {
         guard source.isFromChild else { return "Delegated prompt" }
         let shortId = String(source.sessionId.prefix(8))
-        guard let agentId = source.senderAgentId, !agentId.isEmpty else {
-            return "Report from child · \(shortId)"
+        let child = source.senderAgentId.flatMap { $0.isEmpty ? nil : agentDisplayName($0) }
+            .map { "\($0) child" } ?? "child"
+        guard let noticeKind = source.childNoticeKind else {
+            return "Report from \(child) · \(shortId)"
         }
-        return "Report from \(agentDisplayName(agentId)) child · \(shortId)"
+        let subject = "Alas · \(child) \(shortId)"
+        switch ACPDelegatedOutcomeText.NoticeKind(rawValue: noticeKind) {
+        case .needsDecision: return "\(subject) needs a human decision"
+        case .noResult: return "\(subject) finished without a result"
+        case .failed: return "\(subject) failed"
+        case nil: return subject
+        }
     }
 }
