@@ -69,6 +69,9 @@ struct PluginsPane: View {
                         AlasButton(title: "Approve…", style: .normal) { approving = plugin }
                     }
                 }
+                if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
+                    PluginSettingsForm(settings: manager.settings(for: plugin))
+                }
                 ForEach(manager.hosts(for: plugin), id: \.key) { entry in
                     SettingsRow(name: "\(entry.host.project.name) host", desc: entry.host.state.displayText) {
                         AlasButton(title: "Restart", style: .subtle) { Task { await manager.restart(entry.key) } }
@@ -169,6 +172,79 @@ struct PluginsPane: View {
     }
 }
 
+/// The plugin's declared settings. Text is committed on Return or when the field loses focus;
+/// a stored secret is never shown, only whether one is set.
+private struct PluginSettingsForm: View {
+    let settings: PluginSettings
+
+    var body: some View {
+        ForEach(settings.declared, id: \.key) { setting in
+            switch setting.kind {
+            case .string:
+                SettingsRow(name: setting.title) { PluginTextSetting(settings: settings, key: setting.key) }
+            case .bool:
+                SettingsRow(name: setting.title) {
+                    AlasToggle(on: Binding(
+                        get: { settings.bool(setting.key) },
+                        set: { settings.set(setting.key, .bool($0)) }))
+                }
+            case .secret:
+                let isSet = settings.isSecretSet(setting.key)
+                SettingsRow(
+                    name: setting.title,
+                    desc: (isSet ? "Set" : "Not set") + ". Sent only to " + setting.hosts.joined(separator: ", ") + ".") {
+                    PluginSecretSetting(settings: settings, key: setting.key, isSet: isSet)
+                }
+            }
+        }
+    }
+}
+
+private struct PluginTextSetting: View {
+    let settings: PluginSettings
+    let key: String
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("", text: $draft)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 220)
+            .focused($focused)
+            .onAppear { draft = settings.string(key) }
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+    }
+
+    private func commit() {
+        guard draft != settings.string(key) else { return }
+        settings.set(key, .string(draft))
+    }
+}
+
+private struct PluginSecretSetting: View {
+    let settings: PluginSettings
+    let key: String
+    let isSet: Bool
+    @State private var draft = ""
+
+    var body: some View {
+        HStack {
+            SecureField(isSet ? "Replace" : "Paste a value", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 160)
+                .onSubmit {
+                    guard !draft.isEmpty else { return }
+                    settings.setSecret(key, draft)
+                    draft = ""
+                }
+            if isSet {
+                AlasButton(title: "Clear", style: .subtle) { settings.setSecret(key, nil) }
+            }
+        }
+    }
+}
+
 /// Host log collapsed by default: PluginHost retains up to 200 entries of up
 /// to 2,000 characters each, so rendering it inline would flood the pane.
 private struct HostLogDisclosure: View {
@@ -210,6 +286,13 @@ private struct PluginApprovalSheet: View {
             } else {
                 Text("It will be able to:")
                 ForEach(plugin.manifest.capabilities, id: \.self) { Text("• \($0.summary)") }
+            }
+            if !plugin.manifest.network.isEmpty {
+                Text("Web requests: " + plugin.manifest.network.joined(separator: ", "))
+                    .font(.callout).textSelection(.enabled)
+            }
+            ForEach(plugin.manifest.settings.filter { $0.kind == .secret }, id: \.key) { secret in
+                Text("• Can use \(secret.title) with \(secret.hosts.joined(separator: ", "))")
             }
             Text("Changing the plugin's files requires approving it again.")
                 .font(.caption).foregroundStyle(.secondary)

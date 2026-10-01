@@ -7,9 +7,16 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case tasksStart = "tasks.start"
     case sessionRead = "session.read"
     case notify
+    case network
+    case timers
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
-    var api: Int { self == .notify ? 5 : 4 }
+    var api: Int {
+        switch self {
+        case .notify, .network, .timers: 5
+        default: 4
+        }
+    }
 
     /// Plain-language description shown when the user approves a plugin.
     var summary: String {
@@ -20,6 +27,8 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .tasksStart: "Create worktrees and start agents in this project"
         case .sessionRead: "Read agents' final replies and session changes in this project"
         case .notify: "Show notifications"
+        case .network: "Make web requests to the hosts it lists"
+        case .timers: "Run on a schedule"
         }
     }
 }
@@ -43,6 +52,41 @@ struct PluginTabContribution: Equatable, Sendable {
     var kind: Kind = .canvas
 }
 
+/// A value the user sets for the plugin in Settings → Plugins.
+struct PluginSetting: Equatable, Sendable {
+    enum Kind: String, Sendable { case string, bool, secret }
+
+    let key: String
+    let title: String
+    let kind: Kind
+    var defaultValue: PluginSettingValue?
+    /// Secret only: the hosts its `{{secret:key}}` may be sent to.
+    var hosts: [String] = []
+}
+
+/// A setting's value or default; encodes as a bare JSON string or boolean.
+enum PluginSettingValue: Codable, Equatable, Sendable {
+    case string(String)
+    case bool(Bool)
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else {
+            self = .string(try container.decode(String.self))
+        }
+    }
+}
+
 enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case malformed
     case missingField(String)
@@ -55,6 +99,8 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case unknownEvent(String)
     case eventNeedsCapability(String)
     case needsNewerAPI(String)
+    case invalidSetting(String)
+    case invalidNetwork(String)
 
     var description: String {
         switch self {
@@ -82,6 +128,10 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "event \"\(name)\" needs capability \"\(PluginCapability.sessionRead.rawValue)\""
         case .needsNewerAPI(let feature):
             "\(feature) needs \"api\": 5"
+        case .invalidSetting(let reason):
+            "invalid setting: \(reason)"
+        case .invalidNetwork(let reason):
+            "invalid network list: \(reason)"
         }
     }
 }
@@ -92,6 +142,7 @@ struct PluginManifest: Equatable, Sendable {
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
+    static let maxSettings = 16
 
     let id: String
     let name: String
@@ -102,6 +153,9 @@ struct PluginManifest: Equatable, Sendable {
     var tabs: [PluginTabContribution] = []
     var commands: [PluginCommandContribution] = []
     var events: [PluginEvent] = []
+    var settings: [PluginSetting] = []
+    /// Hosts `http/fetch` may reach: exact, lowercase names.
+    var network: [String] = []
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -146,9 +200,63 @@ struct PluginManifest: Equatable, Sendable {
         let tabs = try parseTabs(raw.contributes?.tabs ?? [])
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
         let commands = try parseCommands(raw.contributes?.commands ?? [])
+        if raw.network != nil || raw.settings != nil, api < 5 {
+            throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
+        }
+        let network = raw.network ?? []
+        if capabilities.contains(.network) {
+            guard !network.isEmpty else { throw .invalidNetwork("capability \"network\" needs at least one host") }
+        } else if !network.isEmpty {
+            throw .invalidNetwork("\"network\" needs capability \"network\"")
+        }
+        for host in network where !isValidHost(host) {
+            throw .invalidNetwork("\"\(host)\" is not a lowercase hostname; no schemes, ports or wildcards")
+        }
+        let settings = try parseSettings(raw.settings ?? [], network: network)
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
-            capabilities: capabilities, tabs: tabs, commands: commands, events: events)
+            capabilities: capabilities, tabs: tabs, commands: commands, events: events,
+            settings: settings, network: network)
+    }
+
+    static func isValidHost(_ host: String) -> Bool {
+        host.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil
+    }
+
+    private static func parseSettings(_ raw: [Raw.RawSetting], network: [String]) throws(PluginManifestError) -> [PluginSetting] {
+        guard raw.count <= maxSettings else { throw .invalidSetting("at most \(maxSettings) settings") }
+        var settings: [PluginSetting] = []
+        for entry in raw {
+            let key = entry.key ?? ""
+            // Also the `{{secret:key}}` placeholder, so no braces or spaces.
+            guard key.wholeMatch(of: /[A-Za-z0-9_-]{1,64}/) != nil else {
+                throw .invalidSetting("invalid setting key \"\(key)\"")
+            }
+            guard !settings.contains(where: { $0.key == key }) else { throw .invalidSetting("duplicate setting key \"\(key)\"") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidSetting("setting \"\(key)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            guard let kind = PluginSetting.Kind(rawValue: entry.type ?? "") else {
+                throw .invalidSetting("setting \"\(key)\" has unknown type \"\(entry.type ?? "")\"")
+            }
+            switch (kind, entry.defaultValue) {
+            case (_, nil), (.string, .string?), (.bool, .bool?): break
+            default: throw .invalidSetting("setting \"\(key)\" has a default of the wrong type")
+            }
+            let hosts = entry.hosts ?? []
+            if kind == .secret {
+                guard !hosts.isEmpty else { throw .invalidSetting("secret \"\(key)\" needs at least one host") }
+                // A secret only travels in `http/fetch`, so its hosts must be ones the plugin may reach.
+                if let host = hosts.first(where: { !network.contains($0) }) {
+                    throw .invalidSetting("secret \"\(key)\" names \"\(host)\", which is not in \"network\"")
+                }
+            } else if !hosts.isEmpty {
+                throw .invalidSetting("only secret settings take hosts")
+            }
+            settings.append(PluginSetting(key: key, title: title, kind: kind, defaultValue: entry.defaultValue, hosts: hosts))
+        }
+        return settings
     }
 
     private static func parseCommands(_ raw: [Raw.RawCommand]) throws(PluginManifestError) -> [PluginCommandContribution] {
@@ -206,6 +314,18 @@ private struct Raw: Decodable {
         let icon: String?
         let slots: [String]?
     }
+    struct RawSetting: Decodable {
+        let key: String?
+        let title: String?
+        let type: String?
+        let defaultValue: PluginSettingValue?
+        let hosts: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case key, title, type, hosts
+            case defaultValue = "default"
+        }
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
@@ -218,10 +338,12 @@ private struct Raw: Decodable {
     let entry: String?
     let capabilities: [String]?
     let events: [String]?
+    let settings: [RawSetting]?
+    let network: [String]?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, contributes }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -234,6 +356,8 @@ private struct Raw: Decodable {
         capabilities = container.contains(.capabilities)
             ? try container.decode([String].self, forKey: .capabilities) : nil
         events = container.contains(.events) ? try container.decode([String].self, forKey: .events) : nil
+        settings = container.contains(.settings) ? try container.decode([RawSetting].self, forKey: .settings) : nil
+        network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)

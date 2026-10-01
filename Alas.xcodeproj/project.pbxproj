@@ -568,6 +568,7 @@
 		3F461A64F269FCD84BE994EA /* ACPRestoreFailureMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCAE824F2D85C382353D9FC5 /* ACPRestoreFailureMessage.swift */; };
 		3F54F0437585F96F5774A3BD /* ACPSetupNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6791BB640C39115289BF6D07 /* ACPSetupNudgeBanner.swift */; };
 		3F60D33828B046E13706FFD3 /* RemoteDeviceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33E8F2129F2A32E3C4534CC /* RemoteDeviceTests.swift */; };
+		3F6D38A1836E44BA242ED792 /* PluginSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335B2B000025A83F204A0524 /* PluginSettings.swift */; };
 		3FCC4EDA31A96BE121F45D44 /* ACPComposerPlaceholderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85E54E9F53ECFE9C205788F1 /* ACPComposerPlaceholderTests.swift */; };
 		3FD4E84E222D586F7C6D3946 /* TabsManagerReviewSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9D3F3FFE39D7E29827D83D /* TabsManagerReviewSessionTests.swift */; };
 		3FE3D85D5E833DE3A91FD444 /* CopilotInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64C0B7363363C77718B446C /* CopilotInstaller.swift */; };
@@ -1889,6 +1890,7 @@
 		DE33366A35436471AE0DAE96 /* DiffReviewRenderBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEE54F0320B9F40BEF46FB85 /* DiffReviewRenderBudgetTests.swift */; };
 		DE41CB04CDC89D09346494A5 /* LineEndingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB52B59655B85764D85CFB7F /* LineEndingTests.swift */; };
 		DE431266B60826A2EA3736DF /* LineBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C954F77AD0867F7FD39A5ED7 /* LineBuffer.swift */; };
+		DE5A3757086CCBDB47DD4081 /* PluginNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 512B1885624D4E69D7906ABA /* PluginNetwork.swift */; };
 		DE91F7958CC50097DF9CAF8F /* ACPDictationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2117FFCCDC663D9083D0791E /* ACPDictationService.swift */; };
 		DE9A1070F5B82F94AE17C378 /* catppuccin-mocha.json in Resources */ = {isa = PBXBuildFile; fileRef = 1D53F9D73E9945466AE65230 /* catppuccin-mocha.json */; };
 		DEBA25FCF25D26395BD04F73 /* EditorConflictBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */; };
@@ -2651,6 +2653,7 @@
 		331B138E37587DF6FB4139F8 /* ACPOrchestrationStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPOrchestrationStoreTests.swift; sourceTree = "<group>"; };
 		332ECD18C5EC56195D662FB8 /* NextPromptContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPromptContext.swift; sourceTree = "<group>"; };
 		333EA07C2BCA5E18F55E2613 /* AppConfigChangesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigChangesTests.swift; sourceTree = "<group>"; };
+		335B2B000025A83F204A0524 /* PluginSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginSettings.swift; sourceTree = "<group>"; };
 		336ADD8484D99054ADDBA588 /* CursorModelVariantsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorModelVariantsTests.swift; sourceTree = "<group>"; };
 		3375A79ACFD3567389DA855C /* FileResultRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileResultRow.swift; sourceTree = "<group>"; };
 		3378F0E7AE54D5896DF9CFC4 /* SignatureHelpFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureHelpFeature.swift; sourceTree = "<group>"; };
@@ -2897,6 +2900,7 @@
 		50BC2802025FA560D35EB42F /* RepoMCPTrustTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoMCPTrustTests.swift; sourceTree = "<group>"; };
 		50E00B5DC5B34A5FCF2935BF /* RunTabPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunTabPresentation.swift; sourceTree = "<group>"; };
 		50F0FBAC37A6C6A46C8D426E /* ACPMarkdownInlineRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownInlineRendererTests.swift; sourceTree = "<group>"; };
+		512B1885624D4E69D7906ABA /* PluginNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginNetwork.swift; sourceTree = "<group>"; };
 		515AFF3BF580DA12B16CD4BE /* MermaidRenderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidRenderService.swift; sourceTree = "<group>"; };
 		515B67124EA11DDCC29B6E36 /* SettingsNavView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNavView.swift; sourceTree = "<group>"; };
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -7679,7 +7683,9 @@
 				E6E5EADE023F1BB6BF4ABC13 /* PluginManager.swift */,
 				B7C91A5C7EA37E4FF35F48E0 /* PluginManifest.swift */,
 				EB010CF79FE48FFF809044D4 /* PluginMessages.swift */,
+				512B1885624D4E69D7906ABA /* PluginNetwork.swift */,
 				63DA8954B5EC0B75956C63F9 /* PluginRuntime.swift */,
+				335B2B000025A83F204A0524 /* PluginSettings.swift */,
 				017121A8305C387DF9EE82EE /* PluginsPane.swift */,
 				60E1590E8897D792101B7378 /* PluginStorage.swift */,
 				8E7BCDE10723C569C4B6C5C1 /* PluginsWindow.swift */,
@@ -8944,7 +8950,9 @@
 				149FE77C3B5D2C7F43D9E948 /* PluginManager.swift in Sources */,
 				1FE191F15E75A5038B26EAF4 /* PluginManifest.swift in Sources */,
 				C5ADF774CCAB9DF5E6F64974 /* PluginMessages.swift in Sources */,
+				DE5A3757086CCBDB47DD4081 /* PluginNetwork.swift in Sources */,
 				19B7DAB42D0005FE63730ABF /* PluginRuntime.swift in Sources */,
+				3F6D38A1836E44BA242ED792 /* PluginSettings.swift in Sources */,
 				339717029FEA33AA03DC7016 /* PluginStorage.swift in Sources */,
 				B634C3F8C6A5D5BC966A8D72 /* PluginTabView.swift in Sources */,
 				1B20171318E4D73030FC4DD3 /* PluginTaskBranch.swift in Sources */,

@@ -15,6 +15,15 @@ private func taskStart(id: Int = 1, title: String = "Fix it", prompt: String = "
     #"{"jsonrpc":"2.0","id":\#(id),"method":"task/start","params":{"title":"\#(title)","prompt":"\#(prompt)"}}"#
 }
 
+private func request(_ id: Int, _ method: String, _ params: String) -> String {
+    #"{"jsonrpc":"2.0","id":\#(id),"method":"\#(method)","params":\#(params)}"#
+}
+
+private func fetch(_ id: Int = 1, url: String = "https://api.example.com/x", auth: String? = nil) -> String {
+    let headers = auth.map { #","headers":{"Authorization":"\#($0)"}"# } ?? ""
+    return request(id, "http/fetch", #"{"method":"GET","url":"\#(url)"\#(headers)}"#)
+}
+
 /// `PluginHost` is main-actor isolated because it applies actions to AppState.
 @MainActor
 struct PluginHostTests {
@@ -41,13 +50,17 @@ struct PluginHostTests {
         limits: PluginLimits = PluginHostTests.limits,
         manifest: String = PluginHostTests.plainManifest,
         storage: PluginStorage? = nil,
+        settings: PluginSettings? = nil,
+        transport: FakeTransport = FakeTransport(),
+        sleeper: Sleeper = Sleeper(),
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
+        let manifest = try PluginManifest.parse(Data(manifest.utf8))
         return PluginHost(
-            manifest: try PluginManifest.parse(Data(manifest.utf8)),
+            manifest: manifest,
             source: PluginJSFixture.source(script),
             project: PluginProjectRef(id: "proj", name: "Project"),
             grants: grants,
@@ -80,8 +93,18 @@ struct PluginHostTests {
                 },
                 notify: { title, body in recorder.notes.append("\(title)|\(body)") }),
             storage: storage,
+            settings: settings ?? Self.settings(manifest),
+            transport: transport,
             limits: limits,
-            now: now)
+            now: now,
+            sleep: { try await sleeper.sleep($0) })
+    }
+
+    static func settings(_ manifest: PluginManifest) -> PluginSettings {
+        PluginSettings(
+            pluginID: manifest.id, declared: manifest.settings,
+            storage: PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-settings-\(UUID().uuidString)")),
+            secrets: RemoteInMemorySecretStore())
     }
 
     func ticks(_ host: PluginHost) -> [String] {
@@ -671,5 +694,200 @@ struct PluginHostTests {
         let sent = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("session/") }.map(\.text)
         #expect(sent.count == deliveries)
         #expect(sent.allSatisfy { $0.contains(#""method":"session/finished""#) && !$0.contains("state") })
+    }
+
+    // MARK: - API 5: settings, network, timers
+
+    /// Holds every request until the test answers it.
+    final class FakeTransport: PluginHTTPTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [(request: URLRequest, redirectHosts: [String])] = []
+        private var pending: [CheckedContinuation<(Data, HTTPURLResponse), any Error>] = []
+
+        var requests: [(request: URLRequest, redirectHosts: [String])] { lock.withLock { seen } }
+
+        func data(for request: URLRequest, redirectHosts: [String]) async throws -> (Data, HTTPURLResponse) {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.withLock {
+                    seen.append((request, redirectHosts))
+                    pending.append(continuation)
+                }
+            }
+        }
+
+        /// Answers the oldest unanswered request.
+        func respond(_ body: String = "ok") {
+            let continuation = lock.withLock { pending.removeFirst() }
+            let response = HTTPURLResponse(
+                url: URL(string: "https://api.example.com")!, statusCode: 200, httpVersion: nil, headerFields: ["X-A": "1"])!
+            continuation.resume(returning: (Data(body.utf8), response))
+        }
+    }
+
+    /// A clock that only moves when the test fires it. Cancelling a sleeper wakes it with an error, as `Task.sleep` does.
+    final class Sleeper: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [UUID: CheckedContinuation<Void, any Error>] = [:]
+        private var slept: [Duration] = []
+        private var cancelled = 0
+
+        var waiting: Int { lock.withLock { pending.count } }
+        var durations: [Duration] { lock.withLock { slept } }
+        var cancellations: Int { lock.withLock { cancelled } }
+
+        func sleep(_ duration: Duration) async throws {
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    lock.withLock {
+                        pending[id] = continuation
+                        slept.append(duration)
+                    }
+                    if Task.isCancelled { cancel(id) }
+                }
+            } onCancel: {
+                cancel(id)
+            }
+        }
+
+        private func cancel(_ id: UUID) {
+            let continuation = lock.withLock {
+                let continuation = pending.removeValue(forKey: id)
+                if continuation != nil { cancelled += 1 }
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+
+        func fireAll() {
+            let due = lock.withLock {
+                defer { pending = [:] }
+                return pending.values
+            }
+            for continuation in due { continuation.resume() }
+        }
+    }
+
+    static let integrationManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["network","timers"],"network":["api.example.com","other.example.com"],"settings":[{"key":"team","title":"Team","type":"string","default":"eng"},{"key":"on","title":"On","type":"bool"},{"key":"token","title":"Token","type":"secret","hosts":["api.example.com"]}]}"#
+
+    @Test func settingsGetAndChangedCarryPlainValuesButNeverSecrets() async throws {
+        let manifest = try PluginManifest.parse(Data(Self.integrationManifest.utf8))
+        let settings = Self.settings(manifest)
+        settings.setSecret("token", "s3cret")
+        let host = try makeHost(
+            [[.send(activateOK), .send(request(1, "settings/get", "{}"))]],
+            manifest: Self.integrationManifest, settings: settings)
+        await host.activate()
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(#""team":"eng""#) && reply.contains(#""on":false"#))
+        settings.set("team", .string("ops"))
+        await host.settingsChanged()
+        let changed = try #require(lastReply(host))
+        #expect(changed.contains("settings/changed") && changed.contains(#""team":"ops""#))
+        #expect(![reply, changed].contains { $0.contains("token") || $0.contains("s3cret") })
+    }
+
+    struct FetchCase: Sendable {
+        let request: String
+        /// nil: the request goes out.
+        let refusal: String?
+        var authorization: String?
+    }
+
+    @Test(arguments: [
+        FetchCase(request: fetch(url: "http://api.example.com/x"), refusal: #""code":-32602"#),
+        FetchCase(request: fetch(url: "https://evil.example.com/x"), refusal: #""code":-32001"#),
+        FetchCase(request: fetch(url: "https://api.example.com:8443/x"), refusal: #""code":-32001"#),
+        FetchCase(
+            request: fetch(url: "https://other.example.com/x", auth: "Bearer {{secret:token}}"),
+            refusal: "secret token is not allowed for other.example.com"),
+        FetchCase(request: fetch(auth: "Bearer {{secret:nope}}"), refusal: #""code":-32602"#),
+        FetchCase(request: fetch(auth: "Bearer {{secret:token}}"), refusal: nil, authorization: "Bearer s3cret"),
+    ])
+    func fetchGoesOnlyToListedHostsAndSecretsOnlyToTheirs(_ c: FetchCase) async throws {
+        let manifest = try PluginManifest.parse(Data(Self.integrationManifest.utf8))
+        let settings = Self.settings(manifest)
+        settings.setSecret("token", "s3cret")
+        let transport = FakeTransport()
+        let host = try makeHost(
+            [[.send(activateOK), .send(c.request)]], grants: [.network],
+            manifest: Self.integrationManifest, settings: settings, transport: transport)
+        await host.activate()
+        if let refusal = c.refusal {
+            #expect(lastReply(host)?.contains(refusal) == true)
+            #expect(transport.requests.isEmpty)
+            return
+        }
+        #expect(await awaitCondition { transport.requests.count == 1 })
+        let sent = try #require(transport.requests.first)
+        #expect(sent.request.value(forHTTPHeaderField: "Authorization") == c.authorization)
+        // The secret's hosts also bound where a redirect may take it.
+        #expect(sent.redirectHosts == ["api.example.com"])
+        transport.respond("hello")
+        #expect(await awaitCondition { lastReply(host)?.contains(#""body":"hello""#) == true })
+        #expect(lastReply(host)?.contains(#""status":200"#) == true)
+    }
+
+    /// Four in flight per instance; a reply goes to the instance that asked, in a later delivery.
+    @Test func fetchRepliesComeLaterAndOnlyToTheInstanceThatAsked() async throws {
+        let transport = FakeTransport()
+        let host = try makeHost(
+            [[.send(activateOK)] + (1...5).map { .send(fetch($0)) }], grants: [.network],
+            manifest: Self.integrationManifest, transport: transport)
+        await host.activate()
+        #expect(replies(host).last?.contains("too many requests in flight") == true)
+        #expect(await awaitCondition { transport.requests.count == 4 })
+        transport.respond("first")
+        #expect(await awaitCondition { lastReply(host)?.contains(#""body":"first""#) == true })
+        #expect(lastReply(host)?.contains(#""id":1"#) == true)
+
+        await host.deactivate()
+        await host.activate()
+        // The new instance starts with nothing in flight, so it gets four of its own.
+        #expect(await awaitCondition { transport.requests.count == 8 })
+        for _ in 0..<3 { transport.respond("stale") }
+        transport.respond("fresh")
+        #expect(await awaitCondition { lastReply(host)?.contains(#""body":"fresh""#) == true })
+        #expect(!host.trace.contains { $0.text.contains("stale") })
+    }
+
+    @Test func aRepeatingTimerFiresOnTheClockUntilCancelled() async throws {
+        let sleeper = Sleeper()
+        let host = try makeHost(
+            [
+                [.send(activateOK), .send(request(1, "timer/set", #"{"id":"a","seconds":60,"repeat":true}"#))],
+                [],
+                [],
+                [.send(request(2, "timer/cancel", #"{"id":"a"}"#))],
+            ],
+            grants: [.timers, .workspaceRead], manifest: Self.integrationManifest, sleeper: sleeper)
+        await host.activate()
+        #expect(await awaitCondition { sleeper.waiting == 1 })
+        sleeper.fireAll()
+        #expect(await awaitCondition { sleeper.waiting == 1 && sleeper.durations.count == 2 })
+        #expect(host.trace.filter { $0.text.contains("timer/fired") }.count == 1)
+        #expect(sleeper.durations == [.seconds(60), .seconds(60)])
+        // The plugin cancels while the timer sleeps again.
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        #expect(await awaitCondition { sleeper.cancellations == 1 })
+        #expect(sleeper.waiting == 0)
+    }
+
+    @Test func timersAreBoundedAndDieWithTheInstance() async throws {
+        let sleeper = Sleeper()
+        var limits = Self.limits
+        limits.maxSendsPerCall = 16
+        let set = #"for (let i = 1; i <= 9; i++) alas.send(JSON.stringify({jsonrpc: "2.0", id: i, method: "timer/set", params: {id: "t" + i, seconds: 60}}));"#
+        let host = try makeHost(
+            [[.send(activateOK), .script(set), .send(request(10, "timer/set", #"{"id":"short","seconds":59}"#))]],
+            grants: [.timers], limits: limits, manifest: Self.integrationManifest, sleeper: sleeper)
+        await host.activate()
+        let sent = replies(host)
+        #expect(sent.filter { $0.contains(#""result":{}"#) }.count == 8)
+        #expect(sent.contains { $0.contains(#""id":9"#) && $0.contains("at most 8 timers") })
+        #expect(sent.contains { $0.contains(#""id":10"#) && $0.contains(#""code":-32602"#) })
+        #expect(await awaitCondition { sleeper.waiting == 8 })
+        await host.deactivate()
+        #expect(await awaitCondition { sleeper.cancellations == 8 })
     }
 }

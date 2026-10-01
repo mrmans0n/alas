@@ -174,3 +174,36 @@ struct PluginNotifyParams: Decodable, Sendable {
     let title: String
     let body: String?
 }
+
+/// `settings/get` result and `settings/changed` params.
+struct PluginSettingsPayload: Codable {
+    let values: [String: PluginSettingValue]
+}
+
+struct PluginHTTPFetchParams: Decodable, Sendable {
+    let method: String
+    let url: String
+    let headers: [String: String]?
+    let body: String?
+}
+
+struct PluginHTTPFetchResult: Encodable {
+    let status: Int
+    let headers: [String: String]
+    let body: String
+}
+
+struct PluginTimerSetParams: Decodable, Sendable {
+    let id: String
+    let seconds: Double
+    let repeats: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, seconds
+        case repeats = "repeat"
+    }
+}
+
+struct PluginTimerIDParams: Codable, Sendable {
+    let id: String
+}
