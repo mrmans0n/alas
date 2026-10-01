@@ -55,7 +55,18 @@ final class ACPPermissionPolicy {
             case .ask:
                 break
             }
-            return await awaitUserDecision(scopeKey: scopeKey, params: params)
+            // The prompt offers one-shot choices only, for the same reason.
+            let oneShot = params.options.filter { $0.kind == "allow_once" || $0.kind == "reject_once" }
+            guard !oneShot.isEmpty else { return .init(outcome: .cancelled) }
+            return await awaitUserDecision(
+                scopeKey: scopeKey,
+                params: ACPPermissionRequestParams(
+                    sessionId: params.sessionId,
+                    toolCall: params.toolCall,
+                    options: oneShot,
+                    metadata: params.metadata
+                )
+            )
         }
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))

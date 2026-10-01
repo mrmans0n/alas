@@ -97,7 +97,7 @@ struct ACPPermissionPolicyTests {
         #expect(resp.outcome == .cancelled)
     }
 
-    @Test("a read-only read with only a persistent allow asks instead of taking it")
+    @Test("a read-only read with only a persistent allow asks with one-shot choices only")
     func readOnlyReadNeverPicksPersistentAllow() async throws {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
@@ -118,6 +118,8 @@ struct ACPPermissionPolicyTests {
             await Task.yield()
         }
         #expect(session.transcript.pendingPermission != nil)
+        // The parked prompt must not offer the persistent allow either.
+        #expect(session.transcript.pendingPermission?.params.options.map(\.kind) == ["reject_once"])
 
         policy.userCancelled()
         #expect(await decision.outcome == .cancelled)

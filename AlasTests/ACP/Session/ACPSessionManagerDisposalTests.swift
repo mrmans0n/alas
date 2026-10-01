@@ -136,6 +136,32 @@ struct ACPSessionManagerDisposalTests {
         await manager.detach(sessionId: parent.id)
     }
 
+    @Test("a newer side question is current while the one it replaces is still closing")
+    func newerSideQuestionWinsDuringTeardown() async throws {
+        let client = ACPMockClient()
+        let closeStarted = AsyncStream<Void>.makeStream()
+        let releaseClose = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/close") { _ in
+            closeStarted.continuation.yield()
+            for await _ in releaseClose.stream { break }
+            return Data("{}".utf8)
+        }
+        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        _ = try await manager.startSideQuestion(parentID: parent.id, question: "first")
+
+        let second = Task { @MainActor in
+            try await manager.startSideQuestion(parentID: parent.id, question: "second")
+        }
+        for await _ in closeStarted.stream { break }
+
+        #expect(manager.sideQuestions[parent.id]?.question == "second")
+        releaseClose.continuation.yield()
+        let side = try await second.value
+        #expect(manager.sideQuestions[parent.id]?.sessionID == side.id)
+        await manager.detach(sessionId: side.id)
+        await manager.detach(sessionId: parent.id)
+    }
+
     @Test("keeping a side question twice promotes it once")
     func sideQuestionPromotesOnce() async throws {
         let client = ACPMockClient()
