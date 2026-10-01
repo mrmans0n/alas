@@ -1,6 +1,7 @@
 //! Kanban: a board of task cards that start agents in new worktrees and follow them.
 
 pub mod board;
+pub mod tickets;
 pub mod view;
 
 use alas_plugin::{export_plugin, log, render, request, request_snapshot, storage_get, storage_set, task_start, Event, Plugin, Snapshot};
