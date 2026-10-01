@@ -94,13 +94,14 @@ screen opens or an agent comment arrives.
 | Done and Cancelled tickets kept in the index | 15, the oldest-closed leave first |
 | Title | 200 characters |
 | Description | 4,000 characters |
-| Comments per ticket | 50, the oldest dropped first |
-| Comment | 4,000 characters (the screen shows the first 2,000) |
+| Comments per ticket | 10, the oldest dropped first |
+| Comment | 2,000 characters; a longer agent reply is cut |
 | Labels | 8 of 32 characters |
 
 Alas gives every plugin call a fixed fuel budget, and parsing, saving and
 drawing tickets costs fuel per ticket and per byte. The index cap keeps the
-costliest board call under half the budget. Archived tickets leave the index
+costliest board call under half the budget, and the comment caps do the same
+for opening a full ticket or adding a comment to it. Archived tickets leave the index
 but their bodies stay stored. When the tracker is full, a new ticket is
 refused until you delete some.
 
@@ -111,8 +112,8 @@ refused until you delete some.
 - If Alas quits while a ticket is starting, the ticket can stay unlinked even
   though its worktree and agent were created; starting it again makes a second
   worktree.
-- A ticket near its comment and size caps can cost more than a plugin call
-  allows. Alas then stops the plugin; **Restart** in **Settings → Plugins**
-  starts it again.
+- Text dense with quotes, backslashes or line breaks costs more fuel to read.
+  A full ticket of such text stays within a plugin call's budget but uses more
+  than half of it.
 - All of a project's tickets share the plugin's 1 MB of storage, archived
   bodies included. When it is full, saving shows an error.

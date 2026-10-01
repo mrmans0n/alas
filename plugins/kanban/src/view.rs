@@ -3,12 +3,10 @@
 //! Ids are built only from fixed words and ticket numbers, so they stay unique and under the
 //! host's 64 bytes. Board cards carry index data only; a ticket body is read on its screen.
 
-use crate::tickets::{Author, Body, Entry, Priority, Status, Tracker, MAX_COMMENTS, MAX_DESCRIPTION_CHARS, MAX_INDEX, MAX_LABELS, MAX_LABEL_CHARS};
+use crate::tickets::{Author, Body, Entry, Priority, Status, Tracker, MAX_COMMENTS, MAX_COMMENT_CHARS, MAX_DESCRIPTION_CHARS, MAX_INDEX, MAX_LABELS, MAX_LABEL_CHARS};
 use alas_plugin::{Agent, Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
 
 const MAX_TEXT: usize = 500;
-/// Comments carry the agent's results, so they show more than other text.
-const MAX_COMMENT_TEXT: usize = 2_000;
 /// The host's cap on menu items.
 const MAX_MENU_ITEMS: usize = 64;
 /// The assignee menu item that clears the assignee.
@@ -301,7 +299,7 @@ fn body_nodes(n: u64, form: u64, comment_form: u64, body: &Body, out: &mut Vec<N
             id: format!("said-{i}"),
             children: vec![
                 text(format!("said-{i}-author"), author, Some(TextStyle::Caption), Some(Tone::Dim)),
-                Node::Text { id: format!("said-{i}-text"), text: clip(&c.text, MAX_COMMENT_TEXT), style: None, tone: None },
+                Node::Text { id: format!("said-{i}-text"), text: clip(&c.text, MAX_COMMENT_CHARS), style: None, tone: None },
             ],
             tone: None,
             clickable: false,
@@ -319,7 +317,7 @@ fn body_nodes(n: u64, form: u64, comment_form: u64, body: &Body, out: &mut Vec<N
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tickets::{MAX_COMMENT_CHARS, MAX_TITLE_CHARS};
+    use crate::tickets::MAX_TITLE_CHARS;
     use serde_json::Value;
     use std::collections::HashSet;
 

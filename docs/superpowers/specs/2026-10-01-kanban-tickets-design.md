@@ -47,7 +47,7 @@ version of the plugin is converted on first load.
 | `assignee` | Optional agent id. |
 | `session_id`, `branch` | Set when a start is accepted. |
 | `agent_state` | Last session state seen (`running`, `awaiting_input`, `permission_request`, `idle`). |
-| `comments` | Oldest first, each `{author, text}`. No timestamp: the plugin has no clock. At most 50 per ticket, each at most 4,000 characters; the oldest are dropped past the cap. `author` is `you` or `agent`. |
+| `comments` | Oldest first, each `{author, text}`. No timestamp: the plugin has no clock. At most 10 per ticket, each at most 2,000 characters (set by the fuel measurement); the oldest are dropped past the cap. `author` is `you` or `agent`. |
 
 Running, Needs you and Review are no longer columns. They are the ticket's
 `agent_state`, shown as a badge, while `status` is the workflow position.
@@ -143,7 +143,7 @@ The rules of the current plugin carry over, applied to `agent_state` and
 
 When a followed session first reports `idle` after being `running`, the plugin
 sends `session/last_message` once for that transition and, if it returns text,
-appends it as an `agent` comment (cut to 4,000 characters). Nothing is fetched
+appends it as an `agent` comment (cut to 2,000 characters). Nothing is fetched
 twice for one transition, and a failed or empty fetch shows a notice and never
 blocks the board.
 
@@ -179,12 +179,14 @@ never committed.
 **Measured (2026-10-01):** with 200-character titles and a session on every
 ticket, the costliest board call is the snapshot that moves a ticket: 11.6M at
 75 tickets (12.3M with escape-heavy titles), 13.1M at 85, 16.5M at 100. The
-index cap is 75 and 15 closed tickets are kept. Ticket bodies at the text caps
-above (4,000-character description, 50 comments of 4,000 characters, about
-200–400 KB) do not fit: parsing and drawing one costs 16–106M depending on how
-much of the text is non-ASCII or escaped, whatever the index size. A body of
-about 24,000 characters (for example 10 comments of 2,000 characters) stays
-under 11M for accented text; the comment caps are a follow-up decision.
+index cap is 75 and 15 closed tickets are kept. The first comment caps (50
+comments of 4,000 characters, bodies of 200–400 KB) did not fit: opening or
+appending to a full body cost 16–106M depending on how much of the text is
+non-ASCII or escaped, whatever the index size. The caps are now 10 comments of
+2,000 characters (about 24,000 characters per body). At 75 tickets with a full
+body, the worst body call is 2.9M for ASCII, 6.3M for code-like text and 10.0M
+for accented text (opening the ticket); escape-heavy text reaches 14.1M, over
+12.5M but well under the 25M host limit.
 
 ## 4. Errors and testing
 

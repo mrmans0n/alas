@@ -9,8 +9,10 @@ pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_DESCRIPTION_CHARS: usize = 4_000;
 pub const MAX_LABELS: usize = 8;
 pub const MAX_LABEL_CHARS: usize = 32;
-pub const MAX_COMMENTS: usize = 50;
-pub const MAX_COMMENT_CHARS: usize = 4_000;
+/// Measured with MAX_COMMENT_CHARS: a full body (about 24,000 characters) keeps opening a ticket or
+/// adding an agent comment under half the host's per-call fuel for accented text.
+pub const MAX_COMMENTS: usize = 10;
+pub const MAX_COMMENT_CHARS: usize = 2_000;
 /// Measured: at 75 tickets with 200-char titles, all with sessions, the costliest board call
 /// (a snapshot that moves a ticket) uses 11.6M fuel, 12.3M for escape-heavy titles, against
 /// half the host's 25M per call. 85 tickets went over.
