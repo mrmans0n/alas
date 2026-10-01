@@ -102,7 +102,7 @@ private struct HostLogDisclosure: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(log.suffix(20).enumerated()), id: \.offset) { _, entry in
+                ForEach(Array(log.enumerated()), id: \.offset) { _, entry in
                     Text("[\(entry.level)] \(entry.message)")
                         .font(.system(size: 11, design: .monospaced))
                         .textSelection(.enabled)
