@@ -73,10 +73,9 @@ enum ACPUpstreamReferenceChipStyle {
             .font: ACPMentionChipMetrics.labelFont,
             .foregroundColor: nameColor(for: kind),
         ]
-        let textSize = (spelling as NSString).size(withAttributes: attrs)
         (spelling as NSString).draw(at: NSPoint(
             x: capRect.maxX + ACPCommandPillStyle.nameHorizontalPadding,
-            y: frame.minY + (frame.height - textSize.height) / 2
+            y: ACPMentionChipMetrics.labelOriginY(in: frame)
         ), withAttributes: attrs)
     }
 }
@@ -92,7 +91,7 @@ final class ACPUpstreamReferenceChipAttachment: NSTextAttachment {
     weak var store: ACPUpstreamReferenceStore?
 
     @MainActor
-    init(reference: CodeHostReference, host: CodeHostKind, store: ACPUpstreamReferenceStore?, font: NSFont) {
+    init(reference: CodeHostReference, host: CodeHostKind, store: ACPUpstreamReferenceStore?) {
         self.reference = reference
         self.host = host
         self.store = store
@@ -115,7 +114,7 @@ final class ACPUpstreamReferenceChipAttachment: NSTextAttachment {
         self.image = image
         bounds = NSRect(
             x: 0,
-            y: ACPMentionChipMetrics.baselineOffset(for: font, attachmentHeight: size.height),
+            y: ACPMentionChipMetrics.baselineOffset,
             width: size.width,
             height: size.height
         )
@@ -132,9 +131,8 @@ enum ACPUpstreamReferenceChip {
         store: ACPUpstreamReferenceStore?,
         attributes: [NSAttributedString.Key: Any]
     ) -> NSAttributedString {
-        let font = attributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 13)
         let chip = NSMutableAttributedString(attachment: ACPUpstreamReferenceChipAttachment(
-            reference: reference, host: host, store: store, font: font
+            reference: reference, host: host, store: store
         ))
         var chipAttributes = attributes
         chipAttributes[.attachment] = nil
