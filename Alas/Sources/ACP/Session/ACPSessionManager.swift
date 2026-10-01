@@ -1782,8 +1782,7 @@ final class ACPSessionManager: ObservableObject {
     /// Opens an empty side-question card on `parentID`, replacing its current
     /// side question; the question is asked from the card.
     func composeSideQuestion(parentID: ACPSession.ID) async {
-        await dismissSideQuestion(parentID: parentID)
-        sideQuestions[parentID] = ACPSideQuestion(question: "")
+        await replaceSideQuestion(parentID: parentID, with: ACPSideQuestion(question: ""))
     }
 
     /// Asks `question` in a hidden side session forked from `parentID` at its

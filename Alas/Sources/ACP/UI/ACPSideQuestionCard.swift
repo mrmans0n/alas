@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+/// Sends a question from the card. Returns whether it was accepted;
+/// `completion` reports whether an accepted question was delivered.
+typealias ACPSideQuestionAsk = (
+    _ text: String,
+    _ completion: @escaping @MainActor (Bool) -> Void
+) -> Bool
+
 /// Floating card above the composer that shows a `/btw` side question and
 /// its answer. The answer comes from a hidden, read-only fork and never
 /// enters the parent's transcript.
@@ -10,7 +17,7 @@ struct ACPSideQuestionCard: View {
     let side: ACPSession?
     let policy: ACPPermissionPolicy?
     let typography: ACPChatTypography
-    let onAsk: (String) -> Void
+    let onAsk: ACPSideQuestionAsk
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
     let onKeep: () -> Void
@@ -58,7 +65,7 @@ struct ACPSideQuestionCard: View {
         @ObservedObject var transcript: ACPTranscript
         let policy: ACPPermissionPolicy?
         let typography: ACPChatTypography
-        let onAsk: (String) -> Void
+        let onAsk: ACPSideQuestionAsk
         let onDismiss: () -> Void
         let onInsert: (String) -> Void
         let onKeep: () -> Void
@@ -204,7 +211,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     let answer: String?
     let hasContent: Bool
     let canAsk: Bool
-    let onAsk: (String) -> Void
+    let onAsk: ACPSideQuestionAsk
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
     let onKeep: (() -> Void)?
@@ -344,7 +351,11 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     private func submit() {
         let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canAsk, !text.isEmpty else { return }
-        followUp = ""
-        onAsk(text)
+        // Keep the text when the side session can't take it, so it can be
+        // sent again.
+        let accepted = onAsk(text) { delivered in
+            if !delivered, followUp.isEmpty { followUp = text }
+        }
+        if accepted { followUp = "" }
     }
 }

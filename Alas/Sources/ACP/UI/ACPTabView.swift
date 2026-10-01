@@ -1298,12 +1298,18 @@ private struct ACPSideQuestionSlot: View {
                 side: side,
                 policy: side.flatMap { manager.permissionPolicy(for: $0.id) },
                 typography: typography,
-                onAsk: { text in
+                onAsk: { text, completion in
                     if let side {
-                        _ = manager.submit(sessionId: side.id, text: text, attachments: [], intent: .auto) { _ in }
-                    } else {
-                        Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
+                        return manager.submit(
+                            sessionId: side.id,
+                            text: text,
+                            attachments: [],
+                            intent: .auto,
+                            onCompleted: completion
+                        )
                     }
+                    Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
+                    return true
                 },
                 onDismiss: {
                     Task { await manager.dismissSideQuestion(parentID: parentID) }
