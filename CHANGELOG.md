@@ -10,6 +10,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Turn the Kanban plugin into a ticket tracker: `KAN-<n>` tickets with statuses, priorities, descriptions and comments, a ticket screen, assignment to an installed agent, and Start, which runs the assignee in a new worktree and adds the agent's final reply as a comment. Boards saved by the card version are converted on first load and left in place. Adds the `session/last_message` and `agent/list` plugin requests, so plugins approved for `workspace.read` can now also read an agent's last reply and the installed agents (approval is bound to the manifest and wasm, so earlier approvals are not asked again).
 
+### 🐛 Fixes
+
+- Write plugin storage off the main thread, coalescing a burst of `storage/set` calls and sharing one store per file across plugin reloads, so a plugin saving large values cannot stall the UI.
+- Make clickable plugin view cards a keyboard stop that Space or Return clicks.
+
 ## [0.19.20] - 2026-10-01
 
 ### ✨ Features

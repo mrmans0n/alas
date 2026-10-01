@@ -5,6 +5,10 @@ import Foundation
 /// Values are arbitrary JSON kept as raw bytes. The file is assembled by splicing each value's
 /// bytes into the object text, and read back with a small top-level scanner, so numbers such as
 /// `1.0` or large integers are never re-typed by a `JSONSerialization` round trip.
+///
+/// Reads and writes see memory at once; the file is written off the main actor, one write at a
+/// time and always the latest entries, so a burst of sets costs at most two writes. A reloaded plugin
+/// gets the same instance (`shared`), so it never reads a file that a pending write is about to replace.
 @MainActor
 final class PluginStorage {
     static let maxKeyBytes = 128
@@ -14,9 +18,24 @@ final class PluginStorage {
 
     private let file: URL
     private var entries: [String: Data]?
+    /// Bumped by every change; `written` is the version last on disk.
+    private var version = 0
+    private var written = 0
+    private var writing: Task<Void, Never>?
 
     init(file: URL) {
         self.file = file
+    }
+
+    private static var open: [URL: PluginStorage] = [:]
+
+    /// One store per file for the life of the app, however often its plugin is reloaded.
+    /// ponytail: kept for the app's lifetime, one small entry per plugin and project.
+    static func shared(file: URL) -> PluginStorage {
+        if let existing = open[file] { return existing }
+        let storage = PluginStorage(file: file)
+        open[file] = storage
+        return storage
     }
 
     /// `root/PluginData/<pluginID>/<projectID>.json`, with the project id percent-encoded so it
@@ -39,6 +58,8 @@ final class PluginStorage {
         load()?[key]
     }
 
+    /// Stored once it is in memory; the file follows. A write that fails leaves the change in memory
+    /// and it goes out with the next one.
     func set(_ key: String, value: Data?) -> SetResult {
         guard Self.isValidKey(key) else { return .invalidKey }
         guard var next = load() else { return .failed }
@@ -57,9 +78,32 @@ final class PluginStorage {
         guard next.reduce(0, { $0 + $1.key.utf8.count + $1.value.count }) <= Self.maxTotalBytes else {
             return .full
         }
-        guard write(next) else { return .failed }
         entries = next
+        version += 1
+        if writing == nil { writing = Task { await drainWrites() } }
         return .stored
+    }
+
+    /// Drains every open store; the app awaits this before quitting so a last save is not lost.
+    static func flushAll() async {
+        for storage in open.values { await storage.flush() }
+    }
+
+    /// Returns once everything stored so far is on disk, or a write failed.
+    func flush() async {
+        while let writing { await writing.value }
+    }
+
+    /// Writes the latest entries until the file has caught up, one write at a time.
+    private func drainWrites() async {
+        while written < version {
+            let snapshot = entries ?? [:]
+            let target = version
+            let task = Task.detached { [file] in Self.write(snapshot, to: file) }
+            guard await task.value else { break }
+            written = target
+        }
+        writing = nil
     }
 
     /// False when the file is unreadable and could not be moved aside: reads would wrongly look empty.
@@ -102,7 +146,7 @@ final class PluginStorage {
         return loaded
     }
 
-    private func write(_ entries: [String: Data]) -> Bool {
+    private nonisolated static func write(_ entries: [String: Data], to file: URL) -> Bool {
         var out = Data("{".utf8)
         for (index, key) in entries.keys.sorted().enumerated() {
             guard let keyJSON = try? JSONSerialization.data(withJSONObject: key, options: .fragmentsAllowed) else {
@@ -114,7 +158,7 @@ final class PluginStorage {
             out.append(entries[key]!)
         }
         out.append(UInt8(ascii: "}"))
-        guard Self.parse(out) != nil else { return false }
+        guard parse(out) != nil else { return false }
         do {
             try FileManager.default.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -126,7 +170,7 @@ final class PluginStorage {
     }
 
     /// Splits a top-level JSON object into key -> raw value bytes; nil when malformed.
-    private static func parse(_ data: Data) -> [String: Data]? {
+    private nonisolated static func parse(_ data: Data) -> [String: Data]? {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         let bytes = [UInt8](data)
         var i = 0

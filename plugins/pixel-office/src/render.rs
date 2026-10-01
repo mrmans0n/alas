@@ -169,10 +169,9 @@ fn draw_sprites(c: &mut Canvas, world: &World, layout: &Layout) -> Vec<Rect> {
             touched.push(draw(c, &OVERLAYS, src, x + 8, y - lift - bob));
         }
         if let (Activity::Seated, Mood::Working, Some(plan)) = (ch.activity, ch.mood, ch.plan) {
-            if plan.total > 0 {
+            if let Some(filled) = (14 * plan.completed.min(plan.total)).checked_div(plan.total) {
                 let r = draw(c, &OVERLAYS, BAR_FRAME, x, y - 12);
-                let filled = (14 * plan.completed.min(plan.total) / plan.total) as i32;
-                c.fill(Rect::new(x + 1, y - 11, filled, 2), PALETTE[BAR_FILL]);
+                c.fill(Rect::new(x + 1, y - 11, filled as i32, 2), PALETTE[BAR_FILL]);
                 touched.push(r);
             }
         }
