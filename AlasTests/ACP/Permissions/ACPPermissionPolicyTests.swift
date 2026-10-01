@@ -76,6 +76,32 @@ struct ACPPermissionPolicyTests {
         #expect(session.readOnlyBlockedTools == (allowed ? [] : ["Tool"]))
     }
 
+    @Test("a read-only read with only a persistent allow asks instead of taking it")
+    func readOnlyReadNeverPicksPersistentAllow() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.readOnlyRestricted = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [
+            .init(optionId: "always", name: "Always", kind: "allow_always"),
+            .init(optionId: "deny", name: "Deny", kind: "reject_once")
+        ]
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "tc", title: "Read", kind: "read"),
+            options: opts
+        )
+        async let decision = policy.evaluate(scopeKey: "tool:Read", options: opts, params: params, requestID: .number(1))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(session.transcript.pendingPermission != nil)
+
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
     @Test("cancelRequest resolves a parked permission matching its id as cancelled")
     func cancelRequestResolvesMatchingParkedPermission() async throws {
         let store = try makeStore()

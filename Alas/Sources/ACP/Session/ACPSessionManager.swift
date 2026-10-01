@@ -5311,6 +5311,8 @@ extension ACPSessionManager {
             session: session,
             client: connection.client,
             onInputAwaiting: { [weak self] session, request in
+                // Hidden side sessions never notify or block orchestration.
+                guard !session.readOnlyRestricted else { return }
                 self?.onInputAwaiting?(session, request)
                 let trimmedTitle = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let trimmedMessage = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5326,6 +5328,7 @@ extension ACPSessionManager {
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
             onPlanAwaiting: { [weak self] session, request in
+                guard !session.readOnlyRestricted else { return }
                 self?.onPlanAwaiting?(session, request)
                 let trimmedName = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 self?.onChildBlocked?(ACPChildBlocker(
