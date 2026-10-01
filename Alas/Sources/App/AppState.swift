@@ -5252,10 +5252,13 @@ final class AppState {
             let remoteHome = try await Self.remoteHomeDirectory(host: host)
             // The home swap works on the real remote path; the result goes back
             // to the virtual form the rest of the app keys worktrees by.
-            preparedDestination = URL(fileURLWithPath: RemotePath.virtualizing(
+            preparedDestination = try await RemotePath.resolvedWorktreeDestination(
                 Self.destinationPathReplacingLocalHome(destination.path, remoteHome: remoteHome),
-                like: repoPath.path
-            ))
+                anchor: repoPath.path,
+                runCommand: { command in
+                    try await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 10)
+                }
+            )
         } else {
             guard !RemotePath.isReserved(destination.path) else { throw RemotePath.reservedForRemoteError(destination.path) }
             preparedDestination = destination
