@@ -71,16 +71,7 @@ struct PluginsPane: View {
                         AlasButton(title: "Restart", style: .subtle) { Task { await manager.restart(entry.key) } }
                     }
                     if !entry.host.log.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(entry.host.log.enumerated()), id: \.offset) { _, logEntry in
-                                Text("[\(logEntry.level)] \(logEntry.message)")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .foregroundColor(theme.color("fg-dim"))
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
+                        HostLogDisclosure(log: entry.host.log)
                     }
                 }
             }
@@ -98,6 +89,34 @@ struct PluginsPane: View {
         if !manager.isApproved(plugin) { return "Not approved" }
         if !manager.isEnabled(plugin) { return "Disabled" }
         return "Enabled"
+    }
+}
+
+/// Host log collapsed by default: PluginHost retains up to 200 entries of up
+/// to 2,000 characters each, so rendering it inline would flood the pane.
+private struct HostLogDisclosure: View {
+    let log: [PluginLogEntry]
+    @State private var isExpanded = false
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(log.suffix(20).enumerated()), id: \.offset) { _, entry in
+                    Text("[\(entry.level)] \(entry.message)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+            }
+            .padding(.vertical, 6)
+        } label: {
+            Text("Log (\(log.count))")
+                .font(.system(size: 11.5))
+                .foregroundColor(theme.color("fg-dim"))
+        }
+        .padding(.leading, 12)
+        .padding(.bottom, 10)
     }
 }
 
