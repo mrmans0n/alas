@@ -6,7 +6,6 @@ import Testing
 /// the pull without stealing selection, a second click while the pull is still
 /// running selects the worktree instead.
 @MainActor
-@Suite(.serialized)
 struct SidebarUpstreamPullClickTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         let projectsFile: ProjectsFile

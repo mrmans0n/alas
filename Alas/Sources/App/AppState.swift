@@ -2970,26 +2970,35 @@ final class AppState {
             // A freshly created pane has not probed its upstream yet, and
             // `pullAwaited()` no-ops until it knows the branch is behind.
             if !pane.showBehindUpstreamChip { await pane.refreshSyncStatus() }
-            let pulled = await pane.pullAwaited()
+            let result = await pane.pullAwaited()
             // The pull ran without switching the selection, so its outcome
-            // would otherwise only surface in the right pane of a worktree the
-            // user never selected. Report it where the click happened.
-            if pulled {
-                if let message = pane.sidebarError {
-                    self?.inAppNotifications.post(
-                        "Pull failed: \(message)",
-                        severity: .error,
-                        worktreeID: id
-                    )
-                } else {
-                    self?.inAppNotifications.post(
-                        "Pulled \(worktree.branch)",
-                        severity: .success,
-                        worktreeID: id
-                    )
-                }
+            // would otherwise only surface in the right pane of a worktree
+            // the user never selected. `InAppNotificationStack` mounts only
+            // for the center-visible worktree, so route the banner to the
+            // currently selected worktree; the message names the pulled one.
+            guard let self, let result else { return }
+            let visibleWorktreeID = self.selectedWorktreeId ?? id
+            switch result {
+            case .clean:
+                self.inAppNotifications.post(
+                    "Pulled \(worktree.branch)",
+                    severity: .success,
+                    worktreeID: visibleWorktreeID
+                )
+            case .conflict:
+                self.inAppNotifications.post(
+                    "Pull of \(worktree.branch) hit conflicts",
+                    severity: .error,
+                    worktreeID: visibleWorktreeID
+                )
+            case .error(let message):
+                self.inAppNotifications.post(
+                    "Pull of \(worktree.branch) failed: \(message)",
+                    severity: .error,
+                    worktreeID: visibleWorktreeID
+                )
             }
-            await self?.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
+            await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
         }
     }
 
