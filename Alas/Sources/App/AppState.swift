@@ -12956,6 +12956,7 @@ final class AppState {
         acpManagers[owner] = mgr
         observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
+        Task { await mgr.purgeOrphanedEphemeralSessions() }
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
@@ -13268,6 +13269,7 @@ final class AppState {
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)
         acpHarnessBridge.attach(manager: manager)
+        Task { await manager.purgeOrphanedEphemeralSessions() }
         #if DEBUG
         memoryDiagnostics.attach(manager: manager)
         #endif

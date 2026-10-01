@@ -74,16 +74,19 @@ and `/tmp/jsc-spike`.
     (the first call also evaluates the script).
   - Hitting the limit fails the plugin (`stopped: took longer than 250 ms`), the
     same rule as running out of fuel today.
-  - Memory: after each delivery Alas checks the process footprint. If the plugin
-    raised it by more than 256 MB since activation, Alas stops the plugin and
-    releases its context group. This is a coarse guard, not a cap; a helper
-    process is the upgrade if a plugin ever needs a real one.
+  - Memory: no cap for now. JSC's per-VM heap statistics leave out typed-array
+    storage (100 MB of typed arrays reported as 3.8 MB of heap), and the process
+    footprint is shared with Alas, so neither can attribute memory to one plugin.
+    The time limit bounds growth per call. A helper process is the upgrade if a
+    plugin ever needs a real cap.
 - **Entry point.** `"entry": "plugin.js"`, one file, evaluated once at
-  activation. An ES module, a bundle produced by esbuild, or a plain script all
-  work, because the plugin only has to assign `globalThis.handle`.
+  activation as a classic script: a plain script or an esbuild bundle with
+  `--format=iife`. ES module syntax (`import`, `export`) does not parse there,
+  so it is not supported; bundling is what turns a multi-file plugin into one
+  script that assigns `globalThis.handle`.
 - **API version.** API 4 is the first JS API. A manifest with `api` 1–3 (the Wasm
-  plugins) is refused with "this plugin was built for the WebAssembly runtime,
-  which Alas no longer supports". No user has non-experimental plugins, so no
+  plugins) is refused with "built for plugin API N, the WebAssembly runtime,
+  which Alas no longer supports; rebuild it for API 4". No user has non-experimental plugins, so no
   migration path is needed.
 - **Trust hash.** The same SHA-256 over manifest and entry bytes. Only the name of
   the second input changes.

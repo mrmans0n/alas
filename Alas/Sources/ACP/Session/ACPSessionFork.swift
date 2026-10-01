@@ -72,6 +72,12 @@ struct ACPSessionForkRecord: Equatable, Sendable {
     var phase: ACPSessionForkCreationPhase
     var mechanism: ACPSessionForkMechanism?
     var contextDeliveryPending: Bool
+    var via: ACPSessionForkVia? = nil
+}
+
+/// The Alas feature that created a fork, when it wasn't a plain fork.
+enum ACPSessionForkVia: String, Equatable, Sendable {
+    case btw
 }
 
 enum ACPSessionForkCandidate: Equatable {

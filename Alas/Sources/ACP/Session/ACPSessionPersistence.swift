@@ -346,6 +346,14 @@ actor ACPSessionPersistence {
         try openedStore().deleteSession(id: id)
     }
 
+    func deleteOrphanedEphemeralSessions(now: Int64, staleAfter: Int64) throws -> [String] {
+        try openedStore().deleteOrphanedEphemeralSessions(now: now, staleAfter: staleAfter)
+    }
+
+    func promoteEphemeralSession(id: String) throws -> Bool {
+        try openedStore().promoteEphemeralSession(id: id)
+    }
+
     func setArchived(id: String, archived: Bool) throws {
         try openedStore().setArchived(id: id, archived: archived)
     }
