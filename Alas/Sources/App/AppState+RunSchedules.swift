@@ -309,14 +309,53 @@ extension AppState {
         // and every later one would collide with what it left behind: the
         // destination it still occupies, or the branch it kept after the
         // worktree went away.
+        return await createWorktreeAtFreeDestination(rendered: rendered, project: project)
+    }
+
+    /// Creates a worktree at the first free branch and path for `rendered`, suffixed when the
+    /// name is taken. Creations in one project run one at a time from picking the name until the
+    /// worktree exists: two overlapping starts (two plugins, or a plugin and a schedule) would
+    /// otherwise both probe before either worktree existed and pick the same name.
+    func createWorktreeAtFreeDestination(
+        rendered: String,
+        project: ProjectConfig
+    ) async -> Result<Worktree, WorktreeCreationFailure> {
+        let gate = worktreeCreationGates[project.id] ?? SerialGate()
+        worktreeCreationGates[project.id] = gate
+        await gate.enter()
+        defer { gate.leave() }
+        switch await reserveWorktreeDestination(rendered: rendered, project: project) {
+        case let .success((branch, destination, base)):
+            guard !Task.isCancelled else { return .failure(.init(message: "Cancelled before the worktree was created.")) }
+            return await createWorktreeAndWait(
+                projectId: project.id,
+                base: base,
+                branch: branch,
+                destination: destination,
+                runStartup: true
+            )
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    /// The first free branch and worktree path for `rendered` (suffixed when
+    /// the name is taken), plus the base branch a new worktree is cut from.
+    /// Callers go through `createWorktreeAtFreeDestination`, which serialises them.
+    private func reserveWorktreeDestination(
+        rendered: String,
+        project: ProjectConfig
+    ) async -> Result<(branch: String, destination: URL, base: String), WorktreeCreationFailure> {
         let repoPath = URL(fileURLWithPath: project.path)
         let git = GitService()
         // Local branches only: `WorktreeService.add` decides whether to reuse
         // a branch from `refs/heads/<branch>`, and a remote-tracking
         // `origin/nightly` with no local branch is still cut from the base.
         let existingBranches = Set((try? await git.localBranches(at: repoPath)) ?? [])
-        let probe = scheduledDestinationExistence
         let host = project.host
+        let branch: String
+        let destination: URL
+        let probe = scheduledDestinationExistence
         let free = await ScheduledWorktreeDestination.firstFree(
             rendered: rendered,
             pathTemplate: config.worktrees.pathTemplate,
@@ -325,8 +364,6 @@ extension AppState {
             existingBranches: existingBranches,
             pathState: { await probe($0, host) }
         )
-        let branch: String
-        let destination: URL
         switch free {
         case let .free(freeBranch, freeDestination):
             branch = freeBranch
@@ -345,13 +382,7 @@ extension AppState {
             availableBranches: availableBranches,
             configuredDefault: config.worktrees.baseBranch
         )
-        return await createWorktreeAndWait(
-            projectId: project.id,
-            base: base,
-            branch: branch,
-            destination: destination,
-            runStartup: true
-        )
+        return .success((branch, destination, base))
     }
 
     private func runScheduledScript(

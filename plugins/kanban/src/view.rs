@@ -1,0 +1,256 @@
+//! Renders the board as a view tree. Pure: no SDK calls besides the node types.
+
+use crate::board::{Board, Card, Column, MAX_CARDS, MAX_CARD_TEXT_BYTES};
+use alas_plugin::{Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
+
+// The board holds at most MAX_CARDS, so every card renders and each one can be used. Only a
+// board stored over the cap shows a "+N older" caption, which keeps the tree well under the
+// host's 2,000-node limit.
+const MAX_CARDS_PER_COLUMN: usize = MAX_CARDS;
+const MAX_TEXT: usize = 500;
+
+fn clip(s: &str, max: usize) -> String {
+    // A string has at least as many bytes as chars, so short ones skip the char scan.
+    if s.len() <= max {
+        return s.to_string();
+    }
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+fn text(id: String, text: &str, style: Option<TextStyle>, tone: Option<Tone>) -> Node {
+    Node::Text { id, text: clip(text, MAX_TEXT), style, tone }
+}
+
+fn hstack(id: String, children: Vec<Node>) -> Node {
+    Node::Hstack { id, children, spacing: None }
+}
+
+pub fn render(board: &Board, form: u64, notice: Option<&str>) -> Node {
+    let columns = Column::ALL.into_iter().map(|col| column(board, col, form)).collect();
+    let mut children: Vec<Node> = notice.map(|n| text("notice".into(), n, None, Some(Tone::Danger))).into_iter().collect();
+    children.push(Node::Scroll {
+        id: "scroll".into(),
+        axis: Axis::Horizontal,
+        child: Box::new(Node::Hstack { id: "columns".into(), children: columns, spacing: Some(12) }),
+    });
+    Node::Vstack { id: "root".into(), spacing: None, width: None, children }
+}
+
+fn column(board: &Board, col: Column, form: u64) -> Node {
+    let key = col.key();
+    let cards = board.in_column(col);
+    let mut children = vec![hstack(
+        format!("col-{key}-header"),
+        vec![
+            text(format!("col-{key}-title"), col.title(), Some(TextStyle::Title), None),
+            Node::Badge { id: format!("col-{key}-count"), text: cards.len().to_string(), tone: None },
+        ],
+    )];
+    if col == Column::Backlog {
+        children.push(Node::TextField {
+            id: format!("new-prompt-{form}"),
+            value: String::new(),
+            placeholder: Some("What should the agent do? First line becomes the title — ⌘Return to add".into()),
+            multiline: true,
+        });
+    }
+    if col == Column::Backlog && board.nearly_full() {
+        let text = if board.has_room(MAX_CARD_TEXT_BYTES) {
+            "The board is nearly full: new cards remove the oldest Done cards."
+        } else {
+            "The board is nearly full: delete cards or move them to Done to make room."
+        };
+        children.push(self::text("board-full".into(), text, Some(TextStyle::Caption), Some(Tone::Dim)));
+    }
+    // The newest cards stay visible; older ones are summarised first.
+    let hidden = cards.len().saturating_sub(MAX_CARDS_PER_COLUMN);
+    let mut stack = Vec::with_capacity(cards.len() - hidden + 1);
+    if hidden > 0 {
+        let older = format!("+{hidden} older");
+        stack.push(text(format!("col-{key}-older"), &older, Some(TextStyle::Caption), Some(Tone::Dim)));
+    }
+    stack.extend(cards[hidden..].iter().map(|c| card(c)));
+    // Cards scroll on their own, under the header, so every card's buttons stay reachable.
+    children.push(Node::Scroll {
+        id: format!("col-{key}-scroll"),
+        axis: Axis::Vertical,
+        child: Box::new(Node::Vstack { id: format!("col-{key}-cards"), children: stack, spacing: Some(8), width: None }),
+    });
+    Node::Vstack { id: format!("col-{key}"), children, spacing: Some(8), width: Some(280) }
+}
+
+fn card(c: &Card) -> Node {
+    let id = c.id;
+    let mut children = vec![
+        text(format!("card-{id}-title"), &c.title, None, None),
+        text(format!("card-{id}-prompt"), &clip(&c.prompt, 120), Some(TextStyle::Caption), Some(Tone::Dim)),
+    ];
+    if let Some(branch) = &c.branch {
+        children.push(text(format!("card-{id}-branch"), branch, Some(TextStyle::Monospaced), None));
+    }
+    if let Some(state) = &c.agent_state {
+        let tone = match state.as_str() {
+            "awaiting_input" | "permission_request" => Some(Tone::Warn),
+            "running" => Some(Tone::Accent),
+            _ => None,
+        };
+        children.push(Node::Badge { id: format!("card-{id}-state"), text: state.clone(), tone });
+    }
+    if let Some(error) = &c.error {
+        children.push(text(format!("card-{id}-error"), &format!("Start failed: {error}"), None, Some(Tone::Danger)));
+    }
+    let mut buttons = Vec::new();
+    if c.column == Column::Backlog {
+        buttons.push(Node::Button {
+            id: format!("start-{id}"),
+            label: "Start".into(),
+            icon: Some("play.fill".into()),
+            style: Some(ButtonStyle::Primary),
+            disabled: false,
+        });
+        buttons.push(Node::Button {
+            id: format!("delete-{id}"),
+            label: "Delete".into(),
+            icon: None,
+            style: Some(ButtonStyle::Plain),
+            disabled: false,
+        });
+    }
+    // A card without a session has nothing to follow, so only Backlog and Done make sense.
+    let items = Column::ALL
+        .into_iter()
+        .filter(|&col| col != c.column)
+        .filter(|col| c.session_id.is_some() || matches!(col, Column::Backlog | Column::Done))
+        .map(|col| MenuItem { id: col.key().into(), label: col.title().into() })
+        .collect();
+    buttons.push(Node::Menu { id: format!("move-{id}"), label: "Move to".into(), items });
+    children.push(hstack(format!("card-{id}-buttons"), buttons));
+    Node::Card { id: format!("card-{id}"), children, tone: None, clickable: c.session_id.is_some(), width: None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every node in the tree, depth first.
+    fn flatten<'a>(node: &'a Node, out: &mut Vec<(&'a str, &'a Node)>) {
+        let (id, kids): (&String, Vec<&Node>) = match node {
+            Node::Vstack { id, children, .. } | Node::Hstack { id, children, .. } | Node::Card { id, children, .. } => {
+                (id, children.iter().collect())
+            }
+            Node::Scroll { id, child, .. } => (id, vec![child.as_ref()]),
+            Node::Text { id, .. }
+            | Node::Badge { id, .. }
+            | Node::Button { id, .. }
+            | Node::TextField { id, .. }
+            | Node::Menu { id, .. }
+            | Node::Divider { id }
+            | Node::Spacer { id } => (id, vec![]),
+        };
+        out.push((id, node));
+        kids.into_iter().for_each(|k| flatten(k, out));
+    }
+
+    fn find<'a>(tree: &'a Node, want: &str) -> Option<&'a Node> {
+        let mut all = Vec::new();
+        flatten(tree, &mut all);
+        all.into_iter().find(|(id, _)| *id == want).map(|(_, n)| n)
+    }
+
+    #[test]
+    fn the_board_renders_five_columns_with_counts() {
+        let mut b = Board::default();
+        b.add("a", "p");
+        let id = b.add("b", "p");
+        b.started(id, "s".into(), "br".into());
+        let tree = render(&b, 0, None);
+        let Node::Vstack { children, .. } = &tree else { panic!() };
+        let Node::Scroll { child, axis: Axis::Horizontal, .. } = &children[0] else { panic!() };
+        let Node::Hstack { children: cols, .. } = child.as_ref() else { panic!() };
+        let keys: Vec<_> = cols
+            .iter()
+            .map(|c| match c {
+                Node::Vstack { id, width: Some(280), .. } => id.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, ["col-backlog", "col-running", "col-needs_you", "col-review", "col-done"]);
+        for (col, count) in [("backlog", "1"), ("running", "1"), ("done", "0")] {
+            let Some(Node::Badge { text, .. }) = find(&tree, &format!("col-{col}-count")) else { panic!() };
+            assert_eq!(text, count);
+        }
+        let mut ids = Vec::new();
+        flatten(&tree, &mut ids);
+        let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
+        assert_eq!(unique.len(), ids.len(), "ids must be unique");
+    }
+
+    #[test]
+    fn backlog_cards_have_start_and_delete_and_started_cards_are_clickable() {
+        let mut b = Board::default();
+        let fresh = b.add("a", "p");
+        let started = b.add("b", "p");
+        b.started(started, "s".into(), "task/b".into());
+        b.start_failed(fresh, "boom");
+        let tree = render(&b, 0, None);
+
+        let Some(Node::Card { clickable: false, .. }) = find(&tree, &format!("card-{fresh}")) else { panic!() };
+        assert!(find(&tree, &format!("start-{fresh}")).is_some());
+        assert!(find(&tree, &format!("delete-{fresh}")).is_some());
+        let Some(Node::Text { text, tone: Some(Tone::Danger), .. }) = find(&tree, &format!("card-{fresh}-error")) else { panic!() };
+        assert_eq!(text, "Start failed: boom");
+        let Some(Node::Menu { items, .. }) = find(&tree, &format!("move-{fresh}")) else { panic!() };
+        assert_eq!(items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["done"]);
+
+        let Some(Node::Card { clickable: true, .. }) = find(&tree, &format!("card-{started}")) else { panic!() };
+        assert!(find(&tree, &format!("start-{started}")).is_none());
+        assert!(find(&tree, &format!("card-{started}-branch")).is_some());
+        let Some(Node::Menu { items, .. }) = find(&tree, &format!("move-{started}")) else { panic!() };
+        assert_eq!(items.len(), 4);
+    }
+
+    #[test]
+    fn a_column_holding_the_whole_board_renders_every_card_within_the_host_limits() {
+        let mut b = Board::default();
+        for i in 0..MAX_CARDS {
+            let id = b.add(&format!("t{i}"), "p");
+            b.started(id, format!("s{i}"), format!("task/t{i}"));
+            b.move_to(id, Column::Review);
+        }
+        let tree = render(&b, 0, None);
+        assert!(b.cards.iter().all(|c| find(&tree, &format!("card-{}", c.id)).is_some()));
+        assert!(find(&tree, "col-review-older").is_none());
+        for col in Column::ALL {
+            let Some(Node::Scroll { axis: Axis::Vertical, .. }) = find(&tree, &format!("col-{}-scroll", col.key())) else {
+                panic!("{col:?} has no vertical scroll")
+            };
+        }
+        let mut ids = Vec::new();
+        flatten(&tree, &mut ids);
+        let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
+        assert_eq!(unique.len(), ids.len(), "ids must be unique");
+        assert!(ids.len() <= 2000, "{} nodes", ids.len());
+        fn depth(n: &Node) -> usize {
+            1 + match n {
+                Node::Vstack { children, .. } | Node::Hstack { children, .. } | Node::Card { children, .. } => {
+                    children.iter().map(depth).max().unwrap_or(0)
+                }
+                Node::Scroll { child, .. } => depth(child),
+                _ => 0,
+            }
+        }
+        assert!(depth(&tree) <= 16);
+    }
+
+    #[test]
+    fn form_field_ids_change_with_the_form_generation() {
+        let b = Board::default();
+        assert!(find(&render(&b, 0, None), "new-prompt-0").is_some());
+        let tree = render(&b, 1, None);
+        assert!(find(&tree, "new-prompt-1").is_some());
+        assert!(find(&tree, "new-prompt-0").is_none());
+    }
+}

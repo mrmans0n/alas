@@ -90,3 +90,41 @@ struct PluginRegionsParams: Codable, Equatable, Sendable {
 struct PluginSessionFocusParams: Codable, Equatable, Sendable {
     let id: String
 }
+
+// API 3. `view/render`'s `root` and `storage/set`'s `value` are arbitrary JSON, read with `JSONSerialization`.
+
+struct PluginViewRenderHeader: Decodable {
+    let tab: Int
+}
+
+struct PluginViewEventParams: Codable, Equatable, Sendable {
+    let tab: Int
+    let id: String
+    let kind: String
+    let value: String?
+}
+
+struct PluginTaskStartParams: Codable, Sendable {
+    let title: String
+    let prompt: String
+    let branch: String?
+    let agent: String?
+}
+
+struct PluginTaskStartResult: Codable, Equatable, Sendable {
+    let sessionId: String
+    let branch: String
+}
+
+struct PluginTaskFailedParams: Codable, Equatable, Sendable {
+    let sessionId: String
+    let reason: String
+}
+
+struct PluginStorageKeyParams: Codable, Sendable {
+    let key: String
+}
+
+struct PluginStorageKeysResult: Codable, Equatable, Sendable {
+    let keys: [String]
+}

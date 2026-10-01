@@ -1,4 +1,4 @@
-//! SDK for Alas plugins (API 1 and 2). Handles the ABI, JSON-RPC framing, the
+//! SDK for Alas plugins (API 1 to 3). Handles the ABI, JSON-RPC framing, the
 //! activation handshake and request ids. On non-wasm targets the host imports are
 //! replaced by an in-memory recorder (`test_host`) so plugins can be unit tested.
 
@@ -66,6 +66,13 @@ pub enum Event {
     Snapshot(Snapshot),
     Tick { dt: u32 },
     Click { tab: u32, region: String },
+    /// A control in a view tab was used: `kind` is `click` (button, card), `submit` (text field) or `select` (menu).
+    ViewEvent { tab: u32, id: String, kind: String, value: Option<String> },
+    /// A task started with `task_start` failed to launch in the background.
+    TaskFailed { session_id: String, reason: String },
+    /// The reply to `storage_get`: the stored JSON as raw text, `None` when unset.
+    /// Raw, so a large value is parsed once, straight into the plugin's own types.
+    Stored { id: i64, value: Result<Option<String>, RpcError> },
     Reply { id: i64, result: Result<Value, RpcError> },
 }
 
@@ -82,6 +89,98 @@ mod sys {
     }
 }
 
+/// Alas meters plugins by fuel, and charges a function or loop body in full each time it
+/// is entered. The default allocator's `malloc`/`free` are large bodies, so every
+/// allocation cost thousands of fuel. This one is a handful of instructions: power-of-two
+/// size classes with a free list each, carved from a bump region grown with `memory.grow`.
+// ponytail: freed blocks are never coalesced, split or returned, so memory use is the sum of
+// each size class's peak, not what is live now (plus up to 2x rounding per block). Fine for
+// the 64 MiB cap and JSON-sized payloads; switch back to dlmalloc for plugins whose large
+// buffers keep changing size class.
+#[cfg(target_arch = "wasm32")]
+mod allocator {
+    use std::alloc::{GlobalAlloc, Layout};
+    use std::cell::UnsafeCell;
+
+    /// Blocks are aligned to their size, capped at this.
+    const MAX_ALIGN: usize = 4096;
+    const PAGE: usize = 65536;
+
+    struct Heap {
+        /// Head of each size class's free list; a free block stores the next head.
+        free: [usize; usize::BITS as usize],
+        next: usize,
+        end: usize,
+    }
+
+    struct SizeClasses(UnsafeCell<Heap>);
+
+    // Plugins are single-threaded wasm modules.
+    unsafe impl Sync for SizeClasses {}
+
+    #[global_allocator]
+    static HEAP: SizeClasses = SizeClasses(UnsafeCell::new(Heap { free: [0; usize::BITS as usize], next: 0, end: 0 }));
+
+    /// log2 of the block size that holds `layout`, at least one pointer.
+    fn class(layout: Layout) -> usize {
+        let size = layout.size().max(layout.align()).max(size_of::<usize>());
+        (usize::BITS - (size - 1).leading_zeros()) as usize
+    }
+
+    unsafe impl GlobalAlloc for SizeClasses {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.align() > MAX_ALIGN {
+                return std::ptr::null_mut();
+            }
+            let heap = &mut *self.0.get();
+            let class = class(layout);
+            let head = heap.free[class];
+            if head != 0 {
+                heap.free[class] = *(head as *const usize);
+                return head as *mut u8;
+            }
+            let size = 1usize << class;
+            let align = size.min(MAX_ALIGN);
+            let mut start = (heap.next + align - 1) & !(align - 1);
+            if start + size > heap.end {
+                let pages = size.div_ceil(PAGE) + 1;
+                let old = core::arch::wasm32::memory_grow(0, pages);
+                if old == usize::MAX {
+                    return std::ptr::null_mut();
+                }
+                // The first region starts at the grown memory; later ones extend the last.
+                if old * PAGE != heap.end {
+                    heap.next = old * PAGE;
+                }
+                heap.end = (old + pages) * PAGE;
+                start = (heap.next + align - 1) & !(align - 1);
+            }
+            heap.next = start + size;
+            start as *mut u8
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            let heap = &mut *self.0.get();
+            let class = class(layout);
+            *(ptr as *mut usize) = heap.free[class];
+            heap.free[class] = ptr as usize;
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let new = Layout::from_size_align_unchecked(new_size, layout.align());
+            if class(new) == class(layout) {
+                return ptr;
+            }
+            let grown = self.alloc(new);
+            if !grown.is_null() {
+                std::ptr::copy_nonoverlapping(ptr, grown, layout.size().min(new_size));
+                self.dealloc(ptr, layout);
+            }
+            grown
+        }
+    }
+}
+
 /// Records what a plugin sends when it is compiled for the host, for tests.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_host {
@@ -89,8 +188,8 @@ pub mod test_host {
     use std::cell::RefCell;
 
     thread_local! {
-        pub(crate) static SENT: RefCell<Vec<Value>> = RefCell::new(Vec::new());
-        pub(crate) static FRAMES: RefCell<Vec<(u32, u32, Vec<u8>)>> = RefCell::new(Vec::new());
+        pub(crate) static SENT: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+        pub(crate) static FRAMES: RefCell<Vec<(u32, u32, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn take_sent() -> Vec<Value> {
@@ -103,18 +202,41 @@ pub mod test_host {
     }
 }
 
-fn send(message: &Value) {
+/// Serialises straight to text: going through `json!` would copy large payloads
+/// (a view tree, a stored board) into a `Value` tree first, which costs fuel.
+fn send<T: Serialize + ?Sized>(message: &T) {
+    let text = match serde_json::to_string(message) {
+        Ok(text) => text,
+        Err(error) => {
+            debug_assert!(false, "could not serialise a message: {error}");
+            // `log` sends a plain `Value`, which always serialises.
+            log("error", &format!("could not serialise a message: {error}"));
+            return;
+        }
+    };
     #[cfg(target_arch = "wasm32")]
-    {
-        let text = message.to_string();
-        unsafe { sys::send(text.as_ptr(), text.len()) }
+    unsafe {
+        sys::send(text.as_ptr(), text.len())
     }
     #[cfg(not(target_arch = "wasm32"))]
-    test_host::SENT.with(|sent| sent.borrow_mut().push(message.clone()));
+    test_host::SENT.with(|sent| sent.borrow_mut().push(serde_json::from_str(&text).expect("sent JSON")));
+}
+
+#[derive(Serialize)]
+struct Outgoing<'a, P> {
+    jsonrpc: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<i64>,
+    method: &'a str,
+    params: P,
+}
+
+fn notify<P: Serialize>(method: &str, params: P) {
+    send(&Outgoing { jsonrpc: "2.0", id: None, method, params });
 }
 
 pub fn log(level: &str, message: &str) {
-    send(&json!({"jsonrpc": "2.0", "method": "log", "params": {"level": level, "message": message}}));
+    notify("log", json!({"level": level, "message": message}));
 }
 
 thread_local! {
@@ -122,26 +244,45 @@ thread_local! {
 }
 
 /// Sends a request and returns its id. The reply arrives in a later call as `Event::Reply`.
-pub fn request(method: &str, params: Value) -> i64 {
+pub fn request<P: Serialize>(method: &str, params: P) -> i64 {
     let id = NEXT_ID.with(|next| {
         let id = next.get();
         next.set(id + 1);
         id
     });
-    send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+    send(&Outgoing { jsonrpc: "2.0", id: Some(id), method, params });
     id
 }
 
+/// Requests whose replies are decoded into their own event instead of `Event::Reply`.
+#[derive(Clone, Copy, PartialEq)]
+enum Typed {
+    Snapshot,
+    Storage,
+}
+
 thread_local! {
-    static SNAPSHOT_REQUESTS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_REQUESTS: RefCell<Vec<(i64, Typed)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn typed_request<P: Serialize>(method: &str, params: P, kind: Typed) -> i64 {
+    let id = request(method, params);
+    TYPED_REQUESTS.with(|ids| ids.borrow_mut().push((id, kind)));
+    id
+}
+
+fn take_typed(id: i64) -> Option<Typed> {
+    TYPED_REQUESTS.with(|ids| {
+        let mut ids = ids.borrow_mut();
+        let index = ids.iter().position(|&(pending, _)| pending == id)?;
+        Some(ids.remove(index).1)
+    })
 }
 
 /// Requests the whole workspace snapshot. The reply arrives as `Event::Snapshot`,
 /// decoded straight into typed structs (it is the one large payload).
 pub fn request_snapshot() -> i64 {
-    let id = request("workspace/snapshot", json!({}));
-    SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().push(id));
-    id
+    typed_request("workspace/snapshot", json!({}), Typed::Snapshot)
 }
 
 /// Hands Alas one RGBA8 frame for tab `tab`. Alas copies it during this call.
@@ -155,7 +296,132 @@ pub fn present(tab: u32, pixels: &[u8], width: u32) {
 }
 
 pub fn set_regions(tab: u32, regions: &[Region]) {
-    send(&json!({"jsonrpc": "2.0", "method": "canvas/regions", "params": {"tab": tab, "regions": regions}}));
+    #[derive(Serialize)]
+    struct Params<'a> {
+        tab: u32,
+        regions: &'a [Region],
+    }
+    notify("canvas/regions", Params { tab, regions });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Axis { Vertical, Horizontal }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextStyle { Body, Caption, Title, Monospaced }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Tone { Normal, Dim, Accent, Warn, Danger }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ButtonStyle { Normal, Primary, Plain }
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MenuItem {
+    pub id: String,
+    pub label: String,
+}
+
+/// A node of a view tab's tree. Ids must be unique within the tree.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Node {
+    Vstack {
+        id: String,
+        children: Vec<Node>,
+        /// Points between children. The host rejects a tree with spacing above 32.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spacing: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<u16>,
+    },
+    Hstack {
+        id: String,
+        children: Vec<Node>,
+        /// Points between children. The host rejects a tree with spacing above 32.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spacing: Option<u8>,
+    },
+    Scroll { id: String, axis: Axis, child: Box<Node> },
+    Text {
+        id: String,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        style: Option<TextStyle>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+    },
+    Badge {
+        id: String,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+    },
+    Button {
+        id: String,
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        style: Option<ButtonStyle>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        disabled: bool,
+    },
+    TextField {
+        id: String,
+        value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        multiline: bool,
+    },
+    Menu { id: String, label: String, items: Vec<MenuItem> },
+    Card {
+        id: String,
+        children: Vec<Node>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        clickable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<u16>,
+    },
+    Divider { id: String },
+    Spacer { id: String },
+}
+
+/// Replaces the tree shown in view tab `tab`.
+pub fn render(tab: u32, root: &Node) {
+    #[derive(Serialize)]
+    struct Params<'a> {
+        tab: u32,
+        root: &'a Node,
+    }
+    notify("view/render", Params { tab, root });
+}
+
+/// Starts a task in a new worktree. The reply (`Event::Reply`) holds `{sessionId, branch}`.
+pub fn task_start(title: &str, prompt: &str) -> i64 {
+    request("task/start", json!({"title": title, "prompt": prompt}))
+}
+
+/// The reply arrives as `Event::Stored`.
+pub fn storage_get(key: &str) -> i64 {
+    typed_request("storage/get", json!({"key": key}), Typed::Storage)
+}
+
+/// A `null` value deletes the key.
+pub fn storage_set<T: Serialize + ?Sized>(key: &str, value: &T) -> i64 {
+    #[derive(Serialize)]
+    struct Params<'a, T: ?Sized> {
+        key: &'a str,
+        value: &'a T,
+    }
+    request("storage/set", Params { key, value })
 }
 
 /// Payloads stay raw until their method is known, so the snapshot is parsed once,
@@ -172,6 +438,12 @@ struct Incoming<'a> {
     result: Option<&'a RawValue>,
     #[serde(borrow, default)]
     error: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct StoragePayload<'a> {
+    #[serde(borrow, default)]
+    value: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -203,6 +475,22 @@ struct ClickParams {
     region: String,
 }
 
+#[derive(Deserialize)]
+struct ViewEventParams {
+    tab: u32,
+    id: String,
+    kind: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TaskFailedParams {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    reason: String,
+}
+
 fn parse<'a, T: Deserialize<'a>>(raw: Option<&'a RawValue>) -> Option<T> {
     serde_json::from_str(raw?.get()).ok()
 }
@@ -230,24 +518,33 @@ pub fn dispatch<P: Plugin>(plugin: &mut P, bytes: &[u8]) {
             Some(params) => Event::Click { tab: params.tab, region: params.region },
             None => return,
         },
+        Some("view/event") => match parse::<ViewEventParams>(message.params) {
+            Some(p) => Event::ViewEvent { tab: p.tab, id: p.id, kind: p.kind, value: p.value },
+            None => return,
+        },
+        Some("task/failed") => match parse::<TaskFailedParams>(message.params) {
+            Some(p) => Event::TaskFailed { session_id: p.session_id, reason: p.reason },
+            None => return,
+        },
         Some(_) => return,
         None => {
             let Some(id) = message.id.as_ref().and_then(Value::as_i64) else { return };
-            if let Some(error) = parse::<RpcError>(message.error) {
-                SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().retain(|&pending| pending != id));
-                Event::Reply { id, result: Err(error) }
-            } else if SNAPSHOT_REQUESTS.with(|ids| {
-                let mut ids = ids.borrow_mut();
-                let found = ids.iter().position(|&pending| pending == id);
-                found.map(|index| ids.remove(index)).is_some()
-            }) {
-                match parse::<SnapshotPayload>(message.result) {
+            let typed = take_typed(id);
+            match (parse::<RpcError>(message.error), typed) {
+                (Some(error), Some(Typed::Storage)) => Event::Stored { id, value: Err(error) },
+                (Some(error), _) => Event::Reply { id, result: Err(error) },
+                (None, Some(Typed::Snapshot)) => match parse::<SnapshotPayload>(message.result) {
                     Some(payload) => Event::Snapshot(payload.snapshot),
                     None => return,
+                },
+                (None, Some(Typed::Storage)) => match parse::<StoragePayload>(message.result) {
+                    Some(payload) => Event::Stored { id, value: Ok(payload.value.map(|raw| raw.get().to_string())) },
+                    None => return,
+                },
+                (None, None) => {
+                    let result = message.result.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or(Value::Null);
+                    Event::Reply { id, result: Ok(result) }
                 }
-            } else {
-                let result = message.result.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or(Value::Null);
-                Event::Reply { id, result: Ok(result) }
             }
         }
     };
@@ -367,6 +664,20 @@ mod tests {
     }
 
     #[test]
+    fn storage_replies_arrive_as_raw_text() {
+        let (set, unset, failed) = (storage_get("a"), storage_get("b"), storage_get("c"));
+        let mut plugin = Recorder::default();
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":set,"result":{"value":{"n":1.0}}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":unset,"result":{"value":null}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":failed,"error":{"code":-32003,"message":"no"}}));
+        assert_eq!(plugin.0, vec![
+            Event::Stored { id: set, value: Ok(Some(r#"{"n":1.0}"#.into())) },
+            Event::Stored { id: unset, value: Ok(None) },
+            Event::Stored { id: failed, value: Err(RpcError { code: -32003, message: "no".into() }) },
+        ]);
+    }
+
+    #[test]
     fn malformed_messages_are_ignored() {
         let mut plugin = Recorder::default();
         dispatch(&mut plugin, b"{not json");
@@ -381,5 +692,50 @@ mod tests {
         set_regions(0, &[Region { id: "r0".into(), label: "L".into(), rect: [1, 2, 3, 4] }]);
         assert_eq!(test_host::take_sent()[0]["params"],
             json!({"tab": 0, "regions": [{"id": "r0", "label": "L", "rect": [1, 2, 3, 4]}]}));
+    }
+
+    #[test]
+    fn view_nodes_encode_to_the_wire_shape() {
+        test_host::take_sent();
+        let s = |v: &str| v.to_string();
+        let tree = Node::Vstack { id: s("root"), spacing: None, width: Some(300), children: vec![
+            Node::TextField { id: s("t"), value: s("v"), placeholder: Some(s("p")), multiline: false },
+            Node::Menu { id: s("m"), label: s("M"), items: vec![MenuItem { id: s("a"), label: s("A") }] },
+            Node::Card { id: s("c"), tone: Some(Tone::Warn), clickable: true, width: None, children: vec![
+                Node::Button { id: s("b"), label: s("B"), icon: None, style: Some(ButtonStyle::Primary), disabled: false },
+            ] },
+        ] };
+        render(2, &tree);
+        assert_eq!(test_host::take_sent()[0], json!({"jsonrpc":"2.0","method":"view/render","params":{"tab":2,"root":{
+            "kind":"vstack","id":"root","width":300,"children":[
+                {"kind":"textField","id":"t","value":"v","placeholder":"p"},
+                {"kind":"menu","id":"m","label":"M","items":[{"id":"a","label":"A"}]},
+                {"kind":"card","id":"c","tone":"warn","clickable":true,"children":[
+                    {"kind":"button","id":"b","label":"B","style":"primary"}]}]}}}));
+    }
+
+    #[test]
+    fn view_events_and_task_failures_decode() {
+        let mut plugin = Recorder::default();
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"f","kind":"select","value":"x"}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"b","kind":"click"}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"task/failed","params":{"sessionId":"s","reason":"boom"}}));
+        assert_eq!(plugin.0, vec![
+            Event::ViewEvent { tab: 1, id: "f".into(), kind: "select".into(), value: Some("x".into()) },
+            Event::ViewEvent { tab: 1, id: "b".into(), kind: "click".into(), value: None },
+            Event::TaskFailed { session_id: "s".into(), reason: "boom".into() },
+        ]);
+    }
+
+    #[test]
+    fn task_and_storage_helpers_send_the_documented_requests() {
+        test_host::take_sent();
+        task_start("T", "do it");
+        storage_get("k");
+        storage_set("k", &json!([1]));
+        let sent = test_host::take_sent();
+        assert_eq!((sent[0]["method"].clone(), sent[0]["params"].clone()), (json!("task/start"), json!({"title":"T","prompt":"do it"})));
+        assert_eq!((sent[1]["method"].clone(), sent[1]["params"].clone()), (json!("storage/get"), json!({"key":"k"})));
+        assert_eq!((sent[2]["method"].clone(), sent[2]["params"].clone()), (json!("storage/set"), json!({"key":"k","value":[1]})));
     }
 }

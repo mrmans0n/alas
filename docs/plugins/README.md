@@ -35,11 +35,13 @@ clock, or environment access.
 - **Be told** when that snapshot changes.
 - **Switch** Alas to another worktree of the same project.
 - **Draw** canvas tabs with clickable regions (API 2), and focus an agent session.
+- **Build native view tabs**, **start tasks** (a new worktree with an agent) and
+  **store data** per project (API 3, see [API v3](api-v3.md)).
 - **Log** lines that show up in **Settings → Plugins**.
 
 ## What it cannot do yet
 
-Draw native panels or sidebars, make network requests, or read or write
+Add sidebars or panels outside a tab, make network requests, or read or write
 files. These are planned; see the roadmap in
 [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
@@ -49,7 +51,7 @@ files. These are planned; see the roadmap in
 |---|---|
 | Run the sample plugin and see it work | [Getting started](getting-started.md) |
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
-| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md), [API v2 additions](api-v2.md) |
+| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md), [API v2 additions](api-v2.md), [API v3 additions](api-v3.md) |
 | Write a plugin: Rust patterns, testing, other languages | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
 

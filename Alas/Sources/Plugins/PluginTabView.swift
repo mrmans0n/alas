@@ -5,15 +5,15 @@ enum PluginTabContent: Equatable {
     case unavailable
     case stopped(String)
     case loading
-    case canvas
+    case content
 
     static func resolve(
         pluginsOn: Bool, found: Bool, approved: Bool, enabled: Bool,
-        hostState: PluginHostState?, hasFrame: Bool
+        hostState: PluginHostState?, hasContent: Bool
     ) -> PluginTabContent {
         guard pluginsOn, found, approved, enabled else { return .unavailable }
         if case .failed(let reason) = hostState { return .stopped(reason) }
-        return hostState == .active && hasFrame ? .canvas : .loading
+        return hostState == .active && hasContent ? .content : .loading
     }
 }
 
@@ -47,18 +47,25 @@ struct PluginTabView: View {
         let plugin = manager?.plugin(id: tab.pluginID)
         let host = manager?.host(pluginID: tab.pluginID, projectID: worktree.projectId)
         let tabIndex = plugin?.manifest.tabs.firstIndex { $0.id == tab.contributionID }
+        let isView = tabIndex.map { plugin?.manifest.tabs[$0].kind == .view } ?? false
         let content = PluginTabContent.resolve(
             pluginsOn: manager != nil,
             found: plugin != nil && tabIndex != nil,
             approved: plugin.map { manager?.isApproved($0) == true } ?? false,
             enabled: plugin.map { manager?.isEnabled($0) == true } ?? false,
             hostState: host?.state,
-            hasFrame: tabIndex.flatMap { host?.frames[$0] } != nil)
+            hasContent: tabIndex.map { isView ? host?.views[$0] != nil : host?.frames[$0] != nil } ?? false)
         ZStack {
             theme.color("bg-1")
             switch content {
-            case .canvas:
-                if let host, let tabIndex { PluginCanvasView(host: host, tabIndex: tabIndex) }
+            case .content:
+                if let host, let tabIndex {
+                    if isView {
+                        PluginViewTabView(host: host, tabIndex: tabIndex)
+                    } else {
+                        PluginCanvasView(host: host, tabIndex: tabIndex)
+                    }
+                }
             case .loading:
                 ProgressView().controlSize(.small)
             case .stopped(let reason):
@@ -76,8 +83,8 @@ struct PluginTabView: View {
                 }
             }
         }
-        // The host ticks only while a canvas for it is on screen.
-        .background(PluginVisibilityReporter(host: content == .canvas || content == .loading ? host : nil))
+        // The host ticks only while a canvas for it is on screen; a view tab never reports, so it never ticks.
+        .background(PluginVisibilityReporter(host: !isView && (content == .content || content == .loading) ? host : nil))
     }
 
     private func placeholder(_ text: String, button: String, action: @escaping () -> Void) -> some View {

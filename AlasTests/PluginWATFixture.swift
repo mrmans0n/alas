@@ -12,7 +12,7 @@ enum PluginFixtureStep: Sendable {
 
 /// Builds a plugin whose Nth `alas_handle` call runs `script[N]`. Calls past the
 /// end of the script do nothing. Message text is stored in data segments from
-/// offset 1024; `alas_alloc` bumps from 32768 unless `allocReturns` pins it.
+/// offset 1024; `alas_alloc` bumps from 32768 (or just past large data) unless `allocReturns` pins it.
 enum PluginWATFixture {
     static func wasm(
         _ script: [[PluginFixtureStep]],
@@ -55,12 +55,15 @@ enum PluginWATFixture {
         let usesPresent = script.joined().contains { if case .present = $0 { true } else { false } }
         let presentImport = usesPresent
             ? #"(import "alas" "present" (func $present (param i32 i32 i32 i32)))"# : ""
+        // Messages larger than 31 KiB would reach the heap, so it then starts after them with 32 KiB to spare.
+        let heap = max(32768, (offset + 15) / 16 * 16)
+        let pages = (heap + 32768 + 65535) / 65536
         return try PluginWAT.compile("""
         (module
           (import "alas" "send" (func $send (param i32 i32)))
           \(presentImport)
-          (memory (export "memory") 1)
-          (global $heap (mut i32) (i32.const 32768))
+          (memory (export "memory") \(pages))
+          (global $heap (mut i32) (i32.const \(heap)))
           (global $calls (mut i32) (i32.const 0))
           \(data)
           (func (export "alas_alloc") (param $n i32) (result i32)

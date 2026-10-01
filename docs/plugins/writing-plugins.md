@@ -152,7 +152,8 @@ Read the full [limits table](api-v1.md#7-limits). What matters day to day:
   and Debug builds of Alas do not optimize it. Compile your plugin with
   `opt-level = "s"` (or `3`) and keep messages cheap so it behaves the same in both.
 - **Memory.** 64 MiB in total. Free what you allocate, and do not keep every
-  snapshot you ever received.
+  snapshot you ever received. The SDK installs a small global allocator whose
+  calls cost little fuel, so do not declare another `#[global_allocator]`.
 
 ## Rust checklist
 

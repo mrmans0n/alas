@@ -4,29 +4,35 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case workspaceRead = "workspace.read"
     case worktreeSwitch = "worktree.switch"
     case sessionFocus = "session.focus"
+    case tasksStart = "tasks.start"
 
-    /// Plain-language description shown when the user approves a plugin.
     /// The first plugin API version that offers this capability.
     var minimumAPI: Int {
         switch self {
         case .workspaceRead, .worktreeSwitch: 1
         case .sessionFocus: 2
+        case .tasksStart: 3
         }
     }
 
+    /// Plain-language description shown when the user approves a plugin.
     var summary: String {
         switch self {
         case .workspaceRead: "Read this project's worktrees and what their agent sessions are doing"
         case .worktreeSwitch: "Switch the selected worktree"
         case .sessionFocus: "Open agent sessions in this project"
+        case .tasksStart: "Create worktrees and start agents in this project"
         }
     }
 }
 
-/// A canvas tab the plugin draws with `alas.present`. API 2 and later.
+/// A tab the plugin draws with `alas.present` (canvas) or describes with `view/render` (view).
 struct PluginTabContribution: Equatable, Sendable {
+    enum Kind: String, Sendable { case canvas, view }
+
     let id: String
     let title: String
+    var kind: Kind = .canvas
 }
 
 enum PluginManifestError: Error, Equatable, CustomStringConvertible {
@@ -63,7 +69,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = [1, 2]
+    static let supportedAPIVersions = [1, 2, 3]
     static let maxTabs = 4
     static let maxTabTitleLength = 40
 
@@ -109,13 +115,13 @@ struct PluginManifest: Equatable, Sendable {
         }
         // `contributes` is inert before API 2, so older manifests are not validated against it.
         if api >= 2, raw.contributesMalformed { throw .malformed }
-        let tabs = api >= 2 ? try parseTabs(raw.contributes?.tabs ?? []) : []
+        let tabs = api >= 2 ? try parseTabs(raw.contributes?.tabs ?? [], api: api) : []
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs)
     }
 
-    private static func parseTabs(_ raw: [Raw.RawTab]) throws(PluginManifestError) -> [PluginTabContribution] {
+    private static func parseTabs(_ raw: [Raw.RawTab], api: Int) throws(PluginManifestError) -> [PluginTabContribution] {
         guard raw.count <= maxTabs else { throw .invalidTab("at most \(maxTabs) tabs") }
         var tabs: [PluginTabContribution] = []
         for entry in raw {
@@ -126,7 +132,15 @@ struct PluginManifest: Equatable, Sendable {
             guard (1...maxTabTitleLength).contains(title.count) else {
                 throw .invalidTab("tab \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
             }
-            tabs.append(PluginTabContribution(id: id, title: title))
+            var kind = PluginTabContribution.Kind.canvas
+            if let rawKind = entry.kind {
+                guard api >= 3 else { throw .invalidTab("tab \"\(id)\" sets kind, which requires plugin API 3") }
+                guard let parsed = PluginTabContribution.Kind(rawValue: rawKind) else {
+                    throw .invalidTab("tab \"\(id)\" has unknown kind \"\(rawKind)\"")
+                }
+                kind = parsed
+            }
+            tabs.append(PluginTabContribution(id: id, title: title, kind: kind))
         }
         return tabs
     }
@@ -136,6 +150,7 @@ private struct Raw: Decodable {
     struct RawTab: Decodable {
         let id: String?
         let title: String?
+        let kind: String?
     }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?

@@ -324,6 +324,9 @@ final class AppState {
     @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
         await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
     }
+    /// One per project: `createWorktreeAtFreeDestination` holds it from picking a free name until
+    /// the worktree exists, so the next pick sees it.
+    @ObservationIgnored var worktreeCreationGates: [String: SerialGate] = [:]
     /// Waits until the agent launched in a terminal session is the one
     /// reading its input, so a scheduled prompt lands in the agent and not in
     /// the shell that is still starting it. Returns false on timeout. Nil
@@ -13526,7 +13529,13 @@ final class AppState {
             ),
             to: worktree.id
         )
-        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        if worktree.id == selectedWorktreeId {
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        } else {
+            // A background launch (scheduled run, plugin task) only picks the tab its worktree shows
+            // when opened; the center-tab path would also clear what the user is looking at now.
+            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
         do {
             _ = try await startACPSession(
                 worktree: worktree,

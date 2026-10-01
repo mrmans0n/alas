@@ -725,6 +725,47 @@ struct AppStateRunScheduleTests {
         #expect(asked.values.allSatisfy { $0.host == project.host })
     }
 
+    /// Two starts for the same name (two plugins, or a plugin and a schedule) must
+    /// not both pick it. Here the second start's probe answers "free" only after
+    /// the first worktree exists: a probe sent before that creation is stale, so
+    /// the second start may only probe once the first has finished.
+    @Test func overlappingStartsForTheSameNameCreateDifferentWorktrees() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let probes = ProbeCounter()
+        let firstDone = Gate()
+        state.scheduledDestinationExistence = { _, _ in
+            if await probes.next() == 1 {
+                // Without serialisation the other start probes now as well; give it a second to.
+                let deadline = ContinuousClock.now + .seconds(1)
+                while await probes.count < 2, ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            } else {
+                await firstDone.wait()
+            }
+            return .free
+        }
+
+        let results = await withTaskGroup(of: Result<Worktree, WorktreeCreationFailure>.self) { group in
+            for _ in 0..<2 {
+                group.addTask { await state.createWorktreeAtFreeDestination(rendered: "nightly", project: project) }
+            }
+            var results: [Result<Worktree, WorktreeCreationFailure>] = []
+            for await result in group {
+                results.append(result)
+                await firstDone.open()
+            }
+            return results
+        }
+
+        let created = try results.map { try $0.get() }
+        #expect(Set(created.map(\.branch)) == ["nightly", "nightly-2"])
+        #expect(Set(created.map(\.path)).count == 2)
+    }
+
     /// A host that cannot be reached answers neither "free" nor "taken".
     /// Treating that silence as free would claim a path that may already hold
     /// a worktree, so the run stops and says which path it could not check.
@@ -992,6 +1033,9 @@ struct AppStateRunScheduleTests {
         #expect(state.tabs.tabs(forWorktree: main.id).isEmpty)
     }
 
+    /// Also pins that the launch leaves the user's view alone: the new
+    /// worktree's chat tab becomes its active tab, but the selection and a
+    /// pending review reveal elsewhere survive.
     @Test func aChatPromptNotSentAutomaticallyIsLeftInTheComposer() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -999,6 +1043,12 @@ struct AppStateRunScheduleTests {
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.harness.notifications.notificationAdder = { _ in }
+        state.selectedWorktreeId = main.id
+        state.attentionPendingReviewReveal = AttentionPendingReviewReveal(
+            worktreeID: main.id, tabID: "review", sessionID: "s",
+            command: DiffReviewDraftCommentScrollCommand(
+                commentID: "c", fileID: DiffReviewFileID(namespace: "review", path: "a.swift"), generation: 1),
+            eventIDs: [])
 
         _ = await state.runSchedule(schedule(
             target: .project(id: project.id),
@@ -1017,6 +1067,9 @@ struct AppStateRunScheduleTests {
         #expect(session.queue.isEmpty)
         #expect(session.composerDraft == ACPComposerDraft(segments: [.text("Fix the build.")]))
         #expect(manager.pendingModel[session.id] == nil)
+        #expect(state.tabs.activeTabId(forWorktree: created.id) == tab.id)
+        #expect(state.selectedWorktreeId == main.id)
+        #expect(state.attentionPendingReviewReveal?.worktreeID == main.id)
     }
 
     /// The surface is decided by the agent the schedule resolves to, at fire
@@ -1269,5 +1322,15 @@ private actor Gate {
     func wait() async {
         guard !isOpen else { return }
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+/// Numbers the calls of a stubbed probe.
+private actor ProbeCounter {
+    private(set) var count = 0
+
+    func next() -> Int {
+        count += 1
+        return count
     }
 }

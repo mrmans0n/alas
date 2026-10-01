@@ -25,6 +25,18 @@ struct PluginLogEntry: Equatable, Sendable {
     let message: String
 }
 
+struct PluginTaskRequest: Equatable, Sendable {
+    let title: String
+    let prompt: String
+    let branch: String?
+    let agent: String?
+}
+
+enum PluginTaskStart: Equatable {
+    case started(sessionId: String, branch: String)
+    case rejected(code: Int, message: String)
+}
+
 /// What a plugin may ask Alas to do, already scoped to one project.
 @MainActor
 struct PluginHostActions {
@@ -33,26 +45,35 @@ struct PluginHostActions {
     var switchWorktree: (String) -> Bool
     /// Returns false when `id` is not an active session of this project.
     var focusSession: (String) -> Bool
+    /// Returns synchronously; the completion is called once, later, with nil on success or the failure reason.
+    var startTask: (PluginTaskRequest, @escaping @MainActor (String?) -> Void) -> PluginTaskStart
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
         PluginHostActions(
             snapshot: { PluginWorkspaceSnapshot(worktrees: []) },
             switchWorktree: { _ in false },
-            focusSession: { _ in false })
+            focusSession: { _ in false },
+            startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available") })
     }
 }
 
-/// Runs the protocol version the manifest declares (1 or 2) for one plugin in one project.
+/// Runs the protocol version the manifest declares (1, 2 or 3) for one plugin in one project.
 @MainActor
 @Observable
 final class PluginHost {
     private static let activateID = JSONRPCID.number(0)
-    private static let requiredCapability: [String: PluginCapability] = [
+    /// Every request method, with the capability it needs; nil means none.
+    private static let methods: [String: PluginCapability?] = [
         "workspace/snapshot": .workspaceRead,
         "worktree/switch": .worktreeSwitch,
         "session/focus": .sessionFocus,
+        "task/start": .tasksStart,
+        "storage/get": nil,
+        "storage/set": nil,
+        "storage/keys": nil,
     ]
+    static let maxPromptBytes = 32 * 1024
     private static let traceLimit = 100
     private static let logLimit = 200
     static let logMessageLimit = 2000
@@ -69,12 +90,19 @@ final class PluginHost {
     private(set) var log: [PluginLogEntry] = []
     private(set) var frames: [Int: PluginFrame] = [:]
     private(set) var regions: [Int: [PluginRegion]] = [:]
+    private(set) var views: [Int: PluginViewNode] = [:]
     @ObservationIgnored private var visibleViews = 0
     @ObservationIgnored private var lastTick: ContinuousClock.Instant?
     @ObservationIgnored private var deliveriesInFlight = 0
+    /// One `task/start` at a time. The generation ties a completion to its own start, so a late,
+    /// repeated, or previous-instance completion changes nothing.
+    @ObservationIgnored private var taskInFlight = false
+    @ObservationIgnored private var taskGeneration = 0
+    @ObservationIgnored private var pendingTaskSession: String?
 
     @ObservationIgnored private let wasm: [UInt8]
     @ObservationIgnored private let actions: PluginHostActions
+    @ObservationIgnored private let storage: PluginStorage
     @ObservationIgnored private let limits: PluginLimits
     @ObservationIgnored private var runtime: PluginRuntime?
 
@@ -84,6 +112,7 @@ final class PluginHost {
         project: PluginProjectRef,
         grants: Set<PluginCapability>,
         actions: PluginHostActions,
+        storage: PluginStorage,
         limits: PluginLimits = PluginLimits()
     ) {
         self.manifest = manifest
@@ -91,6 +120,7 @@ final class PluginHost {
         self.project = project
         self.grants = grants
         self.actions = actions
+        self.storage = storage
         self.limits = limits
     }
 
@@ -103,6 +133,8 @@ final class PluginHost {
         trace = []
         log = []
         clearCanvas()
+        taskInFlight = false
+        taskGeneration += 1
         do {
             let loaded = try await PluginRuntime.load(
                 wasm: wasm, limits: limits, tabCount: manifest.api >= 2 ? manifest.tabs.count : nil)
@@ -150,6 +182,7 @@ final class PluginHost {
     private func clearCanvas() {
         frames = [:]
         regions = [:]
+        views = [:]
         lastTick = nil
     }
 
@@ -159,7 +192,7 @@ final class PluginHost {
         if visibleViews == 0 { lastTick = nil }
     }
 
-    var isTicking: Bool { state == .active && visibleViews > 0 && !manifest.tabs.isEmpty }
+    var isTicking: Bool { state == .active && visibleViews > 0 && manifest.tabs.contains { $0.kind == .canvas } }
 
     /// Dropped, not queued, while any delivery is still running, so a slow plugin loses frames instead of lagging.
     func tick(at now: ContinuousClock.Instant) async {
@@ -174,6 +207,21 @@ final class PluginHost {
         guard state == .active, regions[tab]?.contains(where: { $0.id == region }) == true else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "canvas/click", params: PluginClickParams(tab: tab, region: region))))
+    }
+
+    /// Only nodes in the tab's current tree can send events.
+    func viewEvent(tab: Int, id: String, kind: String, value: String?) async {
+        guard state == .active, let root = views[tab], Self.contains(root, id: id) else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "view/event", params: PluginViewEventParams(tab: tab, id: id, kind: kind, value: value))))
+    }
+
+    private static func contains(_ node: PluginViewNode, id: String) -> Bool {
+        node.id == id || node.children.contains { contains($0, id: id) }
+    }
+
+    private func tabIs(_ tab: Int, _ kind: PluginTabContribution.Kind) -> Bool {
+        manifest.tabs.indices.contains(tab) && manifest.tabs[tab].kind == kind
     }
 
     // MARK: - Delivery
@@ -210,6 +258,10 @@ final class PluginHost {
                 return
             }
             guard isRunning, self.runtime === runtime else { return }
+            if let tab = delivery.frames.keys.sorted().first(where: { tabIs($0, .view) }) {
+                fail("plugin presented a frame to view tab \(tab)")
+                return
+            }
             frames.merge(delivery.frames) { _, new in new }
             for data in delivery.messages {
                 guard isRunning, self.runtime === runtime else { return }
@@ -243,7 +295,12 @@ final class PluginHost {
             if case .string(let text) = id, text.utf8.count > limits.maxRequestIDBytes {
                 return .violation("plugin sent a request id longer than \(limits.maxRequestIDBytes) bytes")
             }
-            return .reply(handleRequest(method, id: id, data: data))
+            let reply = handleRequest(method, id: id, data: data)
+            // A reply over the limit would stop the plugin (a large stored value, many keys), so refuse instead.
+            guard reply.count <= limits.maxMessageBytes else {
+                return .reply(errorReply(id, code: -32003, "the result of \(method) is too large"))
+            }
+            return .reply(reply)
         case let (method?, nil):
             return handleNotification(method, data: data)
         case let (nil, id?):
@@ -259,10 +316,11 @@ final class PluginHost {
     }
 
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data {
-        guard let capability = Self.requiredCapability[method] else {
+        // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
+        guard let capability = Self.methods[method], manifest.api >= 3 || !method.hasPrefix("storage/") else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
-        guard grants.contains(capability) else {
+        if let capability, !grants.contains(capability) {
             return errorReply(id, code: -32001, "capability not granted: \(capability.rawValue)")
         }
         switch method {
@@ -285,9 +343,81 @@ final class PluginHost {
                 return errorReply(id, code: -32003, "unknown session \(params.id)")
             }
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "task/start":
+            return startTask(id: id, data: data)
+        case "storage/get":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginStorageKeyParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            guard PluginStorage.isValidKey(params.key) else { return errorReply(id, code: -32602, "invalid storage key") }
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
+            // Splice the stored bytes in as they are; a typed model would re-type numbers.
+            var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
+            reply.append(encode(id))
+            reply.append(Data(#","result":{"value":"#.utf8))
+            reply.append(storage.get(params.key) ?? Data("null".utf8))
+            reply.append(Data("}}".utf8))
+            return reply
+        case "storage/set":
+            guard let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
+                  let key = params["key"] as? String,
+                  let value = params["value"]
+            else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            // `null` deletes. Anything else is re-serialised, so the store always gets UTF-8.
+            var bytes: Data?
+            if !(value is NSNull) {
+                guard let encoded = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else {
+                    return errorReply(id, code: -32602, "invalid storage value")
+                }
+                bytes = encoded
+            }
+            switch storage.set(key, value: bytes) {
+            case .stored: return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+            case .invalidKey: return errorReply(id, code: -32602, "invalid storage key")
+            case .invalidValue: return errorReply(id, code: -32602, "invalid storage value")
+            case .full: return errorReply(id, code: -32003, "storage full")
+            case .failed: return errorReply(id, code: -32003, "storage unavailable")
+            }
+        case "storage/keys":
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
+            return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
+    }
+
+    private func startTask(id: JSONRPCID, data: Data) -> Data {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginTaskStartParams>.self, from: data).params,
+              !params.title.isEmpty, !params.prompt.isEmpty, params.prompt.utf8.count <= Self.maxPromptBytes
+        else {
+            return errorReply(id, code: -32602, "invalid params for task/start")
+        }
+        guard !taskInFlight else { return errorReply(id, code: -32003, "a task is already starting") }
+        taskInFlight = true
+        taskGeneration += 1
+        pendingTaskSession = nil
+        let generation = taskGeneration
+        let request = PluginTaskRequest(title: params.title, prompt: params.prompt, branch: params.branch, agent: params.agent)
+        switch actions.startTask(request, { [weak self] failure in self?.taskSettled(generation: generation, failure: failure) }) {
+        case .started(let sessionId, let branch):
+            pendingTaskSession = sessionId
+            return encode(PluginResponse(id: id, result: PluginTaskStartResult(sessionId: sessionId, branch: branch), error: nil))
+        case .rejected(let code, let message):
+            taskInFlight = false
+            return errorReply(id, code: code, message)
+        }
+    }
+
+    private func taskSettled(generation: Int, failure: String?) {
+        guard generation == taskGeneration, taskInFlight else { return }
+        taskInFlight = false
+        guard let failure, state == .active, let sessionId = pendingTaskSession else { return }
+        let message = encode(JSONRPCEnvelope(
+            id: nil, method: "task/failed",
+            params: PluginTaskFailedParams(sessionId: sessionId, reason: Self.bounded(failure))))
+        Task { await deliver(message) }
     }
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
@@ -300,9 +430,28 @@ final class PluginHost {
                 appendLog(params.level, params.message)
             }
             return .none
+        case "view/render":
+            guard let header = try? JSONDecoder().decode(PluginParams<PluginViewRenderHeader>.self, from: data).params else {
+                return .violation("plugin sent a malformed view/render")
+            }
+            guard tabIs(header.tab, .view) else {
+                return .violation("plugin sent view/render to tab \(header.tab), which is not a view tab")
+            }
+            // Re-serialised, so the tree decoder always gets UTF-8 whatever encoding the plugin used.
+            guard let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
+                  let root = params["root"],
+                  let rootData = try? JSONSerialization.data(withJSONObject: root, options: .fragmentsAllowed)
+            else { return .violation("plugin sent a malformed view/render") }
+            switch PluginViewTree.decode(rootData) {
+            case .success(let node):
+                views[header.tab] = node
+                return .none
+            case .failure(let error):
+                return .violation(Self.bounded("plugin sent a malformed view/render: \(error.reason)"))
+            }
         case "canvas/regions":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
-                  manifest.tabs.indices.contains(params.tab),
+                  tabIs(params.tab, .canvas),
                   params.regions.allSatisfy({ $0.rect.count == 4 })
             else { return .violation("plugin sent a malformed canvas/regions") }
             regions[params.tab] = params.regions.prefix(Self.maxRegions).map {
