@@ -13072,6 +13072,12 @@ final class AppState {
                 guard let self else { return nil }
                 return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
             },
+            builtInMCPHello: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.record(sessionId: sessionId)
+            },
+            clearMCPRegistration: { [weak self] sessionId in
+                self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
+            },
             onModelsObserved: { [weak self] agentId, host, models in
                 self?.acpModelCatalog.record(
                     agentID: agentId,
