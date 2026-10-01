@@ -17,6 +17,9 @@ struct PluginManagerDiscoveryTests {
         try install("no-script", id: "io.x.noscript", script: false)
         try install("dup-a", id: "io.x.dup")
         try install("dup-b", id: "io.x.dup")
+        // A local copy shadows the catalog's copy in the folder named after the id.
+        try install("io.x.shadowed", id: "io.x.shadowed")
+        try install("my-build", id: "io.x.shadowed")
         // An entry symlinked to a file outside its folder escapes the folder.
         try install("linked-out", id: "io.x.linkedout", script: false)
         let outside = root.appending(path: "outside.js")
@@ -34,8 +37,8 @@ struct PluginManagerDiscoveryTests {
 
         let result = PluginManager.discover(in: root)
 
-        #expect(result.plugins.map(\.id) == ["io.x.good"])
-        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-script", "dup-a", "dup-b", "linked-out", "linked-dir"])
+        #expect(result.plugins.map(\.folder.lastPathComponent) == ["good", "my-build"])
+        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-script", "dup-a", "dup-b", "linked-out", "linked-dir", "io.x.shadowed"])
     }
 
     /// The user approves what a row showed. If the files changed and were rescanned since, that

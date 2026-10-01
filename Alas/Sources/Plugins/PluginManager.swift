@@ -318,9 +318,25 @@ final class PluginManager {
                 invalid.append(Invalid(folder: folder, reason: String(describing: error)))
             }
         }
-        let duplicateIDs = Set(Dictionary(grouping: found, by: \.id).filter { $0.value.count > 1 }.keys)
-        invalid += found.filter { duplicateIDs.contains($0.id) }
-            .map { Invalid(folder: $0.folder, reason: "duplicate plugin id \($0.id)") }
-        return (found.filter { !duplicateIDs.contains($0.id) }, invalid)
+        var loaded: [Plugin] = []
+        for plugin in found {
+            let copies = found.filter { $0.id == plugin.id }
+            if copies.count == 1 {
+                loaded.append(plugin)
+                continue
+            }
+            // A copy built by hand beats the one the catalog put in `Plugins/<id>`; any other duplicate is ambiguous.
+            let catalogCopies = copies.filter { $0.folder.lastPathComponent == $0.id }
+            if copies.count == 2, catalogCopies.count == 1, let local = copies.first(where: { $0.folder.lastPathComponent != $0.id }) {
+                if plugin.folder == local.folder {
+                    loaded.append(plugin)
+                } else {
+                    invalid.append(Invalid(folder: plugin.folder, reason: "shadowed by \(local.folder.lastPathComponent), which has the same id"))
+                }
+            } else {
+                invalid.append(Invalid(folder: plugin.folder, reason: "duplicate plugin id \(plugin.id)"))
+            }
+        }
+        return (loaded, invalid)
     }
 }
