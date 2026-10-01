@@ -150,6 +150,10 @@ pub enum Author {
 pub struct Comment {
     pub author: Author,
     pub text: String,
+    /// Where an agent comment came from (see `reply_source`); lets a repeated fetch be told
+    /// from a new reply that happens to read the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
@@ -170,16 +174,28 @@ fn clip_comment(text: &str) -> &str {
     }
 }
 
+/// Identifies a fetched reply: its session and the FNV-1a hash of the whole trimmed message
+/// (not the clipped text, so replies sharing a prefix differ).
+fn reply_source(session: &str, text: &str) -> String {
+    let text = text.trim();
+    let hash = text.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3));
+    format!("{session}:{}:{hash:x}", text.len())
+}
+
 impl Body {
-    /// Adds an agent's reply unless it repeats the last one. The host answers with the
-    /// transcript's last reply, so a reopened session can report the same reply again.
-    /// Returns whether it was added.
-    pub fn agent_reply(&mut self, text: &str) -> bool {
+    /// Adds an agent's reply from `session` unless the last agent comment came from the same
+    /// session with the same message. The host answers with the transcript's last reply, so a
+    /// reopened session can report the same reply again. Returns whether it was added.
+    pub fn agent_reply(&mut self, session: &str, text: &str) -> bool {
+        let source = reply_source(session, text);
         let last = self.comments.iter().rev().find(|c| c.author == Author::Agent);
-        if last.is_some_and(|c| c.text == clip_comment(text)) || clip_comment(text).is_empty() {
+        if last.is_some_and(|c| c.source.as_deref() == Some(&source)) || clip_comment(text).is_empty() {
             return false;
         }
         self.comment(Author::Agent, text);
+        if let Some(c) = self.comments.last_mut() {
+            c.source = Some(source);
+        }
         true
     }
 
@@ -189,7 +205,7 @@ impl Body {
         if text.is_empty() {
             return;
         }
-        self.comments.push(Comment { author, text: text.into() });
+        self.comments.push(Comment { author, text: text.into(), source: None });
         if self.comments.len() > MAX_COMMENTS {
             let excess = self.comments.len() - MAX_COMMENTS;
             self.comments.drain(..excess);

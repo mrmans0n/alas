@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep a restarted Kanban ticket's repeated agent reply and refuse to load tickets saved by a newer plugin version.
+
 ## [0.19.21] - 2026-10-01
 
 ### ✨ Features

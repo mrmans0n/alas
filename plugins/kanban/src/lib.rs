@@ -23,7 +23,7 @@ enum Then {
     /// Show it on the ticket screen.
     Open,
     /// Append the agent's message and save it.
-    Comment(String),
+    Comment(String, String),
     /// Start the ticket with its description.
     Start,
 }
@@ -52,8 +52,8 @@ pub struct Kanban {
     body_loads: Vec<(i64, u64, Then)>,
     /// task/start id → ticket.
     pending_starts: Vec<(i64, u64)>,
-    /// session/last_message id → ticket.
-    fetches: Vec<(i64, u64)>,
+    /// session/last_message id → ticket and session.
+    fetches: Vec<(i64, u64, String)>,
     agent_request: Option<i64>,
     /// The session/focus request of the last Open session click.
     focus_request: Option<i64>,
@@ -165,7 +165,7 @@ impl Kanban {
         let Some(sessions) = &self.sessions else { return false };
         let (changed, fetch) = self.tracker.sync(sessions);
         for (n, session) in fetch {
-            self.fetches.push((last_message(&session), n));
+            self.fetches.push((last_message(&session), n, session));
         }
         if changed {
             self.commit(true, false, &[]);
@@ -311,7 +311,7 @@ impl Kanban {
     }
 
     /// Appends an agent's message to ticket `n`'s body: the open one, `loaded`, or one read first.
-    fn agent_comment(&mut self, n: u64, text: String, loaded: Option<Body>) {
+    fn agent_comment(&mut self, n: u64, session: String, text: String, loaded: Option<Body>) {
         if self.tracker.entry(n).is_none() {
             return;
         }
@@ -319,21 +319,21 @@ impl Kanban {
             return self.set_notice(format!("KAN-{n}: the agent's reply was not saved because the ticket's saved details could not be read."));
         }
         if let Some(body) = self.open_body_mut(n) {
-            if body.agent_reply(&text) {
+            if body.agent_reply(&session, &text) {
                 self.commit(false, true, &[]);
             }
         } else if let Some(mut body) = loaded {
-            if !body.agent_reply(&text) {
+            if !body.agent_reply(&session, &text) {
                 return;
             }
             let writes = store::writes(&self.tracker, &[(n, &body)], &[], false);
             self.save(writes);
             // Reads sent before this write would miss the comment: read again.
-            for load in self.body_loads.iter_mut().filter(|(_, p, then)| *p == n && matches!(then, Then::Open | Then::Comment(_))) {
+            for load in self.body_loads.iter_mut().filter(|(_, p, then)| *p == n && matches!(then, Then::Open | Then::Comment(..))) {
                 load.0 = storage_get(&body_key(n));
             }
         } else {
-            self.body_loads.push((storage_get(&body_key(n)), n, Then::Comment(text)));
+            self.body_loads.push((storage_get(&body_key(n)), n, Then::Comment(session, text)));
         }
     }
 
@@ -348,7 +348,7 @@ impl Kanban {
                 }
                 return match then {
                     Then::Open => self.unreadable_notice(n, &problem),
-                    Then::Comment(text) => self.agent_comment(n, text, None),
+                    Then::Comment(session, text) => self.agent_comment(n, session, text, None),
                     Then::Start => self.start(n),
                 };
             }
@@ -362,7 +362,7 @@ impl Kanban {
                     self.render();
                 }
             }
-            Then::Comment(text) => self.agent_comment(n, text, Some(body)),
+            Then::Comment(session, text) => self.agent_comment(n, session, text, Some(body)),
             Then::Start => {
                 if let Some(notice) = self.unavailable_assignee(n) {
                     return self.set_notice(notice);
@@ -390,9 +390,9 @@ impl Kanban {
         self.commit(true, false, &[]);
     }
 
-    fn fetched(&mut self, n: u64, result: Result<Value, RpcError>) {
+    fn fetched(&mut self, n: u64, session: String, result: Result<Value, RpcError>) {
         match result.map(|r| parse_last_message(&r)) {
-            Ok(Some(text)) if !text.trim().is_empty() => self.agent_comment(n, text, None),
+            Ok(Some(text)) if !text.trim().is_empty() => self.agent_comment(n, session, text, None),
             Ok(_) => self.set_notice(format!("KAN-{n}: the agent finished without a message.")),
             Err(e) => self.set_notice(format!("Could not read the agent's last message for KAN-{n}: {}", e.message)),
         }
@@ -523,10 +523,10 @@ impl Plugin for Kanban {
                 let (_, n) = self.pending_starts.remove(i);
                 self.start_replied(n, result);
             }
-            Event::Reply { id, result } if self.fetches.iter().any(|&(r, _)| r == id) => {
-                let i = self.fetches.iter().position(|&(r, _)| r == id).expect("contained");
-                let (_, n) = self.fetches.remove(i);
-                self.fetched(n, result);
+            Event::Reply { id, result } if self.fetches.iter().any(|(r, ..)| *r == id) => {
+                let i = self.fetches.iter().position(|(r, ..)| *r == id).expect("contained");
+                let (_, n, session) = self.fetches.remove(i);
+                self.fetched(n, session, result);
             }
             Event::Reply { id, result } if self.focus_request == Some(id) => {
                 self.focus_request = None;
@@ -578,8 +578,12 @@ mod tests {
     }
 
     fn snapshot(k: &mut Kanban, state: &str) {
+        snapshot_of(k, "s", state);
+    }
+
+    fn snapshot_of(k: &mut Kanban, session: &str, state: &str) {
         feed(k, json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
-            {"id":"w","branch":"task/kan-1","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":state}]}]}}}));
+            {"id":"w","branch":"task/kan-1","current":false,"sessions":[{"id":session,"agent":"a","title":"T","state":state}]}]}}}));
     }
 
     /// An activated plugin whose store held `meta`, `index` and the legacy `board` (`null` = unset).
@@ -657,26 +661,37 @@ mod tests {
         let saved = writes(&test_host::take_sent());
         let body = &saved.iter().find(|(key, _)| key == "ticket-1").expect("the body is saved").1;
         assert_eq!(body["description"], "d");
-        assert_eq!(body["comments"], json!([{"author":"agent","text":"Fixed it."}]));
+        assert_eq!(body["comments"][0]["text"], "Fixed it.");
+        assert_eq!(body["comments"].as_array().unwrap().len(), 1);
 
         snapshot(&mut k, "idle");
         assert!(test_host::take_sent().is_empty());
 
         // Reopening the session reports `running` again; the next idle fetches the transcript's
         // last reply, which is still the same one.
-        let idle_again = |k: &mut Kanban, message: &str| {
-            snapshot(k, "running");
-            snapshot(k, "idle");
+        let idle_again = |k: &mut Kanban, session: &str, message: &str, body: &Value| {
+            snapshot_of(k, session, "running");
+            snapshot_of(k, session, "idle");
             let fetch = sent_one(&test_host::take_sent(), "session/last_message");
             reply(k, fetch["id"].as_i64().unwrap(), json!({ "message": message }));
             let read = sent_one(&test_host::take_sent(), "storage/get");
             reply(k, read["id"].as_i64().unwrap(), json!({ "value": body }));
             writes(&test_host::take_sent())
         };
-        assert!(idle_again(&mut k, "Fixed it.").is_empty(), "the same reply is not added twice");
-        let saved = idle_again(&mut k, "Fixed more.");
-        let comments = &saved.iter().find(|(key, _)| key == "ticket-1").unwrap().1["comments"];
-        assert_eq!(comments.as_array().unwrap().len(), 2);
+        let comments = |saved: &[(String, Value)]| saved.iter().find(|(key, _)| key == "ticket-1").unwrap().1["comments"].clone();
+        assert!(idle_again(&mut k, "s", "Fixed it.", body).is_empty(), "the same reply is not added twice");
+        assert_eq!(comments(&idle_again(&mut k, "s", "Fixed more.", body)).as_array().unwrap().len(), 2);
+
+        // A restarted ticket (a new session) can reply with the same text.
+        k.tracker.index[0].session_id = Some("s2".into());
+        assert_eq!(comments(&idle_again(&mut k, "s2", "Fixed it.", body)).as_array().unwrap().len(), 2);
+
+        // Replies sharing their first 2,000 characters are different replies.
+        let long = format!("{}a", "x".repeat(2000));
+        let saved = comments(&idle_again(&mut k, "s2", &long, body));
+        let with_long = json!({"description":"d","comments":saved});
+        let saved = comments(&idle_again(&mut k, "s2", &format!("{}b", "x".repeat(2000)), &with_long));
+        assert_eq!(saved.as_array().unwrap().len(), 3);
     }
 
     #[test]
