@@ -108,7 +108,9 @@ struct ACPUserInputPrompt: View {
 
     static func shouldShowMessage(for request: ACPUserInputRequest) -> Bool {
         let renderedFields = renderedFields(for: request)
-        guard renderedFields.count == 1, let field = renderedFields.first else {
+        // Only the first field sits directly under the message; a later
+        // field that repeats it is not adjacent, so it is not a duplicate.
+        guard let field = renderedFields.first else {
             return true
         }
         let whitespace = CharacterSet.whitespacesAndNewlines
