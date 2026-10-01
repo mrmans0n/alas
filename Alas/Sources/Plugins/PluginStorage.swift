@@ -84,6 +84,11 @@ final class PluginStorage {
         return .stored
     }
 
+    /// Drains every open store; the app awaits this before quitting so a last save is not lost.
+    static func flushAll() async {
+        for storage in open.values { await storage.flush() }
+    }
+
     /// Returns once everything stored so far is on disk, or a write failed.
     func flush() async {
         while let writing { await writing.value }

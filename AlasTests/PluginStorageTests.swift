@@ -31,7 +31,7 @@ struct PluginStorageTests {
         for n in 0..<5 { #expect(storage.set("k", value: Data("\(n)".utf8)) == .stored) }
         // A replacement host gets this same instance, so it cannot read the older file or write over the burst.
         #expect(PluginStorage.shared(file: file).get("k") == Data("4".utf8))
-        await storage.flush()
+        await PluginStorage.flushAll()
         #expect(PluginStorage(file: file).get("k") == Data("4".utf8))
     }
 
