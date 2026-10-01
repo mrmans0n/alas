@@ -40,14 +40,14 @@ version of the plugin is converted on first load.
 |---|---|
 | `number` | Positive integer, shown as `KAN-<number>`. Assigned in order, never reused, even after delete. |
 | `title` | Required, at most 200 characters. |
-| `description` | At most 8,000 characters. |
+| `description` | At most 4,000 characters, the most a host text field can edit. |
 | `priority` | `none`, `low`, `medium`, `high`, `urgent`. Default `none`. |
 | `labels` | Up to 8, each at most 32 characters. Shown, not yet filterable. |
 | `status` | `backlog`, `todo`, `in_progress`, `in_review`, `done`, `cancelled`. |
 | `assignee` | Optional agent id. |
 | `session_id`, `branch` | Set when a start is accepted. |
 | `agent_state` | Last session state seen (`running`, `awaiting_input`, `permission_request`, `idle`). |
-| `comments` | Oldest first, each `{author, text, at}`. At most 50 per ticket, each at most 4,000 characters; the oldest are dropped past the cap. `author` is `you` or `agent`. |
+| `comments` | Oldest first, each `{author, text}`. No timestamp: the plugin has no clock. At most 50 per ticket, each at most 4,000 characters; the oldest are dropped past the cap. `author` is `you` or `agent`. |
 
 Running, Needs you and Review are no longer columns. They are the ticket's
 `agent_state`, shown as a badge, while `status` is the workflow position.
@@ -67,8 +67,8 @@ Running, Needs you and Review are no longer columns. They are the ticket's
 - A ticket in the index without a body is shown with an empty description and
   no comments; a body not in the index is not shown.
 - **Archive:** Done and Cancelled tickets past a threshold are removed from the
-  index and their bodies kept. The threshold and the index cap are set from a
-  fuel measurement in the plan, not guessed here.
+  index, oldest-closed first, and their bodies stay stored. The measured caps
+  are 75 tickets in the index and 15 closed tickets kept (see Fuel).
 - A failed read never overwrites what is stored. The board shows a notice and
   does not save, as the current plugin does.
 
@@ -78,8 +78,9 @@ On the first load with no `meta` key but an existing `board` key (the previous
 format), each card becomes a ticket in the order it was added: card title →
 title, prompt → description, session id, branch and agent state carried over,
 and column → status (Backlog → `backlog`, Running, Needs you and Review →
-`in_progress` / `in_progress` / `in_review`, Done → `done`). The old `board` key
-is left in place, so a downgrade loses nothing. A `board` that cannot be parsed
+`in_progress` / `in_progress` / `in_review`, Done → `done`). A prompt longer
+than 4,000 characters is cut to the description cap. The old `board` key is
+left in place, so a downgrade loses nothing and the full prompt survives there. A `board` that cannot be parsed
 is left alone and the plugin starts with an empty tracker and a notice.
 
 ## 2. The board and the ticket screen
@@ -174,6 +175,16 @@ largest allowed bodies, a board with sessions on every ticket) with the
 throwaway fuel probe, and sets the index cap and archive threshold so the
 worst single call stays under 12.5M (the host limit is 25M). The probe is
 never committed.
+
+**Measured (2026-10-01):** with 200-character titles and a session on every
+ticket, the costliest board call is the snapshot that moves a ticket: 11.6M at
+75 tickets (12.3M with escape-heavy titles), 13.1M at 85, 16.5M at 100. The
+index cap is 75 and 15 closed tickets are kept. Ticket bodies at the text caps
+above (4,000-character description, 50 comments of 4,000 characters, about
+200–400 KB) do not fit: parsing and drawing one costs 16–106M depending on how
+much of the text is non-ASCII or escaped, whatever the index size. A body of
+about 24,000 characters (for example 10 comments of 2,000 characters) stays
+under 11M for accented text; the comment caps are a follow-up decision.
 
 ## 4. Errors and testing
 
