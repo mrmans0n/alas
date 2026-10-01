@@ -4347,23 +4347,69 @@ final class RightPaneState: GGSplitCommitServicing {
         pullInFlight = true
         Task { @MainActor in
             defer { pullInFlight = false }
-            do {
-                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
-                let result = try await git.pull(worktreePath: worktree.path)
-                await refresh()
-                // pull() already fetched upstream; skip the redundant network
-                // fetch and just recount against the already-fresh tracking ref.
-                await refreshSyncStatus()
+            await performPull(autoOpenConflicts: { true })
+        }
+    }
+
+    /// Sidebar-driven pull that the caller can await. Returns when the rebase
+    /// (and its follow-up refreshes) finishes so the sidebar keeps its
+    /// spinner up for exactly as long as the work runs. Returns nil when a
+    /// guard declined the pull; `.clean` when the pull succeeded; `.conflict`
+    /// when the worktree is left mid-rebase; `.error` when git reported a
+    /// failure.
+    ///
+    /// The checkpoint journal revalidation lives in `performPull()` rather
+    /// than here: the sidebar can reach a worktree whose pane was never
+    /// activated (and therefore never ran journal discovery), and the cached
+    /// `checkpointMutationsDisabled` would silently veto the pull.
+    ///
+    /// - Parameter autoOpenConflicts: Evaluated once, at completion, to
+    ///   decide whether a `.conflict` result auto-opens the first conflicted
+    ///   file. The sidebar passes a selection check so the pull the user is
+    ///   looking at behaves like a changes-tab pull, while a background pull
+    ///   stays silent (an invisible tab activation would also clear a viewing
+    ///   native peer session's selection).
+    @discardableResult
+    @MainActor
+    func pullAwaited(autoOpenConflicts: @escaping () -> Bool) async -> MergeResult? {
+        guard showBehindUpstreamChip, mergeOp.current == nil, !pullInFlight else { return nil }
+        sidebarError = nil
+        pullInFlight = true
+        defer { pullInFlight = false }
+        return await performPull(autoOpenConflicts: autoOpenConflicts)
+    }
+
+    /// The body shared by `pull()` and `pullAwaited()`. Both entry points own
+    /// their `pullInFlight` bookkeeping around this; the body performs the
+    /// guarded work, records the failure message in `sidebarError`, and
+    /// returns the pull outcome (nil when a checkpoint guard rejected it).
+    ///
+    /// - Parameter autoOpenConflicts: Evaluated at completion to decide
+    ///   whether a `.conflict` result auto-opens the first conflicted file's
+    ///   tab. Constant true from `pull()`; a selection check from
+    ///   `pullAwaited()` — see its doc comment.
+    @MainActor
+    private func performPull(autoOpenConflicts: () -> Bool) async -> MergeResult? {
+        do {
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else { return nil }
+            let result = try await git.pull(worktreePath: worktree.path)
+            await refresh()
+            // pull() already fetched upstream; skip the redundant network
+            // fetch and just recount against the already-fresh tracking ref.
+            await refreshSyncStatus()
+            if autoOpenConflicts() {
                 handleOperationResult(result)
-                if case .error(let message) = result {
-                    sidebarError = message
-                }
-            } catch {
-                // Unlike the pure rebase/merge siblings, surface the failure to
-                // the user: a pull is the only signal they have that it ran.
-                sidebarError = error.localizedDescription
-                logger.error("pull failed: \(error.localizedDescription, privacy: .public)")
             }
+            if case .error(let message) = result {
+                sidebarError = message
+            }
+            return result
+        } catch {
+            // Unlike the pure rebase/merge siblings, surface the failure to
+            // the user: a pull is the only signal they have that it ran.
+            sidebarError = error.localizedDescription
+            logger.error("pull failed: \(error.localizedDescription, privacy: .public)")
+            return .error(message: error.localizedDescription)
         }
     }
 

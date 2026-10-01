@@ -19,6 +19,7 @@ struct RemoteWorktreeSummaryBuilderTests {
         let summary = RemoteWorktreeSummaryBuilder.make(
             projectName: "alas",
             worktree: worktree(),
+            isMain: false,
             metrics: .available(
                 comparisonRef: "origin/main",
                 commitCount: 3,
@@ -47,6 +48,7 @@ struct RemoteWorktreeSummaryBuilderTests {
         let summary = RemoteWorktreeSummaryBuilder.make(
             projectName: "alas",
             worktree: worktree(),
+            isMain: false,
             metrics: .unavailable
         )
 

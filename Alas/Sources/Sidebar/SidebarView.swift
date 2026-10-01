@@ -81,6 +81,10 @@ struct SidebarView: View {
                                     isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                     upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
                                     onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
+                                    isPullUpstreamInFlight: { wt in
+                                        state.worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: wt.id)
+                                            || state.rightPaneStore.activeState(worktreeId: wt.id)?.pullInFlight == true
+                                    },
                                     workspaceCheckout: { wt in
                                         WorkspaceCheckoutWorktreeResolver.presentation(
                                             for: wt,
@@ -254,7 +258,8 @@ struct SidebarView: View {
                                     onAddPeer: {
                                         state.pendingSettingsSection = .remote
                                         onSettings()
-                                    }
+                                    },
+                                    worktreeOrdering: state.config.worktrees.defaultOrdering
                                 )
                             }
                             Color.clear

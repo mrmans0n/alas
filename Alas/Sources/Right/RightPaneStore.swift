@@ -107,7 +107,16 @@ final class RightPaneStore {
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
 
-    func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
+    /// - Parameter activates: When false, the returned state is created or
+    ///   returned cached but never becomes `activeId` — background work of the
+    ///   currently displayed pane keeps running. Used by the sidebar's pull
+    ///   path, which must not disturb the selected pane's watcher/timer.
+    func state(
+        for worktree: Worktree,
+        baseBranch: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode,
+        activates: Bool = true
+    ) -> RightPaneState {
         let id = worktree.id
         let wasCached = states[id] != nil
         let result: RightPaneState
@@ -278,7 +287,7 @@ final class RightPaneStore {
             states[id] = new
             result = new
         }
-        if activeId != id {
+        if activates, activeId != id {
             if let prev = activeId, let prevState = states[prev] {
                 prevState.endAttentionReveal()
                 prevState.stop()

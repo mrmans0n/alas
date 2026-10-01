@@ -172,6 +172,7 @@ struct WorktreeRowView: View {
     let isMain: Bool
     let upstreamStatus: WorktreeUpstreamStatus?
     var onPullUpstream: (() -> Void)? = nil
+    var isPullUpstreamInFlight: Bool = false
     let operationState: WorktreeOperationState?
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: GGWorktreeMenuModel
@@ -482,11 +483,25 @@ struct WorktreeRowView: View {
                     .foregroundColor(theme.color(item.text.hasPrefix("↓") ? "caution" : "accent"))
                 if item.text.hasPrefix("↓"), let onPullUpstream, let upstreamStatus {
                     let count = upstreamStatus.behind
-                    Button(action: onPullUpstream) { label }
-                        .buttonStyle(.plain)
-                        .pointingHandCursor()
-                        .help("Pull \(count) commit\(count == 1 ? "" : "s") from \(upstreamStatus.upstreamRef) (rebase)")
-                        .accessibilityLabel(item.accessibilityLabel)
+                    Button(action: onPullUpstream) {
+                        HStack(spacing: 3) {
+                            if isPullUpstreamInFlight {
+                                // Matches the changes-tab chip: the count
+                                // keeps reading, the spinner replaces only the
+                                // arrow's spot in the eye.
+                                Spinner(lineWidth: 1.2, duration: 0.7)
+                                    .frame(width: 9, height: 9)
+                                    .accessibilityHidden(true)
+                            }
+                            label
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help(isPullUpstreamInFlight
+                        ? "Pulling from \(upstreamStatus.upstreamRef)…"
+                        : "Pull \(count) commit\(count == 1 ? "" : "s") from \(upstreamStatus.upstreamRef) (rebase)")
+                    .accessibilityLabel(item.accessibilityLabel)
                 } else {
                     label
                         .help(item.accessibilityLabel)

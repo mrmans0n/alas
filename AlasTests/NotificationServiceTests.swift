@@ -29,6 +29,29 @@ struct NotificationServiceTests {
         #expect(click?.owner == .worktree("worktree-1"))
     }
 
+    @Test func worktreePullNotificationIsClickableAndRoutesToWorktree() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { requests.append($0) })
+
+        service.notifyWorktreePull(
+            body: "Pulled main",
+            projectId: "project-1",
+            worktreeId: "worktree-1"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].content.title == "Pull")
+        #expect(requests[0].content.body == "Pulled main")
+        #expect(requests[0].content.sound != nil)
+        let click = NotificationClickContext(userInfo: requests[0].content.userInfo)
+        #expect(click?.projectId == "project-1")
+        #expect(click?.worktreeId == "worktree-1")
+        // The worktree id doubles as the routing session id: no tab matches
+        // it, so the click selects the pulled worktree and lands there.
+        #expect(click?.sessionId == "worktree-1")
+        #expect(click?.owner == .worktree("worktree-1"))
+    }
+
     @Test func failedRunScriptNotificationIncludesExitCode() {
         var requests: [UNNotificationRequest] = []
         let service = NotificationService(notificationAdder: { requests.append($0) })
