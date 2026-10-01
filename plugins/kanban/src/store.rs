@@ -19,27 +19,35 @@ pub enum Loaded {
     Unreadable(String),
 }
 
-/// `legacy` is only consulted when `meta` is absent.
+/// A finished tracker always has an index, so `legacy` (the old `board`) must be supplied
+/// whenever `meta` or `index` is absent: a parseable board then means an interrupted migration
+/// and is migrated again (numbering is deterministic, so this is idempotent).
 pub fn load(meta: Option<&str>, index: Option<&str>, legacy: Option<&str>) -> Loaded {
-    if let Some(meta) = meta {
-        let parsed = serde_json::from_str::<Meta>(meta)
-            .and_then(|meta| Ok((meta, index.map_or(Ok(Vec::new()), serde_json::from_str::<Vec<Entry>>)?)));
-        return match parsed {
-            Ok((mut meta, index)) => {
-                let floor = index.iter().map(|e| e.number + 1).max().unwrap_or(1);
-                meta.next_number = meta.next_number.max(floor);
-                Loaded::Tracker(Tracker { meta, index })
-            }
-            Err(e) => Loaded::Unreadable(format!("The stored tickets could not be read ({e}); nothing will be saved.")),
+    let unreadable = |what: &str, e: serde_json::Error, tail: &str| Loaded::Unreadable(format!("The {what} could not be read ({e}); {tail}"));
+    let board = legacy.map(serde_json::from_str::<Board>);
+    if let (Some(meta), Some(index)) = (meta, index.map(Some).unwrap_or(match &board {
+        Some(Ok(_)) => None,
+        _ => Some("[]"),
+    })) {
+        let mut meta = match serde_json::from_str::<Meta>(meta) {
+            Ok(m) => m,
+            Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
         };
+        let index = match serde_json::from_str::<Vec<Entry>>(index) {
+            Ok(i) => i,
+            Err(e) => return unreadable("stored tickets", e, "nothing will be saved."),
+        };
+        let floor = index.iter().map(|e| e.number.saturating_add(1)).max().unwrap_or(1);
+        meta.next_number = meta.next_number.max(floor);
+        return Loaded::Tracker(Tracker { meta, index });
     }
-    match legacy.map(serde_json::from_str::<Board>) {
+    match board {
         None => Loaded::Fresh,
         Some(Ok(board)) => {
             let (tracker, bodies) = Tracker::migrate(&board);
             Loaded::Migrated(tracker, bodies)
         }
-        Some(Err(e)) => Loaded::Unreadable(format!("The old board could not be read ({e}); it was left untouched and nothing will be saved.")),
+        Some(Err(e)) => unreadable("old board", e, "it was left untouched and nothing will be saved."),
     }
 }
 
@@ -92,11 +100,12 @@ mod tests {
             (Some("garbage"), Some(index), None, "unreadable"),
             (Some(meta), Some("garbage"), None, "unreadable"),
             (Some(meta), Some(index), Some(legacy), "tracker"),
+            (Some(meta), None, Some(legacy), "migrated"),
         ] {
             assert_eq!(kind(&load(m, i, l)), want, "{m:?} {i:?} {l:?}");
         }
-        let Loaded::Tracker(t) = load(Some(meta), None, Some(legacy)) else { panic!() };
-        assert!(t.index.is_empty(), "the legacy board is ignored when meta exists");
+        let Loaded::Tracker(t) = load(Some(meta), None, Some("garbage")) else { panic!() };
+        assert!(t.index.is_empty());
     }
 
     #[test]
