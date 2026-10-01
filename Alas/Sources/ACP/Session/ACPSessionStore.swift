@@ -822,26 +822,39 @@ extension ACPSessionStore {
         return rows.map(Self.rowToSession)
     }
 
-    /// Hidden side-question sessions nobody is driving: no live lease and no
-    /// activity within `staleAfter`. The activity check spares a session
-    /// another instance has just created but not yet leased.
-    func orphanedEphemeralSessionIds(now: Int64, staleAfter: Int64) throws -> [String] {
+    /// Deletes hidden side-question sessions nobody is driving (no live lease
+    /// and no activity within `staleAfter`) and returns their ids. The
+    /// activity check spares a session another instance has just created but
+    /// not yet leased. Selection and deletion share one `BEGIN IMMEDIATE`
+    /// transaction, so a concurrent `claimLease` cannot slip in between.
+    func deleteOrphanedEphemeralSessions(now: Int64, staleAfter: Int64) throws -> [String] {
         let staleCutoff = now - staleAfter
-        let rows = try db.query("""
-        SELECT s.id, l.pid, l.heartbeat_at
-        FROM sessions s
-        LEFT JOIN session_leases l ON l.session_id = s.id
-        WHERE s.ephemeral_parent_id IS NOT NULL AND s.updated_at < ?
-        """, bindings: [staleCutoff])
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            if let heartbeatAt = row["heartbeat_at"] as? Int64,
-               heartbeatAt >= staleCutoff,
-               let pid = row["pid"] as? Int64,
-               ACPProcessLiveness.pidAlive(pid) {
-                return nil
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let rows = try db.query("""
+            SELECT s.id, l.pid, l.heartbeat_at
+            FROM sessions s
+            LEFT JOIN session_leases l ON l.session_id = s.id
+            WHERE s.ephemeral_parent_id IS NOT NULL AND s.updated_at < ?
+            """, bindings: [staleCutoff])
+            let ids: [String] = rows.compactMap { row in
+                guard let id = row["id"] as? String else { return nil }
+                if let heartbeatAt = row["heartbeat_at"] as? Int64,
+                   heartbeatAt >= staleCutoff,
+                   let pid = row["pid"] as? Int64,
+                   ACPProcessLiveness.pidAlive(pid) {
+                    return nil
+                }
+                return id
             }
-            return id
+            for id in ids {
+                try db.exec("DELETE FROM sessions WHERE id = ?", bindings: [id])
+            }
+            try db.exec("COMMIT")
+            return ids
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
         }
     }
 
