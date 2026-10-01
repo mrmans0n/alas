@@ -1,11 +1,12 @@
 //! Renders the board as a view tree. Pure: no SDK calls besides the node types.
 
-use crate::board::{Board, Card, Column, MAX_CARD_TEXT_BYTES};
+use crate::board::{Board, Card, Column, MAX_CARDS, MAX_CARD_TEXT_BYTES};
 use alas_plugin::{Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
 
-// ponytail: fixed per-column cap keeps the tree under the host's 2,000-node limit;
-// paginate or collapse Done if boards grow past it.
-const MAX_CARDS_PER_COLUMN: usize = 30;
+// The board holds at most MAX_CARDS, so every card renders and each one can be used. Only a
+// board stored over the cap shows a "+N older" caption, which keeps the tree well under the
+// host's 2,000-node limit.
+const MAX_CARDS_PER_COLUMN: usize = MAX_CARDS;
 const MAX_TEXT: usize = 500;
 
 fn clip(s: &str, max: usize) -> String {
@@ -202,6 +203,34 @@ mod tests {
         assert!(find(&tree, &format!("card-{started}-branch")).is_some());
         let Some(Node::Menu { items, .. }) = find(&tree, &format!("move-{started}")) else { panic!() };
         assert_eq!(items.len(), 4);
+    }
+
+    #[test]
+    fn a_column_holding_the_whole_board_renders_every_card_within_the_host_limits() {
+        let mut b = Board::default();
+        for i in 0..MAX_CARDS {
+            let id = b.add(&format!("t{i}"), "p");
+            b.started(id, format!("s{i}"), format!("task/t{i}"));
+            b.move_to(id, Column::Review);
+        }
+        let tree = render(&b, 0, None);
+        assert!(b.cards.iter().all(|c| find(&tree, &format!("card-{}", c.id)).is_some()));
+        assert!(find(&tree, "col-review-older").is_none());
+        let mut ids = Vec::new();
+        flatten(&tree, &mut ids);
+        let unique: std::collections::HashSet<_> = ids.iter().map(|(id, _)| id).collect();
+        assert_eq!(unique.len(), ids.len(), "ids must be unique");
+        assert!(ids.len() <= 2000, "{} nodes", ids.len());
+        fn depth(n: &Node) -> usize {
+            1 + match n {
+                Node::Vstack { children, .. } | Node::Hstack { children, .. } | Node::Card { children, .. } => {
+                    children.iter().map(depth).max().unwrap_or(0)
+                }
+                Node::Scroll { child, .. } => depth(child),
+                _ => 0,
+            }
+        }
+        assert!(depth(&tree) <= 16);
     }
 
     #[test]
