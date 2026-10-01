@@ -1,0 +1,18 @@
+{
+  "id": "solarized-light",
+  "name": "Solarized Light",
+  "colors": {
+    "bg": "#fdf6e3",
+    "fg": "#657b83",
+    "gutter-fg": "#93a1a1",
+    "selection": "#eee8d5",
+    "comment": "#93a1a1",
+    "keyword": "#859900",
+    "string": "#2aa198",
+    "number": "#d33682",
+    "type": "#b58900",
+    "function": "#268bd2",
+    "constant": "#cb4b16",
+    "attribute": "#6c71c4"
+  }
+}

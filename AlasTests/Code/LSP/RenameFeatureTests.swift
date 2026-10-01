@@ -150,7 +150,7 @@ struct RenameFeatureTests {
         }
         let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
             LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
-        ]), makeClient: { _, _, _, language, rootURI in LSPClient(transport: transport, language: language, rootURI: rootURI) })
+        ]), makeClient: { _, _, _, language, rootURI, _ in LSPClient(transport: transport, language: language, rootURI: rootURI) })
         let journal = WorkspaceEditJournal(root: root.appendingPathComponent("journal"))
         let tabs = TabsManager(lsp: lsp, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
         let tab = tabs.openEditor(worktreeId: "w", relativePath: "a.swift", revealLine: nil, revealCharacter: nil)

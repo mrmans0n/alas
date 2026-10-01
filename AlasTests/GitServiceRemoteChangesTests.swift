@@ -1051,13 +1051,12 @@ struct GitServiceRemoteChangesTests {
     @Test func diffAgainstHEADOnAnUnbornRemoteBranchDoesNotCrashOrHangOnAnUnreachableHost() async throws {
         let repo = try await makeUnbornRepo()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repo.path)
             try? FileManager.default.removeItem(at: repo)
         }
         try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
-        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "nonexistent-host.invalid", realPath: repo.path))
 
-        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "new.txt")
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: remote, file: "new.txt")
         #expect(diff.hunks.isEmpty)
     }
 
@@ -1073,14 +1072,13 @@ struct GitServiceRemoteChangesTests {
     @Test func changedFilesAgainstRef_propagatesAStatusFailureOnTheNilRefFallback() async throws {
         let repo = try await makeUnbornRepo()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repo.path)
             try? FileManager.default.removeItem(at: repo)
         }
         try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
-        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "nonexistent-host.invalid", realPath: repo.path))
 
         await #expect(throws: (any Error).self) {
-            _ = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
+            _ = try await GitService().changedFilesAgainstRef(worktreePath: remote, ref: nil)
         }
     }
 
@@ -1095,16 +1093,15 @@ struct GitServiceRemoteChangesTests {
     @Test func fileTreePropagatesAGitVisibleFilePathsFailureInsteadOfReportingAnEmptyTree() async throws {
         let repo = try await makeRepo()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repo.path)
             try? FileManager.default.removeItem(at: repo)
         }
         try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "a.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
-        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "nonexistent-host.invalid", realPath: repo.path))
 
         await #expect(throws: (any Error).self) {
-            _ = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
+            _ = try await GitService().fileTree(worktreePath: remote, statusEntries: [])
         }
     }
 

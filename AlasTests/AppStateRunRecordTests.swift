@@ -345,13 +345,13 @@ struct AppStateRunRecordTests {
         })
         defer {
             fixture.state.cancelPendingRunScriptLaunches()
-            RemoteHostRegistry.shared.unregister(root: fixture.worktree.path.path)
             try? FileManager.default.removeItem(at: fixture.directory)
         }
         try FileManager.default.removeItem(at: fixture.script.fileURL)
-        RemoteHostRegistry.shared.register(root: fixture.worktree.path.path, host: "devbox")
+        var remoteWorktree = fixture.worktree
+        remoteWorktree.path = URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: fixture.directory.path))
 
-        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        fixture.state.runOrFocusScript(fixture.script, in: remoteWorktree)
 
         #expect(fixture.errors().isEmpty)
         #expect(runRecord(fixture)?.status == .starting)

@@ -67,17 +67,14 @@ struct DragOutPayloadTests {
     }
 
     @Test func remoteWorkingTreeFilePreparesAsInternalTextOnly() async throws {
-        let dir = try makeTempDir("remote-internal")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        RemoteHostRegistry.shared.register(root: dir.path, host: "example")
-        defer { RemoteHostRegistry.shared.unregister(root: dir.path) }
+        let dir = URL(fileURLWithPath: RemotePath.virtual(host: "example", realPath: "/srv/remote-internal"))
 
         let payload = DragOutPayload.workingTreeFile(worktreePath: dir, relativePath: "a.txt")
         let prepared = try #require(await payload.prepare())
 
         #expect(prepared.dropPayload == .file(
             relativePath: "a.txt",
-            absolutePath: dir.appendingPathComponent("a.txt").path
+            absolutePath: "/srv/remote-internal/a.txt"
         ))
         #expect(prepared.fileURL == nil)
         #expect(prepared.publicText == nil)
@@ -173,13 +170,8 @@ struct DragOutPayloadTests {
     }
 
     @Test func resolveReturnsNilInsideARemoteWorktree() async throws {
-        let dir = try makeTempDir("remote")
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = URL(fileURLWithPath: RemotePath.virtual(host: "example", realPath: "/srv/remote"))
         let file = dir.appendingPathComponent("a.txt")
-        try "x".write(to: file, atomically: true, encoding: .utf8)
-
-        RemoteHostRegistry.shared.register(root: dir.path, host: "example")
-        defer { RemoteHostRegistry.shared.unregister(root: dir.path) }
 
         #expect(await DragOutPayload.onDisk(file).resolve() == nil)
         let revision = DragOutPayload.revision(worktreePath: dir, ref: "HEAD", path: "a.txt")

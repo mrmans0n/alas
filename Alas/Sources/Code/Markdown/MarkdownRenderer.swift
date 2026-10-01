@@ -380,7 +380,7 @@ final class MarkdownRenderer {
 
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: monospaceFont(size: monoSize),
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: EditorTheme(theme: theme).defaultFG,
             .backgroundColor: NSColor(theme.color("bg-2"))
         ]
         let start = output.length

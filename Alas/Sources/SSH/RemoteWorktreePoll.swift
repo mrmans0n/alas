@@ -20,7 +20,7 @@ struct RemoteWorktreePollDelta: Equatable {
 /// `git worktree list --porcelain` per poll yields paths, HEAD shas, and
 /// branches for every worktree in a single ssh round trip.
 enum RemoteWorktreePoll {
-    static func parse(porcelain: String) -> [RemoteWorktreePollEntry] {
+    static func parse(porcelain: String, anchor: String = "") -> [RemoteWorktreePollEntry] {
         var entries: [RemoteWorktreePollEntry] = []
         var path: String?
         var head = ""
@@ -41,7 +41,7 @@ enum RemoteWorktreePoll {
                 flush()
             } else if line.hasPrefix("worktree ") {
                 flush()
-                path = String(line.dropFirst("worktree ".count))
+                path = RemotePath.virtualizing(String(line.dropFirst("worktree ".count)), like: anchor)
             } else if line.hasPrefix("HEAD ") {
                 head = String(line.dropFirst("HEAD ".count))
             } else if line.hasPrefix("branch ") {

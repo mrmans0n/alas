@@ -112,6 +112,9 @@ struct AlasCLICommandRouter {
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
                 return .error("session commands require an originating ACP session")
             }
+            // Anchor worktree selectors on the caller's host, like the origin path below.
+            let request = originatingWorktree(acpOrigin.worktreeId)
+                .map { request.virtualizingPaths(like: $0.path.path) } ?? request
 
             switch request.command {
             case .agentList(let worktree):
@@ -187,6 +190,7 @@ struct AlasCLICommandRouter {
         }
 
         let projectWorktrees = service.visibleWorktrees().filter { $0.projectId == origin.projectId }
+        let request = request.virtualizingPaths(like: origin.path.path)
         switch request.command {
         case .resolve:
             return .ok

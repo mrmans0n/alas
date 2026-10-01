@@ -1,0 +1,18 @@
+{
+  "id": "solarized-dark",
+  "name": "Solarized Dark",
+  "colors": {
+    "bg": "#002b36",
+    "fg": "#839496",
+    "gutter-fg": "#586e75",
+    "selection": "#073642",
+    "comment": "#586e75",
+    "keyword": "#859900",
+    "string": "#2aa198",
+    "number": "#d33682",
+    "type": "#b58900",
+    "function": "#268bd2",
+    "constant": "#cb4b16",
+    "attribute": "#6c71c4"
+  }
+}

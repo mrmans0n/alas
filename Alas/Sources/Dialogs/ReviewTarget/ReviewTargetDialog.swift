@@ -195,7 +195,7 @@ struct ReviewTargetDialog: View {
                             .foregroundColor(theme.color("fg-dim"))
                     }
                 }
-                Text(entry.worktree.path.path)
+                Text(RemotePath.display(entry.worktree.path.path))
                     .font(.system(size: 10))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)

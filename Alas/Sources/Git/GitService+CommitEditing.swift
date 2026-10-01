@@ -246,7 +246,7 @@ private extension GitService {
 
         let gitDir = try await gitOutput(["rev-parse", "--absolute-git-dir"], cwd: worktreePath)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let gitDirURL = URL(fileURLWithPath: gitDir)
+        let gitDirURL = URL(fileURLWithPath: RemotePath.virtualizing(gitDir, like: worktreePath.path))
         let operationPaths = [
             "MERGE_HEAD",
             "CHERRY_PICK_HEAD",

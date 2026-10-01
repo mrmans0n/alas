@@ -10,6 +10,17 @@ import Foundation
 // contention). Force-serialize so each git invocation runs cleanly.
 @Suite(.serialized)
 struct WorktreeServiceTests {
+    @Test(arguments: [
+        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/wt/feature"),
+        ("/srv/repo", "/srv/repo", "/srv/wt/feature")
+    ])
+    func parsePorcelainVirtualizesPathsLikeItsAnchor(anchor: String, main: String, feature: String) {
+        let porcelain = "worktree /srv/repo\nbranch refs/heads/main\n\nworktree /srv/wt/feature\nbranch refs/heads/feature\n"
+        let parsed = WorktreeService.parsePorcelain(porcelain, projectId: "p", isRemote: true, anchor: anchor)
+        #expect(parsed.map(\.path.path) == [main, feature])
+        #expect(parsed.map(\.id) == [main, feature])
+    }
+
     /// Real git repositories built once per test process and copied into a
     /// unique directory per test, so each test starts from the same state as
     /// the old per-test `init` + `commit` (+ fixture) sequence without
@@ -1091,24 +1102,6 @@ extension WorktreeServiceTests {
             return
         }
         defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
-        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
-    }
-
-    @Test func fastLocalRemoveNeverStagesARegisteredRemotePath() async throws {
-        let fixture = try await makeLinkedWorktree(suffix: "remote-fallback")
-        defer { fixture.removeFiles() }
-        RemoteHostRegistry.shared.register(root: fixture.worktree.path.path, host: "test-host")
-        defer { RemoteHostRegistry.shared.unregister(root: fixture.worktree.path.path) }
-
-        let outcome = try await fixture.service.removeFastLocal(
-            repoPath: fixture.repo,
-            worktree: fixture.worktree,
-            deleteBranchIfMerged: false,
-            force: false,
-            usesRemoteHostRegistry: false
-        )
-
-        #expect(outcome == .synchronous)
         #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 

@@ -335,6 +335,18 @@ struct ACPCodeBlockHighlighterTests {
         #expect(String(swiftAttributed.characters) == "let value = 1")
     }
 
+    @Test("highlight cache key changes when only the code theme palette changes")
+    func highlightedTextCacheKeyTracksCodePalette() throws {
+        let plain = try Theme.loadBundled(id: "cool-slate")
+        var solarized = plain
+        solarized.codePalette = try #require(CodePalette.loadBundled(id: "solarized-dark"))
+        var catppuccin = plain
+        catppuccin.codePalette = try #require(CodePalette.loadBundled(id: "catppuccin-mocha"))
+
+        let keys = [plain, solarized, catppuccin].map(ACPSyntaxHighlightCacheKey.themeKey)
+        #expect(Set(keys).count == 3)
+    }
+
     @Test("highlight cache key changes with language and theme inputs")
     func highlightedTextCacheKeyTracksInputs() throws {
         let dark = try Theme.loadBundled(id: "cool-slate")

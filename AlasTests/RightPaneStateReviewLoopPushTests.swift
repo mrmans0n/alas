@@ -196,10 +196,8 @@ struct RightPaneStateReviewLoopPushTests {
 
     @Test func performMergeRevalidatesAgainstCurrentSnapshot() async {
         let worktreeId = "wt-merge-revalidate"
-        let repositoryRoot = "/tmp/repo"
-        RemoteHostRegistry.shared.register(root: repositoryRoot, host: "devbox")
+        let repositoryRoot = RemotePath.virtual(host: "devbox", realPath: "/tmp/repo")
         defer {
-            RemoteHostRegistry.shared.unregister(root: repositoryRoot)
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
         }
         let worktree = Worktree(

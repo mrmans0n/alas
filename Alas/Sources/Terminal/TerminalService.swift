@@ -738,7 +738,7 @@ final class TerminalService {
     /// the env-set prefix on both create and kill, so we feed it the bare
     /// `alas-…` name on either side.
     func sweepOrphans(knownWorktreeIds: Set<String>, knownLeafIds: Set<String>) {
-        let wtHashes = Set(knownWorktreeIds.map(ZmxSessionName.hash16))
+        let wtHashes = ZmxSessionName.worktreeHashes(knownWorktreeIds)
         let leafHashes = Set(knownLeafIds.map(ZmxSessionName.hash16))
         let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
         let client = zmxClient
@@ -841,7 +841,7 @@ final class TerminalService {
         let names = result.stdout.split(separator: "\n").map(String.init)
         let orphans = orphanSessionNames(
             allSessionNames: names,
-            knownWorktreeIdHashes: Set(knownWorktreeIds.map(ZmxSessionName.hash16)),
+            knownWorktreeIdHashes: ZmxSessionName.worktreeHashes(knownWorktreeIds),
             knownLeafIdHashes: Set(knownLeafIds.map(ZmxSessionName.hash16))
         )
         for name in orphans {

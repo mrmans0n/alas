@@ -17,7 +17,7 @@ struct BinaryPreviewTabView: View {
                     if isLast {
                         return .file(BreadcrumbFileMenu(
                             onCopyRelativePath: { Clipboard.copy(relativePath) },
-                            onCopyFullPath: { Clipboard.copy(absoluteURL.path) },
+                            onCopyFullPath: { Clipboard.copyPath(absoluteURL.path) },
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteURL) },
                             onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
                         ))
@@ -25,7 +25,7 @@ struct BinaryPreviewTabView: View {
                         return .folder(BreadcrumbFolderMenu(
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL(for: pathPrefix)) },
                             onFocusInFiles: relativePath.hasPrefix("/") ? nil : { onRevealInFiles(pathPrefix) },
-                            onCopyFullPath: { Clipboard.copy(folderURL(for: pathPrefix).path) }
+                            onCopyFullPath: { Clipboard.copyPath(folderURL(for: pathPrefix).path) }
                         ))
                     }
                 }

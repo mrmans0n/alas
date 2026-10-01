@@ -129,29 +129,10 @@ struct DiffSelectableTextBuilder {
         theme: Theme
     ) -> [NSAttributedString.Key: Any] {
         var attributes = baseAttributes(font: font, theme: theme)
-        attributes[.foregroundColor] = NSColor(color(for: capture, kind: kind, theme: theme))
+        attributes[.foregroundColor] = EditorTheme(theme: theme).color(
+            for: capture,
+            onChangedLine: kind == .add || kind == .delete
+        )
         return attributes
-    }
-
-    private static func color(for capture: HighlightCapture, kind: ParsedDiff.Hunk.Line.Kind, theme: Theme) -> Color {
-        switch capture {
-        case .keyword:
-            return theme.color("syntax-keyword")
-        case .type:
-            return theme.color("syntax-type")
-        case .function:
-            return theme.color("syntax-function")
-        case .string:
-            return theme.color("add")
-        case .number:
-            return theme.color("mod")
-        case .comment:
-            if kind == .add || kind == .delete {
-                return theme.color("fg")
-            }
-            return theme.color("fg-faint")
-        default:
-            return theme.color("fg")
-        }
     }
 }

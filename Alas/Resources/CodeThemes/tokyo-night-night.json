@@ -1,0 +1,18 @@
+{
+  "id": "tokyo-night-night",
+  "name": "Tokyo Night",
+  "colors": {
+    "bg": "#1a1b26",
+    "fg": "#c0caf5",
+    "gutter-fg": "#737aa2",
+    "selection": "#283457",
+    "comment": "#565f89",
+    "keyword": "#bb9af7",
+    "string": "#9ece6a",
+    "number": "#ff9e64",
+    "type": "#2ac3de",
+    "function": "#7aa2f7",
+    "constant": "#ff9e64",
+    "attribute": "#7dcfff"
+  }
+}

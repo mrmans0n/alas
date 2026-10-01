@@ -3,52 +3,91 @@ import Testing
 @testable import Alas
 
 struct RemoteHostRegistryTests {
-    private func makeRegistry() -> RemoteHostRegistry {
-        let registry = RemoteHostRegistry()
-        registry.register(root: "/srv/repo", host: "devbox")
-        return registry
+    @Test(arguments: [
+        ("/.alas-remote/mini.lan/Volumes/Workspace/alas/Sources/a.swift", "mini.lan"),
+        ("/Volumes/Workspace/alas/Sources/a.swift", nil),
+    ])
+    func hostComesFromThePathItself(path: String, host: String?) {
+        #expect(RemoteHostRegistry.shared.host(forPath: path) == host)
+        #expect(URL(fileURLWithPath: path).isRemoteAlasPath == (host != nil))
     }
 
-    @Test func exactRootMatches() {
-        #expect(makeRegistry().host(forPath: "/srv/repo") == "devbox")
+    @Test(arguments: [
+        ("mini.lan", "/Volumes/Workspace/alas", "/.alas-remote/mini.lan/Volumes/Workspace/alas"),
+        ("nacho@mini", "/srv/repo/sub", "/.alas-remote/nacho@mini/srv/repo/sub"),
+    ])
+    func virtualPathRoundTrips(host: String, real: String, virtual: String) throws {
+        #expect(RemotePath.virtual(host: host, realPath: real) == virtual)
+        let split = try #require(RemotePath.split(virtual))
+        #expect(split.host == host)
+        #expect(split.realPath == real)
+        #expect(RemotePath.realPath(virtual) == real)
+        #expect(RemotePath.display(virtual) == "\(host):\(real)")
+        #expect(RemotePath.virtualizing(real, like: virtual) == virtual)
+        #expect(RemotePath.virtualizing(virtual, like: virtual) == virtual)
+        #expect(RemotePath.virtualizing(real, like: real) == real)
     }
 
-    @Test func trailingSlashOnRootIsNormalized() {
-        let registry = RemoteHostRegistry()
-        registry.register(root: "/srv/repo/", host: "devbox")
-        #expect(registry.host(forPath: "/srv/repo") == "devbox")
+    @Test(arguments: ["/Volumes/Workspace/alas", "/.alas-remote", "/.alas-remote/", "/.alas-remote/host"])
+    func nonVirtualPathsPassThrough(path: String) {
+        #expect(RemotePath.split(path) == nil)
+        #expect(RemotePath.realPath(path) == path)
     }
 
-    @Test func nestedPathMatches() {
-        #expect(makeRegistry().host(forPath: "/srv/repo/src/main.swift") == "devbox")
+    /// A host must survive `virtual` → standardization → `split` unchanged.
+    @Test(arguments: [
+        ("mini", true), ("mini.lan", true), ("user@mini", true), ("a.b", true), ("mini:2222", true),
+        ("", false), (".", false), ("..", false), ("a/b", false), (" ", false), ("mini lan", false),
+        ("mini\n", false), ("mini\u{0}", false), ("-oProxyCommand=x", false),
+    ])
+    func hostValidityMatchesVirtualPathRoundTrip(host: String, valid: Bool) {
+        #expect(RemotePath.isValidHost(host) == valid)
+        if valid {
+            let standardized = URL(fileURLWithPath: RemotePath.virtual(host: host, realPath: "/srv/repo")).standardizedFileURL.path
+            #expect(RemotePath.split(standardized)?.host == host)
+        }
     }
 
-    @Test func siblingWithSharedPrefixDoesNotMatch() {
-        #expect(makeRegistry().host(forPath: "/srv/repo-other") == nil)
+    @Test func strippingOnlyTouchesTheExactHost() {
+        let script = "cd '/.alas-remote/mini/a' && ls '/.alas-remote/mini.lan/b'"
+        #expect(RemotePath.stripping(host: "mini", in: script) == "cd '/a' && ls '/.alas-remote/mini.lan/b'")
     }
 
-    @Test func unregisteredPathReturnsNil() {
-        #expect(makeRegistry().host(forPath: "/Users/nacho/local") == nil)
-        #expect(makeRegistry().host(forPath: nil) == nil)
+    /// Prompt text is stripped (the app writes worktree paths into it), but
+    /// embedded resources are file contents and must arrive unchanged.
+    @Test(arguments: ["/", #"\/"#])
+    func outboundTransportStripsPathsButNotEmbeddedResourceContents(slash: String) throws {
+        let inner = RecordingTransport()
+        let transport = RemotePathStrippingTransport(host: "mini", inner: inner)
+        let virtual = ["", ".alas-remote", "mini", "srv", "a.md"].joined(separator: slash)
+        let prompt = #"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"prompt":["#
+            + #"{"type":"text","text":"Repository: \#(virtual)"},"#
+            + #"{"type":"resource","resource":{"uri":"file://\#(virtual)","text":"see \#(virtual)","blob":"\#(virtual)"}}]}}"#
+        try transport.send(Data(prompt.utf8))
+
+        let frame = try #require(inner.sent.first)
+        let sent = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+        let blocks = try #require((sent["params"] as? [String: Any])?["prompt"] as? [[String: Any]])
+        let resource = try #require(blocks[1]["resource"] as? [String: String])
+        #expect(blocks[0]["text"] as? String == "Repository: /srv/a.md")
+        #expect(resource["uri"] == "file:///srv/a.md")
+        #expect(resource["text"] == "see /.alas-remote/mini/srv/a.md")
+        #expect(resource["blob"] == "/.alas-remote/mini/srv/a.md")
     }
 
-    @Test func longestRootWins() {
-        let registry = makeRegistry()
-        registry.register(root: "/srv/repo/vendored", host: "otherbox")
-        #expect(registry.host(forPath: "/srv/repo/vendored/lib.c") == "otherbox")
-        #expect(registry.host(forPath: "/srv/repo/src.c") == "devbox")
+    @Test func outboundTransportLeavesSuccessResponsesByteIdentical() throws {
+        let inner = RecordingTransport()
+        let transport = RemotePathStrippingTransport(host: "mini", inner: inner)
+        let response = Data(#"{"jsonrpc":"2.0","id":7,"result":{"content":"cd /.alas-remote/mini/srv"}}"#.utf8)
+        try transport.send(response)
+        #expect(inner.sent == [response])
     }
+}
 
-    @Test func unregisterRemovesRoot() {
-        let registry = makeRegistry()
-        registry.unregister(root: "/srv/repo")
-        #expect(registry.host(forPath: "/srv/repo") == nil)
-    }
-
-    @Test func urlConvenienceReflectsSharedRegistry() {
-        RemoteHostRegistry.shared.register(root: "/srv/only-in-test", host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: "/srv/only-in-test") }
-        #expect(URL(fileURLWithPath: "/srv/only-in-test/a.txt").isRemoteAlasPath)
-        #expect(!URL(fileURLWithPath: "/tmp").isRemoteAlasPath)
-    }
+private final class RecordingTransport: JSONRPCStdioTransporting, @unchecked Sendable {
+    let incoming = AsyncStream<JSONRPCStdioTransport.Incoming> { _ in }
+    private(set) var sent: [Data] = []
+    func start() throws {}
+    func send(_ data: Data) throws { sent.append(data) }
+    func terminate() {}
 }

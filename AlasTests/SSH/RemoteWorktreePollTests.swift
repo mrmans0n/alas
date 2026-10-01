@@ -27,6 +27,15 @@ struct RemoteWorktreePollTests {
         #expect(entries[2].branch == nil)
     }
 
+    @Test func parseVirtualizesPathsForRemoteAnchor() {
+        let entries = RemoteWorktreePoll.parse(porcelain: porcelain, anchor: "/.alas-remote/mini/srv/repo")
+        #expect(entries.map(\.path) == [
+            "/.alas-remote/mini/srv/repo",
+            "/.alas-remote/mini/srv/wt/feature",
+            "/.alas-remote/mini/srv/wt/detached"
+        ])
+    }
+
     @Test func parseIgnoresBareAndUnknownLines() {
         let entries = RemoteWorktreePoll.parse(porcelain: "worktree /srv/bare\nbare\n")
         #expect(entries.count == 1)

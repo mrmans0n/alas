@@ -166,6 +166,32 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(diagnostics.map(\.message).contains("Workspace member 1 destination '/checkouts/release/\(WorkspaceCheckoutManifest.fileName)' uses a reserved checkout manifest name."))
     }
 
+    @Test(arguments: [
+        ("/checkouts/release", false),
+        (RemotePath.root, true),
+        (RemotePath.root + "/mini/checkouts", true),
+    ])
+    func localCheckoutRootRefusesTheReservedNamespace(rootPath: String, reserved: Bool) async {
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
+        let git = GitProbe(resolutions: ["/repos/one": "base-commit"], branches: ["/repos/one": .available])
+
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", name: "One", path: "/repos/one")],
+            git: git,
+            paths: PathProbe()
+        ).prepare(.init(workspace: workspace, branch: "release/1091", rootPath: rootPath, baseReference: "main"))
+
+        let message = "Checkout root '\(rootPath)' is inside \(RemotePath.root)/, which is reserved for remote projects."
+        switch result {
+        case .success:
+            #expect(!reserved)
+        case .failure(let diagnostics):
+            #expect(reserved)
+            #expect(diagnostics.map(\.message).contains(message))
+        }
+    }
+
     @Test func reportsHostBaseBranchAndDestinationFailuresTogetherWithoutMutation() async {
         let local = WorkspaceMember(projectID: "local", fallbackProjectName: "Local", fallbackRepositoryRoot: "/repos/shared")
         let remote = WorkspaceMember(projectID: "remote", fallbackProjectName: "Remote", fallbackRepositoryRoot: "/repos/remote")

@@ -19,9 +19,7 @@ struct FileContextMenuActionsTests {
     }
 
     @Test func remoteTargetOmitsLocalURL() {
-        let root = URL(fileURLWithPath: "/srv/remote-\(UUID().uuidString)")
-        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: "/srv/remote"))
         let target = FileContextMenuTarget.resolve(
             kind: .file,
             worktreePath: root,

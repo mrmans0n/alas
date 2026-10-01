@@ -1,0 +1,18 @@
+{
+  "id": "ayu-light",
+  "name": "Ayu Light",
+  "colors": {
+    "bg": "#fcfcfc",
+    "fg": "#5c6166",
+    "gutter-fg": "#adaeb1",
+    "selection": "#d1e4f4",
+    "comment": "#acafb3",
+    "keyword": "#fa8d3e",
+    "string": "#86b300",
+    "number": "#a37acc",
+    "type": "#399ee6",
+    "function": "#f2ae49",
+    "constant": "#a37acc",
+    "attribute": "#e6ba7e"
+  }
+}

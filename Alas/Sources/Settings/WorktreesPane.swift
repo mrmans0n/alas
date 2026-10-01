@@ -186,7 +186,7 @@ private struct ArchivedProjectSection: View {
                         Text(wt.branch)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundColor(theme.color("fg"))
-                        Text(wt.path.path)
+                        Text(RemotePath.display(wt.path.path))
                             .font(.system(size: 11))
                             .foregroundColor(theme.color("fg-dim"))
                             .lineLimit(1)

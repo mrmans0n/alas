@@ -253,6 +253,66 @@ struct ACPSessionForkManagerTests {
         #expect(!session.canForkMessage(at: 3))
     }
 
+    @Test("createFork seeds the target's suggestions only from a same-agent non-empty source")
+    func forkSuggestionSeeding() async throws {
+        // Needs a live attach to seed the source's list; drive it through the
+        // runner's own persist path instead of poking store state directly —
+        // that path is covered by the runner, so here set the stored list the
+        // way attach/hydration leaves it.
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "forker"
+        )
+        let suggestions = [
+            ACPPromptSuggestion(command: "/review", description: "Review"),
+        ]
+        let source = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        try store.setPromptSuggestions(sessionId: source.id, suggestions: suggestions)
+        source.promptSuggestions = suggestions
+
+        let user: ACPMessage = .user(id: UUID(), text: "one", attachments: [])
+        let agent: ACPMessage = .agent(id: UUID(), StreamingText("two"))
+        for message in [user, agent] {
+            let index = source.transcript.messages.count
+            source.transcript.appendMessage(message)
+            try store.appendMessage(
+                sessionId: source.id,
+                id: "msg-\(source.id)-\(index)",
+                kind: message.kind,
+                seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message),
+                createdAt: Int64(index)
+            )
+        }
+
+        let sameAgent = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: agent.stableId, kind: .agent),
+            targetAgentID: "claude",
+            autoRunDefault: false
+        )
+        let crossAgent = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: agent.stableId, kind: .agent),
+            targetAgentID: "codex",
+            autoRunDefault: false
+        )
+
+        #expect(sameAgent.promptSuggestions == suggestions)
+        #expect(crossAgent.promptSuggestions.isEmpty)
+
+        let sameAgentID = sameAgent.id
+        let crossAgentID = crossAgent.id
+        await manager.flushAllPersistence()
+        let restoredStore = try ACPSessionStore(path: store.path)
+        #expect(try restoredStore.loadSession(id: sameAgentID)?.promptSuggestions == suggestions)
+        #expect(try restoredStore.loadSession(id: crossAgentID)?.promptSuggestions == nil)
+    }
+
     private func temporaryPath() -> String {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-fork-manager-\(UUID()).sqlite").path

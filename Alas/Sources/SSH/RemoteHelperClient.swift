@@ -210,26 +210,32 @@ actor RemoteHelperClient {
         expectedMtime: Double? = nil,
         expectedContent: String? = nil
     ) async throws -> RemoteHelperFSWriteResult {
+        // File contents must stay byte-identical, so only the path is made real.
         try await request(
             method: "fs/write",
             params: RemoteHelperFSWriteParams(
-                path: path,
+                path: RemotePath.realPath(path),
                 content: content,
                 expectedMtime: expectedMtime,
                 expectedContent: expectedContent
-            )
+            ),
+            stripVirtualPaths: false
         )
     }
 
     func stat(paths: [String]) async throws -> RemoteHelperFSStatResult {
-        try await request(method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths))
+        let result: RemoteHelperFSStatResult = try await request(
+            method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths)
+        )
+        return RemoteHelperFSStatResult(entries: result.entries.map { $0.virtualized(host: host) })
     }
 
     func lineCounts(root: String, paths: [String]) async throws -> RemoteHelperFSLineCountsResult {
-        try await request(
+        let result: RemoteHelperFSLineCountsResult = try await request(
             method: "fs/line-counts",
             params: RemoteHelperFSLineCountsParams(root: root, paths: paths)
         )
+        return RemoteHelperFSLineCountsResult(entries: result.entries.map { $0.virtualized(host: host) })
     }
 
     func list(path: String) async throws -> RemoteHelperFSListResult {
@@ -246,12 +252,13 @@ actor RemoteHelperClient {
         let result: RemoteHelperSearchStartResult = try await request(
             method: "search/start",
             params: RemoteHelperSearchStartParams(
-                root: root,
+                root: RemotePath.realPath(root),
                 query: query,
                 caseSensitive: caseSensitive,
                 wholeWord: wholeWord,
                 regex: regex
-            )
+            ),
+            stripVirtualPaths: false
         )
         var continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation!
         let events = AsyncThrowingStream<RemoteHelperSearchEvent, Error> { continuation = $0 }
@@ -442,16 +449,18 @@ actor RemoteHelperClient {
         try await request(method: "acp/attach", params: params)
     }
 
+    // The ACP broker is local-only and these frames carry prompts and file
+    // contents, so they are never rewritten.
     func sendACPBroker(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
-        try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     func notifyACPBroker(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/notify", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: "acp/notify", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     func ackACPBroker(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
@@ -507,7 +516,8 @@ actor RemoteHelperClient {
     private func request<Params: Encodable, Result: Decodable>(
         method: String,
         params: Params,
-        replaySubscriptionsOnStart: Bool = true
+        replaySubscriptionsOnStart: Bool = true,
+        stripVirtualPaths: Bool = true
     ) async throws -> Result {
         let didStart = try ensureStarted()
         if replaySubscriptionsOnStart {
@@ -529,7 +539,9 @@ actor RemoteHelperClient {
 
         nextId += 1
         let id = JSONRPCID.number(nextId)
-        let body = try Self.encodeRequest(method: method, params: params, id: id)
+        let body = try Self.encodeRequest(
+            method: method, params: params, id: id, host: host, stripVirtualPaths: stripVirtualPaths
+        )
 
         let data: Data
         do {
@@ -738,10 +750,11 @@ actor RemoteHelperClient {
 
         guard head.method == "watch/event",
               let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperWatchEvent>.self, from: data),
-              let event = env.params
+              let rawEvent = env.params
         else {
             return
         }
+        let event = rawEvent.virtualized(host: host)
         guard let (clientSubscriptionId, subscription) = activeSubscriptions.first(where: {
             $0.value.helperGeneration == generation
                 && $0.value.helperSubscriptionId == event.subscriptionId
@@ -898,15 +911,23 @@ actor RemoteHelperClient {
         RemoteHostStatusStore.shared.reportSuccess(host: host)
     }
 
-    private static func encodeRequest<Params: Encodable>(
+    /// Strips the virtual `/.alas-remote/<host>` prefix from every path in the
+    /// serialized request; the helper only knows real remote paths. Requests
+    /// that carry user text or file contents pass `stripVirtualPaths: false`
+    /// and make their path fields real themselves.
+    static func encodeRequest<Params: Encodable>(
         method: String,
         params: Params,
-        id: JSONRPCID
+        id: JSONRPCID,
+        host: String,
+        stripVirtualPaths: Bool = true
     ) throws -> Data {
         var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON, "method": method]
         let paramsData = try JSONEncoder().encode(RemoteHelperAnyEncodableBox(params))
         dict["params"] = try JSONSerialization.jsonObject(with: paramsData)
-        return try JSONSerialization.data(withJSONObject: dict)
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.withoutEscapingSlashes])
+        guard stripVirtualPaths else { return data }
+        return Data(RemotePath.stripping(host: host, in: String(decoding: data, as: UTF8.self)).utf8)
     }
 
     private static func responseErrorIndicatesLiveHost(_ error: Error) -> Bool {

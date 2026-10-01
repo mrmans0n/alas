@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 private struct ACPTranscriptScrollMemory: Equatable {
@@ -1255,6 +1256,15 @@ final class ACPSessionManager: ObservableObject {
     private let isolatedBrokerServiceFactory: ACPBrokerServiceFactory?
     private let attachmentStartupTimeout: Duration
     private let restartTeardownTimeout: Duration
+    /// Answers, at attach, what to do with a delegated child's prompt hold
+    /// (nil: unknown, e.g. a store read failed). Every attach path (a
+    /// restored tab, startup recovery, a delegated start) runs it before the
+    /// runner can drain the queue, so none can dispatch a prompt first.
+    private let delegatedSelectionHoldResolver:
+        (@MainActor (ACPSession.ID) async -> ACPDelegatedSelectionHoldDecision?)?
+    /// How long delegated reasoning validation waits for the config options
+    /// an agent publishes after `session/set_model` before rejecting.
+    private let delegatedReasoningRefreshTimeout: Duration
 #if DEBUG
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
@@ -1420,6 +1430,8 @@ final class ACPSessionManager: ObservableObject {
          isolatedBrokerServiceFactory: ACPBrokerServiceFactory? = nil,
          attachmentStartupTimeout: Duration = .seconds(2),
          restartTeardownTimeout: Duration = .seconds(2),
+         delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> ACPDelegatedSelectionHoldDecision?)? = nil,
+         delegatedReasoningRefreshTimeout: Duration = .seconds(5),
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
          frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider? = nil,
@@ -1487,6 +1499,8 @@ final class ACPSessionManager: ObservableObject {
         self.isolatedBrokerServiceFactory = isolatedBrokerServiceFactory
         self.attachmentStartupTimeout = attachmentStartupTimeout
         self.restartTeardownTimeout = restartTeardownTimeout
+        self.delegatedSelectionHoldResolver = delegatedSelectionHoldResolver
+        self.delegatedReasoningRefreshTimeout = delegatedReasoningRefreshTimeout
         let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
         self.recent = initialRecent
         self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
@@ -1643,6 +1657,15 @@ final class ACPSessionManager: ObservableObject {
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
+                // Seed the fork's composer suggestions only when the target
+                // agent is the SAME agent: its attach would re-advertise the
+                // identical list. A cross-agent fork gets nothing — the
+                // source agent's commands wouldn't exist on the new agent,
+                // and a persisted non-empty list would keep them offered
+                // until that agent broadcasts its own.
+                promptSuggestions: targetAgentID == source.agentId && !source.promptSuggestions.isEmpty
+                    ? source.promptSuggestions
+                    : nil,
                 autoRun: autoRunDefault,
                 createdAt: now,
                 updatedAt: now,
@@ -1679,6 +1702,13 @@ final class ACPSessionManager: ObservableObject {
             )
             target.autoRunEnabled = targetRow.autoRun
             target.forkRecord = forkRecord
+            // Same-agent forks start with the source's command/skill list
+            // (carried on the persisted row); pills render before the attach
+            // re-advertises the identical list. Cross-agent forks seed
+            // nothing — see the targetRow comment above.
+            if let suggestions = targetRow.promptSuggestions {
+                target.promptSuggestions = suggestions
+            }
             for message in copiedMessages {
                 target.transcript.appendMessage(try ACPMessageCodec.decode(
                     kind: message.kind,
@@ -1891,6 +1921,12 @@ final class ACPSessionManager: ObservableObject {
         session.mcpPreambleSent = result.row.mcpPreambleSent
         session.authStatus = result.row.authStatus
         session.autoRunEnabled = result.row.autoRun
+        // Restored before any attach: pills and chips for the agent's own
+        // commands/skills render against the persisted list until a live
+        // `available_commands_update` replaces it.
+        if let suggestions = result.row.promptSuggestions, session.promptSuggestions.isEmpty {
+            session.promptSuggestions = suggestions
+        }
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
         // toolbar during the hydration window should win against the value
@@ -2665,6 +2701,21 @@ final class ACPSessionManager: ObservableObject {
                 sessionId: sessionId,
                 items: items,
                 fence: fence
+            )
+        }
+    }
+
+    /// Persist the agent's advertised commands/skills (`promptSuggestions`)
+    /// whenever they change at attach time, so their pills survive an app
+    /// restart and reach mirror sessions. Only a non-empty list is written —
+    /// a retracted list never erases the stored one, matching
+    /// `ACPSessionRunner.persistPromptSuggestions`.
+    private func persistPromptSuggestions(_ suggestions: [ACPPromptSuggestion], for sessionId: ACPSession.ID) {
+        guard !suggestions.isEmpty else { return }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.setPromptSuggestions(
+                sessionId: sessionId, suggestions: suggestions, fence: fence
             )
         }
     }
@@ -3631,7 +3682,7 @@ final class ACPSessionManager: ObservableObject {
                 onFreshProcSpawn: onFreshHelperProcSpawn,
                 onOutputOffsetsChanged: onHelperProcOffsetsChanged
             )
-            client = ACPStdioClient.makeForTesting(transport: transport)
+            client = ACPStdioClient(transport: RemotePathStrippingTransport(host: host, inner: transport))
         } else if let host {
             let invocation = ACPRemoteLaunch.channelInvocation(
                 host: host,
@@ -3642,11 +3693,16 @@ final class ACPSessionManager: ObservableObject {
             )
             // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
             // HOME, and any host-specific connection configuration.
-            client = try ACPStdioClient(
-                executable: URL(fileURLWithPath: invocation.executable),
-                arguments: invocation.args,
-                environment: nil
-            )
+            client = ACPStdioClient(transport: RemotePathStrippingTransport(
+                host: host,
+                inner: JSONRPCStdioTransport(
+                    executable: URL(fileURLWithPath: invocation.executable),
+                    arguments: invocation.args,
+                    environment: nil,
+                    framing: .newline,
+                    replaceEnv: true
+                )
+            ))
         } else if spec.command.hasPrefix("/") {
             client = try ACPStdioClient(
                 executable: URL(fileURLWithPath: spec.command),
@@ -4478,6 +4534,12 @@ extension ACPSessionManager {
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
         session.authStatus = row.authStatus
+        // Mirrors never run their own attach, so the persisted suggestions
+        // list is the ONLY source for their pills and chips. A fresh list
+        // wins over an empty one; the writer's newer list replaces the old.
+        if let suggestions = row.promptSuggestions, !suggestions.isEmpty {
+            session.promptSuggestions = suggestions
+        }
         // Mirrors never run their own attach/runner, so nothing else ever
         // re-applies the `.needsAuth` semantics the writer's attach derives
         // from a signed-out status — do it here too, or a mirror keeps
@@ -4529,6 +4591,11 @@ extension ACPSessionManager {
         if let session = sessions[sessionId],
            case .ready = session.agentState,
            runners[sessionId] != nil {
+            // Another instance sharing the store may have marked the child
+            // ready or failed since this one armed the hold.
+            if session.holdsPromptsForDelegatedSelection {
+                await resolveDelegatedSelectionHold(sessionId)
+            }
             return nil
         }
         let attempt = AttachmentAttempt()
@@ -4564,6 +4631,7 @@ extension ACPSessionManager {
             }
         }
         await waitForTeardown(sessionId: sessionId)
+        await resolveDelegatedSelectionHold(sessionId)
         guard let session = sessions[sessionId],
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else {
@@ -6155,7 +6223,14 @@ extension ACPSessionManager {
             session.availableModes = result.availableModes
             session.currentModel = result.currentModel
             session.currentMode = result.currentMode
-            session.promptSuggestions = result.promptSuggestions
+            // An attach result without suggestions keeps whatever hydration
+            // restored, so a restart never blanks the pills/chips in the
+            // attach window; the persisted row is refreshed only from a
+            // genuinely non-empty result.
+            if !result.promptSuggestions.isEmpty || session.promptSuggestions.isEmpty {
+                session.promptSuggestions = result.promptSuggestions
+            }
+            persistPromptSuggestions(session.promptSuggestions, for: sessionId)
             session.availableConfigOptions = result.configOptions
             session.providerCapabilities = initialized.providerCapabilities
             session.availableProviders = providers
@@ -6995,11 +7070,15 @@ extension ACPSessionManager {
         }
     }
 
+    /// `ahead` queues the prompt before anything that has not gone out yet:
+    /// a delegated child's initial prompt stays first even when a human
+    /// queued something in its tab while the model selection was pending.
     @discardableResult
     func enqueueDelegatedPrompt(
         text: String,
         source: ACPDelegatedPromptSource,
-        into sessionId: ACPSession.ID
+        into sessionId: ACPSession.ID,
+        ahead: Bool = false
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
         let suggestionSession = session
@@ -7021,7 +7100,7 @@ extension ACPSessionManager {
             return true
         }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: [])
-        session.enqueue(blocks: blocks, delegatedSource: source)
+        session.enqueue(blocks: blocks, delegatedSource: source, ahead: ahead)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
         beginManagerQueuePersistence(sessionId: sessionId)
@@ -7048,7 +7127,9 @@ extension ACPSessionManager {
     /// silently: an id the agent did not advertise, or a refused change,
     /// throws so the caller can fail the child before its first prompt.
     /// Reasoning is resolved after the model because the agent may offer
-    /// different levels per model.
+    /// different levels per model; an agent that publishes those levels only
+    /// after `session/set_model` gets a bounded wait for them before the
+    /// reasoning is rejected.
     func applyDelegatedModelSelection(
         _ selection: ACPDelegatedModelSelection,
         to id: ACPSession.ID
@@ -7056,29 +7137,169 @@ extension ACPSessionManager {
         guard let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
             throw ACPDelegatedModelSelectionError.sessionUnavailable
         }
+        var modelChanged = false
         if let model = selection.model,
            let step = try ACPSessionOrchestrationPolicy.liveModelStep(
                model: model, agentId: session.agentId, chip: session.chipState.models
            ) {
             try await applyDelegatedSelectionStep(step, setting: "model", to: session)
+            modelChanged = true
         }
         if let reasoning = selection.reasoning,
-           let step = try ACPSessionOrchestrationPolicy.liveReasoningStep(
-               reasoning: reasoning, agentId: session.agentId, chip: session.chipState.thinking
+           let step = try await delegatedReasoningStep(
+               reasoning, in: session, afterModelChange: modelChanged
            ) {
             try await applyDelegatedSelectionStep(step, setting: "reasoning", to: session)
+        }
+        // The tab's model picker is not held; a change made while reasoning
+        // was being applied must not let the prompt run on another model.
+        if let model = selection.model, session.chipState.models?.currentId != model {
+            throw ACPDelegatedModelSelectionError.rejected(
+                agentId: session.agentId, setting: "model", value: model,
+                reason: "the model changed while the selection was being applied"
+            )
         }
         persist(session)
     }
 
-    /// Takes a delegated prompt out of a hydrated session's queue before
-    /// attach can dispatch it, returning its text. Startup recovery uses this
-    /// for a child that crashed after queueing its initial prompt but before
-    /// it was marked ready: the prompt must wait until the model selection is
-    /// re-verified. The caller re-queues it, or persists the queue without it
-    /// on failure.
+    /// Validates a requested reasoning level against the session's thinking
+    /// control. After a model switch the agent may not have published the
+    /// new model's levels yet (its `session/set_model` reply can precede the
+    /// config options update), so a failed check waits for the next update,
+    /// up to `delegatedReasoningRefreshTimeout`, and checks again. Without a
+    /// switch, or once the wait runs out, the last error stands. After a
+    /// switch the level is always sent, even when the chip already shows it:
+    /// that value may be the old model's, and the new one may reset it.
+    private func delegatedReasoningStep(
+        _ reasoning: String,
+        in session: ACPSession,
+        afterModelChange: Bool
+    ) async throws -> ACPDelegatedSelectionStep? {
+        let runner = runners[session.id]
+        let deadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
+        var waitExpired = !afterModelChange
+        while true {
+            do {
+                let step = try ACPSessionOrchestrationPolicy.liveReasoningStep(
+                    reasoning: reasoning, agentId: session.agentId, chip: session.chipState.thinking
+                )
+                if step == nil, afterModelChange,
+                   case .configOption(let id)? = session.chipState.thinking?.source {
+                    return .setConfigOption(id: id, value: reasoning)
+                }
+                return step
+            } catch {
+                guard !waitExpired else { throw error }
+            }
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            if remaining <= .zero {
+                waitExpired = true
+            } else {
+                waitExpired = !(await configOptionsChange(of: session, within: remaining))
+            }
+            // A reconnect during the wait means the replacement connection
+            // may not carry the model this selection set.
+            guard sessions[session.id] === session, runner != nil, runners[session.id] === runner else {
+                throw ACPDelegatedModelSelectionError.sessionUnavailable
+            }
+        }
+    }
+
+    /// Whether the session's config options change within `timeout`.
+    private func configOptionsChange(of session: ACPSession, within timeout: Duration) async -> Bool {
+        // Snapshot and subscribe in one main-actor turn, so an update landing
+        // before the wait starts is buffered rather than missed. `@Published`
+        // replays the current value on subscription and emits in `willSet`;
+        // the waiter resumes after the assignment.
+        let revision = session.availableConfigOptionsRevision
+        let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let subscription = session.$availableConfigOptions.dropFirst().sink { _ in continuation.yield() }
+        defer {
+            subscription.cancel()
+            continuation.finish()
+        }
+        let outcome = await runBounded(timeout: timeout) {
+            for await _ in changes { return }
+        }
+        if case .succeeded = outcome { return true }
+        return session.availableConfigOptionsRevision != revision
+    }
+
+    /// Arms the hold for a delegated child still applying its selection, or
+    /// lifts a pending one whose delegation has since become ready or failed
+    /// (possibly in another instance sharing the store). For a failed child
+    /// the parent's initial prompt is dropped from the queue first, whether
+    /// or not a hold was armed here. A released hold is never re-armed, and
+    /// an unknown answer changes nothing.
+    private func resolveDelegatedSelectionHold(_ id: ACPSession.ID) async {
+        guard let resolver = delegatedSelectionHoldResolver,
+              sessions[id]?.delegatedSelectionHold != .released,
+              let decision = await resolver(id),
+              let session = sessions[id]
+        else { return }
+        switch decision {
+        case .hold:
+            session.holdPromptsForDelegatedSelection()
+        case .release:
+            if session.holdsPromptsForDelegatedSelection { releaseDelegatedSelectionHold(id) }
+        case .discard(let messageId):
+            let discarded = await discardDelegatedPrompt(messageId: messageId, in: id)
+            if discarded, sessions[id] === session, session.holdsPromptsForDelegatedSelection {
+                releaseDelegatedSelectionHold(id)
+            }
+        }
+    }
+
+    /// Holds every prompt in a delegated child's queue, including composer
+    /// submits, until `releaseDelegatedSelectionHold`. The coordinator calls
+    /// this for a child it is starting; restored sessions get it from
+    /// `delegatedSelectionHoldResolver` at attach.
+    func holdPromptsForDelegatedSelection(_ id: ACPSession.ID) {
+        sessions[id]?.holdPromptsForDelegatedSelection()
+    }
+
+    /// Lifts the hold once the child is ready on its selection, or durably
+    /// failed. Prompts a human queued in the tab stay and go out.
+    func releaseDelegatedSelectionHold(_ id: ACPSession.ID) {
+        guard let session = sessions[id], session.releaseDelegatedSelectionHold() else { return }
+        runners[id]?.flushQueueIfIdle()
+    }
+
+    /// Drops a failing child's delegated prompt from its queue, and waits for
+    /// the queue to be written without it, so the prompt cannot come back on
+    /// a later hydration once the failed phase has lifted the hold. Also
+    /// writes the queue when the prompt was already withheld in memory.
+    /// Returns whether it is durably gone; true when this instance has no
+    /// hydrated copy of the session, which leaves nothing here to dispatch.
+    func discardDelegatedPrompt(messageId: String, in id: ACPSession.ID) async -> Bool {
+        guard let session = sessions[id], session.hydrationState == .ready else { return true }
+        if let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId }),
+           !session.removeFromQueue(id: item.id) {
+            return false
+        }
+        let items = session.queue
+        let fence = leaseFence(sessionId: id)
+        beginManagerQueuePersistence(sessionId: id)
+        session.pendingQueuePersistenceCount += 1
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
+        }
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        endManagerQueuePersistence(sessionId: id)
+        return persisted
+    }
+
+    /// Takes a delegated prompt out of a hydrated session's queue before it
+    /// can be dispatched, returning its text. Startup recovery uses this for
+    /// a child that crashed after queueing its initial prompt but before it
+    /// was marked ready: the prompt must wait until the model selection is
+    /// re-verified. Safe with a runner attached only while the selection
+    /// hold keeps the queue from draining (a restored tab can attach first).
+    /// The caller re-queues it, or persists the queue without it on failure.
     func withholdQueuedDelegatedPrompt(messageId: String, in id: ACPSession.ID) -> String? {
-        guard let session = sessions[id], runners[id] == nil,
+        guard let session = sessions[id],
+              runners[id] == nil || session.holdsPromptsForDelegatedSelection,
               let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId }),
               session.removeFromQueue(id: item.id)
         else { return nil }

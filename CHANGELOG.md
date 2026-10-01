@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Add plugin API 3: native view tabs described as a tree of controls, a `tasks.start` capability that creates a worktree and starts the default agent with a prompt without changing the selection, and per-project plugin storage. Add a Kanban plugin whose cards start agents in new worktrees and follow their sessions through Running, Needs you and Review.
+- Persist an agent's advertised slash commands and skills so their pills and composer chips survive an app restart, appear in mirrors and forks before any attach, and keep their hover cards.
 - Show peer branch changes as an expandable folder tree and compare them using the viewing Mac's configured commit comparison mode.
 - Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only (#1643).
 
@@ -16,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Set an existing hook socket or isolated-profile runtime directory owned by the user to `0700` instead of accepting an owner-only mode that cannot be traversed, which left hooks, persistent terminals, and ACP brokers unable to start. Refuse such a directory, or an isolated profile root, that group or others could write (#1640).
 - Keep delegated children connected to Alas across an app restart: their `alas` CLI and MCP server now reach the app through a per-session socket link that each attach repoints, and on launch Alas re-attaches children that had a turn in progress, so their reports and turn outcomes still reach the parent (#1641).
+- Hold every prompt to a delegated child with a requested model or reasoning until the selection is acknowledged: prompts typed in the child's tab and a tab restored at launch can no longer run on the previous model, a message sent to a child that already failed is refused atomically with the failure (also across instances sharing a profile), and reasoning levels an agent publishes only after `session/set_model` are waited for instead of rejected (#1639).
+- Render delegated prompts and child reports as cards instead of user bubbles, and keep them out of the user's Up next queue.
 
 ## [0.19.19] - 2026-09-29
 

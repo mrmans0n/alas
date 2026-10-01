@@ -34,7 +34,11 @@ enum ReviewSessionConsolidation {
     }
 }
 
-private struct RemoteWorktreeDestinationCheckError: Error {}
+private struct RemoteWorktreeDestinationCheckError: LocalizedError {
+    var errorDescription: String? {
+        "The remote host did not report whether the destination already exists."
+    }
+}
 
 enum WorkspaceDefinitionSaveError: LocalizedError {
     case spacePlacementFailed
@@ -1420,6 +1424,25 @@ final class AppState {
         nextPromptInference: (any NextPromptRuntime)? = nil,
         localTextSupported: Bool = NextPromptInference.isSupported()
     ) {
+        // Legacy remote worktrees were renamed to virtual ids on decode. Move
+        // their id-keyed state first: the attention store and run scheduler
+        // below load their files, and tabs must be in place before
+        // `reloadTabs` and the zmx orphan sweep, or live remote sessions look
+        // orphaned. The test host shares the user's app support dir, so it
+        // skips the files.
+        var projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
+        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
+        var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
+        // On any failure the pending maps stay and are saved with
+        // projects.json whenever it is next written, so the next launch retries.
+        let unitTestHost = Self.isRunningUnitTests
+        RemotePathMigration.complete(
+            projectsFile: &projectsFile,
+            config: &config,
+            spaces: &spacesFile,
+            saving: unitTestHost ? nil : store,
+            migrateStores: { unitTestHost ? false : RemotePathMigration.migrate(idMap: $0, defaults: AlasProfile.userDefaults) }
+        )
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
         self.localTextModelStore = suggestionStore
@@ -1458,9 +1481,6 @@ final class AppState {
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
-        let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
-        let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
-        let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         self.config = config
         self.languageServerConfigChangeTracker = LanguageServerConfigChangeTracker(
             initial: config.code.languageServers
@@ -1488,6 +1508,7 @@ final class AppState {
         // survives relaunches; otherwise launches always show the theme's
         // built-in accent until the user re-clicks the picker.
         themeStore.setAccent(config.accent)
+        themeStore.setCodeTheme(family: config.code.codeThemeFamily)
         // Same for "Match system" — the toggle's state needs to drive the
         // current theme on launch, not just on subsequent toggle events.
         if config.matchSystemTheme {
@@ -1820,6 +1841,10 @@ final class AppState {
             // pending copy was already cleared.
             var promptAwaitingSelection: String?
             if record.modelSelection != nil {
+                // A restored tab may already be attaching this session; its
+                // attach arms the same hold, and with it held the prompt can
+                // be withheld even from an attached runner.
+                manager.holdPromptsForDelegatedSelection(record.childSessionId)
                 let withheld = manager.withholdQueuedDelegatedPrompt(
                     messageId: acpOrchestration.initialPromptSource(for: record).messageId,
                     in: record.childSessionId
@@ -1833,7 +1858,9 @@ final class AppState {
                     text: prompt,
                     source: ACPDelegatedPromptSource(
                         sessionId: record.parentSessionId,
-                        messageId: "initial-\(record.childSessionId)"
+                        messageId: ACPSessionOrchestrationPolicy.initialPromptMessageId(
+                            childSessionId: record.childSessionId
+                        )
                     ),
                     into: record.childSessionId
                 )
@@ -1872,12 +1899,16 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            try? await acpOrchestrationPersistence.updatePhase(
+            let markedReady = (try? await acpOrchestrationPersistence.updatePhase(
                 childSessionId: record.childSessionId,
                 phase: .ready,
                 failureMessage: nil,
                 updatedAt: Int64(Date().timeIntervalSince1970)
-            )
+            )) != nil
+            // Held until `.ready` is durable, as in the coordinator's start.
+            if record.modelSelection != nil, markedReady {
+                manager.releaseDelegatedSelectionHold(record.childSessionId)
+            }
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
         }
         await attachDelegatedChildrenWithPendingTurns()
@@ -3340,10 +3371,10 @@ final class AppState {
         return checkout.members.first { member in
             guard member.availability == .available,
                   member.projectID == worktree.projectId,
-                  Self.canonicalWorktreePath(member.worktreePath) == worktreePath
+                  Self.canonicalWorktreePath(checkout.inAppWorktreePath(member.worktreePath)) == worktreePath
             else { return false }
             if let plannedDestination = member.plan?.destinationPath {
-                return Self.canonicalWorktreePath(plannedDestination) == worktreePath
+                return Self.canonicalWorktreePath(checkout.inAppWorktreePath(plannedDestination)) == worktreePath
             }
             return true
         }
@@ -3736,7 +3767,7 @@ final class AppState {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
             let memberOperationIsInFlight = current.members.contains { member in
-                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath))
+                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: current.inAppWorktreePath(member.worktreePath)))
                 return Self.blocksWorktreeSessionAdmission(
                     self.projectsManager.operationState(
                         forWorktreeId: worktreeID,
@@ -3874,7 +3905,7 @@ final class AppState {
         var resolved: [UUID: Worktree] = [:]
         for member in checkout.members {
             guard let worktreeID = ids[member.id] else { continue }
-            let expectedPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            let expectedPath = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
             guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
                 $0.id == worktreeID
                     && $0.projectId == member.projectID
@@ -3894,7 +3925,7 @@ final class AppState {
             let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
                 projectID: member.projectID,
                 executionLocation: checkout.executionLocation,
-                repositoryPath: member.worktreePath
+                repositoryPath: checkout.inAppWorktreePath(member.worktreePath)
             )
             stacks[qualifiedWorktreeID] = stack
         }
@@ -3924,9 +3955,12 @@ final class AppState {
     /// path could since be occupied by something this checkout never
     /// touched — closing tabs or clearing selection there would tear down
     /// an unrelated worktree's runtime state instead of this member's own.
-    private static func synthesizedWorktreeIfOwned(for member: WorkspaceCheckoutMember) -> Worktree? {
+    private static func synthesizedWorktreeIfOwned(
+        for member: WorkspaceCheckoutMember,
+        in checkout: WorkspaceCheckout
+    ) -> Worktree? {
         guard member.cleanupOwnership.worktreeCreated else { return nil }
-        let path = URL(fileURLWithPath: member.worktreePath)
+        let path = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath))
         return Worktree(
             id: Worktree.makeId(path: path),
             projectId: member.projectID,
@@ -4010,7 +4044,9 @@ final class AppState {
             // are registered under it — so the risk shown here must count
             // the same sessions it's about to silently terminate.
             if let worktreeID = resolvedWorktreeIDs[member.id]
-                ?? (member.cleanupOwnership.worktreeCreated ? Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath)) : nil) {
+                ?? (member.cleanupOwnership.worktreeCreated
+                    ? Worktree.makeId(path: URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)))
+                    : nil) {
                 let sessionCount = worktreeCleanupSessionIDs(worktreeId: worktreeID).count
                 if sessionCount > 0 {
                     risks.append("\(member.fallbackProjectName): \(sessionCount) \(sessionCount == 1 ? "session" : "sessions") will close")
@@ -4099,7 +4135,7 @@ final class AppState {
         // never owned at all, and its stale sessions would never close.
         let ownershipBeforeDeletion = Dictionary(uniqueKeysWithValues: before.members.map { ($0.id, $0) })
         func worktreeToCleanUp(for member: WorkspaceCheckoutMember) -> Worktree? {
-            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap(Self.synthesizedWorktreeIfOwned)
+            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap { Self.synthesizedWorktreeIfOwned(for: $0, in: before) }
         }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         for worktree in resolvedWorktrees.values {
@@ -4643,14 +4679,17 @@ final class AppState {
             return .error("invalid branch name: \(message)")
         }
 
-        let destination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
-        if FileManager.default.fileExists(atPath: destination.path) {
-            return .error("A worktree already exists at this path.")
+        let destination: URL
+        let shownPath: String
+        do {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            guard !prepared.exists else { return .error("A worktree already exists at this path.") }
+            destination = prepared.destination
+            // Local output keeps the configured path as typed; a remote one
+            // shows where it lands on its host.
+            shownPath = destination.isRemoteAlasPath ? RemotePath.display(destination.path) : prepared.rendered.path
+        } catch {
+            return .error("Could not check the worktree destination: \(error.localizedDescription)")
         }
         let resolvedBase: String
         if let base {
@@ -4669,12 +4708,13 @@ final class AppState {
             branch: branch,
             destination: destination,
             runStartup: true,
-            launchSurface: .none
+            launchSurface: .none,
+            destinationAlreadyPrepared: true
         )
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
         }
-        return .text(["creating \(branch) at \(destination.path)"])
+        return .text(["creating \(branch) at \(shownPath)"])
     }
 
     /// Starts a delegated worktree creation and waits for its reconciled row.
@@ -4711,11 +4751,15 @@ final class AppState {
     }
 
     /// Creates a worktree for delegated ACP work without changing the visible
-    /// project/worktree selection.
-    private func createDelegatedWorktree(
+    /// project/worktree selection. The prepared destination (remote home and
+    /// virtual path applied) is recorded through `recordDestination` before
+    /// anything is created, so startup recovery can find a checkout created
+    /// just before the app stopped.
+    func createDelegatedWorktree(
         projectId: String,
         branch: String,
-        base: String?
+        base: String?,
+        recordDestination: @MainActor (URL) async throws -> Void
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(.init(message: "The project is no longer available."))
@@ -4726,14 +4770,18 @@ final class AppState {
         case .invalid(let message):
             return .failure(.init(message: "invalid branch name: \(message)"))
         }
-        let destination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
-        if FileManager.default.fileExists(atPath: destination.path) {
-            return .failure(.init(message: "A worktree already exists at this path."))
+        let destination: URL
+        do {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            guard !prepared.exists else { return .failure(.init(message: "A worktree already exists at this path.")) }
+            destination = prepared.destination
+        } catch {
+            return .failure(.init(message: "Could not check the worktree destination: \(error.localizedDescription)"))
+        }
+        do {
+            try await recordDestination(destination)
+        } catch {
+            return .failure(.init(message: "Could not record the worktree destination."))
         }
         let selectedBase: String
         if let base {
@@ -4750,7 +4798,8 @@ final class AppState {
             base: selectedBase,
             branch: branch,
             destination: destination,
-            runStartup: true
+            runStartup: true,
+            destinationAlreadyPrepared: true
         )
         switch result {
         case .success(let worktree):
@@ -5200,11 +5249,14 @@ final class AppState {
         if isRemote,
            let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
             let remoteHome = try await Self.remoteHomeDirectory(host: host)
-            preparedDestination = URL(fileURLWithPath: Self.destinationPathReplacingLocalHome(
-                destination.path,
-                remoteHome: remoteHome
+            // The home swap works on the real remote path; the result goes back
+            // to the virtual form the rest of the app keys worktrees by.
+            preparedDestination = URL(fileURLWithPath: RemotePath.virtualizing(
+                Self.destinationPathReplacingLocalHome(destination.path, remoteHome: remoteHome),
+                like: repoPath.path
             ))
         } else {
+            guard !RemotePath.isReserved(destination.path) else { throw RemotePath.reservedForRemoteError(destination.path) }
             preparedDestination = destination
         }
         if isRemote {
@@ -5214,6 +5266,20 @@ final class AppState {
             .deletingLastPathComponent()
             .resolvingSymlinksInPath()
             .appendingPathComponent(preparedDestination.lastPathComponent)
+    }
+
+    /// The destination persisted for a `.new` delegation, in the form the
+    /// created worktree's path will have so startup recovery can find it:
+    /// virtual for remote projects, parent-symlink-resolved for local ones.
+    /// The remote home swap needs an ssh round trip and is not applied here.
+    nonisolated static func delegatedWorktreeDestination(rendered: URL, projectPath: String) -> URL {
+        guard !URL(fileURLWithPath: projectPath).isRemoteAlasPath else {
+            return URL(fileURLWithPath: RemotePath.virtualizing(rendered.path, like: projectPath))
+        }
+        return rendered
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(rendered.lastPathComponent)
     }
 
     nonisolated static func destinationPathReplacingLocalHome(
@@ -5392,16 +5458,9 @@ final class AppState {
         for candidateId in candidateIds {
             beforeIds.insert(candidateId)
         }
-        let remoteRootsToUnregister: [String]
-        if let project = projects.first(where: { $0.id == id }),
-           project.host != nil {
-            remoteRootsToUnregister = [project.path] + projectsManager.worktrees(projectId: id).map(\.path.path)
-        } else {
-            remoteRootsToUnregister = []
-        }
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
-        projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
+        projectsManager.removeProject(id: id)
         spacesManager.removeProjectEverywhere(id)
         runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
@@ -5409,9 +5468,6 @@ final class AppState {
         let afterIds = allWorktreeIds()
         let removedIds = beforeIds.subtracting(afterIds)
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
-        for root in remoteRootsToUnregister {
-            RemoteHostRegistry.shared.unregister(root: root)
-        }
         for worktreeId in removedIds {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
@@ -6961,23 +7017,26 @@ final class AppState {
                     guard let self,
                           let project = self.projects.first(where: { $0.id == projectId })
                     else { return nil }
-                    let destination = WorktreePathTemplateRenderer.render(
-                        template: self.config.worktrees.pathTemplate,
-                        worktreeRoot: self.config.worktrees.rootPath,
-                        repoName: project.name,
-                        branch: branch
+                    return Self.delegatedWorktreeDestination(
+                        rendered: WorktreePathTemplateRenderer.render(
+                            template: self.config.worktrees.pathTemplate,
+                            worktreeRoot: self.config.worktrees.rootPath,
+                            repoName: project.name,
+                            branch: branch
+                        ),
+                        projectPath: project.path
                     )
-                    guard !URL(fileURLWithPath: project.path).isRemoteAlasPath else { return destination }
-                    return destination
-                        .deletingLastPathComponent()
-                        .resolvingSymlinksInPath()
-                        .appendingPathComponent(destination.lastPathComponent)
                 },
-                createWorktree: { [weak self] projectId, branch, base in
+                createWorktree: { [weak self] projectId, branch, base, recordDestination in
                     guard let self else {
                         return .failure(.init(message: "Alas is not available."))
                     }
-                    return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
+                    return await self.createDelegatedWorktree(
+                        projectId: projectId,
+                        branch: branch,
+                        base: base,
+                        recordDestination: recordDestination
+                    )
                 },
                 rememberParent: { [weak self] childID, parentID in
                     self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
@@ -9543,7 +9602,7 @@ final class AppState {
               let memberID = workspaceNavigationState.focusedCheckoutMemberID,
               let member = checkout.members.first(where: { $0.id == memberID && $0.availability == .available })
         else { return nil }
-        let targetPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+        let targetPath = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
         guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
             $0.id == id && $0.path.standardizedFileURL.path == targetPath
         }) else { return nil }
@@ -9590,13 +9649,15 @@ final class AppState {
     }
 
     private func remotePhysicalPath(_ path: String, host: String) async -> String? {
+        // A legacy project host that cannot form a virtual path never matches.
+        guard RemotePath.isValidHost(host) else { return nil }
         let result = try? await workspaceRemoteTransport.run(
             host: host,
-            command: "cd \(SSHCommand.shellQuote(path)) 2>/dev/null && pwd -P"
+            command: "cd \(SSHCommand.shellQuote(RemotePath.realPath(path))) 2>/dev/null && pwd -P"
         )
         guard result?.exitCode == 0 else { return nil }
         let resolved = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return resolved.isEmpty ? nil : resolved
+        return resolved.isEmpty ? nil : RemotePath.virtual(host: host, realPath: resolved)
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
@@ -9920,6 +9981,64 @@ final class AppState {
         case systemOpen(URL)
         /// Not a local path we can resolve; let the default URL action run.
         case unhandled
+        /// A remote worktree's absolute link outside it: claimed, nothing opens.
+        case ignored
+    }
+
+    /// How a clicked absolute link from a session in `worktreeRoot` is routed
+    /// before any local lookup.
+    enum AbsoluteLinkRoute: Equatable {
+        /// Not a remote absolute link; the local routing decides.
+        case local
+        /// Inside the remote worktree: open in the editor, which reads the
+        /// file on its host. `line`/`column` are 1-based.
+        case remoteEditor(relativePath: String, line: Int?, column: Int?)
+        /// A remote absolute link outside the worktree. It is claimed and
+        /// opens nothing, so the system never opens a same-path local twin.
+        case ignored
+    }
+
+    /// A remote session's absolute paths (plain or `file:`, optionally
+    /// `:line[:column]`) name files on its host. They are never probed or
+    /// opened locally; containment is decided lexically on the virtual path.
+    nonisolated static func absoluteLinkRoute(_ raw: String, worktreeRoot: String) -> AbsoluteLinkRoute {
+        guard RemotePath.split(worktreeRoot) != nil else { return .local }
+        var path = raw
+        if let url = URL(string: raw), url.isFileURL { path = url.path }
+        guard path.hasPrefix("/") else { return .local }
+        // Without an existence probe, trailing sentence punctuation is
+        // dropped lexically instead of retried.
+        if path.hasSuffix("."), path.count > 1 { path.removeLast() }
+        var line: Int?
+        var column: Int?
+        if let parsed = parseLocalPathPosition(path) {
+            path = parsed.path
+            line = parsed.line
+            column = parsed.column
+        }
+        let target = URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktreeRoot)).standardizedFileURL.path
+        let root = URL(fileURLWithPath: worktreeRoot).standardizedFileURL.path
+        guard target.hasPrefix(root + "/") else { return .ignored }
+        return .remoteEditor(relativePath: String(target.dropFirst(root.count + 1)), line: line, column: column)
+    }
+
+    /// Opens or claims a remote absolute link; nil lets local routing run.
+    private func routeRemoteAbsoluteLink(_ raw: String, worktree: Worktree) -> TranscriptLinkRoute? {
+        switch Self.absoluteLinkRoute(raw, worktreeRoot: worktree.path.path) {
+        case .local:
+            return nil
+        case .ignored:
+            return .ignored
+        case let .remoteEditor(relativePath, line, column):
+            openFile(
+                relativePath: relativePath,
+                worktreeId: worktree.id,
+                revealLine: line.map { $0 - 1 },
+                revealCharacter: line.map { _ in (column ?? 1) - 1 }
+            )
+            NSApp.activate(ignoringOtherApps: true)
+            return .opened
+        }
     }
 
     /// Route a clicked markdown link from an ACP transcript. Paths inside
@@ -9942,6 +10061,7 @@ final class AppState {
             return .unhandled
         }
         guard !rawPath.isEmpty else { return .unhandled }
+        if let remote = routeRemoteAbsoluteLink(rawPath, worktree: worktree) { return remote }
 
         var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
@@ -9957,7 +10077,7 @@ final class AppState {
                 return .opened
             case .systemOpen(let fileURL):
                 return .systemOpen(fileURL)
-            case .unhandled:
+            case .unhandled, .ignored:
                 continue
             }
         }
@@ -10002,6 +10122,7 @@ final class AppState {
     func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
         guard let session = terminal.registry.session(for: sessionId),
               let worktree = worktree(withId: session.worktreeId) else { return false }
+        if routeRemoteAbsoluteLink(rawURL, worktree: worktree) != nil { return true }
 
         let path: String
         if let parsed = URL(string: rawURL), parsed.isFileURL {
@@ -10062,11 +10183,11 @@ final class AppState {
         baseDirectory: URL?
     ) -> LocalFileOpenTarget? {
         let target: LocalFileOpenTarget
-        let resolved = resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
+        let resolved = Self.resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
         if FileManager.default.fileExists(atPath: resolved.path) {
             target = LocalFileOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
         } else if let parsed = Self.parseLocalPathPosition(candidatePath) {
-            let resolvedParsed = resolveLocalFilePath(parsed.path, worktree: worktree, baseDirectory: baseDirectory)
+            let resolvedParsed = Self.resolveLocalFilePath(parsed.path, worktree: worktree, baseDirectory: baseDirectory)
             target = LocalFileOpenTarget(
                 url: resolvedParsed,
                 revealLine: parsed.line - 1,
@@ -10117,7 +10238,7 @@ final class AppState {
         return relativePath.isEmpty ? nil : relativePath
     }
 
-    private func resolveLocalFilePath(
+    nonisolated private static func resolveLocalFilePath(
         _ rawPath: String,
         worktree: Worktree,
         baseDirectory: URL?
@@ -10779,7 +10900,7 @@ final class AppState {
         return workspacesManager.ownershipCheckouts.compactMap { checkout in
             guard let member = checkout.members.first(where: { member in
                 guard member.projectID == worktree.projectId,
-                      URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path == path
+                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
                 else { return false }
                 if let memberLineage = member.gitLineageID,
                    let worktreeLineage = worktree.lineageID,
@@ -12111,7 +12232,7 @@ final class AppState {
             guard checkout.archivedAt == nil,
                   let member = checkout.members.first(where: {
                       $0.projectID == worktree.projectId &&
-                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
+                          URL(fileURLWithPath: checkout.inAppWorktreePath($0.worktreePath)).standardizedFileURL.path == worktreePath
                   })
             else { return nil }
             return (checkout, member)
@@ -12163,7 +12284,7 @@ final class AppState {
                   checkout.executionLocation.normalized == location.normalized
             else { return [] }
             return Set(checkout.members.compactMap { member in
-                checkpointMemberWorktree(for: member)?.lineageID
+                checkpointMemberWorktree(for: member, in: checkout)?.lineageID
             })
         }
     }
@@ -12181,7 +12302,7 @@ final class AppState {
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
         for member in checkout.members where member.availability == .available {
-            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            guard let worktree = checkpointMemberWorktree(for: member, in: checkout) else { continue }
             if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
         }
         return false
@@ -12189,17 +12310,18 @@ final class AppState {
 
     private func checkpointTerminalAdmissionDisabledAfterDiscovery(for checkout: WorkspaceCheckout) async -> Bool {
         for member in checkout.members where member.availability == .available {
-            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            guard let worktree = checkpointMemberWorktree(for: member, in: checkout) else { continue }
             if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) { return true }
         }
         return false
     }
 
-    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember) -> Worktree? {
+    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) -> Worktree? {
         let liveWorktrees = projectsManager.worktrees(projectId: member.projectID)
         let cachedWorktrees = projects.first(where: { $0.id == member.projectID })?.cachedWorktrees ?? []
         return (liveWorktrees + cachedWorktrees).first(where: {
-                Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                Self.canonicalWorktreePath($0.path.path)
+                    == Self.canonicalWorktreePath(checkout.inAppWorktreePath(member.worktreePath))
         })
     }
 
@@ -12442,6 +12564,16 @@ final class AppState {
             isolatedBrokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try LocalACPBrokerService(resourceURL: resourceURL)
+            },
+            delegatedSelectionHoldResolver: { [weak self] sessionId in
+                guard let self else { return nil }
+                do {
+                    return ACPSessionOrchestrationPolicy.selectionHoldDecision(
+                        target: try await self.acpOrchestrationPersistence.delegation(childSessionId: sessionId)
+                    )
+                } catch {
+                    return nil
+                }
             },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -12762,7 +12894,8 @@ final class AppState {
                     || target.hasPrefix(Self.canonicalWorktreePath(member.worktreePath) + "/")
                 else { continue }
                 guard let worktree = self.projectsManager.worktrees(projectId: member.projectID).first(where: {
-                    Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                    Self.canonicalWorktreePath($0.path.path)
+                        == Self.canonicalWorktreePath(current.inAppWorktreePath(member.worktreePath))
                 }) else { return nil }
                 return worktree.id
             }
@@ -13093,7 +13226,8 @@ final class AppState {
         let result = try await Process.git(["rev-parse", "--git-path", "info/exclude"], cwd: worktreeURL)
         let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("/") {
-            return URL(fileURLWithPath: raw)
+            // A remote git prints a host path; keep it off a same-path local twin.
+            return URL(fileURLWithPath: RemotePath.virtualizing(raw, like: worktreeURL.path))
         }
         return URL(fileURLWithPath: raw, relativeTo: worktreeURL).standardizedFileURL
     }
@@ -14669,24 +14803,11 @@ extension AppState: RemoteSessionsProvider {
             return .failure(stage: .worktree, message: "Could not load branches.", worktreeId: nil)
         }
 
-        let renderedDestination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
         let destination: URL
         do {
-            let repoPath = URL(fileURLWithPath: project.path)
-            destination = if let remoteWorktreeDestinationPreparer {
-                try await remoteWorktreeDestinationPreparer(repoPath, renderedDestination)
-            } else {
-                try await Self.preparedCreateWorktreeDestination(
-                    repoPath: repoPath,
-                    destination: renderedDestination
-                )
-            }
-            if try await remoteCreationDestinationExists(project: project, destination: destination) {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            destination = prepared.destination
+            if prepared.exists {
                 return .failure(
                     stage: .worktree,
                     message: "A worktree already exists at this path.",
@@ -14740,7 +14861,30 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    private func remoteCreationDestinationExists(
+    /// Renders the configured destination, prepares it for the project's own
+    /// host (remote home and virtual path), and checks whether it is taken
+    /// there. A same-path directory on this Mac says nothing about a remote
+    /// project, so existence is never checked before preparation.
+    private func preparedCreationDestination(
+        project: ProjectConfig,
+        branch: String
+    ) async throws -> (destination: URL, rendered: URL, exists: Bool) {
+        let rendered = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        let repoPath = URL(fileURLWithPath: project.path)
+        let destination = if let remoteWorktreeDestinationPreparer {
+            try await remoteWorktreeDestinationPreparer(repoPath, rendered)
+        } else {
+            try await Self.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
+        }
+        return (destination, rendered, try await creationDestinationExists(project: project, destination: destination))
+    }
+
+    private func creationDestinationExists(
         project: ProjectConfig,
         destination: URL
     ) async throws -> Bool {

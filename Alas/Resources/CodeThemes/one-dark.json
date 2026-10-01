@@ -1,0 +1,18 @@
+{
+  "id": "one-dark",
+  "name": "One Dark",
+  "colors": {
+    "bg": "#282c34",
+    "fg": "#abb2bf",
+    "gutter-fg": "#636d83",
+    "selection": "#3e4451",
+    "comment": "#5c6370",
+    "keyword": "#c678dd",
+    "string": "#98c379",
+    "number": "#d19a66",
+    "type": "#e5c07b",
+    "function": "#61afef",
+    "constant": "#d19a66",
+    "attribute": "#56b6c2"
+  }
+}

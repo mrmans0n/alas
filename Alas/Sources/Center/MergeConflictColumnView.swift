@@ -10,6 +10,12 @@ struct MergeConflictColumnView: NSViewRepresentable {
     let codeFontSize: CGFloat
     @Environment(\.theme) var theme
 
+    final class Coordinator {
+        var renderedTheme: Theme?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -29,7 +35,7 @@ struct MergeConflictColumnView: NSViewRepresentable {
         )
         textView.autoresizingMask = [.width]
         textView.drawsBackground = true
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         textView.textContainerInset = NSSize(width: 6, height: 6)
 
         scroll.documentView = textView
@@ -38,11 +44,15 @@ struct MergeConflictColumnView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        // Avoid a full re-layout when the bound text hasn't changed (e.g., on
-        // theme/config-only updates). The background color is cheap to set
-        // unconditionally.
-        let current = textView.string
-        if current != text {
+        // Avoid a full re-layout when neither the text nor the theme changed
+        // (e.g., scroll-only or unrelated config updates). The background
+        // color is cheap to set unconditionally.
+        if MergeConflictTextStorage.needsRebuild(
+            renderedText: textView.string,
+            text: text,
+            renderedTheme: context.coordinator.renderedTheme,
+            theme: theme
+        ) {
             let attr = MergeConflictTextStorage.highlightedAttributedString(
                 text: text,
                 fileExtension: fileExtension,
@@ -51,7 +61,8 @@ struct MergeConflictColumnView: NSViewRepresentable {
                 theme: theme
             )
             textView.textStorage?.setAttributedString(attr)
+            context.coordinator.renderedTheme = theme
         }
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
     }
 }

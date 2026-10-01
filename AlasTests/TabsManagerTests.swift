@@ -920,10 +920,8 @@ struct TabsManagerTests {
     }
 
     @Test func navigationTargetWithMatchingRemoteHostOpensWorktreeRelativeEditor() {
-        let root = URL(fileURLWithPath: "/srv/navigation-target-\(UUID().uuidString)")
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: "/srv/navigation-target"))
         let worktreeID = "navigation-remote-worktree"
-        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
         let manager = TabsManager(store: RestoreMemoryStore())
         let target = EditorNavigationTarget(
             document: EditorDocumentID(

@@ -36,7 +36,7 @@ struct MergeSidePane: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.drawsBackground = true
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.containerSize = NSSize(
@@ -64,8 +64,8 @@ struct MergeSidePane: NSViewRepresentable {
         // coordinator state. Skip the O(file size) attributed-string
         // rebuild when none of the inputs that affect rendering have
         // changed — only the bg color tracks the theme cheaply.
-        let bg = NSColor(theme.color("bg-1"))
-        let fg = NSColor(theme.color("fg"))
+        let bg = EditorTheme(theme: theme).bg
+        let fg = EditorTheme(theme: theme).defaultFG
         let key = Coordinator.CacheKey(
             rows: rows,
             hunkRanges: hunkRanges,
@@ -134,7 +134,7 @@ struct MergeSidePane: NSViewRepresentable {
         let hunkIndexSet = hunkRanges.isEmpty ? Set<Int>() : Set(hunkRanges.flatMap { $0 })
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: EditorTheme(theme: theme).defaultFG,
         ]
         for (i, row) in rows.enumerated() {
             if row.isPadding {

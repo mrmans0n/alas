@@ -117,6 +117,8 @@ Alas checks a selection twice:
    initial prompt is queued only after the agent acknowledges every change.
    Reasoning is checked after the model is set, because an agent can offer
    different levels per model (Claude offers no effort setting for `haiku`).
+   An agent that publishes the new model's levels only after acknowledging
+   the switch gets a few seconds to do so before the reasoning is rejected.
 
 If the live check or the agent rejects the selection, the child is marked
 `failed` with the reason, its prompt is never sent, and the parent receives
@@ -133,8 +135,12 @@ worktree, or interrupted by an app restart before its first prompt, applies
 it again before that prompt, or fails visibly if the agent no longer offers
 it. Messages sent to such a child with `session_send` while it starts are
 held until its first prompt is queued, so the task prompt always runs first
-and on the selected model. If the child fails instead, the held messages are
-discarded rather than delivered. After that the model is part of the
+and on the selected model. The same holds for the child's tab: a prompt typed
+there while the selection is being applied waits in the queue and runs after
+the task prompt, and a tab restored at launch cannot send anything before the
+selection is re-verified. If the child fails instead, the held messages are
+discarded rather than delivered, and a message sent after the failure is
+refused, even by another Alas instance sharing the same profile. After that the model is part of the
 child's session like any model picked in the composer: it is restored when the
 session is reopened, and the user can change it.
 
@@ -320,13 +326,20 @@ agent can tell a report from its user's prompt:
 ```
 
 The worktree clause is omitted when the worktree is unknown. In the parent's
-transcript the bubble is captioned **Report from \<agent\> child ·
-\<first 8 characters of the session id\>**. The prompts Alas sends a parent
-about its child (a failure, or a turn that ended without a report) already
-start with `[alas system] Delegated session …` and carry the same caption.
+transcript the report renders as a full-width card, not a user bubble, headed
+**Report from \<agent\> child · \<first 8 characters of the session id\>**.
+The prompts Alas sends a parent about its child (a failure, or a turn that
+ended without a report) already start with `[alas system] Delegated session …`
+and carry the same header.
 
-A parent's message to its child is delivered unchanged and captioned
-**Delegated prompt**, as is the child's initial task prompt.
+A parent's message to its child is delivered unchanged and rendered as the
+same kind of card headed **Delegated prompt**, as is the child's initial task
+prompt.
+
+A delegated prompt that arrives while the target is mid-turn waits for the
+turn to end, but it is not listed in the target's **Up next** queue and does
+not count toward its queue badge: it is not the user's to edit, reorder, or
+remove, and **Clear all** leaves it in place. If sending one fails, it appears in the queue with its error so you can retry or remove it.
 
 ## Across an app restart
 

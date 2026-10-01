@@ -104,6 +104,44 @@ struct ProjectsManagerTests {
         #expect(project.icon.imagePath == "project-1/icon.png")
     }
 
+    /// `RemotePath.virtual` traps on a malformed host, so user input must
+    /// fail as a normal error before it gets that far.
+    @Test(arguments: ["", "user@host/x", ".", ".."])
+    func addProjectRejectsInvalidRemoteHost(host: String) async {
+        let mgr = ProjectsManager(persistedProjects: [])
+        await #expect(throws: (any Error).self) {
+            try await mgr.addProject(
+                path: URL(fileURLWithPath: "/srv/repo"),
+                displayName: "repo",
+                icon: .default(color: "#fff"),
+                host: host
+            )
+        }
+        #expect(mgr.projects.isEmpty)
+    }
+
+    /// A local repository under the reserved prefix would be classified as
+    /// remote and run on a made-up ssh host, so it is refused before any git.
+    @Test(arguments: ["", RemotePath.root + "/x", RemotePath.root])
+    func addLocalProjectRefusesTheReservedRemotePrefix(reservedPrefix: String) async throws {
+        let repo = try await makeRepo(name: "reserved")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // The bare root stands in for a repository rooted at the namespace itself.
+        let path = reservedPrefix.isEmpty ? repo
+            : URL(fileURLWithPath: reservedPrefix == RemotePath.root ? reservedPrefix : reservedPrefix + repo.path)
+        let mgr = ProjectsManager(persistedProjects: [])
+        let underReservedPrefix = !reservedPrefix.isEmpty
+
+        do {
+            _ = try await mgr.addProject(path: path, displayName: "repo", color: "#fff")
+            #expect(!underReservedPrefix)
+        } catch let error as NSError {
+            #expect(underReservedPrefix)
+            #expect(error.domain == "ProjectsManager" && error.code == 3)
+        }
+        #expect(mgr.projects.count == (underReservedPrefix ? 0 : 1))
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -191,47 +229,6 @@ struct ProjectsManagerTests {
         #expect(manager.isMain(main, in: project))
         #expect(!manager.isMain(linked, in: project))
         #expect(worktrees.first?.id == main.id)
-    }
-
-    @Test func remoteRegistrationReconcileUnregistersRemovedWorktreeRoots() {
-        let project = ProjectConfig(
-            id: "remote-project",
-            name: "remote",
-            path: "/srv/remote",
-            color: "#5fb7c4",
-            addedAt: Date(),
-            host: "devbox"
-        )
-        let removed = Worktree(
-            id: "removed",
-            projectId: project.id,
-            name: "removed",
-            branch: "main",
-            path: URL(fileURLWithPath: "/srv/remote-removed"),
-            status: .clean,
-            lastActivity: Date()
-        )
-        let live = Worktree(
-            id: "live",
-            projectId: project.id,
-            name: "live",
-            branch: "main",
-            path: URL(fileURLWithPath: "/srv/remote-live"),
-            status: .clean,
-            lastActivity: Date()
-        )
-        defer {
-            RemoteHostRegistry.shared.unregister(root: project.path)
-            RemoteHostRegistry.shared.unregister(root: removed.path.path)
-            RemoteHostRegistry.shared.unregister(root: live.path.path)
-        }
-        let mgr = ProjectsManager(persistedProjects: [project])
-        RemoteHostRegistry.shared.register(root: removed.path.path, host: "devbox")
-
-        mgr.reconcileRemoteHostRegistrations(project: project, previous: [removed], reconciled: [live])
-
-        #expect(RemoteHostRegistry.shared.host(forPath: removed.path.path) == nil)
-        #expect(RemoteHostRegistry.shared.host(forPath: live.path.path) == "devbox")
     }
 
     @Test func removeProjectStripsItAndItsWorktrees() async throws {

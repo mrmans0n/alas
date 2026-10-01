@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 19
+    static let targetSchemaVersion = 20
     let path: String
     let db: SQLiteDatabase
 
@@ -46,6 +46,7 @@ final class ACPSessionStore {
         if current < 17 { try migrate_to_v17() }
         if current < 18 { try migrate_to_v18() }
         if current < 19 { try migrate_to_v19() }
+        if current < 20 { try migrate_to_v20() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -304,6 +305,17 @@ final class ACPSessionStore {
         // allowed), which is how those sessions were started.
         try db.exec("ALTER TABLE sessions ADD COLUMN native_subagents_disabled INTEGER")
     }
+
+    private func migrate_to_v20() throws {
+        // JSON-encoded [ACPPromptSuggestion], the slash commands and skills
+        // the agent advertised, so their pills and chips survive an app
+        // restart and reach mirror sessions before any attach happens.
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        let names = Set(columns.compactMap { $0["name"] as? String })
+        if !names.contains("prompt_suggestions") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN prompt_suggestions TEXT")
+        }
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -346,6 +358,10 @@ struct ACPSessionRow: Equatable, Sendable {
     /// reconnect or restore applies the policy the session started with.
     /// `nil` for sessions created before the policy existed (allowed).
     var nativeSubagentsDisabled: Bool? = nil
+    /// Slash commands and skills the agent advertised, persisted so their
+    /// pills and chips survive an app restart and reach mirror sessions
+    /// before any attach happens (see `migrate_to_v20`).
+    var promptSuggestions: [ACPPromptSuggestion]? = nil
     var autoRun: Bool
     var helperProcStdoutOffset: Int64? = nil
     var helperProcStderrOffset: Int64? = nil
@@ -578,12 +594,12 @@ extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
-                              mcp_preamble_pending, mcp_preamble_sent,
+                              mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
                               auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -592,6 +608,7 @@ extension ACPSessionStore {
             context_recovery_pending = sessions.context_recovery_pending,
             mcp_preamble_pending = sessions.mcp_preamble_pending,
             mcp_preamble_sent = sessions.mcp_preamble_sent,
+            prompt_suggestions = COALESCE(excluded.prompt_suggestions, sessions.prompt_suggestions),
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
             config_option_values = excluded.config_option_values,
@@ -614,8 +631,10 @@ extension ACPSessionStore {
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0,
             s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
+            s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
             s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues),
-            s.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, s.autoRun ? 1 : 0,
+            s.nativeSubagentsDisabled.map { $0 ? 1 : 0 },
+            s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
@@ -681,6 +700,18 @@ extension ACPSessionStore {
         let json = payload.map { String(decoding: $0, as: UTF8.self) }
         try db.exec(
             "UPDATE sessions SET auth_status = ? WHERE id = ?",
+            bindings: [json, sessionId]
+        )
+    }
+
+    /// Persists the latest `available_commands_update` list, so skill and
+    /// slash-command pills survive an app restart and reach mirror sessions
+    /// before any attach happens (see `migrate_to_v20`).
+    func setPromptSuggestions(sessionId: String, suggestions: [ACPPromptSuggestion]?) throws {
+        let payload = try suggestions.map { try JSONEncoder().encode($0) }
+        let json = payload.map { String(decoding: $0, as: UTF8.self) }
+        try db.exec(
+            "UPDATE sessions SET prompt_suggestions = ? WHERE id = ?",
             bindings: [json, sessionId]
         )
     }
@@ -1101,6 +1132,8 @@ extension ACPSessionStore {
             configOptionValues: (r["config_option_values"] as? Data)
                 .flatMap { try? JSONDecoder().decode([String: ACPConfigValue].self, from: $0) } ?? [:],
             nativeSubagentsDisabled: (r["native_subagents_disabled"] as? Int64).map { $0 != 0 },
+            promptSuggestions: (r["prompt_suggestions"] as? String)
+                .flatMap { try? JSONDecoder().decode([ACPPromptSuggestion].self, from: Data($0.utf8)) },
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
             helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,

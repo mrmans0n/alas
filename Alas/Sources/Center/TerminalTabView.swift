@@ -147,11 +147,15 @@ private struct PaneLeafView: View {
 
     private func wireCwdHandler(session: TerminalSession) {
         session.surface.cwdHandler = { [worktreeId, owner, tabId, leafId = leaf.id] url in
+            // OSC 7 from a remote shell is a real path; keep lastCwd in the
+            // worktree's virtual namespace.
+            let cwd = state.worktree(withId: worktreeId)
+                .map { RemotePath.virtualizing(url.path, like: $0.path.path) } ?? url.path
             if let owner {
-                _ = state.tabs.setLeafCwd(owner: owner, tabId: tabId, leafId: leafId, cwd: url.path)
+                _ = state.tabs.setLeafCwd(owner: owner, tabId: tabId, leafId: leafId, cwd: cwd)
             } else {
                 _ = state.tabs.setLeafCwd(
-                    worktreeId: worktreeId, tabId: tabId, leafId: leafId, cwd: url.path
+                    worktreeId: worktreeId, tabId: tabId, leafId: leafId, cwd: cwd
                 )
             }
         }

@@ -98,8 +98,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.authStatusCont = asC
     }
 
-    /// Test-only initialiser: accepts a pre-built transport directly,
-    /// skipping the real-subprocess setup.
+    /// Accepts a pre-built transport directly, skipping the local
+    /// subprocess setup (remote channels and tests).
     init(transport: JSONRPCStdioTransporting) {
         self.transport = transport
 

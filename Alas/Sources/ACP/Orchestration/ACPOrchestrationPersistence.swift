@@ -63,13 +63,15 @@ actor ACPOrchestrationPersistence {
         childSessionId: String,
         failureMessage: String,
         updatedAt: Int64,
-        outcome: ACPDelegatedMessage
+        outcome: ACPDelegatedMessage,
+        discardingHeldMessages: Bool = false
     ) throws -> Bool {
         try openedStore().claimFailedPhase(
             childSessionId: childSessionId,
             failureMessage: failureMessage,
             updatedAt: updatedAt,
-            outcome: outcome
+            outcome: outcome,
+            discardingHeldMessages: discardingHeldMessages
         )
     }
 
@@ -87,6 +89,14 @@ actor ACPOrchestrationPersistence {
         )
     }
 
+    func updateWorktreeRequest(
+        childSessionId: String,
+        request: ACPDelegatedWorktreeRequest,
+        updatedAt: Int64
+    ) throws {
+        try openedStore().updateWorktreeRequest(childSessionId: childSessionId, request: request, updatedAt: updatedAt)
+    }
+
     func clearPendingInitialPrompt(childSessionId: String, updatedAt: Int64) throws {
         try openedStore().clearPendingInitialPrompt(childSessionId: childSessionId, updatedAt: updatedAt)
     }
@@ -97,6 +107,10 @@ actor ACPOrchestrationPersistence {
 
     func enqueue(_ message: ACPDelegatedMessage) throws {
         try openedStore().enqueue(message)
+    }
+
+    func enqueueUnlessTargetEnded(_ message: ACPDelegatedMessage) throws -> Bool {
+        try openedStore().enqueueUnlessTargetEnded(message)
     }
 
     func pendingMessages(targetSessionId: String) throws -> [ACPDelegatedMessage] {

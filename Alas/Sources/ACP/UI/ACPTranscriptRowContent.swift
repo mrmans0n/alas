@@ -187,17 +187,24 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 checkpointID: Self.checkpointID(in: message),
                 onRestoreCheckpoint: onRestoreCheckpoint
             ) {
-                UserMessageRow(
-                    text: text,
-                    attachments: attachments,
-                    delegatedLabel: delegatedSource.map {
-                        delegatedLabel ?? ACPDelegatedPromptSource.transcriptLabel(for: $0, agentDisplayName: { $0 })
-                    },
-                    contentMaxWidth: contentMaxWidth,
-                    typography: typography,
-                    session: session,
-                    chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false)
-                )
+                if let delegatedSource {
+                    DelegatedPromptRow(
+                        text: text,
+                        label: delegatedLabel
+                            ?? ACPDelegatedPromptSource.transcriptLabel(for: delegatedSource, agentDisplayName: { $0 }),
+                        isFromChild: delegatedSource.isFromChild,
+                        typography: typography
+                    )
+                } else {
+                    UserMessageRow(
+                        text: text,
+                        attachments: attachments,
+                        contentMaxWidth: contentMaxWidth,
+                        typography: typography,
+                        session: session,
+                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false)
+                    )
+                }
             }
         case .agent(_, _, let buf):
             ACPMessageGutter(

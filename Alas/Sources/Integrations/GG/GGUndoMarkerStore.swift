@@ -29,7 +29,7 @@ extension GGUndoMarkerStoring {
 }
 
 final class GGUndoMarkerStore: GGUndoMarkerStoring, @unchecked Sendable {
-    private static let defaultsKey = "gg.undoMarkersByWorktree"
+    static let defaultsKey = "gg.undoMarkersByWorktree"
     private static let lock = NSLock()
 
     private let defaults: UserDefaults

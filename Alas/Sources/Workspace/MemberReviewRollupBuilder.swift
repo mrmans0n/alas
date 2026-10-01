@@ -115,19 +115,21 @@ struct MemberReviewRollupBuilder {
 
     func build(for checkout: WorkspaceCheckout) throws -> WorkspaceMemberReviewRollup {
         let members = try checkout.members.map { member in
-            let worktreeID = member.worktreePath
+            // Reviews, stacks, and tabs are keyed by the in-app (virtual for
+            // ssh) worktree path, not the member's real host path.
+            let worktreeID = checkout.inAppWorktreePath(member.worktreePath)
             let isAvailable = member.availability == .available
             let reviewRecords = isAvailable ? try reviews.list(
                 worktreeID: worktreeID,
                 projectID: member.projectID,
                 executionLocation: checkout.executionLocation,
-                repositoryPath: member.worktreePath
+                repositoryPath: worktreeID
             ) : []
             let stack = isAvailable ? try gg.stack(
                 worktreeID: worktreeID,
                 projectID: member.projectID,
                 executionLocation: checkout.executionLocation,
-                repositoryPath: member.worktreePath
+                repositoryPath: worktreeID
             ) : nil
             let unpublished = stack?.entries
                 .sorted { $0.position < $1.position }

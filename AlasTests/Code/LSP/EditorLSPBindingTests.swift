@@ -39,7 +39,7 @@ struct EditorLSPBindingTests {
                 environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [],
                 gatekeeperAssessor: { _ in .allowed }
             ) },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let transport = FakeTransport()
                 transport.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }
@@ -106,12 +106,9 @@ struct EditorLSPBindingTests {
     }
 
     @Test func remoteDocumentHasOneOpenChangeRequestCloseLifecycle() async throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("alas-remote-lsp-\(UUID().uuidString)")
-        let file = root.appendingPathComponent("main.swift")
         let host = "lsp-test-host"
-        RemoteHostRegistry.shared.register(root: root.path, host: host)
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: host, realPath: "/srv/alas-remote-lsp-\(UUID().uuidString)"))
+        let file = root.appendingPathComponent("main.swift")
 
         var transport: FakeTransport?
         let manager = WorkspaceLSPManager(
@@ -125,7 +122,7 @@ struct EditorLSPBindingTests {
             remoteLSPAvailable: { command, requestedHost, _ in
                 command == "/usr/bin/true" && requestedHost == host
             },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let fake = FakeTransport()
                 fake.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }
@@ -191,7 +188,7 @@ struct EditorLSPBindingTests {
                 environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [],
                 gatekeeperAssessor: { _ in .allowed }
             ) },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let transport = FakeTransport()
                 transport.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }

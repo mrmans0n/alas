@@ -40,6 +40,15 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// not be confirmed. The queue flusher must not resend it automatically.
     var deliveryUncertain: Bool
 
+    /// Whether the queue UI lists this item. A delegated prompt is hidden
+    /// while it waits its turn — it is not the user's to edit or reorder —
+    /// but surfaces once a send fails or its delivery is uncertain: the
+    /// flusher will not retry it until the user does, so a hidden failed
+    /// head would block the whole queue.
+    var isShownToUser: Bool {
+        delegatedSource == nil || lastError != nil || deliveryUncertain
+    }
+
     static let deliveryUncertaintyMessage =
         "Delivery is uncertain because the previous connection ended before confirming this prompt. Retry to send it again."
 

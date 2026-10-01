@@ -172,6 +172,7 @@ struct HydrationResult: Sendable {
                 currentModel: row.currentModel, currentMode: row.currentMode,
                 configOptionValues: row.configOptionValues,
                 nativeSubagentsDisabled: row.nativeSubagentsDisabled,
+                promptSuggestions: row.promptSuggestions,
                 autoRun: row.autoRun,
                 createdAt: row.createdAt, updatedAt: row.updatedAt,
                 lastOpenedAt: lastOpenedAt,

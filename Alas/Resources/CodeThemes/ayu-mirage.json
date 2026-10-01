@@ -1,0 +1,18 @@
+{
+  "id": "ayu-mirage",
+  "name": "Ayu Mirage",
+  "colors": {
+    "bg": "#1f2430",
+    "fg": "#cccac2",
+    "gutter-fg": "#707a8c",
+    "selection": "#33415e",
+    "comment": "#6c7a8b",
+    "keyword": "#ffad66",
+    "string": "#d5ff80",
+    "number": "#dfbfff",
+    "type": "#73d0ff",
+    "function": "#ffd173",
+    "constant": "#dfbfff",
+    "attribute": "#f29e74"
+  }
+}

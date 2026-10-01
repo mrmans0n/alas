@@ -288,7 +288,7 @@ struct FileTreeListView: View {
             onOpenInAlas: node.kind == .file ? { context.onSelectFile(node) } : nil,
             onFileHistory: node.kind == .file ? { context.onFileHistory(node) } : nil,
             onCopyRelativePath: { Clipboard.copy(node.path) },
-            onCopyFullPath: { Clipboard.copy(context.worktreePath.appendingPathComponent(node.path).path) },
+            onCopyFullPath: { Clipboard.copyPath(context.worktreePath.appendingPathComponent(node.path).path) },
             onToggleBookmark: { context.onToggleBookmark(node) }
         )
     }

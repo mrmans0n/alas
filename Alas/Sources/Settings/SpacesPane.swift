@@ -149,7 +149,7 @@ private struct ProjectSpaceMembershipRow: View {
     let project: ProjectConfig
 
     var body: some View {
-        SettingsRow(name: project.name, desc: project.path) {
+        SettingsRow(name: project.name, desc: RemotePath.display(project.path)) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), alignment: .leading)], alignment: .leading, spacing: 8) {
                 ForEach(state.spacesManager.spaces) { space in
                     let isMember = state.spacesManager.space(id: space.id)?.projectIds.contains(project.id) == true

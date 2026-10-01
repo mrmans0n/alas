@@ -93,7 +93,7 @@ struct EditorTabView: View {
                                 ? { appState.openFileHistory(relativePath: relativePath, worktreeId: worktreeId) }
                                 : nil,
                             onCopyRelativePath: externalAbsolutePath == nil ? { Clipboard.copy(relativePath) } : nil,
-                            onCopyFullPath: { Clipboard.copy(absoluteFilePath) },
+                            onCopyFullPath: { Clipboard.copyPath(absoluteFilePath) },
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteFileURL) },
                             onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteFileURL) }
                         ))
@@ -107,7 +107,7 @@ struct EditorTabView: View {
                         return .folder(BreadcrumbFolderMenu(
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: folderURL) },
                             onFocusInFiles: externalAbsolutePath == nil ? { onRevealInFiles(pathPrefix) } : nil,
-                            onCopyFullPath: { Clipboard.copy(folderURL.path) }
+                            onCopyFullPath: { Clipboard.copyPath(folderURL.path) }
                         ))
                     }
                 },

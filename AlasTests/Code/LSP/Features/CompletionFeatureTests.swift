@@ -54,7 +54,7 @@ struct CompletionFeatureTests {
         let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
         let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
             LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
-        ]), makeClient: { _, _, _, _, _ in client })
+        ]), makeClient: { _, _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: lsp, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: journal)
         let buffer = tabs.buffer(worktreeId: "w", tabId: "a", worktreeRoot: root, relativePath: "file.swift")
         await buffer.awaitLoadForTesting()
