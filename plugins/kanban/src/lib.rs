@@ -1,6 +1,7 @@
 //! Kanban: a board of task cards that start agents in new worktrees and follow them.
 
 pub mod board;
+pub mod store;
 pub mod tickets;
 pub mod view;
 
