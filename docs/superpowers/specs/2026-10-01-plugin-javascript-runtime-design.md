@@ -80,11 +80,13 @@ and `/tmp/jsc-spike`.
     The time limit bounds growth per call. A helper process is the upgrade if a
     plugin ever needs a real cap.
 - **Entry point.** `"entry": "plugin.js"`, one file, evaluated once at
-  activation. An ES module, a bundle produced by esbuild, or a plain script all
-  work, because the plugin only has to assign `globalThis.handle`.
+  activation as a classic script: a plain script or an esbuild bundle with
+  `--format=iife`. ES module syntax (`import`, `export`) does not parse there,
+  so it is not supported; bundling is what turns a multi-file plugin into one
+  script that assigns `globalThis.handle`.
 - **API version.** API 4 is the first JS API. A manifest with `api` 1–3 (the Wasm
-  plugins) is refused with "this plugin was built for the WebAssembly runtime,
-  which Alas no longer supports". No user has non-experimental plugins, so no
+  plugins) is refused with "built for plugin API N, the WebAssembly runtime,
+  which Alas no longer supports; rebuild it for API 4". No user has non-experimental plugins, so no
   migration path is needed.
 - **Trust hash.** The same SHA-256 over manifest and entry bytes. Only the name of
   the second input changes.

@@ -311,8 +311,9 @@ list issues, and adding the right-pane rail later means changing the same files.
 
 ## Compatibility
 
-- Every addition is a new capability, method, manifest field or slot, so API 1–3
-  plugins keep loading.
+- Every addition is a new capability, method, manifest field or slot, so API 4
+  plugins keep loading on an Alas that supports API 5 and later. (API 1–3 were
+  the WebAssembly runtime and are refused since the JavaScript switch.)
 - An Alas that doesn't know a slot ignores commands placed in it rather than
   refusing the plugin, because slots will keep growing. Unknown capabilities are
   still refused, as today.
@@ -329,4 +330,5 @@ Per the testing policy, tests pin decisions, not views:
   only for its hosts, in-flight and size limits. Use a fake transport.
 - Timers with an injected clock.
 - Context provider: size cap, skip on failure.
-- One `PluginHostTests` WAT fixture per new host call for the capability check.
+- One `PluginHostTests` case per new host call for the capability check, using
+  the JavaScript fixture (`PluginJSFixture`) that replaced the WAT one.
