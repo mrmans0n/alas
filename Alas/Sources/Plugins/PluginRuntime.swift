@@ -185,8 +185,17 @@ final class PluginRuntime: @unchecked Sendable {
 
     private func receive(_ value: JSValue) {
         guard hostFailure == nil else { return }
-        guard value.isString, let text = value.toString() else { return refuse(.badSend) }
+        guard value.isString else { return refuse(.badSend) }
         guard outbox.count < limits.maxSendsPerCall else { return refuse(.tooManySends(limits.maxSendsPerCall)) }
+        // UTF-8 never takes fewer bytes than UTF-16 code units, so a string that is too long by that count is
+        // refused before any of it is copied out of JavaScriptCore.
+        guard let jsString = JSValueToStringCopy(context.jsGlobalContextRef, value.jsValueRef, nil) else {
+            return refuse(.badSend)
+        }
+        let units = JSStringGetLength(jsString)
+        JSStringRelease(jsString)
+        guard units <= limits.maxMessageBytes else { return refuse(.messageTooLarge(units)) }
+        guard let text = value.toString() else { return refuse(.badSend) }
         let data = Data(text.utf8)
         guard data.count <= limits.maxMessageBytes else { return refuse(.messageTooLarge(data.count)) }
         outbox.append(data)

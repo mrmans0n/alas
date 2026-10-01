@@ -61,6 +61,8 @@ struct PluginRuntimeTests {
         ([.spin], "took longer than 100 ms"),
         ([.script("alas.send({});")], "expects one string"),
         ([.send(String(repeating: "x", count: 2000))], "exceeds"),
+        // Refused by its length alone, without copying 64 MB out of JavaScriptCore.
+        ([.script("alas.send('x'.repeat(64 << 20));")], "exceeds"),
         ([.sendRepeated("x", times: 5)], "more than 4"),
         // Turning the thrown value into text runs its toString, which must not escape the limit.
         ([.script("throw { toString() { for (;;) {} } };")], "took longer than 100 ms"),
