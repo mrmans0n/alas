@@ -240,6 +240,7 @@ extension NSAttributedString.Key {
 
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
+    var isShowingUpstreamReferenceCard: Bool { upstreamReferenceHover.isShowingCard }
     private var upstreamRevisionObservation: AnyCancellable?
     private var scrollObservers: [any NSObjectProtocol] = []
     private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"

@@ -171,19 +171,14 @@ struct ACPUpstreamReferenceTranscriptTests {
             with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
         ))
-        func popoverCount() -> Int {
-            NSApp.windows.filter { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }.count
-        }
-        let baseline = popoverCount()
-
         textView.mouseMoved(with: move)
-        await Self.poll(until: { popoverCount() > baseline }, timeout: 3)
-        #expect(popoverCount() > baseline)
+        await Self.poll(until: { textView.isShowingUpstreamReferenceCard }, timeout: 3)
+        #expect(textView.isShowingUpstreamReferenceCard)
 
         outer.contentView.setBoundsOrigin(NSPoint(x: 0, y: 40))
-        await Self.poll(until: { popoverCount() == baseline }, timeout: 3)
+        await Self.poll(until: { !textView.isShowingUpstreamReferenceCard }, timeout: 3)
 
-        #expect(popoverCount() == baseline)
+        #expect(!textView.isShowingUpstreamReferenceCard)
     }
 
     /// Polls with a deadline while yielding the main queue, which a hover
