@@ -125,3 +125,52 @@ struct NightlyReleaseInfo: Equatable {
     let htmlURL: URL
     let dmgURL: URL?
 }
+
+/// Selects released sections from the target tag's Keep a Changelog document.
+enum ReleaseNotesHistory {
+    private struct Section {
+        let version: SemanticVersion
+        let heading: String
+        var lines: [String] = []
+
+        var body: String { lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    static func appendingSkippedVersions(
+        to latestNotes: String, changelog: String,
+        installed: SemanticVersion, latest: SemanticVersion
+    ) -> String {
+        var sections: [Section] = []
+        var current: Section?
+        let normalized = changelog.replacingOccurrences(of: "\r\n", with: "\n")
+        for line in normalized.components(separatedBy: "\n") {
+            if line.hasPrefix("## ") {
+                if let current { sections.append(current) }
+                current = nil
+                guard line.hasPrefix("## ["), let closingBracket = line.firstIndex(of: "]") else { continue }
+                let rawVersion = String(line[line.index(line.startIndex, offsetBy: 4)..<closingBracket])
+                // SemanticVersion accepts suffixes and shortened versions;
+                // changelog history includes only full stable version headings.
+                guard let version = SemanticVersion(parsing: rawVersion),
+                      rawVersion == version.description else { continue }
+                current = Section(version: version, heading: line)
+            } else {
+                current?.lines.append(line)
+            }
+        }
+        if let current { sections.append(current) }
+
+        guard let latestSection = sections.first(where: { $0.version == latest }) else { return latestNotes }
+        var history: [Section] = []
+        for section in sections where section.version > installed && section.version < latest {
+            guard !section.body.isEmpty,
+                  !history.contains(where: { $0.version == section.version }) else { continue }
+            history.append(section)
+        }
+        guard !history.isEmpty else { return latestNotes }
+        history.sort { $0.version > $1.version }
+        return (["\(latestSection.heading)\n\n\(latestNotes)"] + history.map {
+            "\($0.heading)\n\n\($0.body)"
+        }).joined(separator: "\n\n")
+    }
+}
