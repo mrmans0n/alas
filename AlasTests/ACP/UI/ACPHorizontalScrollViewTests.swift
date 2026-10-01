@@ -154,7 +154,62 @@ struct ACPHorizontalScrollViewTests {
 
         for event in events { scrollView.scrollWheel(with: event) }
 
-        #expect(next.receivedEvents == [events[0]])
+        #expect(next.receivedEvents.isEmpty)
+    }
+
+    @Test("a vertical gesture's zero-delta start reaches the transcript first, in order")
+    func verticalGestureDeliversBufferedStartInOrder() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let began = try phasedEvent(phase: .began)
+        let changed = try phasedEvent(deltaY: 20, phase: .changed)
+        let more = try phasedEvent(deltaY: 10, phase: .changed)
+
+        scrollView.scrollWheel(with: began)
+        #expect(next.receivedEvents.isEmpty)
+        scrollView.scrollWheel(with: changed)
+        scrollView.scrollWheel(with: more)
+
+        #expect(next.receivedEvents == [began, changed, more])
+    }
+
+    @Test("a gesture cancelled before moving reaches the transcript at the cancel")
+    func cancelledUndecidedGestureFlushes() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let mayBegin = try phasedEvent(phase: .mayBegin)
+        let cancelled = try phasedEvent(phase: .cancelled)
+
+        scrollView.scrollWheel(with: mayBegin)
+        #expect(next.receivedEvents.isEmpty)
+        scrollView.scrollWheel(with: cancelled)
+
+        #expect(next.receivedEvents == [mayBegin, cancelled])
+    }
+
+    @Test("a gesture that ends without moving reaches the transcript, and a buffered start never leaks into the next gesture")
+    func endedUndecidedGestureFlushesAndDoesNotLeak() throws {
+        let scrollView = scrollView(contentWidth: 900)
+        let next = RecordingResponder()
+        scrollView.nextResponder = next
+        let began = try phasedEvent(phase: .began)
+        let ended = try phasedEvent(phase: .ended)
+        scrollView.scrollWheel(with: began)
+        scrollView.scrollWheel(with: ended)
+        #expect(next.receivedEvents == [began, ended])
+        next.clear()
+
+        // A start left buffered by an abandoned gesture is dropped by the next start.
+        let abandoned = try phasedEvent(phase: .began)
+        let nextBegan = try phasedEvent(phase: .began)
+        let vertical = try phasedEvent(deltaY: 9, phase: .changed)
+        scrollView.scrollWheel(with: abandoned)
+        scrollView.scrollWheel(with: nextBegan)
+        scrollView.scrollWheel(with: vertical)
+
+        #expect(next.receivedEvents == [nextBegan, vertical])
     }
 
     @Test("a stray phased event after momentum ends is routed fresh")

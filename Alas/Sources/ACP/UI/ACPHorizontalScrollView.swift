@@ -105,6 +105,9 @@ final class ACPHorizontalNSScrollView: NSScrollView {
     }
 
     private var gestureOwner = GestureOwner.undecided
+    /// Zero-delta phased events held while the owner is undecided.
+    private var pendingEvents: [NSEvent] = []
+    private static let pendingEventLimit = 8
 
     /// Keeps horizontal gestures and passes the rest up the responder chain to
     /// the transcript, which scrolls it with AppKit responsive scrolling.
@@ -126,17 +129,52 @@ final class ACPHorizontalNSScrollView: NSScrollView {
 
         if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
             gestureOwner = .undecided
-        }
-        if gestureOwner == .undecided, dx != 0 || dy != 0 {
-            gestureOwner = Self.isHorizontalDominant(deltaX: dx, deltaY: dy) ? .table : .transcript
-        }
-
-        if gestureOwner == .table {
-            super.scrollWheel(with: event)
-        } else {
-            nextResponder?.scrollWheel(with: event)
+            // `.began` legitimately follows its own `.mayBegin`; anything else
+            // buffered belongs to an abandoned gesture.
+            let continuesMayBegin = event.phase.contains(.began)
+                && pendingEvents.last?.phase.contains(.mayBegin) == true
+            if !continuesMayBegin { pendingEvents.removeAll() }
         }
 
+        if gestureOwner == .undecided {
+            if dx != 0 || dy != 0, !event.phase.isEmpty {
+                gestureOwner = Self.isHorizontalDominant(deltaX: dx, deltaY: dy) ? .table : .transcript
+                deliver(pendingEvents)
+                pendingEvents.removeAll()
+            } else if event.phase.contains(.ended) || event.phase.contains(.cancelled)
+                || !event.momentumPhase.isEmpty
+            {
+                // The gesture finished without ever moving: hand the whole
+                // sequence to the transcript so its begin/end stay paired.
+                let flushed = pendingEvents + [event]
+                pendingEvents.removeAll()
+                for pending in flushed { nextResponder?.scrollWheel(with: pending) }
+                resetOwnerIfGestureOver(event)
+                return
+            } else {
+                // Zero-delta start of a phased gesture: its owner is not known
+                // yet, so hold it back instead of splitting the sequence.
+                pendingEvents.append(event)
+                if pendingEvents.count > Self.pendingEventLimit { pendingEvents.removeFirst() }
+                return
+            }
+        }
+
+        deliver([event])
+        resetOwnerIfGestureOver(event)
+    }
+
+    private func deliver(_ events: [NSEvent]) {
+        for event in events {
+            if gestureOwner == .table {
+                super.scrollWheel(with: event)
+            } else {
+                nextResponder?.scrollWheel(with: event)
+            }
+        }
+    }
+
+    private func resetOwnerIfGestureOver(_ event: NSEvent) {
         if event.phase.contains(.cancelled)
             || event.momentumPhase.contains(.ended)
             || event.momentumPhase.contains(.cancelled)
