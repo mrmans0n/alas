@@ -84,10 +84,27 @@ enum ScheduledWorktreeDestination {
     }
 }
 
-/// A branch and worktree path handed out by `AppState.reserveWorktreeDestination` whose
-/// worktree is not created yet.
-struct WorktreeDestinationClaim: Hashable {
-    let projectID: String
-    let branch: String
-    let path: String
+/// Lets one caller at a time through, in arrival order.
+@MainActor
+final class SerialGate {
+    private var busy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    /// Waits for every earlier caller to `leave`. A cancelled caller still waits its turn, so the
+    /// gate is never left held: the caller owes exactly one `leave`.
+    func enter() async {
+        guard busy else {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func leave() {
+        if waiting.isEmpty {
+            busy = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
 }

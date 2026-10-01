@@ -725,31 +725,45 @@ struct AppStateRunScheduleTests {
         #expect(asked.values.allSatisfy { $0.host == project.host })
     }
 
-    /// Two starts for the same name (two plugins, or a plugin and a schedule) both
-    /// probe the host before either worktree exists. Without a claim both pick
-    /// the same branch and path, and the second `git worktree add` fails.
-    @Test func overlappingReservationsForTheSameNameGetDifferentDestinations() async throws {
+    /// Two starts for the same name (two plugins, or a plugin and a schedule) must
+    /// not both pick it. Here the second start's probe answers "free" only after
+    /// the first worktree exists: a probe sent before that creation is stale, so
+    /// the second start may only probe once the first has finished.
+    @Test func overlappingStartsForTheSameNameCreateDifferentWorktrees() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
         let (state, project, _) = try await makeComposedState(repo: repo, installedAgentIDs: ["term-agent"])
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
-        // Both reservations are mid-probe before either answer comes back.
-        let gate = ArrivalGate(expected: 2)
+        let probes = ProbeCounter()
+        let firstDone = Gate()
         state.scheduledDestinationExistence = { _, _ in
-            await gate.arrive()
+            if await probes.next() == 1 {
+                // Without serialisation the other start probes now as well; give it a second to.
+                let deadline = ContinuousClock.now + .seconds(1)
+                while await probes.count < 2, ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            } else {
+                await firstDone.wait()
+            }
             return .free
         }
 
-        async let first = state.reserveWorktreeDestination(rendered: "nightly", project: project)
-        async let second = state.reserveWorktreeDestination(rendered: "nightly", project: project)
-        let picked = try await [first.get(), second.get()]
-
-        #expect(Set(picked.map(\.branch)) == ["nightly", "nightly-2"])
-        #expect(Set(picked.map(\.destination.path)).count == 2)
-        for pick in picked {
-            state.releaseWorktreeDestination(projectID: project.id, branch: pick.branch, destination: pick.destination)
+        let results = await withTaskGroup(of: Result<Worktree, WorktreeCreationFailure>.self) { group in
+            for _ in 0..<2 {
+                group.addTask { await state.createWorktreeAtFreeDestination(rendered: "nightly", project: project) }
+            }
+            var results: [Result<Worktree, WorktreeCreationFailure>] = []
+            for await result in group {
+                results.append(result)
+                await firstDone.open()
+            }
+            return results
         }
-        #expect(state.worktreeDestinationClaims.isEmpty)
+
+        let created = try results.map { try $0.get() }
+        #expect(Set(created.map(\.branch)) == ["nightly", "nightly-2"])
+        #expect(Set(created.map(\.path)).count == 2)
     }
 
     /// A host that cannot be reached answers neither "free" nor "taken".
@@ -1311,23 +1325,12 @@ private actor Gate {
     }
 }
 
-/// Holds each caller until `expected` callers have arrived; later callers pass straight through.
-private actor ArrivalGate {
-    private let expected: Int
-    private var arrived = 0
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+/// Numbers the calls of a stubbed probe.
+private actor ProbeCounter {
+    private(set) var count = 0
 
-    init(expected: Int) {
-        self.expected = expected
-    }
-
-    func arrive() async {
-        arrived += 1
-        guard arrived < expected else {
-            waiting.forEach { $0.resume() }
-            waiting = []
-            return
-        }
-        await withCheckedContinuation { waiting.append($0) }
+    func next() -> Int {
+        count += 1
+        return count
     }
 }

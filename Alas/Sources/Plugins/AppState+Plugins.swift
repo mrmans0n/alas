@@ -105,18 +105,9 @@ extension AppState {
     ) async -> String? {
         let cancelled = "The task was cancelled before its agent started."
         let worktree: Worktree
-        switch await reserveWorktreeDestination(rendered: branch, project: project) {
-        case .failure(let failure):
-            return failure.message
-        case let .success((branch, destination, base)):
-            defer { releaseWorktreeDestination(projectID: project.id, branch: branch, destination: destination) }
-            guard !Task.isCancelled else { return cancelled }
-            switch await createWorktreeAndWait(
-                projectId: project.id, base: base, branch: branch, destination: destination, runStartup: true
-            ) {
-            case .failure(let failure): return failure.message
-            case .success(let created): worktree = created
-            }
+        switch await createWorktreeAtFreeDestination(rendered: branch, project: project) {
+        case .failure(let failure): return Task.isCancelled ? cancelled : failure.message
+        case .success(let created): worktree = created
         }
         let surface = WorktreeLaunchSurface.acp(agentId: agentId, preparedPrompt: prepared)
         do {

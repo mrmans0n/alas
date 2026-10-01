@@ -309,9 +309,24 @@ extension AppState {
         // and every later one would collide with what it left behind: the
         // destination it still occupies, or the branch it kept after the
         // worktree went away.
+        return await createWorktreeAtFreeDestination(rendered: rendered, project: project)
+    }
+
+    /// Creates a worktree at the first free branch and path for `rendered`, suffixed when the
+    /// name is taken. Creations in one project run one at a time from picking the name until the
+    /// worktree exists: two overlapping starts (two plugins, or a plugin and a schedule) would
+    /// otherwise both probe before either worktree existed and pick the same name.
+    func createWorktreeAtFreeDestination(
+        rendered: String,
+        project: ProjectConfig
+    ) async -> Result<Worktree, WorktreeCreationFailure> {
+        let gate = worktreeCreationGates[project.id] ?? SerialGate()
+        worktreeCreationGates[project.id] = gate
+        await gate.enter()
+        defer { gate.leave() }
         switch await reserveWorktreeDestination(rendered: rendered, project: project) {
         case let .success((branch, destination, base)):
-            defer { releaseWorktreeDestination(projectID: project.id, branch: branch, destination: destination) }
+            guard !Task.isCancelled else { return .failure(.init(message: "Cancelled before the worktree was created.")) }
             return await createWorktreeAndWait(
                 projectId: project.id,
                 base: base,
@@ -326,9 +341,8 @@ extension AppState {
 
     /// The first free branch and worktree path for `rendered` (suffixed when
     /// the name is taken), plus the base branch a new worktree is cut from.
-    /// The pair stays claimed until `releaseWorktreeDestination`, which the
-    /// caller owes once the worktree is created or has failed.
-    func reserveWorktreeDestination(
+    /// Callers go through `createWorktreeAtFreeDestination`, which serialises them.
+    private func reserveWorktreeDestination(
         rendered: String,
         project: ProjectConfig
     ) async -> Result<(branch: String, destination: URL, base: String), WorktreeCreationFailure> {
@@ -341,7 +355,16 @@ extension AppState {
         let host = project.host
         let branch: String
         let destination: URL
-        switch await claimFreeDestination(rendered: rendered, project: project, existingBranches: existingBranches) {
+        let probe = scheduledDestinationExistence
+        let free = await ScheduledWorktreeDestination.firstFree(
+            rendered: rendered,
+            pathTemplate: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            existingBranches: existingBranches,
+            pathState: { await probe($0, host) }
+        )
+        switch free {
         case let .free(freeBranch, freeDestination):
             branch = freeBranch
             destination = freeDestination
@@ -360,45 +383,6 @@ extension AppState {
             configuredDefault: config.worktrees.baseBranch
         )
         return .success((branch, destination, base))
-    }
-
-    /// `firstFree` with the destinations other reservations hold counted as taken, claiming the
-    /// result. `firstFree` awaits the host per candidate, so another reservation may claim the
-    /// same pair meanwhile: the claims are checked and recorded with no await in between, and a
-    /// clash reruns the search.
-    private func claimFreeDestination(
-        rendered: String,
-        project: ProjectConfig,
-        existingBranches: Set<String>
-    ) async -> ScheduledWorktreeDestination.Outcome {
-        let probe = scheduledDestinationExistence
-        let host = project.host
-        while true {
-            let claims = worktreeDestinationClaims
-            let claimedPaths = Set(claims.map(\.path))
-            let outcome = await ScheduledWorktreeDestination.firstFree(
-                rendered: rendered,
-                pathTemplate: config.worktrees.pathTemplate,
-                worktreeRoot: config.worktrees.rootPath,
-                repoName: project.name,
-                existingBranches: existingBranches.union(claims.filter { $0.projectID == project.id }.map(\.branch)),
-                pathState: { claimedPaths.contains($0.path) ? .occupied : await probe($0, host) }
-            )
-            guard case let .free(branch, destination) = outcome else { return outcome }
-            let clashes = worktreeDestinationClaims.contains {
-                ($0.projectID == project.id && $0.branch == branch) || $0.path == destination.path
-            }
-            if !clashes {
-                worktreeDestinationClaims.insert(
-                    WorktreeDestinationClaim(projectID: project.id, branch: branch, path: destination.path))
-                return outcome
-            }
-        }
-    }
-
-    func releaseWorktreeDestination(projectID: String, branch: String, destination: URL) {
-        worktreeDestinationClaims.remove(
-            WorktreeDestinationClaim(projectID: projectID, branch: branch, path: destination.path))
     }
 
     private func runScheduledScript(

@@ -320,9 +320,9 @@ final class AppState {
     @ObservationIgnored var scheduledDestinationExistence: @Sendable (URL, String?) async -> ScheduledWorktreeDestination.PathState = {
         await ScheduledWorktreeDestination.existence(of: $0, onHost: $1)
     }
-    /// Branches and paths handed out by `reserveWorktreeDestination` whose worktree is still
-    /// being created, so two overlapping reservations never pick the same one.
-    @ObservationIgnored var worktreeDestinationClaims: Set<WorktreeDestinationClaim> = []
+    /// One per project: `createWorktreeAtFreeDestination` holds it from picking a free name until
+    /// the worktree exists, so the next pick sees it.
+    @ObservationIgnored var worktreeCreationGates: [String: SerialGate] = [:]
     /// Waits until the agent launched in a terminal session is the one
     /// reading its input, so a scheduled prompt lands in the agent and not in
     /// the shell that is still starting it. Returns false on timeout. Nil
