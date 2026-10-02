@@ -248,6 +248,10 @@ final class PluginManager {
             throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
         }
         let target = directory.appending(path: id)
+        // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded.
+        if Self.discover(in: directory).plugins.contains(where: { $0.id == id && !$0.isCatalogFolder }) {
+            throw PluginCatalogError.installedLocally
+        }
         await stopHosts { $0.pluginID == id }
         // Checked after the last suspension, right before replacing: something at `Plugins/<id>` is replaced only
         // if it is the catalog's own install, a real folder holding a published version. A symlink, a local build

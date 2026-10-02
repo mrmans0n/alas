@@ -166,4 +166,19 @@ struct PluginCatalogTests {
         #expect(await f.install() == PluginCatalogError.installedLocally.description)
         #expect(try Data(contentsOf: mine.appending(path: "plugin.json")) == Data("{ not json".utf8))
     }
+
+    /// A hand-built copy in another folder wins, so the catalog does not install a shadowed duplicate.
+    @MainActor
+    @Test func installStepsAsideForALocalCopyElsewhere() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        let local = f.root.appending(path: "my-build")
+        try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+        try Data(#"{"id":"io.x.p","name":"P","version":"9","api":4,"entry":"plugin.js"}"#.utf8).write(to: local.appending(path: "plugin.json"))
+        try f.script.write(to: local.appending(path: "plugin.js"))
+        await f.manager.reload()
+
+        #expect(await f.install() == PluginCatalogError.installedLocally.description)
+        #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: "io.x.p").path))
+    }
 }
