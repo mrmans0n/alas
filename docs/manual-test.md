@@ -685,3 +685,10 @@ xcodebuild -project Alas.xcodeproj -scheme Alas \
   -resultBundlePath /private/tmp/alas-ai-final-integration-20261002.xcresult test
 ```
 
+After rebasing onto `origin/main`, the same focused command additionally selected
+`AlasTests/WorktreeRowStatusTests` and `AlasTests/LocalTextInferenceEngineTests`,
+with result bundle `/private/tmp/alas-ai-rebased-integration-20261002.xcresult`.
+All 13 suites passed: 174 definitions, 266 expanded runs, zero failures or skips.
+The rebase preserved the new mainline worktree-explanation helper; its existing
+fallback predicate now uses the shared permission/readiness boundary.
+
