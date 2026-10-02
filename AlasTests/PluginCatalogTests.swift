@@ -62,7 +62,7 @@ struct PluginCatalogTests {
         let manager: PluginManager
         let script = Data("globalThis.handle = () => {};".utf8)
 
-        init() throws {
+        init(projects: [ProjectConfig] = []) throws {
             let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
             let base = "https://example.com/0.3.0/"
             let files = [
@@ -72,7 +72,7 @@ struct PluginCatalogTests {
             release = PluginCatalogTests.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
             manager = PluginManager(
                 directory: root, approvals: PluginApprovalStore(defaults: try #require(UserDefaults(suiteName: suite))),
-                projects: { [] }, actions: { _ in .inert }, catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
+                projects: { projects }, actions: { _ in .inert }, catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
         }
 
         func install(_ version: PluginCatalogIndex.Version? = nil) async -> String? {
@@ -103,6 +103,25 @@ struct PluginCatalogTests {
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == f.release.hash)
         #expect(!f.manager.isApproved(plugin))
         #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: ".staging/io.x.p").path))
+    }
+
+    /// Installing one plugin leaves every other running plugin, and its state, alone.
+    @MainActor
+    @Test func installKeepsOtherPluginsRunning() async throws {
+        let project = ProjectConfig(id: "proj", name: "Project", path: "/tmp/proj", color: "blue", addedAt: Date())
+        let f = try Fixture(projects: [project])
+        defer { f.cleanUp() }
+        let other = f.root.appending(path: "other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data(#"{"id":"io.x.other","name":"O","version":"1","api":4,"entry":"plugin.js"}"#.utf8).write(to: other.appending(path: "plugin.json"))
+        try PluginJSFixture.source([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]]).write(to: other.appending(path: "plugin.js"))
+        await f.manager.reload()
+        await f.manager.approve(try #require(f.manager.plugin(id: "io.x.other")))
+        let running = try #require(f.manager.host(pluginID: "io.x.other", projectID: "proj"))
+
+        #expect(await f.install() == nil)
+        #expect(f.manager.host(pluginID: "io.x.other", projectID: "proj") === running)
+        await f.manager.shutdown()
     }
 
     /// A symlinked staging folder must not lead install to clean up inside its target.

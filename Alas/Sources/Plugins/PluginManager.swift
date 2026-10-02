@@ -156,7 +156,7 @@ final class PluginManager {
             }
             do {
                 try await self.performInstall(entry, version, download)
-                await self.performReload()
+                await self.performRescan()
             } catch {
                 // Nothing was stopped or replaced, so the installed version keeps running untouched.
                 failure = describe(error)
@@ -182,7 +182,7 @@ final class PluginManager {
             } else {
                 failure = PluginCatalogError.installedLocally.description
             }
-            await self.performReload()
+            await self.performRescan()
         }
         return failure
     }
@@ -254,7 +254,7 @@ final class PluginManager {
         // or a broken folder stays, and the reload restarts what was stopped.
         if FileManager.default.fileExists(atPath: target.path) || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
             guard let current = catalogInstall(id: id), entry.versions.contains(where: { $0.hash == current.hash }) else {
-                await performReload()
+                await performRescan()
                 throw PluginCatalogError.installedLocally
             }
         }
@@ -265,7 +265,7 @@ final class PluginManager {
                 try fileManager.moveItem(at: staging, to: target)
             }
         } catch {
-            await performReload()  // restarts the version still in place
+            await performRescan()  // restarts the version still in place
             throw error
         }
     }
@@ -295,6 +295,18 @@ final class PluginManager {
             hostsByKey[key] = nil
             lastSnapshots[key] = nil
         }
+    }
+
+    /// Rescans the folder after the catalog changed it. Unlike a reload, plugins whose files did not change keep
+    /// running with their state; only hosts of changed or removed plugins stop, and approved plugins without
+    /// hosts start.
+    private func performRescan() async {
+        guard !isShutDown else { return }
+        let before = Dictionary(plugins.map { ($0.id, $0.hash) }, uniquingKeysWith: { first, _ in first })
+        (plugins, invalid) = Self.discover(in: directory)
+        let after = Dictionary(plugins.map { ($0.id, $0.hash) }, uniquingKeysWith: { first, _ in first })
+        await stopHosts { before[$0.pluginID] != after[$0.pluginID] }
+        for plugin in plugins where isApproved(plugin) { await start(plugin) }
     }
 
     private func performReload() async {
