@@ -83,8 +83,13 @@ final class PluginHost {
         "storage/get": nil,
         "storage/set": nil,
         "storage/keys": nil,
+        "settings/get": nil,
+        "http/fetch": .network,
+        "timer/set": .timers,
+        "timer/cancel": .timers,
     ]
     static let maxPromptBytes = 32 * 1024
+    static let maxSecretSubstitutions = 8
     private static let traceLimit = 100
     private static let logLimit = 200
     static let logMessageLimit = 2000
@@ -95,6 +100,11 @@ final class PluginHost {
     static let notifyTitleLimit = 80
     static let notifyBodyLimit = 500
     static let notifyInterval: Duration = .seconds(2)
+    static let maxFetchesInFlight = 4
+    static let maxTimers = 8
+    static let timerIDByteLimit = 64
+    static let timerSeconds: ClosedRange<Double> = 60...86_400
+    private static let httpMethods: Set<String> = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
 
     let manifest: PluginManifest
     let project: PluginProjectRef
@@ -115,6 +125,12 @@ final class PluginHost {
     @ObservationIgnored private var pendingTaskSession: String?
     @ObservationIgnored private var lastNotify: ContinuousClock.Instant?
     @ObservationIgnored private var warnedNotifyNotGranted = false
+    /// Bumped whenever an instance starts or ends, so a fetch reply or timer from an earlier one is dropped.
+    @ObservationIgnored private var instance = 0
+    /// Running fetches by token, so ending the instance can cancel them rather than let them finish unheard.
+    @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
+    @ObservationIgnored private var nextFetchToken = 0
+    @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
@@ -122,6 +138,9 @@ final class PluginHost {
     @ObservationIgnored private let limits: PluginLimits
     @ObservationIgnored private var runtime: PluginRuntime?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
+    @ObservationIgnored private let settings: PluginSettings
+    @ObservationIgnored private let transport: any PluginHTTPTransport
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
 
     init(
         manifest: PluginManifest,
@@ -130,8 +149,11 @@ final class PluginHost {
         grants: Set<PluginCapability>,
         actions: PluginHostActions,
         storage: PluginStorage,
+        settings: PluginSettings,
+        transport: any PluginHTTPTransport = PluginURLSessionTransport(),
         limits: PluginLimits = PluginLimits(),
-        now: @escaping () -> ContinuousClock.Instant = { .now }
+        now: @escaping () -> ContinuousClock.Instant = { .now },
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.manifest = manifest
         self.source = source
@@ -141,6 +163,9 @@ final class PluginHost {
         self.storage = storage
         self.limits = limits
         self.now = now
+        self.settings = settings
+        self.transport = transport
+        self.sleep = sleep
     }
 
     private var isRunning: Bool { state == .activating || state == .active }
@@ -155,6 +180,7 @@ final class PluginHost {
         taskInFlight = false
         taskGeneration += 1
         warnedNotifyNotGranted = false
+        endInstance()
         do {
             let loaded = try await PluginRuntime.load(
                 source: source, limits: limits, tabCount: manifest.tabs.count)
@@ -197,9 +223,16 @@ final class PluginHost {
         }
     }
 
+    func settingsChanged() async {
+        guard state == .active else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "settings/changed", params: PluginSettingsPayload(settings))))
+    }
+
     /// Sends `alas/deactivate`, then drops the instance whatever the plugin does.
     /// Anything the plugin sends back is ignored.
     func deactivate() async {
+        endInstance()
         if state == .activating, runtime == nil {  // still loading the script
             state = .stopped
             return
@@ -333,7 +366,8 @@ final class PluginHost {
             if case .string(let text) = id, text.utf8.count > limits.maxRequestIDBytes {
                 return .violation("plugin sent a request id longer than \(limits.maxRequestIDBytes) bytes")
             }
-            let reply = handleRequest(method, id: id, data: data)
+            // nil: answered in a later delivery.
+            guard let reply = handleRequest(method, id: id, data: data) else { return .none }
             // A reply over the limit would stop the plugin (a large stored value, many keys), so refuse instead.
             guard reply.count <= limits.maxMessageBytes else {
                 return .reply(errorReply(id, code: -32003, "the result of \(method) is too large"))
@@ -353,7 +387,7 @@ final class PluginHost {
         }
     }
 
-    private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data {
+    private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data? {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method] else {
             return errorReply(id, code: -32601, "method not found: \(method)")
@@ -434,6 +468,18 @@ final class PluginHost {
         case "storage/keys":
             guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
             return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
+        case "settings/get":
+            return encode(PluginResponse(id: id, result: PluginSettingsPayload(settings), error: nil))
+        case "http/fetch":
+            return fetch(id: id, data: data)
+        case "timer/set":
+            return setTimer(id: id, data: data)
+        case "timer/cancel":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginTimerIDParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            timers.removeValue(forKey: params.id)?.cancel()
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -469,6 +515,143 @@ final class PluginHost {
             id: nil, method: "task/failed",
             params: PluginTaskFailedParams(sessionId: sessionId, reason: Self.bounded(failure))))
         Task { await deliver(message) }
+    }
+
+    // MARK: - Network and timers
+
+    /// Answers at once only when the request is refused; otherwise the reply comes in a later delivery.
+    private func fetch(id: JSONRPCID, data: Data) -> Data? {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginHTTPFetchParams>.self, from: data).params,
+              Self.httpMethods.contains(params.method.uppercased()),
+              let url = URL(string: params.url)
+        else {
+            return errorReply(id, code: -32602, "invalid params for http/fetch")
+        }
+        guard url.scheme?.lowercased() == "https" else { return errorReply(id, code: -32602, "only https URLs can be fetched") }
+        guard PluginHTTP.allows(url, hosts: manifest.network), let host = url.host()?.lowercased() else {
+            return errorReply(id, code: -32001, "host not allowed: \(url.host() ?? params.url)")
+        }
+        guard (params.body?.utf8.count ?? 0) <= PluginHTTP.maxBodyBytes else {
+            return errorReply(id, code: -32602, "the request body is larger than 512 KiB")
+        }
+        guard fetches.count < Self.maxFetchesInFlight else { return errorReply(id, code: -32003, "too many requests in flight") }
+        var request = URLRequest(url: url, timeoutInterval: PluginHTTP.timeout)
+        request.httpMethod = params.method.uppercased()
+        request.httpShouldHandleCookies = false
+        request.httpBody = params.body.map { Data($0.utf8) }
+        // A redirect may only carry a secret to a host that secret allows.
+        var redirectHosts = manifest.network
+        // Each secret is read from the Keychain once per request, and a request may substitute only a handful,
+        // so no header can turn into thousands of synchronous lookups on the main actor.
+        var secretValues: [String: String] = [:]
+        var substitutions = 0
+        for (name, value) in params.headers ?? [:] {
+            var resolved = ""
+            var rest = value[...]
+            while let match = rest.firstMatch(of: /\{\{secret:([^}]*)\}\}/) {
+                substitutions += 1
+                guard substitutions <= Self.maxSecretSubstitutions else {
+                    return errorReply(id, code: -32602, "more than \(Self.maxSecretSubstitutions) secret substitutions in one request")
+                }
+                let key = String(match.1)
+                guard let setting = settings.declaration(key), setting.kind == .secret else {
+                    return errorReply(id, code: -32602, "unknown secret \(key)")
+                }
+                guard setting.hosts.contains(host) else {
+                    return errorReply(id, code: -32001, "secret \(key) is not allowed for \(host)")
+                }
+                guard let secret = secretValues[key] ?? settings.secret(key) else {
+                    return errorReply(id, code: -32602, "secret \(key) is not set")
+                }
+                secretValues[key] = secret
+                resolved += rest[..<match.range.lowerBound]
+                resolved += secret
+                redirectHosts.removeAll { !setting.hosts.contains($0) }
+                rest = rest[match.range.upperBound...]
+            }
+            resolved += rest
+            request.setValue(resolved, forHTTPHeaderField: name)
+        }
+        let token = nextFetchToken
+        nextFetchToken += 1
+        let instance = instance
+        let transport = transport
+        fetches[token] = Task { [weak self, request, redirectHosts] in
+            let outcome: Result<(Data, HTTPURLResponse), any Error>
+            do {
+                outcome = .success(try await transport.data(for: request, redirectHosts: redirectHosts))
+            } catch {
+                outcome = .failure(error)
+            }
+            await self?.fetchSettled(id: id, token: token, instance: instance, outcome)
+        }
+        return nil
+    }
+
+    private func fetchSettled(
+        id: JSONRPCID, token: Int, instance: Int, _ outcome: Result<(Data, HTTPURLResponse), any Error>
+    ) async {
+        guard instance == self.instance else { return }
+        fetches[token] = nil
+        guard state == .active else { return }
+        let tooLarge = "the response is too large for one message"
+        var reply: Data
+        switch outcome {
+        case .success(let (body, response)):
+            guard body.count <= PluginHTTP.maxResponseBodyBytes else {
+                reply = errorReply(id, code: -32003, tooLarge)
+                break
+            }
+            guard let text = String(data: body, encoding: .utf8) else {
+                reply = errorReply(id, code: -32003, "the response body is not UTF-8 text")
+                break
+            }
+            var headers: [String: String] = [:]
+            for case let (name as String, value as String) in response.allHeaderFields { headers[name.lowercased()] = value }
+            reply = encode(PluginResponse(
+                id: id, result: PluginHTTPFetchResult(status: response.statusCode, headers: headers, body: text), error: nil))
+            if reply.count > limits.maxMessageBytes { reply = errorReply(id, code: -32003, tooLarge) }
+        case .failure(let error) where error is PluginHTTPBodyTooLarge:
+            reply = errorReply(id, code: -32003, tooLarge)
+        case .failure(let error):
+            reply = errorReply(id, code: -32003, "request failed: \(error.localizedDescription)")
+        }
+        await deliver(reply)
+    }
+
+    private func setTimer(id: JSONRPCID, data: Data) -> Data {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginTimerSetParams>.self, from: data).params,
+              (1...Self.timerIDByteLimit).contains(params.id.utf8.count),
+              Self.timerSeconds.contains(params.seconds)
+        else {
+            return errorReply(id, code: -32602, "invalid params for timer/set: seconds must be 60 to 86400")
+        }
+        guard timers[params.id] != nil || timers.count < Self.maxTimers else {
+            return errorReply(id, code: -32003, "at most \(Self.maxTimers) timers")
+        }
+        timers[params.id]?.cancel()
+        let instance = instance
+        let sleep = sleep
+        let repeats = params.repeats ?? false
+        let message = encode(JSONRPCEnvelope(id: nil, method: "timer/fired", params: PluginTimerIDParams(id: params.id)))
+        timers[params.id] = Task { [weak self] in
+            repeat {
+                do { try await sleep(.seconds(params.seconds)) } catch { return }
+                guard !Task.isCancelled, let self, self.instance == instance, self.state == .active else { return }
+                if !repeats { self.timers[params.id] = nil }
+                await self.deliver(message)
+            } while repeats
+        }
+        return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+    }
+
+    /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled.
+    private func endInstance() {
+        instance += 1
+        for fetch in fetches.values { fetch.cancel() }
+        fetches = [:]
+        for timer in timers.values { timer.cancel() }
+        timers = [:]
     }
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
@@ -566,6 +749,7 @@ final class PluginHost {
     }
 
     private func fail(_ reason: String) {
+        endInstance()
         state = .failed(reason)
         runtime = nil
         clearCanvas()

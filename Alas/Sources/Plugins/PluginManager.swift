@@ -53,19 +53,39 @@ final class PluginManager {
     @ObservationIgnored private var isShutDown = false
     @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
     @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
+    @ObservationIgnored private var settingsByPlugin: [String: PluginSettings] = [:]
+    @ObservationIgnored private let makeSettings: (PluginManifest) -> PluginSettings
 
     init(
         directory: URL = PluginManager.defaultDirectory,
         approvals: PluginApprovalStore = PluginApprovalStore(),
         projects: @escaping () -> [ProjectConfig],
         actions: @escaping (ProjectConfig) -> PluginHostActions,
-        catalog: PluginCatalog = PluginCatalog()
+        catalog: PluginCatalog = PluginCatalog(),
+        makeSettings: @escaping (PluginManifest) -> PluginSettings = {
+            PluginSettings.make(pluginID: $0.id, declared: $0.settings)
+        }
     ) {
         self.directory = directory
         self.catalog = catalog
         self.approvals = approvals
         self.projects = projects
         self.actions = actions
+        self.makeSettings = makeSettings
+    }
+
+    /// One per discovered plugin, so the form and every host share it; a change reaches each running host.
+    func settings(for plugin: Plugin) -> PluginSettings {
+        if let existing = settingsByPlugin[plugin.id], existing.declared == plugin.manifest.settings { return existing }
+        let settings = makeSettings(plugin.manifest)
+        settings.didChange = { [weak self] in
+            guard let self else { return }
+            for (key, host) in self.hostsByKey where key.pluginID == plugin.id {
+                Task { await host.settingsChanged() }
+            }
+        }
+        settingsByPlugin[plugin.id] = settings
+        return settings
     }
 
     func isApproved(_ plugin: Plugin) -> Bool {
@@ -391,7 +411,8 @@ final class PluginManager {
                 manifest: plugin.manifest, source: plugin.source,
                 project: PluginProjectRef(id: project.id, name: project.name),
                 grants: Set(approval.capabilities), actions: actions(project),
-                storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)))
+                storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)),
+                settings: settings(for: plugin))
             hostsByKey[key] = host
             await host.activate()
         }

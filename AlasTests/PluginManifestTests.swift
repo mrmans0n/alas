@@ -9,6 +9,10 @@ private func manifest(api: Int = 5, _ extra: String = "") -> String {
 
 private func commands(_ list: String) -> String { #","contributes":{"commands":[\#(list)]}"# }
 
+private func network(_ hosts: String) -> String { #","capabilities":["network"],"network":[\#(hosts)]"# }
+
+private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
+
 struct PluginManifestTests {
     @Test func parsesAValidManifestIgnoringUnknownFields() throws {
         let json = #"{"id":"io.nlopez.hello","name":"Hello","version":"0.1.0","api":4,"entry":"plugin.js","capabilities":["workspace.read"],"future":{"x":1}}"#
@@ -41,7 +45,21 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":5}"#, .malformed),
-        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["network"]}"#, .unknownCapability("network")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.write"]}"#, .unknownCapability("files.write")),
+        (manifest(api: 4, #","settings":[]"#), .needsNewerAPI(#""settings""#)),
+        (manifest(#","capabilities":["network"]"#), .invalidNetwork(#"capability "network" needs at least one host"#)),
+        (manifest(#","network":["a.com"]"#), .invalidNetwork(#""network" needs capability "network""#)),
+        (manifest(network(#""https://a.com""#)), .invalidNetwork(#""https://a.com" is not a lowercase hostname; no schemes, ports or wildcards"#)),
+        (manifest(network(#""*.a.com""#)), .invalidNetwork(#""*.a.com" is not a lowercase hostname; no schemes, ports or wildcards"#)),
+        (manifest(network(#""a.com:443""#)), .invalidNetwork(#""a.com:443" is not a lowercase hostname; no schemes, ports or wildcards"#)),
+        (manifest(settings(#"{"key":"a b","title":"A","type":"string"}"#)), .invalidSetting(#"invalid setting key "a b""#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"number"}"#)), .invalidSetting(#"setting "a" has unknown type "number""#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"bool","default":"yes"}"#)), .invalidSetting(#"setting "a" has a default of the wrong type"#)),
+        (manifest(settings(#"{"key":"token","title":"A","type":"string"},{"key":"Token","title":"B","type":"string"}"#)), .invalidSetting(#"duplicate setting key "Token""#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"string","default":"\#(String(repeating: "x", count: 4097))"}"#)), .invalidSetting(#"setting "a" has a default longer than 4096 bytes"#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"secret"}"#)), .invalidSetting(#"secret "a" needs at least one host"#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"secret","hosts":["b.com"]}"#)), .invalidSetting(#"secret "a" names "b.com", which is not in "network""#)),
+        (manifest(settings(#"{"key":"a","title":"A","type":"string","hosts":["a.com"]}"#)), .invalidSetting("only secret settings take hosts")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":null}"#, .malformed),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"../p.js"}"#, .invalidEntry("../p.js")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"/tmp/p.js"}"#, .invalidEntry("/tmp/p.js")),
