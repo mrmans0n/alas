@@ -303,6 +303,31 @@ private struct PluginApprovalSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Approve \(manifest.name)?").font(.headline)
             Text("\(plugin.id) · version \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+            // A long disclosure scrolls, so the confirmation and the buttons below it stay on screen.
+            ViewThatFits(in: .vertical) {
+                disclosure(sandboxed: sandboxed, fullAccess: fullAccess)
+                ScrollView { disclosure(sandboxed: sandboxed, fullAccess: fullAccess) }
+            }
+            .frame(maxHeight: 420)
+            if !fullAccess.isEmpty {
+                Toggle(Self.confirmation(fullAccess), isOn: $acceptsFullAccess)
+            }
+            Text("Changing the plugin's files requires approving it again.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
+                Button("Approve") { finish(true) }.keyboardShortcut(.defaultAction)
+                    .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private func disclosure(sandboxed: [PluginCapability], fullAccess: [PluginCapability]) -> some View {
+        let manifest = plugin.manifest
+        return VStack(alignment: .leading, spacing: 12) {
             if manifest.capabilities.isEmpty {
                 Text("It requests no capabilities.")
             }
@@ -326,19 +351,9 @@ private struct PluginApprovalSheet: View {
                         .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
                         .padding(.leading, 12)
                 }
-                Toggle(Self.confirmation(fullAccess), isOn: $acceptsFullAccess)
-            }
-            Text("Changing the plugin's files requires approving it again.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Spacer()
-                Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
-                Button("Approve") { finish(true) }.keyboardShortcut(.defaultAction)
-                    .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
             }
         }
-        .padding(20)
-        .frame(width: 460)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static func confirmation(_ fullAccess: [PluginCapability]) -> String {

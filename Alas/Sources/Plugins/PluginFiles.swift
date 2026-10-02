@@ -3,7 +3,9 @@ import Foundation
 
 /// `files.read` and `files.write`: plugin paths resolved inside one worktree.
 enum PluginFiles {
-    static let maxFileBytes = 1 << 20
+    /// Half the 1 MiB message limit, like `PluginHTTP.maxBodyBytes`, so a file's content, JSON-escaped, still fits
+    /// in the reply as a rule. A reply that still does not fit is refused like any other.
+    static let maxFileBytes = 512 << 10
     static let maxListEntries = 2000
 
     /// Where `path`, relative to `root`, really leads, or why it may not be used. Refuses absolute paths, `..`,
@@ -51,7 +53,7 @@ enum PluginFiles {
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
                   values.isRegularFile == true
             else { return .failure(.notFound(path)) }
-            guard (values.fileSize ?? 0) <= maxFileBytes else { return .failure(.refused("\(path) is larger than 1 MiB")) }
+            guard (values.fileSize ?? 0) <= maxFileBytes else { return .failure(.refused("\(path) is larger than 512 KiB")) }
             guard let data = try? Data(contentsOf: url) else { return .failure(.notFound(path)) }
             guard let text = String(data: data, encoding: .utf8) else { return .failure(.refused("\(path) is not UTF-8 text")) }
             return .success(text)
@@ -79,7 +81,7 @@ enum PluginFiles {
 
     /// Creates missing folders on the way, all inside the worktree because the path resolved there.
     static func write(_ path: String, content: String, in root: URL) -> Result<Void, PluginFilesError> {
-        guard content.utf8.count <= maxFileBytes else { return .failure(.refused("content is larger than 1 MiB")) }
+        guard content.utf8.count <= maxFileBytes else { return .failure(.refused("content is larger than 512 KiB")) }
         return resolve(path, in: root).flatMap { url in
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {

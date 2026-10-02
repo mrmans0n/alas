@@ -1320,6 +1320,7 @@ struct PluginHostTests {
     struct FileCase: Sendable {
         let request: String
         var grants: Set<PluginCapability> = [.filesRead, .filesWrite]
+        var limits: PluginLimits?
         let reply: String
         var absent: String?
         /// Relative path and content the request leaves in the worktree.
@@ -1328,7 +1329,9 @@ struct PluginHostTests {
 
     @Test(arguments: [
         FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"a.txt"}"#), reply: #""content":"hello""#),
-        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"big.txt"}"#), reply: "larger than 1 MiB"),
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"big.txt"}"#), reply: "larger than 512 KiB"),
+        // A file at the limit fits in a reply under the real message limit, newlines escaped and all.
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"edge.txt"}"#), limits: PluginLimits(), reply: #""content":"a\nb"#),
         FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"bin.dat"}"#), reply: "not UTF-8"),
         FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"../a.txt"}"#), reply: #""code":-32003"#),
         FileCase(request: request(1, "file/read", #"{"worktree":"other","path":"a.txt"}"#), reply: "unknown worktree other"),
@@ -1343,10 +1346,11 @@ struct PluginHostTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try Data("hello".utf8).write(to: root.appending(path: "a.txt"))
         try Data(count: PluginFiles.maxFileBytes + 1).write(to: root.appending(path: "big.txt"))
+        try Data(String(repeating: "a\nb", count: PluginFiles.maxFileBytes / 3).utf8).write(to: root.appending(path: "edge.txt"))
         try Data([0xFF, 0xFE]).write(to: root.appending(path: "bin.dat"))
         try Data("gitdir: elsewhere".utf8).write(to: root.appending(path: ".git"))
         let host = try makeHost(
-            [[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: Self.processManifest, worktreeRoot: root)
+            [[.send(activateOK), .send(c.request)]], grants: c.grants, limits: c.limits ?? Self.limits, manifest: Self.processManifest, worktreeRoot: root)
         await host.activate()
         let reply = try #require(lastReply(host))
         #expect(reply.contains(c.reply))
