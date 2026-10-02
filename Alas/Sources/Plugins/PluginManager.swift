@@ -276,20 +276,22 @@ final class PluginManager {
         let target = directory.appending(path: id)
         // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded. Any copy
         // quarantined as a duplicate means a local one exists too, so adding a catalog copy would only add another.
-        let found = Self.discover(in: directory)
-        if found.plugins.contains(where: { $0.id == id && !$0.isCatalogFolder })
-            || found.invalid.contains(where: { $0.pluginID == id }) {
-            throw PluginCatalogError.installedLocally
+        func localCopyExists() -> Bool {
+            let found = Self.discover(in: directory)
+            return found.plugins.contains { $0.id == id && !$0.isCatalogFolder } || found.invalid.contains { $0.pluginID == id }
         }
+        // Checked before stopping anything, so a local copy keeps running untouched.
+        if localCopyExists() { throw PluginCatalogError.installedLocally }
         await stopHosts { $0.pluginID == id }
-        // Checked after the last suspension, right before replacing: something at `Plugins/<id>` is replaced only
-        // if it is the catalog's own install, a real folder holding a published version. A symlink, a local build
-        // or a broken folder stays, and the reload restarts what was stopped.
-        if FileManager.default.fileExists(atPath: target.path) || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-            guard let current = catalogInstall(id: id), entry.versions.contains(where: { $0.hash == current.hash }) else {
-                await performRescan()
-                throw PluginCatalogError.installedLocally
-            }
+        // Checked again after the last suspension, right before replacing: no local copy may have appeared, and
+        // something at `Plugins/<id>` is replaced only if it is the catalog's own install of a published version.
+        // Otherwise the rescan restarts what was stopped.
+        let targetExists = FileManager.default.fileExists(atPath: target.path)
+            || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        let ownsTarget = catalogInstall(id: id).map { current in entry.versions.contains { $0.hash == current.hash } } ?? false
+        if localCopyExists() || (targetExists && !ownsTarget) {
+            await performRescan()
+            throw PluginCatalogError.installedLocally
         }
         do {
             if fileManager.fileExists(atPath: target.path) {
