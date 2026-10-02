@@ -1340,7 +1340,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
                suggestions: coordinator.promptSuggestions
            ) {
             let chip = NSMutableAttributedString(
-                attributedString: ACPSlashCommand.chip(for: target.command, font: chatTypography.appKitFont())
+                attributedString: ACPSlashCommand.chip(
+                    for: target.command, font: chatTypography.appKitFont(),
+                    suggestions: coordinator.promptSuggestions
+                )
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
             replaceUndoably(range: target.range, with: chip)
@@ -1369,7 +1372,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard let textStorage, let coordinator, !hasMarkedText() else { return }
         let targets = ACPSlashCommand.chipTargets(in: textStorage.string, suggestions: coordinator.promptSuggestions)
         for target in targets.reversed() {
-            let chip = ACPSlashCommand.chip(for: target.command, font: chatTypography.appKitFont())
+            let chip = ACPSlashCommand.chip(
+                for: target.command, font: chatTypography.appKitFont(), suggestions: coordinator.promptSuggestions
+            )
             replaceUndoably(range: target.range, with: chip)
         }
     }
@@ -2617,7 +2622,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // `replaceCharacters` that would leave this keystroke's own typing
         // undo record targeting a range that no longer exists.
         let chip = NSMutableAttributedString(
-            attributedString: ACPSlashCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
+            attributedString: ACPSlashCommand.chip(
+                for: suggestion.command, font: chatTypography.appKitFont(),
+                suggestions: coordinator?.promptSuggestions ?? []
+            )
         )
         chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
         replaceUndoably(range: range, with: chip)

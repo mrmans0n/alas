@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Features
+
+- Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill.
+
 ### 🐛 Fixes
 
 - Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
