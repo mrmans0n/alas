@@ -276,6 +276,18 @@ struct WorktreeRowStatusTests {
     }
 
     @Test @MainActor
+    func worktreeExplanationStopsAfterMaximumRetryAttempts() async {
+        var attempts = 0
+
+        await WorktreeExplanationRetry.run(delay: .zero, maximumAttempts: 3) {
+            attempts += 1
+            return false
+        }
+
+        #expect(attempts == 3)
+    }
+
+    @Test @MainActor
     func generatedExplanationInvalidatesObservation() async {
         let probe = WorktreeExplainerGenerationProbe()
         let store = WorktreeExplainerStore { await probe.generate($0) }

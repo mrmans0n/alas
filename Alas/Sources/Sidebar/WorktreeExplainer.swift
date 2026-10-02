@@ -21,6 +21,7 @@ enum WorktreeExplainerPolicy {
     static let maxTokens = 64
     static let timeout: Duration = .seconds(20)
     static let retryDelay: Duration = .seconds(5)
+    static let maximumRetryAttempts = 8
     static let maximumLength = 60
     static let minimumWords = 3
     static let maximumWords = 8
@@ -128,10 +129,13 @@ enum WorktreeExplanationRetry {
     @MainActor
     static func run(
         delay: Duration = WorktreeExplainerPolicy.retryDelay,
+        maximumAttempts: Int = WorktreeExplainerPolicy.maximumRetryAttempts,
         prepare: @MainActor () async -> Bool
     ) async {
-        while !Task.isCancelled {
+        for attempt in 0 ..< maximumAttempts {
+            guard !Task.isCancelled else { return }
             if await prepare() { return }
+            guard attempt < maximumAttempts - 1 else { return }
             do {
                 try await Task.sleep(for: delay)
             } catch {
