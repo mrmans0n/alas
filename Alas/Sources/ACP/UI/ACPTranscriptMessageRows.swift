@@ -189,6 +189,19 @@ struct DelegatedPromptRow: View {
     let typography: ACPChatTypography
     @Environment(\.theme) private var theme
 
+    nonisolated static let foldLineThreshold = 12
+    nonisolated static let foldCharacterThreshold = 900
+
+    /// The raw line count when `text` is long enough to fold, else nil.
+    /// Decided from the text alone: measuring the rendered height would
+    /// write state from a geometry callback, which live-locks the transcript.
+    nonisolated static func foldedLineCount(for text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lineCount = trimmed.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).count
+        guard lineCount > foldLineThreshold || trimmed.count > foldCharacterThreshold else { return nil }
+        return lineCount
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
