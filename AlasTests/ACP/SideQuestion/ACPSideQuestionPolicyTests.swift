@@ -103,4 +103,23 @@ struct ACPSideQuestionPolicyTests {
     func readOnlySupport(agentId: String, supported: Bool) {
         #expect(ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: agentId) == supported)
     }
+
+    @Test(
+        "a config-backed mode change counts only when the echo selects the target",
+        arguments: [
+            ([] as [ACPConfigOption], true),
+            ([modeOption(current: "plan")], true),
+            ([modeOption(current: "bypassPermissions")], false),
+            ([ACPConfigOption(id: "effort", name: "Effort", type: "select", category: nil,
+                              currentValue: .string("high"), options: [])], false),
+        ]
+    )
+    func modeEcho(echoed: [ACPConfigOption], accepted: Bool) {
+        #expect(ACPSideQuestionModePolicy.acceptsEcho(echoed, configID: "mode", target: "plan") == accepted)
+    }
+
+    static func modeOption(current: String) -> ACPConfigOption {
+        ACPConfigOption(id: "mode", name: "Mode", type: "select", category: "mode",
+                        currentValue: .string(current), options: [])
+    }
 }
