@@ -147,21 +147,21 @@ struct PluginEventState: Equatable, Sendable {
     /// What changed since `old`. Polls are half a second apart, so that is how often a worktree's `git.changed`
     /// can fire; a dirty count that is first learned (the scan finishing) is not a change.
     func events(since old: PluginEventState) -> [PluginEventMessage] {
-        var events = workspace.sessionEvents(since: old.workspace)
+        var events: [PluginEventMessage] = []
         let before = Dictionary(old.workspace.worktrees.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let now = Set(workspace.worktrees.map(\.id))
-        for worktree in old.workspace.worktrees where !now.contains(worktree.id) {
-            events.append(PluginEventMessage(event: .worktreeRemoved, params: PluginEventParams(worktree: worktree.id)))
-        }
-        for worktree in workspace.worktrees {
-            guard let previous = before[worktree.id] else {
-                events.append(PluginEventMessage(event: .worktreeCreated, params: PluginEventParams(worktree: worktree.id)))
-                // Created and selected between two polls: the move to it is still a focus change.
-                if worktree.current {
-                    events.append(PluginEventMessage(event: .focusChanged, params: PluginEventParams(worktree: worktree.id)))
-                }
-                continue
+        // Parents before children: a worktree is created before its sessions are reported, and its sessions and
+        // runs end before it is removed, which is the last thing reported.
+        for worktree in workspace.worktrees where before[worktree.id] == nil {
+            events.append(PluginEventMessage(event: .worktreeCreated, params: PluginEventParams(worktree: worktree.id)))
+            // Created and selected between two polls: the move to it is still a focus change.
+            if worktree.current {
+                events.append(PluginEventMessage(event: .focusChanged, params: PluginEventParams(worktree: worktree.id)))
             }
+        }
+        events += workspace.sessionEvents(since: old.workspace)
+        for worktree in workspace.worktrees {
+            guard let previous = before[worktree.id] else { continue }
             if previous.dirty != nil, worktree.dirty != nil, previous.dirty != worktree.dirty {
                 events.append(PluginEventMessage(event: .gitChanged, params: PluginEventParams(worktree: worktree.id)))
             }
@@ -198,6 +198,9 @@ struct PluginEventState: Equatable, Sendable {
         for review in reviews where reviewsBefore[review.worktree] != review {
             events.append(PluginEventMessage(event: .reviewChanged, params: PluginEventParams(
                 worktree: review.worktree, state: review.state, number: review.number, checks: review.checks)))
+        }
+        for worktree in old.workspace.worktrees where !now.contains(worktree.id) {
+            events.append(PluginEventMessage(event: .worktreeRemoved, params: PluginEventParams(worktree: worktree.id)))
         }
         return events
     }

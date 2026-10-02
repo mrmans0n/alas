@@ -89,6 +89,8 @@ struct PluginWorkspaceSnapshotTests {
         StateCase(before: state(), after: state([("w", 1, true)]), events: ["focus.changed:w"]),
         StateCase(before: state([("w", 1, true)]), after: state(), events: []),
         StateCase(before: state(), after: state(runs: [run("r1", nil)]), events: ["run.started:w:r1::"]),
+        // A worktree removed with a run still going: the run ends before the worktree goes.
+        StateCase(before: state(runs: [run("r1", nil)]), after: state([]), events: ["run.finished:w:r1:unknown:", "worktree.removed:w"]),
         // A failed launch rolled the record back to a run already reported: only the abandoned one ends.
         StateCase(
             before: state(runs: [run("r2", nil)], seenRuns: ["r1", "r2"]), after: state(runs: [run("r1", .succeeded)]),
@@ -122,5 +124,18 @@ struct PluginWorkspaceSnapshotTests {
             return parts.joined(separator: ":")
         }
         #expect(events == c.events)
+    }
+
+    /// A worktree is created before its first session is reported, and that session is gone before it is removed.
+    @Test func worktreeEventsBracketTheirSessionEvents() {
+        func state(sessions: [String]) -> PluginEventState {
+            PluginEventState(workspace: PluginWorkspaceSnapshot(worktrees: sessions.isEmpty ? [] : [.init(
+                id: "x", branch: "x", current: false, dirty: nil,
+                sessions: sessions.map { .init(id: $0, agent: "claude", title: "", state: "running", plan: nil) })]))
+        }
+        let created = state(sessions: ["s1"]).events(since: state(sessions: [])).map(\.event)
+        #expect(created == [.worktreeCreated, .sessionState])
+        let removed = state(sessions: []).events(since: state(sessions: ["s1"])).map(\.event)
+        #expect(removed == [.sessionState, .worktreeRemoved])
     }
 }

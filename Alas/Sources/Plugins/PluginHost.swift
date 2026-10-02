@@ -1037,14 +1037,14 @@ final class PluginHost {
     }
 
     /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled, and its
-    /// processes, which are stopped.
+    /// processes, which are stopped. Deferred requests are only forgotten, so work the plugin asked for still
+    /// finishes; their replies are discarded.
     private func endInstance() {
         for run in processes.keys { stopProcess(run) }
         processes = [:]
         instance += 1
         for fetch in fetches.values { fetch.cancel() }
         fetches = [:]
-        for request in requests.values { request.cancel() }
         requests = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]

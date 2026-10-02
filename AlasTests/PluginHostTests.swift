@@ -57,6 +57,9 @@ struct PluginHostTests {
         var sent: [String] = []
         var runsStarted: [String] = []
         var comments: [String] = []
+        /// A run of "repo:slow.sh" waits here, then records whether it was cancelled.
+        var slowRun: CheckedContinuation<Void, Never>?
+        var slowRunCancelled: Bool?
     }
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
@@ -122,6 +125,11 @@ struct PluginHostTests {
                 },
                 startRun: { worktree, script in
                     recorder.runsStarted.append("\(worktree)|\(script)")
+                    if script == "repo:slow.sh" {
+                        await withCheckedContinuation { recorder.slowRun = $0 }
+                        recorder.slowRunCancelled = Task.isCancelled
+                        return nil
+                    }
                     return script == "repo:dev.sh" ? nil : "unknown run script \(script)"
                 },
                 runOutput: { run in run == "live" ? .notFinished : .unknownRun },
@@ -1101,6 +1109,21 @@ struct PluginHostTests {
         #expect(recorder.sent + recorder.runsStarted + recorder.comments == c.acted)
     }
 
+    @Test func endingAnInstanceKeepsTheWorkItAskedForButDropsTheReply() async throws {
+        let recorder = Recorder()
+        let host = try makeHost(
+            [[.send(activateOK), .send(request(1, "run/start", #"{"worktree":"wt","script":"repo:slow.sh"}"#))]],
+            grants: [.runsStart], recorder: recorder, manifest: api6Manifest)
+        await host.activate()
+        #expect(await awaitCondition { recorder.slowRun != nil })
+        let repliesBefore = replies(host).count
+        await host.deactivate()
+        recorder.slowRun?.resume()
+        #expect(await awaitCondition { recorder.slowRunCancelled != nil })
+        #expect(recorder.slowRunCancelled == false)
+        #expect(replies(host).count == repliesBefore)
+    }
+
     /// `run/output` keeps the tail, starting on a scalar boundary.
     @Test(arguments: [(5, "aéx"), (3, "éx"), (2, "x")])
     func runOutputKeepsTheTail(maxBytes: Int, output: String) {
@@ -1210,10 +1233,10 @@ struct PluginHostTests {
 
         await host.deactivate()
         #expect(launcher.handles[1].signals == [SIGTERM])
-        // Both time limits are cancelled; what remains is the kill grace.
-        #expect(await awaitCondition { sleeper.cancellations == 2 && sleeper.waiting == 1 })
+        // The finished run's time limit is cancelled; the stopped run's lasts until it exits, next to the kill grace.
+        #expect(await awaitCondition { sleeper.cancellations == 1 && sleeper.waiting == 2 })
         sleeper.fireAll()
-        #expect(await awaitCondition { launcher.handles[1].signals == [SIGTERM, SIGKILL] })
+        #expect(await awaitCondition { launcher.handles[1].signals.contains(SIGKILL) })
         // The next instance hears only about its own runs.
         await host.activate()
         launcher.handles[1].emit(.exit(137))
