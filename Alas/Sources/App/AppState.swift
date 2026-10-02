@@ -7978,12 +7978,14 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
+            let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: closedLeafId)
             scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
+            authExitHandler?()
         }
     }
 
@@ -9117,10 +9119,12 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leaf.id)
                     if cancelRunScriptMonitors {
                         scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
             if case .editor = tab {
@@ -9164,14 +9168,23 @@ final class AppState {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func cleanupTerminals(worktreeId: String, allTabs: [Tab], tabIds: [TabID]) {
+    private func cleanupTerminals(
+        worktreeId: String,
+        allTabs: [Tab],
+        tabIds: [TabID],
+        triggerAuthExitHandlers: Bool = true
+    ) {
         let projectPath = projectPath(forWorktreeId: worktreeId)
         for id in tabIds {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = triggerAuthExitHandlers
+                        ? acpAuthTerminalExitHandlers.removeValue(forKey: leaf.id)
+                        : nil
                     scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
         }
@@ -9654,7 +9667,12 @@ final class AppState {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
         invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
-        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
+        cleanupTerminals(
+            worktreeId: worktreeId,
+            allTabs: allTabs,
+            tabIds: closed,
+            triggerAuthExitHandlers: false
+        )
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
         if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }

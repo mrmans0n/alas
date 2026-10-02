@@ -386,7 +386,7 @@ struct AgentTerminalLaunchTests {
         #expect(exitCount == 1)
     }
 
-    @Test func acpAuthManualTerminalCloseRemovesExitCallbackWithoutInvoking() throws {
+    @Test func acpAuthManualTerminalCloseRunsExitCallback() throws {
         var exitCount = 0
         let project = project(mode: .useGlobal, useBypass: false)
         let worktree = Worktree(
@@ -416,7 +416,7 @@ struct AgentTerminalLaunchTests {
         state.closeFocusedPane(worktreeId: worktree.id)
         state.handleTerminalProcessExited(worktreeId: worktree.id, leafId: "auth-session", processAlive: false)
 
-        #expect(exitCount == 0)
+        #expect(exitCount == 1)
     }
 
     @Test func launchingCopilotInstallsHookBeforeOpeningTerminal() throws {
