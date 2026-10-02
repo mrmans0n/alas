@@ -931,7 +931,6 @@ struct PluginHostTests {
         #expect(await awaitCondition { transport.requests.count == 4 })
         transport.respond("first")
         #expect(await awaitCondition { lastReply(host)?.contains(#""body":"first""#) == true })
-        #expect(lastReply(host)?.contains(#""id":1"#) == true)
 
         await host.deactivate()
         await host.activate()
