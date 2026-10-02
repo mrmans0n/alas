@@ -16,7 +16,7 @@ struct CompletionDocumentationRendererTests {
         let range = (result.attributedString.string as NSString).range(of: "func")
         let color = result.attributedString.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
 
-        #expect(color != NSColor(theme.color("fg")))
+        #expect(color != theme.nsColor("fg"))
     }
 
     @Test func completionMermaidUsesCompactAttachment() throws {

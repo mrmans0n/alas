@@ -195,7 +195,7 @@ struct MarkdownRendererTests {
         // Keyword color is "syntax-keyword". Just confirm it is NOT the default
         // fg ("fg") — any non-default color means the highlighter ran.
         let theme = try Theme.loadBundled(id: "cool-slate")
-        let defaultFG = NSColor(theme.color("fg"))
+        let defaultFG = theme.nsColor("fg")
         #expect(color != defaultFG)
     }
 
@@ -204,7 +204,7 @@ struct MarkdownRendererTests {
         // these fence labels must resolve through fenceLanguageToExtension
         // and actually highlight, not just render monospaced plain text.
         let theme = try Theme.loadBundled(id: "cool-slate")
-        let defaultFG = NSColor(theme.color("fg"))
+        let defaultFG = theme.nsColor("fg")
         let cases: [(label: String, source: String, needle: String)] = [
             ("csharp", "public class Greeter {}", "class"),
             ("elixir", "defmodule Greeter do\nend", "defmodule"),
