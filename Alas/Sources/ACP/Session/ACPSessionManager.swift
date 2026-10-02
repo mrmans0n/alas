@@ -2466,6 +2466,7 @@ final class ACPSessionManager: ObservableObject {
         let wasHidden = (visibleSessionCounts[id] ?? 0) == 0
         visibleSessionCounts[id, default: 0] += 1
         if wasHidden {
+            sessions[id]?.nextPromptVisibilityChanged.send(true)
             wakeVisibleMirror(sessionId: id)
         }
     }
@@ -2474,8 +2475,8 @@ final class ACPSessionManager: ObservableObject {
         guard let current = visibleSessionCounts[id], current > 0 else { return }
         let next = current - 1
         if next == 0 {
-            sessions[id]?.nextPromptActivity.send()
             visibleSessionCounts.removeValue(forKey: id)
+            sessions[id]?.nextPromptVisibilityChanged.send(false)
         } else {
             visibleSessionCounts[id] = next
         }
