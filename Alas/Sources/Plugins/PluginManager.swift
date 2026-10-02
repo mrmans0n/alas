@@ -448,7 +448,8 @@ final class PluginManager {
             // A copy built by hand beats the one the catalog put in `Plugins/<id>`; any other duplicate is ambiguous.
             let catalogCopies = copies.filter(\.isCatalogFolder)
             if copies.count == 2, catalogCopies.count == 1, let local = copies.first(where: { !$0.isCatalogFolder }) {
-                if plugin.folder == local.folder {
+                // Decided by which copy this is, not by its resolved folder: a link may point at the catalog folder.
+                if !plugin.isCatalogFolder {
                     loaded.append(plugin)
                 } else {
                     invalid.append(Invalid(
