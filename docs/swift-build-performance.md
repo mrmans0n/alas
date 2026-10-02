@@ -123,6 +123,29 @@ The cold attempt passed the builder, both Swift shards, and the coverage audit.
 Its unrelated AlasCLI socket test failed with `Connection reset by peer`.
 The AlasCLI job passed in attempt 2 without any source change.
 
+Compiler CAS archives are saved only by successful builds on `main`.
+Pull requests restore compatible default-branch entries but do not save
+merge-ref copies. Those copies cannot be restored by releases and compete
+with the less frequently accessed Intel native caches for repository storage.
+Existing PR-scoped entries are not deleted by this change; they remain until
+GitHub evicts them.
+
+### Release architecture and cache retention
+
+Release matrix jobs pass `ARCHS` explicitly and enable `ONLY_ACTIVE_ARCH`.
+Job-level native architecture overrides also apply inside Xcode build phases
+and resource embedding, so they reuse the same slice as the prebuild steps.
+Before signing, the workflow checks the app executable, bundled macOS zmx,
+and dylibs with `lipo -archs`. Remote helper and CLI resources deliberately
+retain their separate platform slices.
+
+Nightly dependency warming already saves arm64 and Intel artifacts on `main`.
+Release tags restore those entries but cannot share caches saved by other tags.
+For subsequent releases, compare the app build duration, native cache misses,
+and cache inventory rather than assuming a speedup from these settings.
+Check that Intel entries survive between nightly warming and release.
+This change does not enable Release compiler caching or alter optimization.
+
 ## Local baseline
 
 Local runs use the base revision's app and test sources, apart from the temporary

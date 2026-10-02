@@ -13,6 +13,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keep native peer sessions connected when older peers send transcript snapshots larger than 1 MiB.
 - Bound transcript snapshots, history pages, and live-update batches to 8 MiB. Individual rows exceeding the 4 MiB remote-display budget show an explicit notice; their full content remains on the owning Mac.
 
+### Internal
+
+- Build each release app only for its named architecture and verify bundled binaries before signing.
+- Save Swift compiler caches only from `main`, avoiding PR-scoped duplicates that compete with release dependency caches.
+
 ## [0.19.22] - 2026-10-02
 
 ### ✨ Features
