@@ -315,10 +315,10 @@ struct TabsManagerBufferTests {
         _ = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
 
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
-        try await Task.sleep(nanoseconds: 900_000_000)
-
-        #expect(try store.read(worktreeId: "wt", tabId: "t1")?.content == "zx")
-        #expect(try store.read(worktreeId: "wt", tabId: "t2")?.content == "zx")
+        try await Self.waitUntil {
+            try store.read(worktreeId: "wt", tabId: "t1")?.content == "zx"
+                && store.read(worktreeId: "wt", tabId: "t2")?.content == "zx"
+        }
     }
 
     @Test func editTimeSnapshotWritesUnloadedTabsSharingDirtyBuffer() async throws {
@@ -331,11 +331,24 @@ struct TabsManagerBufferTests {
         await buffer.awaitLoadForTesting()
 
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
-        try await Task.sleep(nanoseconds: 900_000_000)
-
-        #expect(try store.read(worktreeId: "wt", tabId: first.id)?.content == "zx")
-        #expect(try store.read(worktreeId: "wt", tabId: second.id)?.content == "zx")
+        try await Self.waitUntil {
+            try store.read(worktreeId: "wt", tabId: first.id)?.content == "zx"
+                && store.read(worktreeId: "wt", tabId: second.id)?.content == "zx"
+        }
         #expect(manager.peekBuffer(tabId: second.id) == nil)
+    }
+
+    /// The edit-time snapshot is debounced, so its write is awaited with a deadline instead of a fixed sleep,
+    /// which a loaded CI runner can outlast.
+    private static func waitUntil(_ condition: () throws -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while try !condition() {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("the snapshot was not written in time")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     @Test func savingSharedBufferDiscardsEveryTabSnapshot() async throws {
