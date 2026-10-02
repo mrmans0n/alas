@@ -989,7 +989,11 @@ private struct ACPSessionView: View {
         }
         Task { @MainActor in
             do {
-                _ = try await state.openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, command: command) {
+                _ = try await state.openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(
+                    for: worktree,
+                    acpSessionId: sessionId,
+                    command: command
+                ) {
                     Task { @MainActor in
                         session.pendingAuthMethodId = method.id
                         await reattachAndRefreshAdapterUpdateState()
