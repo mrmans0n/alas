@@ -9,10 +9,19 @@ struct ACPChatTypography: Equatable {
 
     let fontFamily: String
     let baseSize: CGFloat
+    /// Renders every heading at paragraph size (still bold), for markdown
+    /// inside a prompt bubble, where `##` should not outrank the body.
+    private(set) var flattensHeadings = false
 
     init(fontFamily: String, fontSize: Int) {
         self.fontFamily = fontFamily
         self.baseSize = CGFloat(max(8, min(64, fontSize)))
+    }
+
+    func flatteningHeadings() -> ACPChatTypography {
+        var copy = self
+        copy.flattensHeadings = true
+        return copy
     }
 
     var paragraphSize: CGFloat { baseSize + 0.5 }
@@ -23,6 +32,7 @@ struct ACPChatTypography: Equatable {
     var labelSize: CGFloat { max(8, baseSize - 3) }
 
     func headingSize(level: Int) -> CGFloat {
+        if flattensHeadings { return paragraphSize }
         switch level {
         case 1: return baseSize + 6
         case 2: return baseSize + 4

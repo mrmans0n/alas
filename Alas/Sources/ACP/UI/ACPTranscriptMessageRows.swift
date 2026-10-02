@@ -176,42 +176,120 @@ extension View {
     }
 }
 
-// MARK: - Delegated prompt (full-width card)
+// MARK: - Delegated prompt (incoming bubble)
 
 /// A prompt Alas delivered on another session's behalf: a child's report to
 /// its parent, or a parent's (or mission's) prompt to a child. Nobody typed
-/// it here, so it renders as a left-aligned card with the sender in its
-/// header instead of the user's accent bubble.
+/// it here, so it renders as an incoming bubble (the user bubble mirrored to
+/// the left, in neutral slate) with the sender captioned above it. Long
+/// prompts fold to a few lines until expanded.
 struct DelegatedPromptRow: View {
     let text: String
     let label: String
     let isFromChild: Bool
+    let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
+    /// Local like `ACPThoughtView.expanded`: a rebuilt row folds again.
+    @State private var isExpanded = false
     @Environment(\.theme) private var theme
 
+    nonisolated static let foldLineThreshold = 12
+    nonisolated static let foldCharacterThreshold = 900
+    private static let foldedVisibleLines: CGFloat = 8
+
+    /// The raw line count when `text` is long enough to fold, else nil.
+    /// Decided from the text alone: measuring the rendered height would
+    /// write state from a geometry callback, which live-locks the transcript.
+    nonisolated static func foldedLineCount(for text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lineCount = trimmed.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).count
+        guard lineCount > foldLineThreshold || trimmed.count > foldCharacterThreshold else { return nil }
+        return lineCount
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Image(systemName: isFromChild ? "arrow.turn.down.left" : "arrow.turn.down.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-faint"))
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.color("fg-faint"))
+        let foldedLineCount = Self.foldedLineCount(for: text)
+        let isFolded = foldedLineCount != nil && !isExpanded
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: isFromChild ? "arrow.turn.down.left" : "arrow.turn.down.right")
+                        .font(.system(size: 11))
+                    Text(label)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(theme.color("fg-faint"))
+                .padding(.leading, 4)
+                VStack(alignment: .leading, spacing: 6) {
+                    ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
+                        .frame(maxHeight: isFolded ? foldedHeight : nil, alignment: .top)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .mask(foldMask(isFolded: isFolded))
+                        // Clipping only hides pixels: the hidden lines' links
+                        // and Copy buttons would stay clickable and focusable.
+                        // Folded, nothing in here takes input; the toggle below
+                        // is the way in. The text itself stays readable to
+                        // VoiceOver, like a line-limited `Text`.
+                        .allowsHitTesting(!isFolded)
+                        .disabled(isFolded)
+                    if let foldedLineCount {
+                        foldToggle(lineCount: foldedLineCount)
+                    }
+                }
+                .padding(.vertical, 9)
+                .padding(.horizontal, 13)
+                .background(
+                    LinearGradient(
+                        colors: [theme.color("bg-3"), theme.color("bg-2")],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .clipShape(bubbleShape)
+                .overlay(bubbleShape.strokeBorder(theme.color("bg-5"), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             }
-            ACPMarkdownText(raw: text, typography: typography)
+            .frame(maxWidth: contentMaxWidth * 0.84, alignment: .leading)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(theme.color("bg-1").opacity(0.5))
+    }
+
+    /// The user bubble's shape mirrored: the tail corner is bottom-leading.
+    private var bubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            cornerRadii: .init(topLeading: 12, bottomLeading: 4, bottomTrailing: 12, topTrailing: 12)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+    }
+
+    private var foldedHeight: CGFloat {
+        let font = typography.appKitFont(size: typography.paragraphSize)
+        return ceil((font.ascender - font.descender + font.leading) * Self.foldedVisibleLines)
+    }
+
+    /// Fades the last lines of a folded prompt; fully opaque otherwise.
+    private func foldMask(isFolded: Bool) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: isFolded ? 0.6 : 1),
+                .init(color: isFolded ? .clear : .black, location: 1)
+            ],
+            startPoint: .top, endPoint: .bottom
         )
+    }
+
+    private func foldToggle(lineCount: Int) -> some View {
+        Button { isExpanded.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(isExpanded ? "Collapse" : "Show full prompt · \(lineCount) line\(lineCount == 1 ? "" : "s")")
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(theme.color("fg-dim"))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
