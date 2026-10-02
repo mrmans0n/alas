@@ -776,7 +776,7 @@ Use a temporary hosted AppState with explicit persistence/model-root injection f
 - [ ] Launch/inspect the unsupported-management path with an injected unsupported runtime and a temporary installed root. Confirm no native load, actionable status, and safe removal. Intel compile coverage does not substitute for this behavior check.
 - [ ] Exercise actual feature entry points with public/synthetic data: a generated fallback title with both owner flags off; independent worktree naming with titles off; a failure brief; a requested conflict explanation; a grounded idle-session summary; and a ghost suggestion accepted into the draft without send. Do not add new permanent tests for forwarding these entry points.
 - [ ] Measure baseline/peak/after-unload memory and observe cancellation releasing the lease. A high retained RSS is not silently converted into a false promise of reclaimed memory; use the approved copy.
-- [ ] Recheck native suggestion safety against the existing public synthetic cases, using production context/policy/parser and the pinned native engine. `scripts/prototype-next-prompt/comparison-safety.json` is the public fixture; do not use private real-session cases. Explicitly include protected deletion, secret disclosure, and claimed human consent. Report useful output, invalid/absent output, and dangerous accepted output separately. Do not treat one ordinary successful suggestion as clearance for old severe cases.
+- [ ] Recheck native suggestion safety against the existing public synthetic cases, using production context/policy/parser and the pinned native engine. `scripts/prototype-next-prompt/native-synthetic.json` is the public fixture; do not use private real-session cases. Explicitly include protected deletion, secret disclosure, and claimed human consent. Report useful output, invalid/absent output, and dangerous accepted output separately. Do not treat one ordinary successful suggestion as clearance for old severe cases.
 - [ ] If a severe-risk accepted suggestion or ungrounded summary is observed, the production release gate fails. Preserve the observed result privately and report the specific unmet criterion; do not silently change prompts/filters, label the evaluation green, or ship an experimental-only substitute for the approved scope. A behavior fix outside this settings plan requires an explicit revised design decision.
 - [ ] Inspect keyboard focus, confirmation Escape behavior, accessibility labels/status values, light/dark, and Increase Contrast in the native settings/composer. Record a VoiceOver limit honestly if its reading order cannot be observed.
 - [ ] Run the focused affected suites after all integration edits. Include AppConfigTests, LocalTextAppleAvailabilityTests, both settings suites, ACPLocalTitleRoutingTests, and any naming/brief/conflict suite changed by the cutover. Reuse existing model-store/lease/engine suites if their behavior changed. Do not run the entire test plan by default. Check `Test run with N tests in M suites` and report nonzero suite execution, not only xcodebuild's exit status.
@@ -791,4 +791,29 @@ No product code, dependency installation, app build, or Swift tests ran while wr
 
 Recommended execution: Native. The lifecycle and caller changes share AppState state and need one integration owner; five sequential tasks followed by an independent whole-change review avoid conflicting partial cutovers. If subagent-driven is selected instead, one worker owns each complete task, the coordinator runs focused validation only after its edits settle, and a fresh reviewer gates the task before the next one starts.
 
-Review this plan and choose the execution method before implementation. Both methods require a final independent review, exercised native behavior, and all release acceptance criteria above.
+The user approved this plan and selected Native execution. Implementation is followed by independent review, exercised native behavior, and the release acceptance criteria above. On 2026-10-02, the user also explicitly authorized the bounded destructive-consent safety revision recorded in the specification after native evaluation exposed two unsafe accepted suggestions.
+
+## Execution record, 2026-10-02
+
+Tasks 1-3 are implemented and exercised. The ordinary settings page is
+implemented; actual native light/dark, programmatic scrolling, and failed-save
+rendering were observed. Interactive model consent and keyboard/accessibility
+acceptance remain blocked by the locked desktop.
+
+The native lifecycle smoke passed actual pinned MLX helpers, grounded summary,
+cancellation/drain, peer-lease refusal and removal, and unsupported-runtime
+inspection/removal with zero inference calls. Every one of the 22 public fixture
+IDs has an output record: five withheld before generation, seventeen accepted,
+with no severe accepted result on manual review. The user-authorized bounded
+input/output consent fix has failing-before/passing-after regressions.
+
+Release compilation is not Release launch proof. The untouched app's embedded
+FFF library failed Team-ID validation and the keychain contained no valid signing
+identity. No validation bypass was applied. Current native ghost acceptance,
+consent/Escape, keyboard order, accessibility status, and Increase Contrast remain
+unverified. Merge remains on hold until the reachable release criteria above are
+met; an actual VoiceOver limitation must be recorded separately.
+
+Detailed commands, counts, privacy limits, and memory observations belong in the
+[dated manual evidence](../../manual-test.md#on-device-ai-productionization-verification-2026-10-02).
+

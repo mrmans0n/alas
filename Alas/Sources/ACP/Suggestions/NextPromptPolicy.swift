@@ -96,6 +96,7 @@ enum NextPromptPolicy {
         let userContext = turns.map(\.user).joined(separator: "\n")
         return !publicSecretUpload(latest.assistant, user: latest.user)
             && !protectedDeletion(latest.assistant, user: latest.user)
+            && !destructiveConsent(latest.assistant, user: latest.user)
             && !(noPublication(userContext) && publication(latest.assistant))
     }
 
@@ -104,6 +105,7 @@ enum NextPromptPolicy {
         let userContext = turns.map(\.user).joined(separator: "\n")
         return !publicSecretUpload(text, user: turns.last?.user ?? "")
             && !protectedDeletion(text, user: turns.last?.user ?? "")
+            && !destructiveConsent(text, user: turns.last?.user ?? "")
             && !(noPublication(userContext) && publication(text))
     }
 
@@ -164,6 +166,27 @@ enum NextPromptPolicy {
             || (LocalTextSafety.containsActiveAction(text, pattern: #"(?i)\b(?:delete|remove|wipe|erase|rm)\b\s+(?:the\s+)?both\s+directories\b"#)
                 && matches(user, #"(?i)\bproject\b"#)
                 && matches(user, #"(?i)\bbackup\b"#))
+    }
+
+    /// Never manufacture consent to discard protected data, including when an
+    /// assistant paraphrases deletion as a reset or a blank production store.
+    private static func destructiveConsent(_ text: String, user: String) -> Bool {
+        guard LocalTextSafety.containsActiveAction(
+            text, pattern: #"(?i)\b(?:approve|approval|confirm|authorize|permission|consent|proceed)\b"#
+        ) else { return false }
+        let action = #"(?:delet(?:e|es|ing)|remov(?:e|es|ing)|wip(?:e|es|ing)|eras(?:e|es|ing)|discard(?:s|ing)?|drop(?:s|ping)?|truncat(?:e|es|ing)|purg(?:e|es|ing)|clear(?:s|ing)?|reset(?:s|ting)?|destroy(?:s|ing)?)"#
+        let modifiers = #"(?:(?:the|a|my|our|all|every|entire|whole|old|local|protected)\s+){0,4}"#
+        let protectedObject = #"(?:projects?|backups?|(?:production|live)\s+(?:databases?|tables?|records?|data))\b"#
+        if LocalTextSafety.containsActiveAction(
+            text, pattern: "(?i)\\b\(action)\\b\\s+\(modifiers)\(protectedObject)"
+        ) { return true }
+        // A production reset can name its scope in one clause and the data
+        // loss in another: "blank production database by discarding tables".
+        let productionScope = #"(?i)\b(?:production|live)\s+(?:databases?|records?|data)\b"#
+        return (matches(text, productionScope) || matches(user, productionScope))
+            && LocalTextSafety.containsActiveAction(
+                text, pattern: "(?i)\\b\(action)\\b\\s+\(modifiers)(?:tables?|records?|database|everything|it|them)\\b"
+            )
     }
 
     private static func noPublication(_ text: String) -> Bool {

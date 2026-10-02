@@ -108,9 +108,7 @@ enum ACPLocalTitleGenerator {
     }
 
     static func isFoundationModelAvailable() -> Bool {
-        guard #available(macOS 26.0, *) else { return false }
-        let model = SystemLanguageModel.default
-        return model.isAvailable && model.supportsLocale(Locale.current)
+        LocalTextAppleAvailability.current().isAvailable
     }
 
     static func generateWithFoundationModel(from candidate: String) async -> String? {
@@ -137,8 +135,7 @@ enum ACPLocalTitleGenerator {
 struct ACPQwenTitleFallback: Sendable {
     let engine: any LocalTextGenerating
     let isAvailable: @MainActor @Sendable () -> Bool
-    /// Consent flags stay off until launch-time model inspection finishes, so a
-    /// first prompt sent right after launch would otherwise never get a title.
+    /// A first prompt can wait for launch-time verification of an allowed model.
     var waitForLocalTextReadiness: @MainActor @Sendable () async -> Void = {}
     var requests: ACPQwenTitleRequests?
 

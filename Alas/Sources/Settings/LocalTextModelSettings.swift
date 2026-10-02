@@ -1,170 +1,152 @@
 import SwiftUI
 
 struct LocalTextModelSettings: View {
-    static let nextPromptConsent = "Downloads about 2.3 GB of model files. Local inference can use several GB of memory, and process memory may remain elevated after unloading. Recent chat text is processed on this Mac; it is not sent to a suggestion service. Suggestions may be wrong or absent. Tab inserts a suggestion for review and never sends it automatically."
-    static let sessionSummaryConsent = "Downloads roughly 2.3 GB of model files. Session transcripts are processed locally on this Mac. Inference can use multi-gigabyte memory, and process memory may remain retained after unloading. Summaries may be incomplete or wrong and should be reviewed before acting."
-
-    static func sessionSummaryReadyDetail(
-        requested: Bool,
-        runtimeEnabled: Bool,
-        disableSavePending: Bool
-    ) -> String? {
-        if disableSavePending {
-            return "Model installed. Session summaries are off for this session."
-        }
-        if runtimeEnabled {
-            return "Model ready. Session summaries run locally."
-        }
-        return requested ? "Model installed. Retry to resume session summaries." : nil
-    }
-
     let state: AppState
-    @State private var showingNextPromptConsent = false
-    @State private var showingSummaryConsent = false
+    @Environment(\.theme) private var theme
+    @State private var showingDownloadConsent = false
+    @State private var showingRemovalConfirmation = false
+    private static let manifest = try? LocalTextModelManifest.bundled()
+    private static let downloadSize = manifest.map {
+        ByteCountFormatter.string(fromByteCount: $0.totalBytes, countStyle: .file)
+    } ?? "Size unavailable"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            nextPromptRow
-            sessionSummaryRow
-            SettingsRow(
-                name: "Failure briefs",
-                desc: "Summarizes failed run scripts on-device with Apple Intelligence. Without it, the installed local model is used while suggestions or summaries are enabled."
-            ) {
-                AlasToggle(on: Binding(
-                    get: { state.config.runFailureBriefsEnabled },
-                    set: { state.setRunFailureBriefsEnabled($0) }
-                ))
+        SettingsGroup(title: "Local model") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    Icon(name: "cpu", size: 20, color: theme.color("fg-muted"))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Qwen3").font(.system(size: 12.5, weight: .semibold))
+                        Text("4B parameters · 4-bit · \(Self.downloadSize)")
+                            .font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                    }
+                    Spacer()
+                    Text(modelStatus).font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(theme.color(state.localTextModelAvailable ? "add" : "fg-dim"))
+                }
+                Text("Optional download").font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(theme.color("fg-dim"))
+                Text("Required for session summaries and next-prompt suggestions, and provides fallback for the other built-in helpers when applicable. Feature preferences remain separate.")
+                    .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                    .fixedSize(horizontal: false, vertical: true)
+                modelActions
+                if !state.localTextSupported {
+                    Text("Local inference requires Apple silicon with a supported Metal GPU. You can still remove existing model files.")
+                        .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                }
+                if let error = state.localTextModelSettingsError {
+                    Text(error).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    if state.localTextModelDisableSavePending {
+                        AlasButton(title: "Retry Save") { Task { await state.retryLocalTextModelSettings() } }
+                            .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
+                    }
+                }
+                if let failure = state.localTextRemovalFailure {
+                    Text(failure.settingsMessage).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+                    AlasButton(title: "Retry Removal") { Task { await state.removeLocalTextModel() } }
+                        .disabled(!state.canRemoveLocalTextModel)
+                }
             }
-            if !state.localTextSupported {
-                Text("Requires Apple silicon with a supported Metal GPU. On-device text features are unavailable on this Mac.")
-            } else {
-                modelStatus
-            }
-            if let failure = state.localTextRemovalFailure {
-                Text(failure == .inUse
-                     ? "Model in use by another Alas process. Close its on-device features and retry removal."
-                     : failure.settingsMessage)
-                Button("Retry Removal") { Task { await state.removeLocalTextModel() } }
-                    .disabled(state.localTextRemovalInProgress)
-            } else if state.localTextModelState == .ready {
-                Button("Remove Model", role: .destructive) { Task { await state.removeLocalTextModel() } }
-                    .disabled(!state.canRemoveLocalTextModel)
-                    .help(state.localTextRemovalInProgress
-                          ? "Model removal is in progress."
-                          : state.canRemoveLocalTextModel
-                              ? "Remove the shared on-device model."
-                              : "Disable both on-device capabilities before removing the model.")
-            }
+            .padding(14)
+            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            Text("Local inference can use several GB of memory. Some process memory may remain allocated after the model unloads.")
+                .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
         }
-        .font(.callout)
+        .padding(.bottom, 20)
         .task { await state.inspectLocalTextModelOnSettingsAppearance() }
-        .alert("Enable experimental next-prompt suggestions?", isPresented: $showingNextPromptConsent) {
-            Button("Enable and Install") { Task { await state.enableNextPromptSuggestions() } }
-                .disabled(state.localTextRemovalInProgress)
+        .alert("Download the local model?", isPresented: $showingDownloadConsent) {
+            Button("Download and Allow") { Task { await state.downloadLocalTextModel() } }
+                .disabled(downloadDisabled)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(Self.nextPromptConsent)
+            Text("Downloads \(Self.downloadSize) of model files from Hugging Face. Inference runs on this Mac and can use several GB of memory; some process memory may remain allocated after unloading. Downloading allows built-in helpers to use this model. Session summaries and next-prompt suggestions remain separate preferences and are not turned on by the download.")
         }
-        .alert("Enable experimental session summaries?", isPresented: $showingSummaryConsent) {
-            Button("Enable and Install") { Task { await state.enableSessionSummaries() } }
-                .disabled(state.localTextRemovalInProgress)
+        .alert("Remove the local model?", isPresented: $showingRemovalConfirmation) {
+            Button("Remove Model", role: .destructive) { Task { await state.removeLocalTextModel() } }
+                .disabled(!state.canRemoveLocalTextModel)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(Self.sessionSummaryConsent)
+            Text("Removes up to \(Self.downloadSize) of shared model files and turns off local model use. Session summaries, next-prompt suggestions, and local fallback will be unavailable until you download and allow the model again. Feature preferences stay unchanged. Available Apple Intelligence helpers keep working.")
         }
     }
 
-    private var nextPromptRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SettingsRow(name: "Next-prompt suggestions", desc: "Experimental, on-device suggestions after a successful agent turn.") {
-                if state.nextPromptDisableSavePending {
-                    Button("Retry Disable") { Task { await state.retryNextPromptSuggestions() } }
-                        .disabled(state.localTextRemovalInProgress)
-                } else if state.config.nextPromptSuggestionsEnabled {
-                    Button("Disable") { Task { await state.disableNextPromptSuggestions() } }
-                } else {
-                    Button("Enable…") { showingNextPromptConsent = true }
-                        .disabled(!state.localTextSupported || state.localTextRemovalInProgress)
-                }
-            }
-            if state.nextPromptDisableSavePending {
-                Text("Suggestions are off for this session. Disabling has not been saved.")
-            }
-            if let error = state.nextPromptSettingsError { Text(error).foregroundStyle(.red) }
+    private var modelStatus: String {
+        if state.localTextRemovalInProgress { return "Removing…" }
+        switch state.localTextModelState {
+        case .notInstalled: return "Not installed"
+        case .downloading: return "Downloading"
+        case .verifying: return "Verifying"
+        case .ready: return state.localTextModelAvailable ? "Ready" : "Installed"
+        case .failed: return "Needs attention"
+        case .unavailable: return "Unavailable"
         }
     }
 
-    private var sessionSummaryRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SettingsRow(name: "Session summaries", desc: "Experimental, on-device summaries for resuming an idle session.") {
-                if state.sessionSummaryDisableSavePending {
-                    Button("Retry Disable") { Task { await state.retrySessionSummarySettings() } }
-                        .disabled(state.localTextRemovalInProgress)
-                } else if state.config.sessionSummariesEnabled {
-                    Button("Disable") { Task { await state.disableSessionSummaries() } }
-                } else {
-                    Button("Enable…") { showingSummaryConsent = true }
-                        .disabled(!state.localTextSupported || state.localTextRemovalInProgress)
-                }
-            }
-            if state.sessionSummaryDisableSavePending {
-                Text("Summaries are off for this session. Disabling has not been saved.")
-            }
-            if let error = state.sessionSummarySettingsError { Text(error).foregroundStyle(.red) }
-        }
-    }
-
-    @ViewBuilder private var modelStatus: some View {
+    @ViewBuilder private var modelActions: some View {
         switch state.localTextModelState {
         case .unavailable:
             Text("The bundled model manifest is unavailable. Reinstall Alas to restore it.")
+                .font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
         case .notInstalled:
-            Text("Model not installed.")
-            if state.config.nextPromptSuggestionsEnabled || state.config.sessionSummariesEnabled { retryButton }
+            AlasButton(title: "Download…") { showingDownloadConsent = true }
+                .disabled(downloadDisabled)
         case .downloading(let received, let expected):
+            Text("Available Apple Intelligence helpers keep working while the model downloads.")
+                .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
             ProgressView(value: Double(received), total: Double(max(expected, 1)))
-                .accessibilityLabel("Downloading on-device model")
-            Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
-            Button("Cancel Download") { Task { await state.cancelLocalTextDownload() } }
-        case .verifying:
-            ProgressView("Verifying model…")
-        case .ready:
-            if state.config.nextPromptSuggestionsEnabled {
-                if state.nextPromptInferenceState == .failed && state.nextPromptRuntimeEnabled {
-                    Text("The last suggestion failed. We'll try again after the next assistant reply.")
-                    retryButton
-                } else if state.nextPromptInferenceState == .retryRequired ||
-                            state.nextPromptInferenceState == .failed {
-                    Text("Local inference paused after a failure. Retry to use suggestions again.")
-                    retryButton
-                } else if !state.nextPromptRuntimeEnabled {
-                    Text("Model installed. Retry to resume suggestions.")
-                    retryButton
-                } else {
-                    Text("Model ready. Suggestions run locally.")
-                }
-            } else if let detail = Self.sessionSummaryReadyDetail(
-                requested: state.config.sessionSummariesEnabled,
-                runtimeEnabled: state.sessionSummariesRuntimeEnabled,
-                disableSavePending: state.sessionSummaryDisableSavePending
-            ) {
-                Text(detail)
-                if state.config.sessionSummariesEnabled && !state.sessionSummariesRuntimeEnabled &&
-                    !state.sessionSummaryDisableSavePending {
-                    retryButton
-                }
-            } else {
-                Text("Model installed. On-device features disabled.")
+                .accessibilityLabel("Model download")
+                .accessibilityValue("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
+            HStack {
+                Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
+                    .font(.system(size: 10.5)).foregroundStyle(theme.color("fg-dim"))
+                Spacer()
+                AlasButton(title: "Cancel", style: .subtle) { Task { await state.cancelLocalTextDownload() } }
+                    .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
             }
+        case .verifying:
+            HStack {
+                ProgressView().controlSize(.small).accessibilityLabel("Verifying model files")
+                Text("Verifying model files…").font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                Spacer()
+                AlasButton(title: "Cancel", style: .subtle) { Task { await state.cancelLocalTextDownload() } }
+                    .disabled(state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
+            }
+        case .ready:
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Use local model").font(.system(size: 12.5, weight: .medium))
+                    Text("Allow these helpers to use the installed model.")
+                        .font(.system(size: 11.5)).foregroundStyle(theme.color("fg-dim"))
+                }
+                Spacer()
+                AlasToggle(on: Binding(
+                    get: { state.config.localTextModelEnabled },
+                    set: { enabled in Task { await state.setLocalTextModelEnabled(enabled) } }
+                ))
+                .disabled(!state.localTextSupported || state.localTextRemovalInProgress || state.localTextModelPermissionChangeInProgress)
+                .accessibilityLabel("Use local model")
+                .accessibilityValue(state.localTextModelDisableSavePending ? "Off for this session; not saved" : state.config.localTextModelEnabled ? "On" : "Off")
+            }
+            AlasButton(title: "Remove…", style: .subtle) { showingRemovalConfirmation = true }
+                .disabled(!state.canRemoveLocalTextModel)
         case .failed(let failure):
-            Text(failure.settingsMessage)
-            if state.config.nextPromptSuggestionsEnabled || state.config.sessionSummariesEnabled { retryButton }
+            Text(failure.settingsMessage).font(.system(size: 11.5)).foregroundStyle(theme.color("warn"))
+            HStack {
+                AlasButton(title: "Retry Download…") { showingDownloadConsent = true }
+                    .disabled(downloadDisabled)
+                AlasButton(title: "Remove…", style: .subtle) { showingRemovalConfirmation = true }
+                    .disabled(!state.canRemoveLocalTextModel)
+            }
         }
     }
 
-    private var retryButton: some View {
-        Button("Retry") { Task { await state.retryLocalTextModel() } }
-            .disabled(state.localTextRemovalInProgress)
+    private var downloadDisabled: Bool {
+        !state.localTextSupported || state.localTextRemovalInProgress
+            || state.localTextModelPermissionChangeInProgress || state.localTextModelDisableSavePending
+            || Self.manifest == nil
     }
 }
 

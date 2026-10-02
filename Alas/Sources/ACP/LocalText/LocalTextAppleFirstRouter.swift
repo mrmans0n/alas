@@ -95,9 +95,7 @@ private final class AppleGenerationRace {
 enum LocalTextAppleIntelligence {
     @MainActor
     static var isAvailable: Bool {
-        guard #available(macOS 26.0, *) else { return false }
-        let model = SystemLanguageModel.default
-        return model.isAvailable && model.supportsLocale(Locale.current)
+        LocalTextAppleAvailability.current().isAvailable
     }
 
     @MainActor

@@ -76,13 +76,15 @@ enum IssueWorktreeNamePolicy {
 struct IssueWorktreeNameSuggester {
     let router: LocalTextAppleFirstRouter
     let timeout: Duration
+    let requests: IssueWorktreeNameRequests?
 
     init(
         engine: any LocalTextGenerating,
         isAppleIntelligenceAvailable: @escaping @MainActor @Sendable () -> Bool = { false },
         generateWithAppleIntelligence: @escaping LocalTextAppleFirstRouter.AppleGenerator = { _ in nil },
         isMLXAvailable: @escaping @MainActor @Sendable () -> Bool,
-        timeout: Duration = IssueWorktreeNamePolicy.timeout
+        timeout: Duration = IssueWorktreeNamePolicy.timeout,
+        requests: IssueWorktreeNameRequests? = nil
     ) {
         self.router = LocalTextAppleFirstRouter(
             engine: engine,
@@ -91,6 +93,7 @@ struct IssueWorktreeNameSuggester {
             isMLXAvailable: isMLXAvailable
         )
         self.timeout = timeout
+        self.requests = requests
     }
 
     @MainActor
@@ -104,9 +107,31 @@ struct IssueWorktreeNameSuggester {
             timeout: timeout
         )
 
-        return await router.generate(request, caller: .worktreeName, priority: .automatic) { output in
-            IssueWorktreeNamePolicy.parse(output, displayReference: source.displayReference)
+        let router = router
+        let job = Task {
+            await router.generate(request, caller: .worktreeName, priority: .automatic) { output in
+                IssueWorktreeNamePolicy.parse(output, displayReference: source.displayReference)
+            }
         }
+        requests?.track(job)
+        let result = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        requests?.finish(job)
+        return result
+    }
+}
+
+/// Preference changes cancel owned requests synchronously, including those
+/// that have not reached the native engine yet. A later request stays untouched.
+@MainActor
+final class IssueWorktreeNameRequests {
+    private var tracked: Set<Task<String?, Never>> = []
+
+    func track(_ job: Task<String?, Never>) { tracked.insert(job) }
+    func finish(_ job: Task<String?, Never>) { tracked.remove(job) }
+
+    func cancelAll() {
+        tracked.forEach { $0.cancel() }
+        tracked.removeAll()
     }
 }
 

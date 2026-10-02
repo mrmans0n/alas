@@ -1,6 +1,6 @@
 # Production on-device AI settings
 
-Status: provider split, visual direction, and written specification approved. Implementation plan written and self-reviewed; product-code changes await plan review and execution-method selection.
+Status: specification, implementation plan, and Native execution approved. Implementation and release verification are in progress. The bounded destructive-consent safety revision below was explicitly approved on 2026-10-02 after native evaluation exposed two accepted unsafe suggestions.
 
 ## Intent
 
@@ -34,6 +34,10 @@ Promote the settings and management flow for these existing capabilities:
 Separate permission to use the local model from individual feature preferences. Remove implicit dependence on the summaries and suggestions flags.
 
 Do not add cloud providers, model selection, automatic downloads, telemetry, model benchmarking infrastructure, a chat assistant, or new inference prompts. Do not change dictation settings or external-agent configuration.
+
+### Approved safety revision, 2026-10-02
+
+The production native fixture accepted consent to erase project/backup data and reset a production database despite preservation instructions. The user authorized extending the existing deterministic suggestion policy to suppress assistant requests for destructive consent involving protected production, project, or backup data. Safe read-only follow-ups and quoted/negated discussion must remain available. Apply the same boundary to generated candidates so safe input cannot bypass it. Keep the model and system prompt unchanged; retain behavioral regressions and rerun the existing public native fixture. This is a bounded release-gate fix, not new model benchmarking infrastructure or a general safety guarantee.
 
 ## Settings placement and appearance
 

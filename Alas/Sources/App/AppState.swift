@@ -208,21 +208,23 @@ final class AppState {
         return await self.makeWorktreeExplainerSuggester().suggest(for: evidence)
     }
 
+    @ObservationIgnored let issueWorktreeNameRequests = IssueWorktreeNameRequests()
     @ObservationIgnored var localTextInstallation: Task<Void, Never>?
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
-    var nextPromptRuntimeEnabled = false {
-        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
-    }
+    var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var sessionSummariesRuntimeEnabled = false {
-        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
-    }
+    var sessionSummariesRuntimeEnabled = false
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
     var localTextRemovalFailure: LocalTextModelFailure?
+    var localTextModelDisableSavePending = false
+    var localTextModelPermissionChangeInProgress = false
+    var localTextModelSettingsError: String?
+    var onDeviceAIHelperSettingsError: String?
+    @ObservationIgnored var localTextPermissionGeneration: UInt64 = 0
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
     @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
@@ -1686,62 +1688,50 @@ final class AppState {
         ))
     }
 
-    /// Apple Intelligence borrows consent from the existing local-title setting.
     var issueWorktreeNameAppleSuggestionsAvailable: Bool {
-        config.harness.acpLocalTitlesEnabled && LocalTextAppleIntelligence.isAvailable
+        config.issueWorktreeNameSuggestionsEnabled && LocalTextAppleIntelligence.isAvailable
     }
 
-    /// Worktree name suggestions ride on a local-text capability the user has
-    /// already consented to. Without one, or while the model is not verified
-    /// ready, the suggester never touches the engine or the model assets.
     var issueWorktreeNameSuggestionsAvailable: Bool {
-        borrowedLocalTextConsentAvailable
+        config.issueWorktreeNameSuggestionsEnabled && localTextModelAvailable
     }
 
-    /// Qwen titles borrow the same consent as worktree names and only apply
-    /// where Foundation Models is unavailable (see `ACPLocalTitleGenerator`).
     var qwenFallbackTitlesAvailable: Bool {
-        config.harness.acpLocalTitlesEnabled && borrowedLocalTextConsentAvailable
-    }
-
-    private var borrowedLocalTextConsentAvailable: Bool {
-        localTextSupported
-            && !nextPromptShuttingDown
-            && !localTextRemovalInProgress
-            && localTextModelState == .ready
-            && (nextPromptRuntimeEnabled || sessionSummariesRuntimeEnabled)
+        config.harness.acpLocalTitlesEnabled && localTextModelAvailable
     }
 
     var issueWorktreeNameSuggestionAvailable: Bool {
         issueWorktreeNameAppleSuggestionsAvailable || issueWorktreeNameSuggestionsAvailable
     }
 
-    /// Worktree names and Qwen titles borrow consent from the other local-text capabilities,
-    /// so turning the last one off must also stop their in-flight requests.
-    /// Both recheck availability too; this frees the engine early. Titles are
-    /// cancelled through their tracked jobs, synchronously: a delayed
-    /// caller-wide engine cancel could hit a title started after consent returns.
-    private func cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: Bool) {
-        guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
-        qwenTitleRequests.cancelAll()
-        let engine = localTextInference
-        Task {
-            await engine.cancel(caller: .worktreeName)
-            await engine.cancel(caller: .worktreeExplainer)
-
-            await engine.cancel(caller: .mergeConflictExplanation)
-            await engine.cancel(caller: .runFailureBrief)
-        }
-    }
 
     /// A pending Qwen title would be discarded anyway once titles are off;
     /// cancelling frees the shared engine instead of running to its timeout.
     func setACPLocalTitlesEnabled(_ enabled: Bool) {
         let wasEnabled = config.harness.acpLocalTitlesEnabled
         config.harness.acpLocalTitlesEnabled = enabled
-        saveConfig()
+        if saveConfig() {
+            onDeviceAIHelperSettingsError = nil
+        } else {
+            if enabled { config.harness.acpLocalTitlesEnabled = wasEnabled }
+            onDeviceAIHelperSettingsError =
+                "Could not save helper settings. Changes apply only to this session. Retry before quitting."
+        }
         guard wasEnabled, !enabled else { return }
         qwenTitleRequests.cancelAll()
+    }
+
+    func setIssueWorktreeNameSuggestionsEnabled(_ enabled: Bool) {
+        let previous = config.issueWorktreeNameSuggestionsEnabled
+        config.issueWorktreeNameSuggestionsEnabled = enabled
+        if saveConfig() {
+            onDeviceAIHelperSettingsError = nil
+        } else {
+            if enabled { config.issueWorktreeNameSuggestionsEnabled = previous }
+            onDeviceAIHelperSettingsError =
+                "Could not save helper settings. Changes apply only to this session. Retry before quitting."
+        }
+        if previous, !enabled { issueWorktreeNameRequests.cancelAll() }
     }
 
     func makeQwenTitleFallback() -> ACPQwenTitleFallback {
@@ -1764,7 +1754,8 @@ final class AppState {
             },
             isMLXAvailable: { [weak self] in
                 self?.issueWorktreeNameSuggestionsAvailable ?? false
-            }
+            },
+            requests: issueWorktreeNameRequests
         )
     }
 
@@ -1801,8 +1792,8 @@ final class AppState {
         )
     }
 
-    /// Explanations are user-initiated, so Apple Intelligence needs no extra
-    /// opt-in. MLX still borrows consent and never triggers a model download.
+    /// Explanations are user-initiated. Available Apple Intelligence needs no
+    /// extra opt-in; local fallback requires independent model permission.
     func makeMergeConflictExplainer() -> MergeConflictExplainer {
         MergeConflictExplainer(
             engine: localTextInference,
@@ -1811,7 +1802,7 @@ final class AppState {
                 await LocalTextAppleIntelligence.generate(request)
             },
             isMLXAvailable: { [weak self] in
-                self?.borrowedLocalTextConsentAvailable ?? false
+                self?.localTextModelAvailable ?? false
             }
         )
     }
@@ -1825,7 +1816,7 @@ final class AppState {
                 await LocalTextAppleIntelligence.generate(request)
             },
             isMLXAvailable: { [weak self] in
-                self?.borrowedLocalTextConsentAvailable ?? false
+                self?.localTextModelAvailable ?? false
             }
         )
         guard router.isAppleIntelligenceAvailable() || router.isMLXAvailable() else { return nil }

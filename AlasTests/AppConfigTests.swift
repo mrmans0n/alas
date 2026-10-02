@@ -3,46 +3,43 @@ import Foundation
 @testable import Alas
 
 struct AppConfigTests {
-    @Test func sessionSummariesDefaultsOffAndRoundTrips() throws {
+    @Test(arguments: [
+        (false, false, false, Optional<Bool>.none, false, false),
+        (true, false, false, nil, true, true),
+        (false, true, false, nil, true, true),
+        (false, false, true, nil, false, true),
+        (true, true, true, false, false, false)
+    ])
+    func localAIConsentMigrationPreservesExplicitChoices(
+        suggestions: Bool, summaries: Bool, titles: Bool,
+        explicit: Bool?, expectedModel: Bool, expectedNames: Bool
+    ) throws {
+        var source = AppConfig.defaults
+        source.sidebarWidth = 301
+        source.harness.acpLocalTitlesEnabled = titles
+        source.nextPromptSuggestionsEnabled = suggestions
+        source.sessionSummariesEnabled = summaries
         var object = try #require(JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(AppConfig.defaults)
+            with: JSONEncoder().encode(source)
         ) as? [String: Any])
-        object.removeValue(forKey: "sessionSummariesEnabled")
-        let absent = try JSONDecoder().decode(
-            AppConfig.self,
-            from: JSONSerialization.data(withJSONObject: object)
+        object.removeValue(forKey: "localTextModelEnabled")
+        object.removeValue(forKey: "issueWorktreeNameSuggestionsEnabled")
+        if let explicit {
+            object["localTextModelEnabled"] = explicit
+            object["issueWorktreeNameSuggestionsEnabled"] = explicit
+        }
+        let config = try JSONDecoder().decode(
+            AppConfig.self, from: JSONSerialization.data(withJSONObject: object)
         )
-        #expect(!absent.sessionSummariesEnabled)
-
-        object["sessionSummariesEnabled"] = true
-        let enabled = try JSONDecoder().decode(
-            AppConfig.self,
-            from: JSONSerialization.data(withJSONObject: object)
+        #expect(config.localTextModelEnabled == expectedModel)
+        #expect(config.issueWorktreeNameSuggestionsEnabled == expectedNames)
+        #expect(config.sidebarWidth == 301)
+        #expect(config.nextPromptSuggestionsEnabled == suggestions)
+        #expect(config.sessionSummariesEnabled == summaries)
+        let restored = try JSONDecoder().decode(
+            AppConfig.self, from: JSONEncoder().encode(config)
         )
-        let encoded = try #require(JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(enabled)
-        ) as? [String: Any])
-        #expect(enabled.sessionSummariesEnabled)
-        #expect(encoded["sessionSummariesEnabled"] as? Bool == true)
-    }
-
-    @Test func nextPromptPreferenceRoundTripsEnabled() throws {
-        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults)) as? [String: Any])
-        object["nextPromptSuggestionsEnabled"] = true
-        let config = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
-        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
-        #expect(encoded["nextPromptSuggestionsEnabled"] as? Bool == true)
-    }
-
-    @Test func missingNextPromptPreferencePreservesExistingPreferences() throws {
-        var config = AppConfig.defaults
-        config.sidebarWidth = 301
-        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
-        object.removeValue(forKey: "nextPromptSuggestionsEnabled")
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(decoded.sidebarWidth == 301)
-        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
-        #expect(encoded["nextPromptSuggestionsEnabled"] as? Bool == false)
+        #expect(restored == config)
     }
 
     @Test func defaultConfigEncodesAndDecodes() throws {
