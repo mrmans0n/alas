@@ -272,7 +272,7 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: ["cancel", "disable", "remove", "modelChange", "shutdown"])
+    @Test(arguments: ["disable", "remove", "modelChange", "shutdown"])
     func staleDownloadReadCannotResumeSuggestions(_ interruption: String) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -287,7 +287,6 @@ struct NextPromptSettingsTests {
         try await fixture.waitForInstallation { await gate.entered }
         await state.inspectLocalTextModel()
         switch interruption {
-        case "cancel": await state.cancelLocalTextDownload()
         case "disable": await state.disableNextPromptSuggestions()
         case "remove": await state.removeLocalTextModel()
         case "modelChange":

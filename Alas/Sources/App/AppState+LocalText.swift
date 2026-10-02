@@ -214,6 +214,7 @@ extension AppState {
 
     func cancelLocalTextDownload() async {
         guard let installation = localTextInstallation else { return }
+        let permission = localTextPermissionGeneration
         nextPromptSettingsGeneration &+= 1
         sessionSummarySettingsGeneration &+= 1
         nextPromptRuntimeEnabled = false
@@ -226,6 +227,7 @@ extension AppState {
         let value = await localTextReadModelState()
         guard generation == localTextModelGeneration || value == localTextModelState else { return }
         updateLocalTextModelState(value)
+        await restoreLocalTextFeatures(permission: permission)
     }
 
     private func restoreLocalTextFeatures(permission: UInt64) async {

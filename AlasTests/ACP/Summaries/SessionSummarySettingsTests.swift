@@ -39,16 +39,26 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func staleDownloadCancellationKeepsReadyFeaturesRunning() async throws {
+    @Test(arguments: [false, true])
+    func staleDownloadCancellationKeepsReadyFeaturesRunning(beforeReadinessCompletes: Bool) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let persistence = SummarySettingsStore(configEnabled: true)
         persistence.config.nextPromptSuggestionsEnabled = true
-        let state = makeState(fixture, persistence, modelEnabled: false)
-        await state.downloadLocalTextModel()
-        try #require(state.sessionSummariesRuntimeEnabled && state.nextPromptRuntimeEnabled)
+        let gate = LocalTextModelStateReadGate()
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) }, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
+        try await fixture.waitForInstallation { await gate.entered }
+        if !beforeReadinessCompletes {
+            await gate.open()
+            await download.value
+            try #require(state.sessionSummariesRuntimeEnabled && state.nextPromptRuntimeEnabled)
+        }
 
         await state.cancelLocalTextDownload()
+        await gate.open()
+        await download.value
 
         #expect(state.localTextModelAvailable)
         #expect(state.sessionSummariesRuntimeEnabled && state.nextPromptRuntimeEnabled)

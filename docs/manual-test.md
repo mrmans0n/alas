@@ -741,3 +741,31 @@ and the exact canonical `-only-testing` selector, in
 No new test or isolation rule was added. Both arm64 and x86_64 Release builds
 also passed on the cancellation-fix head `fb11473e`. Release launch and the
 interactive acceptance checks above remain required before merge.
+
+A further review found that Cancel could still see a completed installation
+while its readiness callback awaited a state read. The gated regression failed
+with summaries left paused. Cancellation now restores requested helpers if the
+model is ready, using the captured permission generation to respect revocation.
+The regression covers cancellation before and after the readiness callback.
+The old stale-read case that required a completed install to remain paused was
+removed rather than repinned to the new behavior.
+
+An isolated app-hosted native smoke then verified the actual pinned Qwen model's
+2,278,970,666 bytes in an owned clone of the read-only cached snapshot. Cancel
+ran while completion was gated; both helpers resumed. Actual MLX generation
+returned a grounded summary with the nil-query guard completed and targeted
+SearchTests still to run, followed by an accepted read-only next-prompt question.
+No network transfer occurred. The run passed one test in one suite in
+`/private/tmp/alas-ai-queued-cancel-native-20261003.xcresult`.
+The disposable driver was removed and project membership regenerated.
+This is lifecycle/native-generation evidence, not an unlocked UI interaction.
+
+After removing the obsolete cancellation variant and the disposable probe, all
+four focused suites passed: 67 definitions, 87 expanded runs, zero failures or
+skips. `SessionSummarySettingsTests`, `NextPromptSettingsTests`,
+`LocalTextModelStoreTests`, and `LocalTextInferenceEngineTests` all ran, in
+`/private/tmp/alas-ai-queued-cancel-final-green-20261003.xcresult`.
+SwiftFormat again reported zero of 2,127 files requiring formatting. Both arm64
+and x86_64 Release builds passed with the final correction.
+Compiled-inventory planning again discovered 12,505 definitions, excluded 22,
+and scheduled 12,483, without the removed probe.
