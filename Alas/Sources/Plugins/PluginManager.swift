@@ -82,8 +82,11 @@ final class PluginManager {
 
     static let tickInterval: Duration = .milliseconds(66)  // 15 fps
 
-    /// Where the catalog stages a download; discovery never treats it as a plugin.
-    nonisolated static let stagingFolderName = ".staging"
+    /// Where the catalog stages a download: next to the plugins folder, so moving it in is one step on the same
+    /// volume, and outside it, so it never overlaps a folder someone named.
+    var stagingDirectory: URL {
+        directory.deletingLastPathComponent().appending(path: ".\(directory.lastPathComponent)-staging")
+    }
 
     func hosts(for plugin: Plugin) -> [(key: HostKey, host: PluginHost)] {
         hostsByKey.filter { $0.key.pluginID == plugin.id }
@@ -261,7 +264,7 @@ final class PluginManager {
         let (manifest, manifestData, source) = download
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
-        let stagingRoot = directory.appending(path: Self.stagingFolderName)
+        let stagingRoot = stagingDirectory
         // A symlink here would make the cleanup below delete inside its target; replace it with a real folder.
         let rootValues = try? stagingRoot.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
         if rootValues?.isSymbolicLink == true || (rootValues != nil && rootValues?.isDirectory != true) {
@@ -441,9 +444,8 @@ final class PluginManager {
     /// all folders sharing a duplicate id, are reported instead of loaded.
     nonisolated static func discover(in directory: URL) -> (plugins: [Plugin], invalid: [Invalid]) {
         let fileManager = FileManager.default
-        // Every subfolder but the catalog's staging area, whatever its name.
+        // Every subfolder, whatever its name.
         let entries = ((try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? [])
-            .filter { $0.lastPathComponent != Self.stagingFolderName }
         let folders = entries
             .map { (url: $0.resolvingSymlinksInPath(), isLinked: (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true) }
             .filter { (try? $0.url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }

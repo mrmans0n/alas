@@ -85,6 +85,7 @@ struct PluginCatalogTests {
 
         func cleanUp() {
             try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: manager.stagingDirectory)
             UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
         }
     }
@@ -105,7 +106,7 @@ struct PluginCatalogTests {
         let plugin = try #require(f.manager.plugin(id: "io.x.p"))
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == f.release.hash)
         #expect(!f.manager.isApproved(plugin))
-        #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: ".staging/io.x.p").path))
+        #expect(!FileManager.default.fileExists(atPath: f.manager.stagingDirectory.appending(path: "io.x.p").path))
         #expect(!f.manager.catalogPathIsTaken(id: "io.x.p"))
     }
 
@@ -152,7 +153,7 @@ struct PluginCatalogTests {
         let elsewhere = f.root.appending(path: "elsewhere")
         try FileManager.default.createDirectory(at: elsewhere.appending(path: "io.x.p"), withIntermediateDirectories: true)
         try Data("keep".utf8).write(to: elsewhere.appending(path: "io.x.p/keep"))
-        try FileManager.default.createSymbolicLink(at: f.root.appending(path: ".staging"), withDestinationURL: elsewhere)
+        try FileManager.default.createSymbolicLink(at: f.manager.stagingDirectory, withDestinationURL: elsewhere)
         await f.manager.reload()
 
         #expect(await f.install() == nil)

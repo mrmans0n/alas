@@ -14,9 +14,8 @@ struct PluginManagerDiscoveryTests {
             if script { try Data([0]).write(to: dir.appending(path: "plugin.js")) }
         }
         try install("good", id: "io.x.good")
-        // A dot-folder is a plugin like any other; only the catalog's staging folder is skipped.
+        // A dot-folder is a plugin like any other.
         try install(".dotted", id: "io.x.dotted")
-        try install(".staging", id: "io.x.staged")
         // Refused by its size, before it is read.
         try install("too-big", id: "io.x.toobig", script: false)
         try Data(count: PluginLimits().maxSourceBytes + 1).write(to: root.appending(path: "too-big/plugin.js"))
