@@ -67,15 +67,44 @@ struct PluginCatalogTests {
             projects: { [] }, actions: { _ in .inert }, catalog: catalog)
         await manager.reload()
 
-        let failure = await manager.install(id: "io.x.p", Self.version("0.3.0", hash: "wrong"))
+        let failure = await manager.install(Self.entry([Self.version("0.3.0", hash: "wrong")]), Self.version("0.3.0", hash: "wrong"))
         #expect(failure == PluginCatalogError.hashMismatch.description)
         #expect(manager.plugins.isEmpty)
 
         let hash = PluginTrust.hash(manifest: manifest, entry: script)
-        #expect(await manager.install(id: "io.x.p", Self.version("0.3.0", hash: hash)) == nil)
+        #expect(await manager.install(Self.entry([Self.version("0.3.0", hash: hash)]), Self.version("0.3.0", hash: hash)) == nil)
         let plugin = try #require(manager.plugin(id: "io.x.p"))
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == hash)
         #expect(!manager.isApproved(plugin))
         #expect(!FileManager.default.fileExists(atPath: root.appending(path: ".staging/io.x.p").path))
+
+        // Edited after the scan the row came from: no longer the catalog's files, so Remove keeps them.
+        try Data("globalThis.handle = () => { /* mine */ };".utf8).write(to: plugin.folder.appending(path: "plugin.js"))
+        await manager.uninstall(plugin)
+        #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "plugin.js").path))
+    }
+
+    /// A folder at `Plugins/<id>` the catalog did not put there, even a broken one, is the user's.
+    @MainActor
+    @Test func installNeverReplacesAFolderTheCatalogDoesNotOwn() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mine = root.appending(path: "io.x.p")
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: mine.appending(path: "plugin.json"))
+        let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
+        let script = Data("globalThis.handle = () => {};".utf8)
+        let files = [URL(string: "https://example.com/0.3.0/plugin.json")!: manifest, URL(string: "https://example.com/0.3.0/plugin.js")!: script]
+        let suite = "PluginCatalogTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = PluginManager(
+            directory: root, approvals: PluginApprovalStore(defaults: defaults), projects: { [] }, actions: { _ in .inert },
+            catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
+        await manager.reload()
+
+        let version = Self.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
+        #expect(await manager.install(Self.entry([version]), version) == PluginCatalogError.installedLocally.description)
+        #expect(try Data(contentsOf: mine.appending(path: "plugin.json")) == Data("{ not json".utf8))
     }
 }

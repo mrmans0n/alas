@@ -116,9 +116,9 @@ struct PluginsPane: View {
             } else {
                 switch row {
                 case .install(let version):
-                    AlasButton(title: "Install \(version.version)", style: .normal) { install(manager, entry.id, version) }
+                    AlasButton(title: "Install \(version.version)", style: .normal) { install(manager, entry, version) }
                 case .update(let version):
-                    AlasButton(title: "Update to \(version.version)", style: .normal) { install(manager, entry.id, version) }
+                    AlasButton(title: "Update to \(version.version)", style: .normal) { install(manager, entry, version) }
                     removeButton(manager, entry.id)
                 case .installed:
                     removeButton(manager, entry.id)
@@ -140,11 +140,11 @@ struct PluginsPane: View {
         }
     }
 
-    private func install(_ manager: PluginManager, _ id: String, _ version: PluginCatalogIndex.Version) {
+    private func install(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) {
         Task {
-            busy.insert(id)
-            installFailures[id] = await manager.install(id: id, version)
-            busy.remove(id)
+            busy.insert(entry.id)
+            installFailures[entry.id] = await manager.install(entry, version)
+            busy.remove(entry.id)
         }
     }
 
