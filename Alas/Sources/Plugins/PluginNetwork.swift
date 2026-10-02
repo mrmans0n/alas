@@ -7,10 +7,10 @@ protocol PluginHTTPTransport: Sendable {
 }
 
 enum PluginHTTP {
-    /// A request body travels inside the plugin's own message, so the message limit already bounds it.
-    static let maxBodyBytes = 1 << 20
-    /// Half the 1 MiB message limit, so the reply that carries the body, JSON-escaped, still fits as a rule.
-    static let maxResponseBodyBytes = 512 << 10
+    /// Half the 1 MiB message limit, so the message that carries a body, JSON-escaped, still fits as a rule:
+    /// the plugin's request on the way out, and Alas's reply on the way back.
+    static let maxBodyBytes = 512 << 10
+    static let maxResponseBodyBytes = maxBodyBytes
     static let timeout: TimeInterval = 30
 
     /// https on the default port, to a host in `hosts`.
