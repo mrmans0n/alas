@@ -4210,7 +4210,6 @@ final class ACPSessionManager: ObservableObject {
         guard offset <= UInt64(Int64.max) else { return nil }
         return Int64(offset)
     }
-
 }
 
 // MARK: - Writer lease + heartbeat

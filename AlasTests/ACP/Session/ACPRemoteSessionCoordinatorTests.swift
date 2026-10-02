@@ -36,7 +36,8 @@ actor ReplicaEndpoint {
         case "lease/claim", "lease/seize":
             let params = try decode(RemoteSessionClaimParams.self, data)
             if owner == nil || (owner == params.owner && (fence?.token == params.requestedToken || params.previousFence == fence)) || method == "lease/seize" {
-                key = params.key; owner = params.owner
+                key = params.key
+                owner = params.owner
                 if procId.isEmpty { procId = params.proposedProcId }
                 fence = .init(recordId: recordId, token: params.requestedToken)
                 return try encoded(RemoteSessionClaimResult(lease: lease, fence: fence))
@@ -56,12 +57,14 @@ actor ReplicaEndpoint {
             return try encoded(RemoteSessionObserveResult(lease: !matches || (owner == nil && revision == 0) ? nil : lease))
         case "lease/heartbeat":
             let params = try decode(RemoteSessionHeartbeatParams.self, data)
-            try validate(params.fence); status = params.status
+            try validate(params.fence)
+            status = params.status
             return try encoded(lease)
         case "replica/publish":
             let params = try decode(RemoteSessionPublishParams.self, data)
             try validate(params.fence)
-            revision += 1; status = params.status
+            revision += 1
+            status = params.status
             for entry in params.entries {
                 entries[entry.kind.rawValue + "/" + entry.key] = .init(kind: entry.kind, key: entry.key, payload: entry.payload, revision: revision)
             }
@@ -78,10 +81,12 @@ actor ReplicaEndpoint {
                 return try encoded(RemoteSessionReadResult(cutoffRevision: revision, entries: Array(delta.prefix(1)), nextPageToken: "page"))
             }
             return try encoded(RemoteSessionReadResult(cutoffRevision: revision, entries: delta, nextPageToken: nil))
-        case "replica/cancel": nextPage = nil; return try encoded(RemoteSessionMutationResult(ok: true))
+        case "replica/cancel": nextPage = nil
+        return try encoded(RemoteSessionMutationResult(ok: true))
         case "lease/release":
             try validate(decode(RemoteSessionReleaseParams.self, data).fence)
-            owner = nil; fence = nil
+            owner = nil
+            fence = nil
             return try encoded(RemoteSessionMutationResult(ok: true))
         case "proc/kill":
             let params = try decode(RemoteHelperProcKillParams.self, data)
@@ -101,7 +106,8 @@ struct ACPRemoteSessionCoordinatorTests {
         let endpoint = ReplicaEndpoint()
         let writer = coordinator(endpoint, server: "mac-a")
         let reader = coordinator(endpoint, server: "mac-b")
-        defer { writer.shutdown(); reader.shutdown() }
+        defer { writer.shutdown()
+        reader.shutdown() }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let a = ACPSessionPersistence(path: folder.appendingPathComponent("a.sqlite").path)
@@ -130,7 +136,8 @@ struct ACPRemoteSessionCoordinatorTests {
         #expect(try await b.mirrorSnapshot(sessionId: "local-b").wireMessages == [wire("stream completes")])
         let takeover = try await reader.claim(sessionId: "local-b", key: key, proposedProcId: "acp-local-b", requestedToken: "successor", seize: true)
         #expect(takeover.lease.procId == "acp-local-a")
-        do { _ = try await writer.heartbeat(sessionId: "local-a", status: "busy"); Issue.record("stale writer heartbeat succeeded") }
+        do { _ = try await writer.heartbeat(sessionId: "local-a", status: "busy")
+        Issue.record("stale writer heartbeat succeeded") }
         catch { #expect(error.isRemoteSessionLeaseLoss) }
         #expect(!writer.hasAuthority(sessionId: "local-a"))
         writer.stopPublishing(sessionId: "local-a")
@@ -147,12 +154,14 @@ struct ACPRemoteSessionCoordinatorTests {
         let endpoint = ReplicaEndpoint()
         let writer = coordinator(endpoint, server: "a")
         let reader = coordinator(endpoint, server: "b")
-        defer { writer.shutdown(); reader.shutdown() }
+        defer { writer.shutdown()
+        reader.shutdown() }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let a = ACPSessionPersistence(path: folder.appendingPathComponent("a.sqlite").path)
         let b = ACPSessionPersistence(path: folder.appendingPathComponent("b.sqlite").path)
-        try await a.upsertSession(row("a")); try await b.upsertSession(row("b"))
+        try await a.upsertSession(row("a"))
+        try await b.upsertSession(row("b"))
         _ = try await b.persistMessages([message("b", text: "last complete transcript")], fence: nil)
         _ = try await writer.claim(sessionId: "a", key: key, proposedProcId: "acp-a", requestedToken: "a")
         try await writer.startPublishing(sessionId: "a", persistence: a, status: { "idle" }, onLeaseLost: {})
@@ -160,7 +169,8 @@ struct ACPRemoteSessionCoordinatorTests {
         await writer.flush(sessionId: "a")
         let observed = try #require(try await reader.observe(sessionId: "b", key: key))
         await endpoint.disconnectDuringRead(true)
-        do { try await reader.syncMirror(sessionId: "b", lease: observed, persistence: b, isCurrent: { true }); Issue.record("incomplete read committed") }
+        do { try await reader.syncMirror(sessionId: "b", lease: observed, persistence: b, isCurrent: { true })
+        Issue.record("incomplete read committed") }
         catch { #expect(try await b.mirrorSnapshot(sessionId: "b").wireMessages == [wire("last complete transcript")]) }
         #expect(try await b.replicaRevision(sessionId: "b", recordId: "record") == 0)
         await endpoint.disconnectDuringRead(false)
@@ -173,7 +183,8 @@ struct ACPRemoteSessionCoordinatorTests {
         let endpoint = ReplicaEndpoint()
         let writer = coordinator(endpoint, server: "mac", instance: "writer")
         let reader = coordinator(endpoint, server: "mac", instance: "reader")
-        defer { writer.shutdown(); reader.shutdown() }
+        defer { writer.shutdown()
+        reader.shutdown() }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let persistence = ACPSessionPersistence(path: folder.appendingPathComponent("shared.sqlite").path)
@@ -194,12 +205,14 @@ struct ACPRemoteSessionCoordinatorTests {
         let endpoint = ReplicaEndpoint()
         let writer = coordinator(endpoint, server: "mac")
         let reader = coordinator(endpoint, server: "other")
-        defer { writer.shutdown(); reader.shutdown() }
+        defer { writer.shutdown()
+        reader.shutdown() }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let local = ACPSessionPersistence(path: folder.appendingPathComponent("local.sqlite").path)
         let mirror = ACPSessionPersistence(path: folder.appendingPathComponent("mirror.sqlite").path)
-        try await local.upsertSession(row("session")); try await mirror.upsertSession(row("mirror"))
+        try await local.upsertSession(row("session"))
+        try await mirror.upsertSession(row("mirror"))
         _ = try await writer.claim(sessionId: "session", key: key, proposedProcId: "acp-session", requestedToken: "first")
         try await writer.startPublishing(sessionId: "session", persistence: local, status: { "idle" }, onLeaseLost: {})
         _ = try await local.persistMessages([message("session", text: "published")], fence: nil)

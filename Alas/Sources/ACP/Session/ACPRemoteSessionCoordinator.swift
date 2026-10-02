@@ -149,7 +149,8 @@ final class ACPRemoteSessionCoordinator {
     }
 
     func release(sessionId: String, expectedFence: RemoteSessionFence) async {
-        guard fence(sessionId: sessionId) == expectedFence else { try? await release(fence: expectedFence); return }
+        guard fence(sessionId: sessionId) == expectedFence else { try? await release(fence: expectedFence)
+        return }
         stopPublishing(sessionId: sessionId)
         try? await release(fence: expectedFence)
         if fence(sessionId: sessionId) == expectedFence {
@@ -272,7 +273,8 @@ final class ACPRemoteSessionCoordinator {
         reads[sessionId] = task
         readEpochs[sessionId] = readEpoch
         defer {
-            if readEpochs[sessionId] == readEpoch { reads.removeValue(forKey: sessionId); readEpochs.removeValue(forKey: sessionId) }
+            if readEpochs[sessionId] == readEpoch { reads.removeValue(forKey: sessionId)
+            readEpochs.removeValue(forKey: sessionId) }
         }
         try await task.value
     }
@@ -313,9 +315,13 @@ final class ACPRemoteSessionCoordinator {
         for task in drains.values { task.cancel() }
         for task in claims.values { task.cancel() }
         for task in reads.values { task.cancel() }
-        reads.removeAll(); readEpochs.removeAll()
+        reads.removeAll()
+        readEpochs.removeAll()
         claims.removeAll()
-        drains.removeAll(); publications.removeAll(); pending.removeAll(); dirty.removeAll()
+        drains.removeAll()
+        publications.removeAll()
+        pending.removeAll()
+        dirty.removeAll()
         for id in epochs.keys { epochs[id] = UUID() }
         for id in authorities.keys { authorities[id]?.confirmed = false }
     }

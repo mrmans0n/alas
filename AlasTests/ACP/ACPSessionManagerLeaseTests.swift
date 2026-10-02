@@ -30,7 +30,8 @@ import Foundation
         let attachBarrier = AsyncStream<Void>.makeStream()
         b.beforeTakeoverAttachForTesting = { _ in for await _ in attachBarrier.stream {} }
         defer {
-            a.shutdownBackgroundTasks(); b.shutdownBackgroundTasks()
+            a.shutdownBackgroundTasks()
+            b.shutdownBackgroundTasks()
             attachBarrier.continuation.finish()
         }
         #expect(await a.acquireWriterLease(sessionId: "local-a"))

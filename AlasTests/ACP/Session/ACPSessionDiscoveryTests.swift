@@ -370,7 +370,6 @@ struct ACPSessionDiscoveryTests {
         await manager.detach(sessionId: claude.id)
     }
 
-
     @Test("restore policy prefers resume locally and strict load for imported sessions")
     func restorePolicy() {
         #expect(ACPSessionRestorePolicy.operation(

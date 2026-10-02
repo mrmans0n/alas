@@ -31,13 +31,18 @@ private struct ReplicaMetadata: Codable {
     let updatedAt: Int64
 
     init(_ row: ACPSessionRow) {
-        title = row.title; titleSource = row.titleSource; origin = row.origin
+        title = row.title
+        titleSource = row.titleSource
+        origin = row.origin
         contextRecoveryPending = row.contextRecoveryPending
-        currentModel = row.currentModel; currentMode = row.currentMode
+        currentModel = row.currentModel
+        currentMode = row.currentMode
         configOptionValues = row.configOptionValues
         nativeSubagentsDisabled = row.nativeSubagentsDisabled
-        promptSuggestions = row.promptSuggestions; autoRun = row.autoRun
-        createdAt = row.createdAt; updatedAt = row.updatedAt
+        promptSuggestions = row.promptSuggestions
+        autoRun = row.autoRun
+        createdAt = row.createdAt
+        updatedAt = row.updatedAt
     }
 }
 
@@ -152,7 +157,8 @@ extension ACPSessionStore {
                       lease?.token == localFence.token else { throw ACPSessionReplicaError.localWriterActive }
             }
             let tracked = try db.query("SELECT record_id FROM session_replica_exports WHERE session_id=?", bindings: [sessionId]).first?["record_id"] as? String
-            if tracked == recordId { try db.exec("COMMIT"); return }
+            if tracked == recordId { try db.exec("COMMIT")
+            return }
             try db.exec("INSERT INTO session_replica_links(session_id,record_id) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET record_id=excluded.record_id", bindings: [sessionId, recordId])
             try db.exec("INSERT INTO session_replica_exports(session_id,record_id) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET record_id=excluded.record_id", bindings: [sessionId, recordId])
             for row in try db.query("SELECT CAST(seq AS TEXT) AS item_key FROM messages WHERE session_id=?", bindings: [sessionId]) {
@@ -167,7 +173,8 @@ extension ACPSessionStore {
                 try markReplicaDirty(sessionId: sessionId, kind: kind, key: key)
             }
             try db.exec("COMMIT")
-        } catch { try? db.exec("ROLLBACK"); throw error }
+        } catch { try? db.exec("ROLLBACK")
+        throw error }
     }
 
     func disableReplicaExport(sessionId: String) throws {
@@ -267,7 +274,8 @@ extension ACPSessionStore {
                     } else { payload = nil }
                 case .queue:
                     var queue = try loadQueue(sessionId: sessionId)
-                    for i in queue.indices { queue[i].dispatchedBrokerGeneration = nil; queue[i].brokerOperationAttempt = 0 }
+                    for i in queue.indices { queue[i].dispatchedBrokerGeneration = nil
+                    queue[i].brokerOperationAttempt = 0 }
                     guard var objects = try JSONSerialization.jsonObject(with: encoder.encode(queue)) as? [[String: Any]] else { throw ACPSessionReplicaError.invalidPage }
                     var refs: [String: ReplicaReference] = [:]
                     for i in objects.indices {
@@ -358,7 +366,8 @@ extension ACPSessionStore {
             try discardReplicaImport(sessionId: id)
             try db.exec("COMMIT")
             return cutoff
-        } catch { try? db.exec("ROLLBACK"); throw error }
+        } catch { try? db.exec("ROLLBACK")
+        throw error }
     }
 
     private func importedMessagePayload(_ message: ReplicaMessage) throws -> Data {
@@ -380,11 +389,16 @@ extension ACPSessionStore {
             guard let payload else { return }
             let m = try decoder.decode(ReplicaMetadata.self, from: payload)
             guard var row = try loadSession(id: sessionId) else { throw ACPSessionReplicaError.missingSession }
-            row.title = m.title; row.titleSource = m.titleSource; row.origin = m.origin
+            row.title = m.title
+            row.titleSource = m.titleSource
+            row.origin = m.origin
             row.contextRecoveryPending = m.contextRecoveryPending
-            row.currentModel = m.currentModel; row.currentMode = m.currentMode
-            row.configOptionValues = m.configOptionValues; row.promptSuggestions = m.promptSuggestions
-            row.autoRun = m.autoRun; row.updatedAt = m.updatedAt
+            row.currentModel = m.currentModel
+            row.currentMode = m.currentMode
+            row.configOptionValues = m.configOptionValues
+            row.promptSuggestions = m.promptSuggestions
+            row.autoRun = m.autoRun
+            row.updatedAt = m.updatedAt
             try upsertSession(row)
             try db.exec("UPDATE sessions SET native_subagents_disabled=?,created_at=? WHERE id=?", bindings: [m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.createdAt, sessionId])
         case "message", "subagent":
@@ -414,7 +428,8 @@ extension ACPSessionStore {
             try db.exec("UPDATE \(table) SET payload=?,created_at=? WHERE session_id=? AND seq=?\(childPredicate)", bindings: bindings)
         case "queue":
             try db.exec("DELETE FROM session_replica_relations WHERE session_id=? AND relation_key LIKE 'queue:%'", bindings: [sessionId])
-            guard let payload else { try upsertQueue(sessionId: sessionId, items: []); return }
+            guard let payload else { try upsertQueue(sessionId: sessionId, items: [])
+            return }
             let queue = try decoder.decode(ReplicaQueue.self, from: payload)
             guard var objects = try JSONSerialization.jsonObject(with: queue.payload) as? [[String: Any]] else { throw ACPSessionReplicaError.invalidPage }
             for i in objects.indices {
