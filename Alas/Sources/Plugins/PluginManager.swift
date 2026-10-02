@@ -78,6 +78,9 @@ final class PluginManager {
 
     static let tickInterval: Duration = .milliseconds(66)  // 15 fps
 
+    /// Where the catalog stages a download; discovery never treats it as a plugin.
+    nonisolated static let stagingFolderName = ".staging"
+
     func hosts(for plugin: Plugin) -> [(key: HostKey, host: PluginHost)] {
         hostsByKey.filter { $0.key.pluginID == plugin.id }
             .map { (key: $0.key, host: $0.value) }
@@ -146,6 +149,11 @@ final class PluginManager {
         }
         var failure: String?
         await serialized {
+            // Plugins were turned off while it downloaded: the manager is gone, so nothing is written.
+            guard !self.isShutDown else {
+                failure = "Plugins were turned off."
+                return
+            }
             do {
                 try await self.performInstall(entry, version, download)
                 await self.performReload()
@@ -205,7 +213,7 @@ final class PluginManager {
         let (manifest, manifestData, source) = download
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
-        let stagingRoot = directory.appending(path: ".staging")
+        let stagingRoot = directory.appending(path: Self.stagingFolderName)
         // A symlink here would make the cleanup below delete inside its target; replace it with a real folder.
         let rootValues = try? stagingRoot.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
         if rootValues?.isSymbolicLink == true || (rootValues != nil && rootValues?.isDirectory != true) {
@@ -356,8 +364,9 @@ final class PluginManager {
     /// all folders sharing a duplicate id, are reported instead of loaded.
     nonisolated static func discover(in directory: URL) -> (plugins: [Plugin], invalid: [Invalid]) {
         let fileManager = FileManager.default
-        let entries = ((try? fileManager.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey], options: .skipsHiddenFiles)) ?? [])
+        // Every subfolder but the catalog's staging area, whatever its name.
+        let entries = ((try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? [])
+            .filter { $0.lastPathComponent != Self.stagingFolderName }
         let folders = entries
             .map { (url: $0.resolvingSymlinksInPath(), isLinked: (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true) }
             .filter { (try? $0.url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
