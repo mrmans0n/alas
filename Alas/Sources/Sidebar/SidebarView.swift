@@ -32,7 +32,7 @@ struct SidebarView: View {
     /// Per space, since every page keeps its own scroll view. Read only by the
     /// filter row, so per-frame scroll updates re-render it alone rather than
     /// the whole tree.
-    @State private var sidebarScrollOffsets: [String: CGFloat] = [:]
+    @State private var scrollOffsets = SidebarScrollOffsets()
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -52,7 +52,7 @@ struct SidebarView: View {
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     SidebarFilterSlotScrollView(
                         scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
-                        onScroll: { sidebarScrollOffsets[spaceID] = $0 }
+                        onScroll: { scrollOffsets.setOffset($0, forSpace: spaceID) }
                     ) {
                         VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
                             // The filter row's slot; the row itself is drawn
@@ -285,10 +285,8 @@ struct SidebarView: View {
                 .overlay(alignment: .top) {
                     SidebarWorktreeFilterRow(
                         state: state,
-                        scrollOffset: Binding(
-                            get: { sidebarScrollOffsets[state.spacesManager.activeSpaceId] ?? 0 },
-                            set: { _ in }
-                        ),
+                        scrollOffsets: scrollOffsets,
+                        spaceID: state.spacesManager.activeSpaceId,
                         text: $worktreeFilter,
                         focused: $worktreeFilterFocused,
                         onMoveHighlight: moveFilterHighlight(by:),
@@ -536,12 +534,30 @@ private struct FilterSlotSnapBehavior: ScrollTargetBehavior {
     }
 }
 
+/// Scroll offsets published on every scroll frame. They live in an observable
+/// object rather than in `SidebarView` state: a `@State` write re-evaluated the
+/// whole sidebar tree each frame, even though only the filter row reads them.
+@MainActor
+@Observable
+final class SidebarScrollOffsets {
+    private var offsets: [String: CGFloat] = [:]
+
+    func offset(forSpace spaceID: String) -> CGFloat {
+        offsets[spaceID] ?? 0
+    }
+
+    func setOffset(_ offset: CGFloat, forSpace spaceID: String) {
+        offsets[spaceID] = offset
+    }
+}
+
 /// Rides its slot at the top of the scroll content, and pins over the list
 /// while filtering. Owns the offset read so it does not re-render the sidebar
 /// tree.
 private struct SidebarWorktreeFilterRow: View {
     @Bindable var state: AppState
-    @Binding var scrollOffset: CGFloat
+    let scrollOffsets: SidebarScrollOffsets
+    let spaceID: String
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
     let onMoveHighlight: (Int) -> Void
@@ -553,7 +569,7 @@ private struct SidebarWorktreeFilterRow: View {
         // loses the field that explains it.
         let pinned = !text.isEmpty || focused.wrappedValue
         let y = WorktreeSidebarFilter.rowY(
-            scrollOffset: scrollOffset, pinned: pinned, restY: SidebarFilterRowMetrics.restY
+            scrollOffset: scrollOffsets.offset(forSpace: spaceID), pinned: pinned, restY: SidebarFilterRowMetrics.restY
         )
         let opacity = WorktreeSidebarFilter.rowOpacity(y: y, height: SidebarFilterRowMetrics.slotHeight)
         let inset = SidebarFilterRowMetrics.restY
