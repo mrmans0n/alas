@@ -346,6 +346,14 @@ extension AppState {
                             self.nextPromptComposerEpoch &+= 1
                         }
                     },
+                    session.nextPromptVisibilityChanged.sink { [weak self] isVisible in
+                        guard let self, self.nextPromptActiveIncarnation == incarnation else { return }
+                        if isVisible {
+                            self.nextPromptCoordinator.reconsider(incarnation: incarnation)
+                        } else {
+                            self.nextPromptCoordinator.suspend(incarnation: incarnation)
+                        }
+                    },
                     session.nextPromptTeardown.sink { [weak self] in
                         guard let self else { return }
                         self.nextPromptCoordinator.sessionEnded(incarnation: incarnation)

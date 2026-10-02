@@ -25,7 +25,7 @@ struct NextPromptSettingsTests {
         await state.shutdownNextPromptSuggestions()
     }
 
-    @Test func unfocusedCompletionIsOfferedAfterComposerReturns() async throws {
+    @Test func temporaryFocusAndTabLossPreserveOffer() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
@@ -95,6 +95,13 @@ struct NextPromptSettingsTests {
         #expect(state.nextPromptCoordinator.offer == nil)
         environment.hasComposerFocus = true
         state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        #expect(state.nextPromptCoordinator.offer == "Show an example.")
+        #expect(generationCount.withLock { $0 } == 1)
+
+        manager.markSessionVisible(id: session.id)
+        manager.unmarkSessionVisible(id: session.id)
+        #expect(state.nextPromptCoordinator.offer == nil)
+        manager.markSessionVisible(id: session.id)
         #expect(state.nextPromptCoordinator.offer == "Show an example.")
         #expect(generationCount.withLock { $0 } == 1)
 

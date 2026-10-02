@@ -641,7 +641,7 @@ struct NextPromptCoordinatorTests {
         #expect(fixture.generator.requests.count == 1)
     }
 
-    @Test(arguments: ["visibility", "lease", "observed lease", "teardown", "shutdown"])
+    @Test(arguments: ["lease", "observed lease", "teardown", "shutdown"])
     func managerLifecycleInvalidatesBeforeReturning(_ event: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -669,7 +669,6 @@ struct NextPromptCoordinatorTests {
         await task?.value
         #expect(coordinator.offer != nil)
         switch event {
-        case "visibility": manager.unmarkSessionVisible(id: session.id)
         case "lease": manager._ownedLeases.remove(session.id)
         case "observed lease":
             _ = try store.seizeLease(sessionId: session.id, instanceId: "other", pid: Int64(getpid()),
