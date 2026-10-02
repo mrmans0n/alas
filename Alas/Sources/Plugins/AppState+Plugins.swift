@@ -116,11 +116,19 @@ extension AppState {
                 // Only live agent sessions of this project's worktrees; terminal sessions take no prompts.
                 guard let self, let worktree = (self.projectsManager.worktreesByProject[project.id] ?? []).first(where: {
                     self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
-                }) else { return false }
-                Task { @MainActor in
-                    await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { _ in })
+                }) else { return "unknown session \(id)" }
+                // Answered once the session accepted or refused the prompt (no writer lease, signed out, …).
+                let accepted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    var resumed = false
+                    Task { @MainActor in
+                        await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { ok in
+                            guard !resumed else { return }
+                            resumed = true
+                            continuation.resume(returning: ok)
+                        })
+                    }
                 }
-                return true
+                return accepted ? nil : "the session did not accept the prompt"
             },
             startRun: { [weak self] worktreeID, key in
                 guard let self else { return "Alas is shutting down" }
