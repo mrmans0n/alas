@@ -577,11 +577,11 @@ final class PluginHost {
         guard instance == self.instance else { return }
         fetchesInFlight -= 1
         guard state == .active else { return }
-        let tooLarge = "the response body is larger than 1 MiB"
+        let tooLarge = "the response is too large for one message"
         var reply: Data
         switch outcome {
         case .success(let (body, response)):
-            guard body.count <= PluginHTTP.maxBodyBytes else {
+            guard body.count <= PluginHTTP.maxResponseBodyBytes else {
                 reply = errorReply(id, code: -32003, tooLarge)
                 break
             }

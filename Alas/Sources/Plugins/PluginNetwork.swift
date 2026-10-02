@@ -7,7 +7,10 @@ protocol PluginHTTPTransport: Sendable {
 }
 
 enum PluginHTTP {
+    /// A request body travels inside the plugin's own message, so the message limit already bounds it.
     static let maxBodyBytes = 1 << 20
+    /// Half the 1 MiB message limit, so the reply that carries the body, JSON-escaped, still fits as a rule.
+    static let maxResponseBodyBytes = 512 << 10
     static let timeout: TimeInterval = 30
 
     /// https on the default port, to a host in `hosts`.
@@ -40,7 +43,7 @@ struct PluginURLSessionTransport: PluginHTTPTransport {
         var data = Data()
         for try await byte in bytes {
             data.append(byte)
-            if data.count > PluginHTTP.maxBodyBytes {
+            if data.count > PluginHTTP.maxResponseBodyBytes {
                 bytes.task.cancel()
                 throw PluginHTTPBodyTooLarge()
             }
