@@ -347,15 +347,167 @@ struct ACPSessionManagerRemoteRestoreTests {
         }
     }
 
+    @Test("a foreign SSH mirror takes over and continues the same conversation with a persisted prompt reply", arguments: [ACPSessionOrigin.agentImported, .alasCreated])
+    func sshMirrorTakeoverLoadsAndPromptsExistingConversation(origin: ACPSessionOrigin) async throws {
+        let endpoint = ReplicaEndpoint()
+        let coordinatorA = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) { method, data in
+            try await endpoint.request(method, data)
+        }
+        let coordinatorB = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in
+            try await endpoint.request(method, data)
+        }
+        let (a, _, clientA, sessionA) = try fixture(
+            origin: origin,
+            localMessage: .agent(id: UUID(), StreamingText("Earlier reply")),
+            localId: UUID().uuidString,
+            instanceId: "A",
+            remoteCoordinator: coordinatorA
+        )
+        let (b, storeB, clientB, sessionB) = try fixture(
+            origin: origin,
+            localId: UUID().uuidString,
+            instanceId: "B",
+            remoteCoordinator: coordinatorB
+        )
+        defer {
+            a.shutdownBackgroundTasks()
+            b.shutdownBackgroundTasks()
+        }
+        for client in [clientA, clientB] {
+            scriptInitialize(client, canLoad: true, canResume: true)
+            scriptSessionResult(client, method: "session/load", sessionId: "remote-id")
+        }
+        clientA.script(method: "session/resume") { _ in Data("{}".utf8) }
+        clientB.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.sessionId == "remote-id")
+            #expect(params.prompt.contains { block in
+                if case .text("Continue from the other Mac") = block { return true }
+                return false
+            })
+            clientB.emit(.init(sessionId: "remote-id", update: .agentMessageChunk(.text("Continued on Mac B"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+
+        await a.hydrateIfNeeded(id: sessionA.id)
+        await a.attach(to: sessionA.id, freshlyCreated: false)
+        try #require(sessionA.agentState == .ready)
+        await a.flushAllPersistence()
+        await coordinatorA.flush(sessionId: sessionA.id)
+        await b.hydrateIfNeeded(id: sessionB.id)
+        await b.attach(to: sessionB.id, freshlyCreated: false)
+        try #require(b.isMirror(sessionId: sessionB.id))
+        #expect(a.isWriter(for: sessionA.id))
+        #expect(clientB.sent.isEmpty)
+        try await waitUntil { sessionB.transcript.messages.count == 1 }
+
+        try #require(await b.takeOver(sessionId: sessionB.id))
+        _ = await a.heartbeatTick(sessionId: sessionA.id)
+        try await waitUntil { sessionB.agentState == .ready }
+        #expect(b.isWriter(for: sessionB.id))
+        #expect(!b.isMirror(sessionId: sessionB.id))
+        #expect(!a.isWriter(for: sessionA.id))
+        #expect(a.isMirror(sessionId: sessionA.id))
+        #expect(clientB.sent.contains { $0.method == "session/load" })
+        #expect(!clientB.sent.contains { $0.method == "session/new" })
+
+        var promptSucceeded: Bool?
+        await b.sendPrompt(for: sessionB.id, text: "Continue from the other Mac", attachments: []) {
+            promptSucceeded = $0
+        }
+        try await waitUntil {
+            promptSucceeded == true && sessionB.agentState == .ready
+                && sessionB.transcript.messages.count == 3
+        }
+        await b.flushAllPersistence()
+
+        let expected: [ACPMessageWire] = [
+            .agent(messageId: nil, text: "Earlier reply", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "Continue from the other Mac", attachments: [], delegatedSource: nil),
+            .agent(messageId: nil, text: "Continued on Mac B", phase: nil, metadata: nil)
+        ]
+        let transcript = try sessionB.transcript.messages.map {
+            try ACPMessageWire.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        let persisted = try storeB.loadMessages(sessionId: sessionB.id).map {
+            try ACPMessageWire.decode(kind: $0.kind, payload: $0.payload)
+        }
+        #expect(transcript == expected)
+        #expect(persisted == expected)
+        #expect(try storeB.loadSession(id: sessionB.id)?.remoteSessionId == "remote-id")
+        #expect(!clientB.sent.contains { $0.method == "session/new" })
+        #expect(b.isWriter(for: sessionB.id))
+        #expect(a.isMirror(sessionId: sessionA.id))
+        await a.detach(sessionId: sessionA.id)
+        await b.detach(sessionId: sessionB.id)
+    }
+
+    @Test("SSH context recovery creates a distinct fenced conversation and retains the original history", arguments: [false, true])
+    func sshContextRecoveryPreservesOriginalConversation(canResume: Bool) async throws {
+        let original = ReplicaEndpoint(recordId: "original"), recovered = ReplicaEndpoint(recordId: "recovered")
+        let request: ACPRemoteSessionCoordinator.Request = { method, data in
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            let key = object["key"] as? [String: Any]
+            let fence = object["fence"] as? [String: Any]
+            let record = object["recordId"] as? String ?? fence?["recordId"] as? String
+            let endpoint: ReplicaEndpoint
+            if let key {
+                endpoint = key["remoteSessionId"] as? String == "remote-id" ? original : recovered
+            } else {
+                endpoint = record == "recovered" ? recovered : original
+            }
+            return try await endpoint.request(method, data)
+        }
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A"), request: request)
+        let first = ACPMockClient(), next = ACPMockClient()
+        scriptInitialize(first, canLoad: true, canResume: canResume)
+        first.script(method: canResume ? "session/resume" : "session/load") { _ in
+            throw JSONRPCError(code: -32602, message: "conversation unavailable", data: nil)
+        }
+        scriptInitialize(next, canLoad: true, canResume: true)
+        scriptSessionResult(next, method: "session/new", sessionId: "recovered-id")
+        next.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        var clients = [first, next]
+        let (manager, store, _, session) = try fixture(origin: .alasCreated,
+            localMessage: .agent(id: UUID(), StreamingText("Original reply")), instanceId: "A",
+            remoteCoordinator: coordinator, connectionFactory: { _, _, _ in ACPConnection(client: clients.removeFirst()) })
+        defer { manager.shutdownBackgroundTasks() }
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil { session.agentState == .ready }
+        #expect(manager.isWriter(for: session.id))
+        #expect(session.remoteSessionId == "recovered-id")
+        #expect(try store.loadSession(id: session.id)?.remoteSessionId == "recovered-id")
+        #expect(coordinator.lease(sessionId: session.id)?.recordId == "recovered")
+        #expect(!first.sent.contains { $0.method == "session/new" })
+        let observeParams = try JSONEncoder().encode(RemoteSessionObserveParams(key: .init(worktreePath: "/tmp/wt", agentId: "claude", remoteSessionId: "remote-id")))
+        let oldData = try await original.request("lease/observe", observeParams)
+        let old = try JSONDecoder().decode(RemoteSessionObserveResult.self, from: oldData)
+        let oldLease = try #require(old.lease)
+        #expect(oldLease.owner == nil)
+        #expect(oldLease.procId != coordinator.lease(sessionId: session.id)?.procId)
+        let mirror = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path)
+        try await mirror.upsertSession(.init(id: "original-reader", agentId: "claude", title: "Original", remoteSessionId: "remote-id", currentModel: nil, currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let reader = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B"), request: request)
+        defer { reader.shutdown() }
+        try await reader.syncMirror(sessionId: "original-reader", lease: oldLease, persistence: mirror, isCurrent: { true })
+        #expect(try await mirror.mirrorSnapshot(sessionId: "original-reader").wireMessages == [.agent(messageId: nil, text: "Original reply", phase: nil, metadata: nil)])
+        await manager.detach(sessionId: session.id)
+    }
+
     private func fixture(
         origin: ACPSessionOrigin,
-        localMessage: ACPMessage? = nil
+        localMessage: ACPMessage? = nil,
+        localId: String = "local-id",
+        instanceId: String = UUID().uuidString,
+        remoteCoordinator: ACPRemoteSessionCoordinator? = nil,
+        connectionFactory: ACPSessionManager.ACPConnectionFactory? = nil
     ) throws -> (ACPSessionManager, ACPSessionStore, ACPMockClient, ACPSession) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-remote-restore-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(
-            id: "local-id",
+            id: localId,
             agentId: "claude",
             title: "Session",
             titleSource: .generated,
@@ -377,8 +529,8 @@ struct ACPSessionManagerRemoteRestoreTests {
             // the position it resolved to (correctly, since that write is
             // real) creates a duplicate instead of updating this one.
             try store.appendMessage(
-                sessionId: "local-id",
-                id: "msg-local-id-0",
+                sessionId: localId,
+                id: "msg-\(localId)-0",
                 kind: localMessage.kind,
                 seq: 0,
                 payload: ACPMessageCodec.encode(localMessage),
@@ -390,10 +542,16 @@ struct ACPSessionManagerRemoteRestoreTests {
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            instanceId: instanceId,
+            remoteHost: remoteCoordinator == nil ? nil : "fixture",
+            remoteSessionCoordinator: remoteCoordinator,
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/home/dev/.alas/acp/claude/bin/claude-agent-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: connectionFactory ?? { _, _, _ in ACPConnection(client: client) }
         )
-        let session = try #require(manager.placeholderSession(id: "local-id"))
+        let session = try #require(manager.placeholderSession(id: localId))
         return (manager, store, client, session)
     }
 

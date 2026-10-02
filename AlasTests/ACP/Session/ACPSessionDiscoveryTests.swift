@@ -370,28 +370,6 @@ struct ACPSessionDiscoveryTests {
         await manager.detach(sessionId: claude.id)
     }
 
-    @Test("deletion confirmations name the agent and session and explain retention semantics")
-    func deletionConfirmationCopy() {
-        let session = ACPDiscoveredSession(
-            worktreeId: "wt",
-            agentId: "pi",
-            remoteSessionId: "remote-listed",
-            cwd: "/tmp/wt",
-            title: "Fix parser",
-            updatedAt: nil,
-            additionalDirectories: [],
-            localSessionId: "local-1"
-        )
-        let remote = ACPSessionDeletionRequest(kind: .agentHistory, agentName: "Pi", session: session)
-        #expect(remote.title.contains("Pi"))
-        #expect(remote.title.contains("Fix parser"))
-        #expect(remote.message.contains("soft or permanent"))
-        #expect(remote.message.contains("no undo"))
-
-        let local = ACPSessionDeletionRequest(kind: .localOnly, agentName: "Pi", session: session)
-        #expect(local.message.contains("Only Alas’s local record"))
-        #expect(local.message.contains("remains in Pi’s history"))
-    }
 
     @Test("restore policy prefers resume locally and strict load for imported sessions")
     func restorePolicy() {

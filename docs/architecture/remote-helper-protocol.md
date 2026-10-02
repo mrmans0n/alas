@@ -39,11 +39,13 @@ Result:
 {
   "name": "alas-helper",
   "protocolVersion": 1,
-  "binaryVersion": "0.3.0",
+  "binaryVersion": "0.6.0",
   "capabilities": {
     "watchKinds": ["files", "git"],
     "fs": {"read": true, "write": true, "stat": true},
-    "ping": true
+    "ping": true,
+    "proc": true,
+    "sessionCoordination": 1
   }
 }
 ```
@@ -181,9 +183,65 @@ Result: `{"ok":true}`
 Cancellation kills the server-side ripgrep child without closing the helper
 channel.
 
+## SSH ACP session coordination
+
+SSH ACP writers require both `proc: true` and `sessionCoordination: 1`. Older
+helpers remain usable for filesystem and discovery operations, but cannot open
+a writable SSH ACP attachment. Fenced process mutations revalidate this
+capability after a helper connection restarts.
+
+The helper canonicalizes `key.worktreePath` on the remote host. Bound sessions
+are identified by that path, `key.agentId`, and the opaque
+`key.remoteSessionId`, not by a Mac's local session UUID. Before `session/new`
+returns an ID, the proposed process ID identifies the provisional record.
+Delegated children have separate records and leases.
+
+`lease/observe` looks up bound sessions. An unbound `(worktree, agent, null)` is
+not unique; callers retain the provisional process locator and fence returned
+by claim until binding.
+
+| Method | Params | Result / effect |
+| --- | --- | --- |
+| `lease/claim` | `key`, `owner`, `proposedProcId`, `requestedToken`, optional `previousFence` | Current `lease` and an optional writer `fence`; a fresh foreign owner gets no fence |
+| `lease/seize` | Same as claim | Explicit takeover with a new token |
+| `lease/bind` | `fence`, `remoteSessionId` | Binds the provisional record without changing its actual process locator |
+| `lease/heartbeat` | `fence`, `status` | Renews the writer using remote time and records idle/busy status |
+| `lease/observe` | `key` | Current lease, or null |
+| `lease/release` | `fence` | Relinquishes ownership without deleting history |
+| `lease/delete` | `fence` | Deletes the record and replica; requires current, fresh ownership |
+| `replica/publish` | `fence`, `batchId`, `entries`, `status` | Idempotent batch publication with a monotonic revision |
+| `replica/read` | `recordId`, `afterRevision`, optional `pageToken` | Entries, pinned `cutoffRevision`, and optional `nextPageToken` |
+| `replica/cancel` | `pageToken` | Releases a pinned read |
+
+`owner` contains the Mac's persisted `serverId` and the Alas `instanceId`.
+The server identity exists independently of enabling the WebSocket server.
+A fence contains `{recordId, token}`. Replacing an attachment within the same
+owner must present its `previousFence` and rotate the token; knowing the owner
+identifiers alone does not authorize replacement.
+
+Leases expire after 60 seconds by the helper's clock; clients heartbeat every
+5 seconds. SQLite write transactions serialize arbitration across helper
+processes. For associated processes, `proc/spawn`, `proc/write`, and `proc/kill`
+require `leaseFence`, and the authority check and process mutation share that
+transaction. `expectedStdinOffset` still deduplicates retries but does not grant
+authority. Reading or attaching to output does not grant stdin authority.
+
+Replica entries are keyed by kind and item key. Their base64 payload is opaque
+to the helper; null payloads are tombstones. Pages use one pinned SQLite
+snapshot, so concurrent edits cannot change an in-progress cutoff. Page tokens
+expire after 60 seconds and are lost when their serving helper exits. Clients
+discard incomplete staging and retry from the last committed revision.
+
+Readers transactionally import complete pages into their own local SQLite
+store. Portable relationships are mapped to local IDs; user text and tool
+payload bytes are not path-rewritten. Composer drafts, process offsets, MCP
+registrations, and broker credentials remain local. Same-Mac mirrors keep the
+existing shared-SQLite fast path. Release, helper restart, and local Forget
+retain the remote replica; an authorized agent-history deletion removes it.
+
 ## Security
 
-The helper only serves paths under registered roots. `watch/subscribe` resolves
+Filesystem RPCs only serve paths under registered roots. `watch/subscribe` resolves
 the requested root with the remote host filesystem. Reads, stats, listings,
 line counts, and searches
 resolve existing target paths and require them to be under a registered root.
@@ -210,3 +268,7 @@ range:
 | `-32023` | path is outside registered roots |
 | `-32025` | path is not a regular file |
 | `-32030` | expected content or mtime baseline did not match |
+| `-32080` | remote session storage failed |
+| `-32081` | remote session lease was lost or expired |
+| `-32082` | remote session identity conflicts |
+| `-32083` | replica page token expired or is unknown |

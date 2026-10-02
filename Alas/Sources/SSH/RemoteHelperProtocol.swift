@@ -28,6 +28,7 @@ struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     let proc: Bool?
     let acp: Bool?
     let ping: Bool
+    var sessionCoordination: Int? = nil
 }
 
 struct RemoteHelperFSCapabilities: Codable, Equatable, Sendable {
@@ -237,6 +238,7 @@ struct RemoteHelperProcSpawnParams: Codable, Equatable, Sendable {
     let cwd: String
     let env: [String: String]
     let pathPrefixDirectories: [String]
+    var leaseFence: RemoteSessionFence? = nil
 }
 
 struct RemoteHelperProcStatus: Codable, Equatable, Sendable {
@@ -272,6 +274,7 @@ struct RemoteHelperProcWriteParams: Codable, Equatable, Sendable {
     let procId: String
     let dataBase64: String
     let expectedStdinOffset: UInt64?
+    var leaseFence: RemoteSessionFence? = nil
 }
 
 struct RemoteHelperProcWriteResult: Codable, Equatable, Sendable {
@@ -281,6 +284,7 @@ struct RemoteHelperProcWriteResult: Codable, Equatable, Sendable {
 
 struct RemoteHelperProcKillParams: Codable, Equatable, Sendable {
     let procId: String
+    var leaseFence: RemoteSessionFence? = nil
 }
 
 struct RemoteHelperProcKillResult: Codable, Equatable, Sendable {

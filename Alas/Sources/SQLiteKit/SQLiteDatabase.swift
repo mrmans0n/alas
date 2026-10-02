@@ -3,6 +3,7 @@ import SQLite3
 
 final class SQLiteDatabase {
     private var handle: OpaquePointer?
+    private var replicaChangeObservers: [UUID: @Sendable () -> Void] = [:]
 
     init(path: String, busyTimeoutMilliseconds: Int32 = 5_000) throws {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
@@ -18,6 +19,22 @@ final class SQLiteDatabase {
     }
 
     deinit { sqlite3_close(handle) }
+
+    /// The persistence actor serializes the next outbox read after the current
+    /// SQLite operation returns. Rollbacks may wake it but cannot export rows.
+    func observeReplicaChanges(id: UUID, _ observer: @escaping @Sendable () -> Void) {
+        replicaChangeObservers[id] = observer
+        sqlite3_update_hook(handle, { context, operation, _, table, _ in
+            guard operation != SQLITE_DELETE, let context, let table else { return }
+            let isReplicaChange = "session_replica_dirty".withCString { strcmp(table, $0) == 0 }
+            guard isReplicaChange else { return }
+            for observer in Unmanaged<SQLiteDatabase>.fromOpaque(context).takeUnretainedValue().replicaChangeObservers.values { observer() }
+        }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    func removeReplicaChangeObserver(id: UUID) {
+        replicaChangeObservers.removeValue(forKey: id)
+    }
 
     func exec(_ sql: String, bindings: [Any?] = []) throws {
         guard let h = handle else { return }

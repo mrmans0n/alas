@@ -191,9 +191,23 @@ struct RemoteAppStateAccessTests {
         }
     }
 
-    private struct MemoryStore: PersistenceStoreProtocol {
-        func write<T: Encodable>(_: T, to _: URL) throws {}
-        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    private final class MemoryStore: PersistenceStoreProtocol {
+        private var files: [URL: Data] = [:]
+        private let lock = NSLock()
+
+        func write<T: Encodable>(_ value: T, to url: URL) throws {
+            let data = try JSONEncoder().encode(value)
+            lock.lock()
+            defer { lock.unlock() }
+            files[url] = data
+        }
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            lock.lock()
+            let data = files[url]
+            lock.unlock()
+            return try data.map { try JSONDecoder().decode(type, from: $0) }
+        }
     }
 
     private struct ProjectMemoryStore: PersistenceStoreProtocol {
@@ -219,6 +233,74 @@ struct RemoteAppStateAccessTests {
             }
             return nil
         }
+    }
+
+    @Test func sshManagersPersistMachineIdentityWhileWebSocketAccessRemainsDisabled() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let store = MemoryStore()
+        var config = AppConfig.defaults
+        config.remote.enabled = false
+        config.remote.serverId = ""
+        try store.write(config, to: Paths.appConfigFile)
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "Remote",
+            path: RemotePath.virtual(host: "identity.test", realPath: repository.path),
+            color: "blue",
+            addedAt: Date(),
+            host: "identity.test"
+        )
+        try store.write(ProjectsFile(projects: [project]), to: Paths.projectsFile)
+        let worktree = Worktree(
+            id: UUID().uuidString,
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: project.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let state = AppState(store: store)
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        #expect(state.config.remote.serverId.isEmpty)
+        #expect(state.remoteServer == nil)
+
+        let manager = try #require(state.acpManager(for: worktree))
+        let identity = try #require(manager.remoteServerIdProvider())
+        #expect(!identity.isEmpty)
+        #expect(state.config.remote.serverId == identity)
+        #expect(!state.config.remote.enabled)
+        #expect(state.remoteServer == nil)
+
+        let persisted = try #require(try store.readIfExists(AppConfig.self, from: Paths.appConfigFile))
+        #expect(persisted.remote.serverId == identity)
+        #expect(!persisted.remote.enabled)
+
+        let secondWorktree = Worktree(
+            id: UUID().uuidString,
+            projectId: project.id,
+            name: "topic",
+            branch: "topic",
+            path: worktree.path.appendingPathComponent("topic"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(secondWorktree)
+        let secondManager = try #require(state.acpManager(for: secondWorktree))
+        #expect(secondManager.remoteServerIdProvider() == identity)
+        #expect(!state.config.remote.enabled)
+        #expect(state.remoteServer == nil)
+
+        let reloadedState = AppState(store: store)
+        #expect(reloadedState.config.remote.serverId == identity)
+        #expect(!reloadedState.config.remote.enabled)
+        #expect(reloadedState.remoteServer == nil)
+        reloadedState.projectsManager.insertOptimisticWorktree(worktree)
+        let reloadedManager = try #require(reloadedState.acpManager(for: worktree))
+        #expect(reloadedManager.remoteServerIdProvider() == identity)
+        #expect(!reloadedState.config.remote.enabled)
+        #expect(reloadedState.remoteServer == nil)
     }
 
     @Test func appStateRemoteServerPublishesAndRefreshesConfiguredAccessState() async throws {

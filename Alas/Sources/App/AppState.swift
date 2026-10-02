@@ -12983,6 +12983,11 @@ final class AppState {
                 )
             }
         )
+        mgr.remoteServerIdProvider = { [weak self] in
+            guard let self else { return nil }
+            if self.config.remote.ensureServerId() { self.saveConfig() }
+            return self.config.remote.serverId
+        }
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
@@ -13302,6 +13307,11 @@ final class AppState {
                 )
             }
         )
+        manager.remoteServerIdProvider = { [weak self] in
+            guard let self else { return nil }
+            if self.config.remote.ensureServerId() { self.saveConfig() }
+            return self.config.remote.serverId
+        }
         manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path

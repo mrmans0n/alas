@@ -148,6 +148,124 @@ struct ACPSessionPersistenceTests {
         #expect(try await persistence.loadSession(id: "session")?.authStatus == newStatus)
     }
 
+    @Test("remote transcript import rekeys rows and preserves this Mac's draft")
+    func remoteReplicaPreservesLocalIdentityAndDraft() async throws {
+        let writer = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        let reader = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        var source = row(id: "writer-local")
+        source.remoteSessionId = "remote-conversation"
+        var target = row(id: "reader-local")
+        target.remoteSessionId = "remote-conversation"
+        target.helperProcStdoutOffset = 42
+        try await writer.upsertSession(source)
+        try await reader.upsertSession(target)
+        let draft = ACPComposerDraft(segments: [.text("my unsent draft")])
+        try await reader.upsertComposerDraft(sessionId: target.id, draft: draft, updatedAt: 1)
+        try await writer.enableReplicaExport(sessionId: source.id, recordId: "remote-record")
+        let payload = Data(#"{"text":"hello /.alas-remote/writer-alias/literal"}"#.utf8)
+        _ = try await writer.persistMessages([.init(id: "msg-writer-local-0", sessionId: source.id, kind: "agent", seq: 0, payload: payload, createdAt: 12)], fence: nil)
+        let exported = try #require(try await writer.replicaChanges(sessionId: source.id, limit: 256))
+        let entries = exported.entries.map { RemoteSessionReplicaEntry(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 1) }
+        try await reader.stageReplicaPage(sessionId: target.id, recordId: "remote-record", page: .init(cutoffRevision: 1, entries: entries, nextPageToken: nil))
+        #expect(try await reader.commitReplicaImport(importGuard: .init(sessionId: target.id, expectedLocalFence: nil)) == 1)
+        let hydrated = try await reader.mirrorSnapshot(sessionId: target.id)
+        #expect(hydrated.wireMessages == [.agent(messageId: nil, text: "hello /.alas-remote/writer-alias/literal", phase: nil, metadata: nil)])
+        #expect(hydrated.row.id == target.id)
+        #expect(hydrated.row.helperProcStdoutOffset == 42)
+        #expect(try await reader.loadComposerDraftRecord(sessionId: target.id)?.draft == draft)
+    }
+
+    @Test("acknowledging an older publication retains a newer streamed row")
+    func replicaAcknowledgementRetainsNewerChange() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "session"))
+        try await persistence.enableReplicaExport(sessionId: "session", recordId: "record")
+        _ = try await persistence.persistMessages([.init(id: "msg-session-0", sessionId: "session", kind: "agent", seq: 0, payload: Data(#"{"text":"old"}"#.utf8), createdAt: 1)], fence: nil)
+        let first = try #require(try await persistence.replicaChanges(sessionId: "session", limit: 256))
+        _ = try await persistence.persistMessages([.init(id: "msg-session-0", sessionId: "session", kind: "agent", seq: 0, payload: Data(#"{"text":"new"}"#.utf8), createdAt: 1)], fence: nil)
+        try await persistence.acknowledgeReplicaChanges(sessionId: "session", export: first)
+        let next = try #require(try await persistence.replicaChanges(sessionId: "session", limit: 256))
+        #expect(next.entries.contains { $0.kind == .message && $0.key == "0" })
+        let reader = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await reader.upsertSession(row(id: "reader"))
+        let entries = next.entries.map { RemoteSessionReplicaEntry(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 2) }
+        try await reader.stageReplicaPage(sessionId: "reader", recordId: "record", page: .init(cutoffRevision: 2, entries: entries, nextPageToken: nil))
+        _ = try await reader.commitReplicaImport(importGuard: .init(sessionId: "reader", expectedLocalFence: nil))
+        #expect(try await reader.mirrorSnapshot(sessionId: "reader").wireMessages == [.agent(messageId: nil, text: "new", phase: nil, metadata: nil)])
+    }
+
+    @Test("an unresolved remote parent survives takeover and later resolves without undoing promotion")
+    func unresolvedParentSurvivesTakeoverAndResolvesLocally() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "child-local"))
+        let reference = Data(#"{"agentId":"claude","remoteSessionId":"parent-remote"}"#.utf8)
+        try await persistence.stageReplicaPage(sessionId: "child-local", recordId: "child-record",
+            page: .init(cutoffRevision: 1, entries: [.init(kind: .relationship, key: "ephemeralParent", payload: reference, revision: 1)], nextPageToken: nil))
+        _ = try await persistence.commitReplicaImport(importGuard: .init(sessionId: "child-local", expectedLocalFence: nil))
+        try await persistence.enableReplicaExport(sessionId: "child-local", recordId: "child-record")
+        let publication = try #require(try await persistence.replicaChanges(sessionId: "child-local", limit: 256))
+        let retained = try #require(publication.entries.first { $0.kind == .relationship && $0.key == "ephemeralParent" }?.payload)
+        #expect(try JSONDecoder().decode([String: String].self, from: retained) == ["agentId": "claude", "remoteSessionId": "parent-remote"])
+        var parent = row(id: "parent-local")
+        parent.remoteSessionId = "parent-remote"
+        try await persistence.upsertSession(parent)
+        try await persistence.resolveReplicaRelations()
+        #expect(try await persistence.loadSession(id: "child-local")?.ephemeralParentId == "parent-local")
+        #expect(try await persistence.promoteEphemeralSession(id: "child-local"))
+        try await persistence.resolveReplicaRelations()
+        #expect(try await persistence.loadSession(id: "child-local")?.ephemeralParentId == nil)
+    }
+
+    @Test("unresolved delegated sources survive takeover and map when their sender becomes local", arguments: [false, true])
+    func delegatedSourcesSurviveTakeover(subagent: Bool) async throws {
+        let writerPath = temporaryDatabaseURL().path
+        let readerPath = temporaryDatabaseURL().path
+        let nextPath = temporaryDatabaseURL().path
+        let writerStore = try ACPSessionStore(path: writerPath)
+        var sender = row(id: "sender-writer")
+        sender.remoteSessionId = "sender-remote"
+        try writerStore.upsertSession(sender)
+        try writerStore.upsertSession(row(id: "writer"))
+        let writer = ACPSessionPersistence(path: writerPath)
+        let reader = ACPSessionPersistence(path: readerPath)
+        let next = ACPSessionPersistence(path: nextPath)
+        try await reader.upsertSession(row(id: "reader"))
+        try await next.upsertSession(row(id: "next"))
+        var nextSender = row(id: "sender-next")
+        nextSender.remoteSessionId = sender.remoteSessionId
+        try await next.upsertSession(nextSender)
+        try await writer.enableReplicaExport(sessionId: "writer", recordId: "record")
+        let source = ACPDelegatedPromptSource(sessionId: sender.id, messageId: "inbox")
+        let message = ACPMessage.user(id: UUID(), messageId: nil, text: "delegated input", attachments: [], delegatedSource: source)
+        if subagent {
+            try writerStore.upsertSubagentMessages([.init(id: "native-row", sessionId: "writer", subagentSessionId: "native/child", kind: message.kind, seq: 0, payload: ACPMessageCodec.encode(message), createdAt: 1)])
+        } else {
+            try writerStore.appendMessage(sessionId: "writer", id: "msg-writer-0", kind: message.kind, seq: 0, payload: ACPMessageCodec.encode(message), createdAt: 1)
+        }
+        try writerStore.upsertQueue(sessionId: "writer", items: [.init(blocks: [.text("queued input")], delegatedSource: source)])
+        let first = try #require(try await writer.replicaChanges(sessionId: "writer", limit: 256))
+        try await reader.stageReplicaPage(sessionId: "reader", recordId: "record", page: .init(cutoffRevision: 1, entries: first.entries.map { .init(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 1) }, nextPageToken: nil))
+        _ = try await reader.commitReplicaImport(importGuard: .init(sessionId: "reader", expectedLocalFence: nil))
+        try await reader.enableReplicaExport(sessionId: "reader", recordId: "record")
+        let takeover = try #require(try await reader.replicaChanges(sessionId: "reader", limit: 256))
+        try await next.stageReplicaPage(sessionId: "next", recordId: "record", page: .init(cutoffRevision: 2, entries: takeover.entries.map { .init(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 2) }, nextPageToken: nil))
+        _ = try await next.commitReplicaImport(importGuard: .init(sessionId: "next", expectedLocalFence: nil))
+        var readerSender = row(id: "sender-reader")
+        readerSender.remoteSessionId = sender.remoteSessionId
+        try await reader.upsertSession(readerSender)
+        try await reader.resolveReplicaRelations()
+        for (path, sessionId, senderId) in [(readerPath, "reader", "sender-reader"), (nextPath, "next", "sender-next")] {
+            let store = try ACPSessionStore(path: path)
+            let table = subagent ? "subagent_messages" : "messages"
+            let payload = try #require(try store.db.query("SELECT payload FROM \(table) WHERE session_id=? AND seq=0", bindings: [sessionId]).first?["payload"] as? Data)
+            let object = try #require(try JSONSerialization.jsonObject(with: payload) as? [String: Any])
+            let importedSource = try #require(object["delegatedSource"] as? [String: Any])
+            #expect(importedSource["sessionId"] as? String == senderId)
+            #expect(importedSource["messageId"] as? String == "inbox")
+            #expect(try store.loadQueue(sessionId: sessionId).first?.delegatedSource == ACPDelegatedPromptSource(sessionId: senderId, messageId: "inbox"))
+        }
+    }
+
     private func temporaryDatabaseURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-persistence-\(UUID()).sqlite")

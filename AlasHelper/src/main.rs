@@ -1,6 +1,7 @@
 mod watch;
 
 use alas_helper::acp_broker_process;
+use alas_helper::remote_sessions::{RemoteSessionError, RemoteSessionFence, RemoteSessionStore};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,6 +48,12 @@ struct HelperError {
     message: String,
 }
 
+impl From<RemoteSessionError> for HelperError {
+    fn from(error: RemoteSessionError) -> Self {
+        Self { code: error.code, message: error.message }
+    }
+}
+
 #[derive(Default)]
 struct HelperState {
     next_subscription_id: u64,
@@ -56,6 +63,7 @@ struct HelperState {
     searches: HashMap<String, Arc<AtomicBool>>,
     event_sender: Option<Sender<ServerMessage>>,
     proc_tailers: HashSet<String>,
+    remote_sessions: Option<RemoteSessionStore>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,7 +257,8 @@ fn capabilities() -> Value {
         "ping": true,
         "proc": true
         ,
-        "acp": true
+        "acp": true,
+        "sessionCoordination": 1
     })
 }
 
@@ -711,11 +720,13 @@ fn handle_request(
         "fs/list" => fs_list(state, params),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
-        "proc/spawn" => proc_spawn(state, params),
+        "proc/spawn" => fenced_proc_request(state, method, params),
         "proc/attach" => proc_attach(state, params),
-        "proc/write" => proc_write(params),
-        "proc/kill" => proc_kill(params),
+        "proc/write" | "proc/kill" => fenced_proc_request(state, method, params),
         "proc/list" => proc_list(),
+        method if method.starts_with("lease/") || method.starts_with("replica/") => {
+            remote_session_store(state)?.handle(method, params, alas_helper::remote_sessions::now()).map_err(Into::into)
+        }
         method if method.starts_with("acp/") => {
             acp_broker_process::handle_control_request(method, params).map_err(|error| {
                 HelperError {
@@ -726,6 +737,37 @@ fn handle_request(
         }
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
+}
+
+fn remote_session_store(state: &mut HelperState) -> Result<&mut RemoteSessionStore, HelperError> {
+    if state.remote_sessions.is_none() {
+        let root = alas_helper::helper_state_dir().ok_or_else(|| jsonrpc_error(-32080, "HOME is not set"))?;
+        state.remote_sessions = Some(RemoteSessionStore::open(&root)?);
+    }
+    Ok(state.remote_sessions.as_mut().expect("initialized remote session store"))
+}
+
+fn fenced_proc_request(state: &mut HelperState, method: &str, params: Option<Value>) -> Result<Value, HelperError> {
+    let value = params.as_ref().ok_or_else(|| jsonrpc_error(-32602, "missing process params"))?;
+    let proc_id = value.get("procId").and_then(Value::as_str)
+        .ok_or_else(|| jsonrpc_error(-32602, "missing procId"))?.to_owned();
+    validate_proc_id(&proc_id)?;
+    let fence: Option<RemoteSessionFence> = value.get("leaseFence").filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone())).transpose()
+        .map_err(|_| jsonrpc_error(-32602, "invalid leaseFence"))?;
+    remote_session_store(state)?;
+    // Take the store out temporarily so spawn can update the other helper state.
+    let mut store = state.remote_sessions.take().expect("initialized remote session store");
+    let result = store.with_proc_fence(&proc_id, fence.as_ref(), alas_helper::remote_sessions::now(), || {
+        match method {
+            "proc/spawn" => proc_spawn(state, params),
+            "proc/write" => proc_write(params),
+            "proc/kill" => proc_kill(params),
+            _ => unreachable!(),
+        }
+    });
+    state.remote_sessions = Some(store);
+    result
 }
 
 fn watch_subscribe(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
@@ -1142,6 +1184,8 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     let dir = proc_dir(&params.proc_id)?;
     std::fs::create_dir_all(&dir)
         .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
+    std::fs::create_dir_all(dir.join("exits"))
+        .map_err(|error| jsonrpc_error(-32050, format!("proc exits dir failed: {error}")))?;
     let status = proc_status_in_dir(&dir);
     if status.running {
         register_proc_cwd(state, &params.proc_id, cwd);
@@ -1310,7 +1354,8 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
     write_proc_pid(&dir, child.id())?;
-    run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
+    let exit_path = dir.join("exits").join(child.id().to_string());
+    run_supervised_proc_child(child, dir.join("stdin.log"), exit_path);
     Ok(())
 }
 
@@ -1710,7 +1755,13 @@ struct ProcStatus {
 }
 
 fn proc_status_in_dir(dir: &Path) -> ProcStatus {
-    let exit_code = std::fs::read_to_string(dir.join("exit"))
+    // A killed supervisor can finish after its directory was removed and a
+    // successor spawned. Its old PID's exit file cannot poison the successor.
+    let exit_path = match std::fs::read_to_string(dir.join("generation")) {
+        Ok(pid) => dir.join("exits").join(pid.trim()),
+        Err(_) => dir.join("exit"),
+    };
+    let exit_code = std::fs::read_to_string(exit_path)
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok());
     let running = exit_code.is_none() && verified_proc_pid(dir).is_some();
@@ -1908,11 +1959,8 @@ fn read_pid(dir: &Path) -> Option<u32> {
 }
 
 fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
-    write_restrictive_bytes(
-        dir.join("pid").as_path(),
-        format!("{pid}\n").as_bytes(),
-        "pid",
-    )?;
+    let pid_bytes = format!("{pid}\n");
+    write_restrictive_bytes(&dir.join("generation"), pid_bytes.as_bytes(), "generation")?;
     let metadata = ProcPidMetadata {
         pid,
         process_group_id: current_process_group_id(pid),
@@ -1921,7 +1969,12 @@ fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
         dir.join("pid.json").as_path(),
         &serde_json::to_vec(&metadata).expect("pid metadata serialization must succeed"),
         "pid metadata",
-    )
+    )?;
+    // Publish readiness only after the metadata is complete.
+    let pending = dir.join("pid.pending");
+    write_restrictive_bytes(&pending, pid_bytes.as_bytes(), "pid")?;
+    std::fs::rename(pending, dir.join("pid"))
+        .map_err(|error| jsonrpc_error(-32050, format!("pid publish failed: {error}")))
 }
 
 fn read_proc_pid_metadata(dir: &Path) -> Option<ProcPidMetadata> {

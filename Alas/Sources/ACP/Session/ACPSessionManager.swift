@@ -350,6 +350,7 @@ final class ACPSessionManager: ObservableObject {
     /// carry a token fence so stale cached authority cannot commit.
     func isWriter(for id: ACPSession.ID) -> Bool {
         _ownedLeases.contains(id) && !anotherLiveInstanceOwnsLease(sessionId: id)
+            && (effectiveRemoteHost() == nil || remoteCoordinator?.hasAuthority(sessionId: id) == true)
     }
 
     /// Confirms ownership off-main immediately before an RPC or local process
@@ -365,6 +366,18 @@ final class ACPSessionManager: ObservableObject {
             guard lease?.ownerInstance == instanceId, lease?.token == token else {
                 await standDown(sessionId: sessionId, leaseToken: token)
                 return false
+            }
+            if let coordinator = try coordination() {
+                do {
+                    guard try await coordinator.heartbeat(sessionId: sessionId, status: remoteWriterStatus(sessionId: sessionId)) else {
+                        await standDown(sessionId: sessionId, leaseToken: token)
+                        return false
+                    }
+                } catch {
+                    persistenceError = error.localizedDescription
+                    if error.isRemoteSessionLeaseLoss { await standDown(sessionId: sessionId, leaseToken: token) }
+                    return false
+                }
             }
             return true
         } catch {
@@ -1323,6 +1336,116 @@ final class ACPSessionManager: ObservableObject {
     /// session without making its transcript visible; mirror polling uses
     /// this narrower signal to back off when the ACP tab is not on screen.
     private var visibleSessionCounts: [ACPSession.ID: Int] = [:]
+    var remoteServerIdProvider: @MainActor () -> String? = { nil }
+    private var remoteCoordinator: ACPRemoteSessionCoordinator?
+
+    private func coordination() throws -> ACPRemoteSessionCoordinator? {
+        guard let host = effectiveRemoteHost() else { return nil }
+        if let remoteCoordinator { return remoteCoordinator }
+        guard let serverId = remoteServerIdProvider(), !serverId.isEmpty else {
+            throw RemoteSessionUnavailable(message: "The SSH session requires a persisted machine identity.")
+        }
+        let coordinator = ACPRemoteSessionCoordinator(host: host, owner: .init(serverId: serverId, instanceId: instanceId))
+        remoteCoordinator = coordinator
+        return coordinator
+    }
+
+    private func remoteKey(sessionId: ACPSession.ID) async throws -> RemoteSessionKey {
+        let row = try await persistence.loadSession(id: sessionId)
+        guard let row else { throw ACPSessionReplicaError.missingSession }
+        return .init(worktreePath: RemotePath.realPath(worktreePath), agentId: row.agentId, remoteSessionId: row.remoteSessionId)
+    }
+
+    private func remoteWriterStatus(sessionId: ACPSession.ID) -> String {
+        retainedCleanupHasActivePromptWork(for: sessionId) ? "busy" : "idle"
+    }
+
+    private func recoverRemoteConversation(session: ACPSession, attempt: AttachmentAttempt) async throws {
+        let sessionId = session.id
+        guard let coordinator = remoteCoordinator, let previousLease = coordinator.lease(sessionId: sessionId),
+              let previousFence = coordinator.fence(sessionId: sessionId), let oldToken = attempt.leaseToken,
+              previousFence.token == oldToken else { throw RemoteSessionUnavailable.ownershipLost }
+        stopHeartbeat(sessionId: sessionId)
+        stopWriterWatch(sessionId: sessionId)
+        cancelAutoReconnect(sessionId: sessionId)
+        await coordinator.flush(sessionId: sessionId)
+        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
+        coordinator.stopPublishing(sessionId: sessionId)
+        coordinator.markUnavailable(sessionId: sessionId)
+        try await persistence.disableReplicaExport(sessionId: sessionId,
+            localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: oldToken))
+        let token = UUID().uuidString
+        var nextFence: RemoteSessionFence?
+        do {
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
+            let claim = try await coordinator.claim(sessionId: sessionId,
+                key: .init(worktreePath: previousLease.key.worktreePath, agentId: previousLease.key.agentId, remoteSessionId: nil),
+                proposedProcId: Self.helperACPProcId(sessionId: sessionId) + "-" + UUID().uuidString,
+                requestedToken: token)
+            guard let fence = claim.fence else { throw RemoteSessionUnavailable.ownershipLost }
+            nextFence = fence
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
+            let lease = try await persistence.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid,
+                now: Int64(Date().timeIntervalSince1970), leaseToken: token)
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+                  coordinator.fence(sessionId: sessionId) == fence else { throw CancellationError() }
+            _ownedLeases.insert(sessionId)
+            ownedLeaseTokens[sessionId] = token
+            observedLeases[sessionId] = lease
+            let localFence = ACPSessionLeaseFence(sessionId: sessionId, ownerInstance: instanceId, token: token)
+            guard try await persistence.prepareRemoteContextRecovery(fence: localFence),
+                  isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
+            persistedRows[sessionId]?.remoteSessionId = nil
+            persistedRows[sessionId]?.contextRecoveryPending = true
+            session.remoteSessionId = nil
+            attempt.connectionShutdownRequested = true
+            await attempt.connection?.shutdown()
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
+            attempt.leaseToken = nil
+            _ = supersedeAttachmentAttempt(for: sessionId)
+            let replacement = AttachmentAttempt()
+            attachmentAttempts[sessionId] = replacement
+            connectionOwnerIDs[sessionId] = replacement.id
+            brokerCallbackOwnerIDs[sessionId] = nil
+            session.agentState = .idle
+            await runAttachmentAttempt(replacement, to: sessionId, freshlyCreated: false)
+        } catch {
+            await releaseWriterLease(sessionId: sessionId, leaseToken: token)
+            if let nextFence { await coordinator.release(sessionId: sessionId, expectedFence: nextFence) }
+            await coordinator.stopAndRelease(procId: previousLease.procId, expectedFence: previousFence)
+            throw error
+        }
+        await coordinator.stopAndRelease(procId: previousLease.procId, expectedFence: previousFence)
+    }
+
+    private func acquireRemoteAuthority(sessionId: ACPSession.ID, lease: ACPSessionLease) async throws -> Bool {
+        guard let coordinator = try coordination() else { return true }
+        let key = try await remoteKey(sessionId: sessionId)
+        let proposedProcId = coordinator.lease(sessionId: sessionId).flatMap {
+            $0.key.agentId == key.agentId && $0.key.remoteSessionId == key.remoteSessionId ? $0.procId : nil
+        } ?? Self.helperACPProcId(sessionId: sessionId)
+        let result = try await coordinator.claim(sessionId: sessionId, key: key, proposedProcId: proposedProcId, requestedToken: lease.token)
+        guard let remoteFence = result.fence else { return false }
+        guard ownedLeaseTokens[sessionId] == lease.token, !isDisposed else {
+            await coordinator.release(sessionId: sessionId, expectedFence: remoteFence)
+            return false
+        }
+        if !coordinator.isPublishing(sessionId: sessionId) {
+            try await coordinator.syncMirror(sessionId: sessionId, lease: result.lease, persistence: persistence,
+                                             localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token)) { [weak self] in
+                self?.ownedLeaseTokens[sessionId] == lease.token && self?.isDisposed == false
+            }
+            if sessions[sessionId] != nil { await refreshMirror(sessionId: sessionId) }
+        }
+        guard ownedLeaseTokens[sessionId] == lease.token, !isDisposed else { return false }
+        try await coordinator.startPublishing(sessionId: sessionId, persistence: persistence,
+            localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token), status: { [weak self] in
+            self?.remoteWriterStatus(sessionId: sessionId) ?? "idle"
+        }, onLeaseLost: { [weak self] in
+            await self?.standDown(sessionId: sessionId, leaseToken: lease.token)
+        })
+        return true
+    }
     // MARK: Mirror state (read-only follower when another instance holds the lease)
     private var mirrorTokens: [ACPSession.ID: Int32] = [:]
     private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1432,6 +1555,7 @@ final class ACPSessionManager: ObservableObject {
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
          remoteHost: String? = nil,
+         remoteSessionCoordinator: ACPRemoteSessionCoordinator? = nil,
          usesRemoteHostRegistry: Bool = true,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
@@ -1478,6 +1602,7 @@ final class ACPSessionManager: ObservableObject {
         self.worktreePath = worktreePath
         self.owner = resolvedOwner
         self.remoteHost = remoteHost
+        self.remoteCoordinator = remoteSessionCoordinator
         self.usesRemoteHostRegistry = usesRemoteHostRegistry
         self.persistence = resolvedPersistence
         self.onDirtyCheck = onDirtyCheck
@@ -3099,11 +3224,10 @@ final class ACPSessionManager: ObservableObject {
     }
 
     private func killRemoteHelperACPProcIfPossible(sessionId: ACPSession.ID) {
-        guard let host = effectiveRemoteHost() else { return }
-        let procId = Self.helperACPProcId(sessionId: sessionId)
+        guard effectiveRemoteHost() != nil, let coordinator = remoteCoordinator,
+              coordinator.hasAuthority(sessionId: sessionId), let fence = coordinator.fence(sessionId: sessionId) else { return }
         Task {
-            let client = await RemoteHelperClientPool.shared.client(for: host)
-            try? await client.killProc(procId: procId)
+            try? await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
         }
     }
 
@@ -3179,6 +3303,74 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    /// Returns false for local discovery. SSH deletion uses the session's
+    /// fenced helper process, never the unfenced listing connection.
+    func deleteCoordinatedAgentHistory(_ discovered: ACPDiscoveredSession) async throws -> Bool {
+        guard let host = effectiveRemoteHost(), let coordinator = try coordination() else { return false }
+        let existing = try await persistence.loadSession(agentId: discovered.agentId, remoteSessionId: discovered.remoteSessionId)
+        let sessionId = existing?.id ?? UUID().uuidString
+        let key = RemoteSessionKey(worktreePath: RemotePath.realPath(worktreePath), agentId: discovered.agentId, remoteSessionId: discovered.remoteSessionId)
+        if let lease = try await coordinator.observe(sessionId: sessionId, key: key),
+           lease.isFresh, let owner = lease.owner, owner != coordinator.owner { throw RemoteSessionUnavailable.ownershipLost }
+        if existing != nil {
+            try await closeActiveSessionForDeletion(localSessionId: sessionId, agentId: discovered.agentId, remoteSessionId: discovered.remoteSessionId)
+            guard await acquireWriterLease(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
+        } else {
+            let result = try await coordinator.claim(sessionId: sessionId, key: key, proposedProcId: Self.helperACPProcId(sessionId: sessionId), requestedToken: UUID().uuidString)
+            guard result.fence != nil else { throw RemoteSessionUnavailable.ownershipLost }
+        }
+        guard let fence = coordinator.fence(sessionId: sessionId), let lease = coordinator.lease(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
+        let localToken = existing == nil ? nil : ownedLeaseTokens[sessionId]
+        let heartbeat = Task { @MainActor in
+            while !Task.isCancelled {
+                guard coordinator.fence(sessionId: sessionId) == fence else { return }
+                _ = try? await coordinator.heartbeat(sessionId: sessionId, status: "idle")
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+        defer { heartbeat.cancel() }
+        var connection: ACPConnection?
+        func finish() async {
+            await connection?.shutdown()
+            if let localToken { await releaseWriterLease(sessionId: sessionId, leaseToken: localToken) }
+            else { await coordinator.release(sessionId: sessionId, expectedFence: fence) }
+        }
+        do {
+            guard let spec = ACPLaunchCatalog.spec(for: discovered.agentId) else { throw ACPSessionDiscoveryError.noLaunchSpec(discovered.agentId) }
+            let setup = await evaluateSetup(for: launchSpecTransformer(spec, true))
+            guard case .ready = setup else { throw ACPSessionDiscoveryError.setupRequired(setup.reasonText) }
+            let launch = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
+            guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
+            await coordinator.flush(sessionId: sessionId)
+            guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
+            coordinator.stopPublishing(sessionId: sessionId)
+            if let localToken {
+                try await persistence.disableReplicaExport(sessionId: sessionId,
+                    localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: localToken))
+            }
+            try await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+            let deletionConnection: ACPConnection
+            if let injectedConnectionFactory { deletionConnection = try injectedConnectionFactory(launch, host, worktreePath) }
+            else {
+                deletionConnection = try Self.makeDefaultConnection(spec: launch, host: host, worktreePath: worktreePath,
+                    sessionId: sessionId, useHelperProc: true, remoteProcId: lease.procId, remoteLeaseFence: fence)
+            }
+            connection = deletionConnection
+            let initialized = try await deletionConnection.initialize()
+            guard initialized.sessionCapabilities.supportsDelete else { throw ACPSessionDiscoveryError.deletionUnsupported }
+            guard try await coordinator.heartbeat(sessionId: sessionId, status: "idle"),
+                  coordinator.fence(sessionId: sessionId) == fence else { throw RemoteSessionUnavailable.ownershipLost }
+            try await deletionConnection.deleteSession(sessionId: discovered.remoteSessionId)
+            try await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+            try await coordinator.delete(sessionId: sessionId, expectedFence: fence)
+            await finish()
+            return true
+        } catch {
+            await finish()
+            throw error
+        }
+    }
+
     @discardableResult
     func materializeDiscoveredSession(
         _ discovered: ACPDiscoveredSession,
@@ -3217,6 +3409,7 @@ final class ACPSessionManager: ObservableObject {
         )
         do {
             try await persistence.upsertSession(row)
+            try await persistence.resolveReplicaRelations()
             persistedRows[row.id] = row
             replaceRecentRow(row)
             return row
@@ -3936,6 +4129,9 @@ final class ACPSessionManager: ObservableObject {
         worktreePath: String,
         sessionId: ACPSession.ID?,
         useHelperProc: Bool,
+        remoteProcId: String? = nil,
+        remoteLeaseFence: RemoteSessionFence? = nil,
+        onRemoteLeaseLost: @escaping @MainActor @Sendable () async -> Void = {},
         initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
         onFreshHelperProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
         onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in }
@@ -3944,7 +4140,7 @@ final class ACPSessionManager: ObservableObject {
         if let host, useHelperProc, let sessionId {
             let transport = RemoteHelperACPTransport(
                 host: host,
-                procId: helperACPProcId(sessionId: sessionId),
+                procId: remoteProcId ?? helperACPProcId(sessionId: sessionId),
                 command: spec.command,
                 arguments: spec.arguments,
                 cwd: worktreePath,
@@ -3952,7 +4148,9 @@ final class ACPSessionManager: ObservableObject {
                 pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? [],
                 initialOutputOffsets: initialHelperProcOffsets,
                 onFreshProcSpawn: onFreshHelperProcSpawn,
-                onOutputOffsetsChanged: onHelperProcOffsetsChanged
+                onOutputOffsetsChanged: onHelperProcOffsetsChanged,
+                leaseFence: remoteLeaseFence,
+                onLeaseLost: onRemoteLeaseLost
             )
             client = ACPStdioClient(transport: RemotePathStrippingTransport(host: host, inner: transport))
         } else if let host {
@@ -4013,17 +4211,6 @@ final class ACPSessionManager: ObservableObject {
         return Int64(offset)
     }
 
-    private func remoteHelperSupportsProc(host: String) async -> Bool {
-        if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake == nil {
-            return false
-        }
-        do {
-            let client = await RemoteHelperClientPool.shared.client(for: host)
-            return try await client.hello().capabilities.proc == true
-        } catch {
-            return false
-        }
-    }
 }
 
 // MARK: - Writer lease + heartbeat
@@ -4091,11 +4278,18 @@ extension ACPSessionManager {
             observedLeases[sessionId] = lease
             _ownedLeases.insert(sessionId)
             ownedLeaseTokens[sessionId] = lease.token
+            guard try await acquireRemoteAuthority(sessionId: sessionId, lease: lease) else {
+                await releaseWriterLease(sessionId: sessionId, leaseToken: lease.token)
+                return false
+            }
             return true
         } catch {
             persistenceError = error.localizedDescription
-            _ownedLeases.remove(sessionId)
-            ownedLeaseTokens.removeValue(forKey: sessionId)
+            await releaseWriterLease(sessionId: sessionId, leaseToken: requestedToken)
+            if ownedLeaseTokens[sessionId] == requestedToken {
+                _ownedLeases.remove(sessionId)
+                ownedLeaseTokens.removeValue(forKey: sessionId)
+            }
             return false
         }
     }
@@ -4139,14 +4333,22 @@ extension ACPSessionManager {
             observedLeases[sessionId] = lease
             _ownedLeases.insert(sessionId)
             ownedLeaseTokens[sessionId] = lease.token
+            guard try await acquireRemoteAuthority(sessionId: sessionId, lease: lease),
+                  isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                await releaseWriterLease(sessionId: sessionId, leaseToken: lease.token)
+                return false
+            }
             return true
         } catch {
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                 return false
             }
             persistenceError = error.localizedDescription
-            _ownedLeases.remove(sessionId)
-            ownedLeaseTokens.removeValue(forKey: sessionId)
+            await releaseWriterLease(sessionId: sessionId, leaseToken: requestedToken)
+            if ownedLeaseTokens[sessionId] == requestedToken {
+                _ownedLeases.remove(sessionId)
+                ownedLeaseTokens.removeValue(forKey: sessionId)
+            }
             return false
         }
     }
@@ -4169,7 +4371,18 @@ extension ACPSessionManager {
         sessionId: ACPSession.ID,
         leaseToken: String?
     ) async {
+        guard let leaseToken else { return }
         await flushAllPersistence()
+        if ownedLeaseTokens[sessionId] == leaseToken, let coordinator = remoteCoordinator,
+           let fence = coordinator.fence(sessionId: sessionId), fence.token == leaseToken {
+            await coordinator.flush(sessionId: sessionId)
+            try? await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+            await coordinator.release(sessionId: sessionId, expectedFence: fence)
+        }
+        if ownedLeaseTokens[sessionId] == leaseToken, effectiveRemoteHost() != nil {
+            try? await persistence.disableReplicaExport(sessionId: sessionId,
+                localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: leaseToken))
+        }
         do {
             try await persistence.releaseLease(
                 sessionId: sessionId,
@@ -4179,7 +4392,7 @@ extension ACPSessionManager {
         } catch {
             persistenceError = error.localizedDescription
         }
-        if leaseToken == nil || ownedLeaseTokens[sessionId] == leaseToken {
+        if ownedLeaseTokens[sessionId] == leaseToken {
             _ownedLeases.remove(sessionId)
             ownedLeaseTokens.removeValue(forKey: sessionId)
             observedLeases[sessionId] = nil
@@ -4189,6 +4402,7 @@ extension ACPSessionManager {
     /// True when this session is open here and the latest observed lease is
     /// owned by another live instance.
     func isMirror(sessionId: ACPSession.ID) -> Bool {
+        if effectiveRemoteHost() != nil { return remoteCoordinator?.hasAuthority(sessionId: sessionId) != true }
         if _ownedLeases.contains(sessionId) { return false }
         guard let observed = observedLeases[sessionId] else {
             return isAwaitingInitialLeaseObservation(sessionId: sessionId)
@@ -4229,6 +4443,9 @@ extension ACPSessionManager {
     /// actively streaming (drives the mirror's busy spinner). Reads the
     /// lease status written by the owner's heartbeat.
     func mirrorIsBusy(sessionId: ACPSession.ID) -> Bool {
+        if let coordinator = remoteCoordinator, coordinator.isForeignMachine(sessionId: sessionId) {
+            return coordinator.lease(sessionId: sessionId)?.status == "busy"
+        }
         guard let observed = observedLeases[sessionId], let lease = observed else { return false }
         return lease.status == "busy"
     }
@@ -4256,9 +4473,13 @@ extension ACPSessionManager {
                 ? "busy" : "idle"
             try await persistence.refreshHeartbeat(
                 sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+            if let coordinator = try coordination() {
+                return try await !coordinator.heartbeat(sessionId: sessionId, status: remoteWriterStatus(sessionId: sessionId))
+            }
             return false
         } catch {
             persistenceError = error.localizedDescription
+            if error.isRemoteSessionLeaseLoss { return true }
             return false
         }
     }
@@ -4366,7 +4587,22 @@ extension ACPSessionManager {
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = UUID().uuidString
         let lease: ACPSessionLease
+        var remoteTakeoverFence: RemoteSessionFence?
+        var committedTakeover = false
+        defer {
+            if !committedTakeover, let fence = remoteTakeoverFence, let coordinator = remoteCoordinator {
+                Task { try? await coordinator.release(fence: fence) }
+            }
+        }
         do {
+            if let coordinator = try coordination() {
+                coordinator.stopPublishing(sessionId: sessionId)
+                let result = try await coordinator.claim(sessionId: sessionId, key: remoteKey(sessionId: sessionId),
+                                                         proposedProcId: Self.helperACPProcId(sessionId: sessionId),
+                                                         requestedToken: requestedToken, seize: true)
+                guard let fence = result.fence else { throw RemoteSessionUnavailable.ownershipLost }
+                remoteTakeoverFence = fence
+            }
             lease = try await persistence.seizeLease(
                 sessionId: sessionId,
                 instanceId: instanceId,
@@ -4375,6 +4611,7 @@ extension ACPSessionManager {
                 leaseToken: requestedToken
             )
         } catch {
+            if let remoteTakeoverFence { await remoteCoordinator?.release(sessionId: sessionId, expectedFence: remoteTakeoverFence) }
             if takeoverAttemptIDs[sessionId] == takeoverAttemptID {
                 takeoverAttemptIDs.removeValue(forKey: sessionId)
             }
@@ -4401,6 +4638,35 @@ extension ACPSessionManager {
         _ownedLeases.insert(sessionId)
         ownedLeaseTokens[sessionId] = lease.token
         observedLeases[sessionId] = lease
+        do {
+            if let coordinator = remoteCoordinator, let remoteLease = coordinator.lease(sessionId: sessionId),
+               let fence = remoteTakeoverFence {
+                cancelAutoReconnect(sessionId: sessionId)
+                let previousAttempt = supersedeAttachmentAttempt(for: sessionId)
+                let previousRunner = runners.removeValue(forKey: sessionId)
+                connectionOwnerIDs[sessionId] = nil
+                brokerCallbackOwnerIDs[sessionId] = nil
+                previousRunner?.stop()
+                previousAttempt?.connectionShutdownRequested = true
+                if let previousRunner {
+                    await previousRunner.flushPersistence()
+                    await previousRunner.connection.shutdown()
+                }
+                if let connection = previousAttempt?.connection, connection !== previousRunner?.connection {
+                    await connection.shutdown()
+                }
+                try await coordinator.syncMirror(sessionId: sessionId, lease: remoteLease, persistence: persistence,
+                                                 localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token)) { [weak self] in
+                    self?.takeoverAttemptIDs[sessionId] == takeoverAttemptID
+                }
+                try await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+                await resetHelperProcOffsets(sessionId: sessionId)
+            }
+        } catch {
+            persistenceError = error.localizedDescription
+            await releaseWriterLease(sessionId: sessionId, leaseToken: lease.token)
+            return false
+        }
         changeNotifier.post()
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
@@ -4446,39 +4712,35 @@ extension ACPSessionManager {
 #endif
             guard self.takeoverAttemptIDs[sessionId] == takeoverAttemptID,
                   self.sessions[sessionId] === session else { return }
-            self.takeoverAttemptIDs.removeValue(forKey: sessionId)
             self.endMirroring(sessionId: sessionId)
             session.agentState = .idle
             await self.attach(to: sessionId, freshlyCreated: false)
+            if self.takeoverAttemptIDs[sessionId] == takeoverAttemptID {
+                self.takeoverAttemptIDs.removeValue(forKey: sessionId)
+            }
         }
+        committedTakeover = true
         return true
     }
 
     /// Relinquish the writer role we just lost to a takeover: cancel any
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
-    /// Does NOT release the lease — we no longer own it.
     private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
-        // An ownership check may finish after detach or a later lease claim.
-        guard _ownedLeases.contains(sessionId),
-              ownedLeaseTokens[sessionId] == leaseToken
-        else { return }
+        guard _ownedLeases.contains(sessionId), ownedLeaseTokens[sessionId] == leaseToken else { return }
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
+        remoteCoordinator?.markUnavailable(sessionId: sessionId)
+        remoteCoordinator?.stopPublishing(sessionId: sessionId)
         _ownedLeases.remove(sessionId)
-        // We no longer own the lease — drop any not-yet-applied config so it
-        // can't fire against a session another instance now drives.
+        ownedLeaseTokens.removeValue(forKey: sessionId)
         pendingModel.removeValue(forKey: sessionId)
         pendingMode.removeValue(forKey: sessionId)
         pendingConfigOptionValues.removeValue(forKey: sessionId)
         discardDeferredConfigOptionUpdates(for: sessionId)
         discardDeferredModelModeUpdates(for: sessionId)
-
-        if let runner = runners.removeValue(forKey: sessionId) {
-            runner.invalidateActivePrompt()
-            runner.stop()
-            await runner.flushPersistence()
-            await runner.connection.detach()
-        }
+        let runner = runners.removeValue(forKey: sessionId)
+        runner?.invalidateActivePrompt()
+        runner?.stop()
         cancelAutoReconnect(sessionId: sessionId)
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         if let session = sessions[sessionId] {
@@ -4486,11 +4748,15 @@ extension ACPSessionManager {
             session.clearConnectionRecovery()
             session.transcript.streamingState = .idle
         }
-        // Only begin mirroring when the session is still open. A takeover
-        // notification can race with tab closure: if `detach`/`evictIfIdle`
-        // already removed the session, starting a mirror poll would leak a
-        // background task for a session that no longer exists.
-        if sessions[sessionId] != nil {
+        // Every cache mutation above happens before suspension. A later claim
+        // gets a new token; this teardown can only touch its captured old one.
+        let fence = ACPSessionLeaseFence(sessionId: sessionId, ownerInstance: instanceId, token: leaseToken)
+        try? await persistence.disableReplicaExport(sessionId: sessionId, localFence: fence)
+        try? await persistence.releaseLease(sessionId: sessionId, instanceId: instanceId, leaseToken: leaseToken)
+        await runner?.flushPersistence()
+        await runner?.connection.detach()
+        if sessions[sessionId] != nil, !_ownedLeases.contains(sessionId),
+           runners[sessionId] == nil, attachingSessions[sessionId] == nil {
             beginMirroring(sessionId: sessionId)
         }
     }
@@ -4550,6 +4816,7 @@ extension ACPSessionManager {
     }
 
     func endMirroring(sessionId: ACPSession.ID) {
+        remoteCoordinator?.invalidateMirror(sessionId: sessionId)
         if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
         mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
         mirrorPoll.removeValue(forKey: sessionId)?.cancel()
@@ -4577,6 +4844,7 @@ extension ACPSessionManager {
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
+        remoteCoordinator?.shutdown()
     }
 
     /// Release every lease this manager still owns. Call AFTER runner
@@ -4683,6 +4951,19 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId] else { return }
         let result: HydrationResult
         do {
+            if let coordinator = try coordination() {
+                let key = try await remoteKey(sessionId: sessionId)
+                // Unbound records are addressed by their claimed process/fence,
+                // not by the ambiguous (worktree, agent, nil) tuple.
+                if key.remoteSessionId != nil,
+                   let lease = try await coordinator.observe(sessionId: sessionId, key: key),
+                   !coordinator.isPublishing(sessionId: sessionId) {
+                    try await coordinator.syncMirror(sessionId: sessionId, lease: lease, persistence: persistence,
+                                                     localFence: leaseFence(sessionId: sessionId)) { [weak self, weak session] in
+                        self?.sessions[sessionId] === session && self?.isDisposed == false
+                    }
+                }
+            }
             result = try await retryingTransientPersistenceFailure {
                 try await self.persistence.mirrorSnapshot(sessionId: sessionId)
             }
@@ -4712,7 +4993,10 @@ extension ACPSessionManager {
         // only from the store, so every refresh has to carry them.
         Self.restoreSubagents(from: result, in: session)
         mirrorMessageSnapshots[sessionId] = comparison.snapshot
-        guard !result.wireMessages.isEmpty else { return }
+        if result.wireMessages.isEmpty {
+            if !session.transcript.messages.isEmpty { _ = replaceTranscriptWithTail([], in: session, markCompletedBoundary: false) }
+            return
+        }
         if applyMirrorSnapshotToHydratedTranscript(result.messages, delta: comparison.delta, in: session) {
             return
         }
@@ -5319,7 +5603,7 @@ extension ACPSessionManager {
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
-            } else if host == nil, let brokerServiceFactory {
+            } else if host == nil, brokerServiceFactory != nil {
                 connection = try await makeBrokerConnectionWithRecovery(
                     launchSpec: launchSpec,
                     sessionId: sessionId,
@@ -5332,10 +5616,10 @@ extension ACPSessionManager {
                     return
                 }
             } else {
-                let useHelperProc = if let host {
-                    await remoteHelperSupportsProc(host: host)
-                } else {
-                    false
+                let useHelperProc = host != nil
+                if useHelperProc {
+                    guard let coordinator = try coordination(), coordinator.hasAuthority(sessionId: sessionId),
+                          coordinator.fence(sessionId: sessionId) != nil else { throw RemoteSessionUnavailable.ownershipLost }
                 }
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
                 connection = try Self.makeDefaultConnection(
@@ -5344,6 +5628,12 @@ extension ACPSessionManager {
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     useHelperProc: useHelperProc,
+                    remoteProcId: remoteCoordinator?.lease(sessionId: sessionId)?.procId,
+                    remoteLeaseFence: remoteCoordinator?.fence(sessionId: sessionId),
+                    onRemoteLeaseLost: { [weak self] in
+                        guard let token = attempt.leaseToken else { return }
+                        await self?.standDown(sessionId: sessionId, leaseToken: token)
+                    },
                     initialHelperProcOffsets: Self.helperProcOffsets(from: persistedRows[sessionId]),
                     onFreshHelperProcSpawn: { [weak self] in
                         await self?.resetHelperProcOffsets(sessionId: sessionId)
@@ -5812,12 +6102,15 @@ extension ACPSessionManager {
                     return
                 }
             }
-            let restoreOperation = ACPSessionRestorePolicy.operation(
-                origin: session.origin,
-                canLoad: initialized.loadSession,
-                canResume: initialized.sessionCapabilities.supportsResume,
-                hasLocalTranscript: session.hasConversationTranscript
-            )
+            let isRemoteTakeover = host != nil && takeoverAttemptIDs[sessionId] != nil
+            let restoreOperation: ACPSessionRestoreOperation = isRemoteTakeover
+                ? (initialized.loadSession ? .loadStrict : .unavailable)
+                : ACPSessionRestorePolicy.operation(
+                    origin: session.origin,
+                    canLoad: initialized.loadSession,
+                    canResume: initialized.sessionCapabilities.supportsResume,
+                    hasLocalTranscript: session.hasConversationTranscript
+                )
             let shouldSuppressLoadReplay = (restoreOperation == .loadWithRecovery
                 || restoreOperation == .loadStrict
                 || restoreOperation == .resume)
@@ -5857,6 +6150,7 @@ extension ACPSessionManager {
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
+                                              self.remoteCoordinator?.wake(sessionId: sessionId)
                                           },
                                           onSuccessfulTurn: { [weak self] turn in
                                               guard let self, self.sessions[sessionId]?.readOnlyRestricted != true else { return }
@@ -6113,6 +6407,11 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
+                        if host != nil {
+                            await abandonEarlyListenerRunnerIfNeeded()
+                            try await recoverRemoteConversation(session: session, attempt: attempt)
+                            return
+                        }
                         result = try await performRemoteSessionCreation(
                             for: attempt,
                             using: connection,
@@ -6159,7 +6458,7 @@ extension ACPSessionManager {
                     )
                     func resumeAfterLoadFailure(_ error: any Error) async throws
                         -> ACPSessionNewResult {
-                        guard initialized.sessionCapabilities.supportsResume,
+                        guard !isRemoteTakeover, initialized.sessionCapabilities.supportsResume,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
                         let resumed = try await connection.resumeSession(
@@ -6282,6 +6581,11 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
+                        if host != nil {
+                            await abandonEarlyListenerRunnerIfNeeded()
+                            try await recoverRemoteConversation(session: session, attempt: attempt)
+                            return
+                        }
                         result = try await performRemoteSessionCreation(
                             for: attempt,
                             using: connection,
@@ -6394,6 +6698,10 @@ extension ACPSessionManager {
                 attaching.remoteSessionId = result.sessionId
                 attachingConnections[sessionId] = attaching
                 claimRemoteSessionCreationResult(result, for: attempt)
+            }
+            if let coordinator = try coordination() {
+                try await coordinator.bind(sessionId: sessionId, remoteSessionId: result.sessionId)
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             }
             let providers: [ACPProviderInfo] = if initialized.providerCapabilities != nil {
                 (try? await connection.listProviders()) ?? []

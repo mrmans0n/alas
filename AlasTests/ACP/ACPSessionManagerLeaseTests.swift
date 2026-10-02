@@ -13,14 +13,56 @@ import Foundation
                           hydratorPath: hydratorPath)
     }
 
-    @Test("manager exposes its instanceId")
-    func exposesInstanceId() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mgr-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        let mgr = tempManager(instanceId: "INST-A", store: store)
-        #expect(mgr.instanceId == "INST-A")
-        #expect(mgr.pid == Int64(getpid()))
+    @Test("an SSH takeover fences the old writer despite independent Mac-local lease databases")
+    func remoteTakeoverReplacesAuthorityAcrossIndependentStores() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let storeA = try ACPSessionStore(path: folder.appendingPathComponent("a.sqlite").path)
+        let storeB = try ACPSessionStore(path: folder.appendingPathComponent("b.sqlite").path)
+        for (store, id) in [(storeA, "local-a"), (storeB, "local-b")] {
+            try store.upsertSession(.init(id: id, agentId: "claude", title: "Session", remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        }
+        let endpoint = ReplicaEndpoint()
+        let coordinatorA = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) { method, data in try await endpoint.request(method, data) }
+        let coordinatorB = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in try await endpoint.request(method, data) }
+        let a = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: storeA, instanceId: "A", remoteHost: "fixture", remoteSessionCoordinator: coordinatorA)
+        let b = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: storeB, instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinatorB)
+        let attachBarrier = AsyncStream<Void>.makeStream()
+        b.beforeTakeoverAttachForTesting = { _ in for await _ in attachBarrier.stream {} }
+        defer {
+            a.shutdownBackgroundTasks(); b.shutdownBackgroundTasks()
+            attachBarrier.continuation.finish()
+        }
+        #expect(await a.acquireWriterLease(sessionId: "local-a"))
+        #expect(!(await b.acquireWriterLease(sessionId: "local-b")))
+        #expect(a.isWriter(for: "local-a"))
+        #expect(b.isMirror(sessionId: "local-b"))
+        #expect(try storeB.loadLease(sessionId: "local-b") == nil)
+        _ = b.placeholderSession(id: "local-b")
+        #expect(await b.takeOver(sessionId: "local-b"))
+        #expect(await a.heartbeatTick(sessionId: "local-a"))
+        #expect(!a.isWriter(for: "local-a"))
+        #expect(a.isMirror(sessionId: "local-a"))
+        #expect(b.isWriter(for: "local-b"))
+        await a.releaseWriterLease(sessionId: "local-a")
+        await b.releaseWriterLease(sessionId: "local-b")
+    }
+
+    @Test("an old SSH helper leaves the session read-only and releases the tentative local lease")
+    func unsupportedHelperCannotGrantWriterAuthority() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("session.sqlite").path)
+        try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session", remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let endpoint = ReplicaEndpoint()
+        await endpoint.setCoordinationSupported(false)
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac", instanceId: "instance")) { method, data in try await endpoint.request(method, data) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store, instanceId: "instance", remoteHost: "fixture", remoteSessionCoordinator: coordinator)
+        defer { manager.shutdownBackgroundTasks() }
+        #expect(!(await manager.acquireWriterLease(sessionId: "session")))
+        #expect(!manager.isWriter(for: "session"))
+        #expect(manager.isMirror(sessionId: "session"))
+        #expect(try store.loadLease(sessionId: "session") == nil)
     }
 
     @Test("second instance attaching the same session becomes a mirror")

@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 21
+    static let targetSchemaVersion = 22
     let path: String
     let db: SQLiteDatabase
 
@@ -48,6 +48,7 @@ final class ACPSessionStore {
         if current < 19 { try migrate_to_v19() }
         if current < 20 { try migrate_to_v20() }
         if current < 21 { try migrate_to_v21() }
+        if current < 22 { try createReplicaSchema() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
