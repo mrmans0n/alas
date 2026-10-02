@@ -93,7 +93,7 @@ merging a PR does not publish it.
 ## Alas: catalog in Settings → Plugins
 
 - An **Available** section below the installed list. Alas fetches the index when
-  the pane opens, at most once every 10 minutes, and always on **Refresh**. Each
+  the pane opens, at most once every 10 minutes, and always on **Rescan**. Each
   row shows the name, version, summary, and the capabilities written out in
   words, with an **Install** button.
 - **Install** downloads both files, verifies the hash, parses the manifest, and

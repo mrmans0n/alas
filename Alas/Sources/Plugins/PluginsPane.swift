@@ -51,7 +51,12 @@ struct PluginsPane: View {
             AlasButton(title: "Reveal Plugins Folder", icon: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([manager.directory])
             }
-            AlasButton(title: "Rescan", icon: "arrow.clockwise") { Task { await manager.reload() } }
+            AlasButton(title: "Rescan", icon: "arrow.clockwise") {
+                Task {
+                    await manager.reload()
+                    await manager.catalog.refresh(force: true)
+                }
+            }
         }
         .padding(.bottom, 12)
         if manager.plugins.isEmpty {
