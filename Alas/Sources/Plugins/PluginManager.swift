@@ -22,6 +22,8 @@ final class PluginManager {
     struct Invalid: Identifiable, Sendable {
         let folder: URL
         let reason: String
+        /// Set when the folder holds a valid plugin that lost to a duplicate of the same id.
+        var pluginID: String?
         var id: String { folder.path }
     }
 
@@ -248,8 +250,11 @@ final class PluginManager {
             throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
         }
         let target = directory.appending(path: id)
-        // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded.
-        if Self.discover(in: directory).plugins.contains(where: { $0.id == id && !$0.isCatalogFolder }) {
+        // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded, and
+        // so do local copies quarantined as duplicates of each other: adding a catalog copy would only add a third.
+        let found = Self.discover(in: directory)
+        if found.plugins.contains(where: { $0.id == id && !$0.isCatalogFolder })
+            || found.invalid.contains(where: { $0.pluginID == id && $0.folder.lastPathComponent != id }) {
             throw PluginCatalogError.installedLocally
         }
         await stopHosts { $0.pluginID == id }
@@ -446,10 +451,12 @@ final class PluginManager {
                 if plugin.folder == local.folder {
                     loaded.append(plugin)
                 } else {
-                    invalid.append(Invalid(folder: plugin.folder, reason: "shadowed by \(local.folder.lastPathComponent), which has the same id"))
+                    invalid.append(Invalid(
+                        folder: plugin.folder, reason: "shadowed by \(local.folder.lastPathComponent), which has the same id",
+                        pluginID: plugin.id))
                 }
             } else {
-                invalid.append(Invalid(folder: plugin.folder, reason: "duplicate plugin id \(plugin.id)"))
+                invalid.append(Invalid(folder: plugin.folder, reason: "duplicate plugin id \(plugin.id)", pluginID: plugin.id))
             }
         }
         return (loaded, invalid)
