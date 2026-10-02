@@ -173,12 +173,7 @@ struct ACPSlashPickerView: View {
             }
             Spacer(minLength: 0)
             if ACPAlasSlashCommand.isAlasCommand(s) {
-                Text("Alas")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(theme.color("warn"))
-                    .padding(.horizontal, 5)
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("warn").opacity(0.5)))
-                    .help("Handled by Alas, not sent to the agent")
+                ACPAlasCommandBadge()
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 5)

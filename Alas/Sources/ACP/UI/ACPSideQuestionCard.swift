@@ -386,9 +386,7 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("/btw")
-                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(theme.color("warn"))
+            ACPCommandPill(suggestion: ACPAlasSlashCommand.btwSuggestion)
             Text(question.isEmpty ? "Side question" : question)
                 .font(.system(size: 12))
                 .foregroundStyle(theme.color(question.isEmpty ? "fg-faint" : "fg"))

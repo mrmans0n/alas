@@ -29,6 +29,85 @@ enum ACPCommandPillStyle {
     }
 }
 
+/// Prism colors shared by the native attachment and SwiftUI badges.
+enum ACPAlasPrismStyle {
+    static let base = NSColor(calibratedRed: 0.145, green: 0.137, blue: 0.188, alpha: 1)
+    static let border = NSColor(calibratedRed: 0.635, green: 0.569, blue: 0.871, alpha: 0.6)
+    static let colors: [NSColor] = [
+        .clear,
+        NSColor(calibratedRed: 0.443, green: 0.612, blue: 1, alpha: 0.35),
+        NSColor(calibratedRed: 0.804, green: 0.514, blue: 0.929, alpha: 0.55),
+        NSColor(calibratedRed: 1, green: 0.702, blue: 0.831, alpha: 0.35),
+        NSColor(calibratedRed: 0.553, green: 0.945, blue: 0.882, alpha: 0.35),
+        .clear,
+    ]
+    static let locations: [CGFloat] = [0, 0.25, 0.43, 0.57, 0.75, 1]
+    static let gradient = NSGradient(colors: colors, atLocations: locations, colorSpace: .deviceRGB)!
+    static let swiftUIGradient = Gradient(stops: zip(colors, locations).map {
+        .init(color: Color(nsColor: $0.0), location: $0.1)
+    })
+
+    static func position(at time: TimeInterval, reducedMotion: Bool) -> CGFloat {
+        guard !reducedMotion else { return 0.5 }
+        let phase = time.truncatingRemainder(dividingBy: 4.5) / 4.5
+        let progress = min(1, max(0, (phase - 0.15) / 0.6))
+        return CGFloat(progress * progress * (3 - 2 * progress))
+    }
+
+    static func draw(in rect: NSRect, time: TimeInterval, reducedMotion: Bool) {
+        base.setFill()
+        rect.fill()
+        let center = rect.minX + rect.width * (-0.65 + 2.3 * position(at: time, reducedMotion: reducedMotion))
+        gradient.draw(
+            from: NSPoint(x: center - rect.width * 0.5, y: rect.minY),
+            to: NSPoint(x: center + rect.width * 0.5, y: rect.maxY),
+            options: []
+        )
+    }
+}
+
+struct ACPAlasPrismBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reducedMotion)) { context in
+            GeometryReader { geometry in
+                let position = ACPAlasPrismStyle.position(
+                    at: context.date.timeIntervalSinceReferenceDate, reducedMotion: reducedMotion
+                )
+                Color(nsColor: ACPAlasPrismStyle.base)
+                    .overlay {
+                        LinearGradient(
+                            gradient: ACPAlasPrismStyle.swiftUIGradient,
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .offset(x: geometry.size.width * (-1.15 + 2.3 * position))
+                    }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct ACPAlasCommandBadge: View {
+    var body: some View {
+        Text("Alas")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background { ACPAlasPrismBackground() }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(Color(nsColor: ACPAlasPrismStyle.border), lineWidth: 0.75)
+            }
+            .help("Handled by Alas, not sent to the agent")
+    }
+}
+
 /// Known slash commands in a message: the leading one the transcript renders
 /// as a pill, and every one the composer turns into a chip.
 enum ACPSlashCommand {
@@ -108,13 +187,26 @@ enum ACPSlashCommand {
     }
 
     @MainActor
-    static func chip(for command: String, font: NSFont) -> NSAttributedString {
-        let chip = NSMutableAttributedString(attachment: ACPCommandChipAttachment(command: command))
+    static func chip(for command: String, font: NSFont, suggestions: [ACPPromptSuggestion]) -> NSAttributedString {
+        let isAlas = suggestions.contains { $0.command == command && ACPAlasSlashCommand.isAlasCommand($0) }
+        let chip = NSMutableAttributedString(attachment: ACPCommandChipAttachment(command: command, isAlas: isAlas))
         chip.addAttributes([
             .commandChipName: command,
             .font: font,
         ], range: NSRange(location: 0, length: chip.length))
         return chip
+    }
+
+    /// Ownership can change during lease takeover without changing draft text.
+    @MainActor
+    static func refreshChipOwnership(in storage: NSAttributedString, suggestions: [ACPPromptSuggestion]) {
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            guard let attachment = value as? ACPCommandChipAttachment else { return }
+            let isAlas = suggestions.contains {
+                $0.command == attachment.command && ACPAlasSlashCommand.isAlasCommand($0)
+            }
+            attachment.updateOwnership(isAlas: isAlas)
+        }
     }
 
     /// Ranges of known `/command` tokens that should become chips, in
@@ -153,7 +245,9 @@ enum ACPSlashCommand {
     @MainActor
     static func chipify(_ storage: NSMutableAttributedString, suggestions: [ACPPromptSuggestion], font: NSFont) {
         for target in chipTargets(in: storage.string, suggestions: suggestions).reversed() {
-            storage.replaceCharacters(in: target.range, with: chip(for: target.command, font: font))
+            storage.replaceCharacters(
+                in: target.range, with: chip(for: target.command, font: font, suggestions: suggestions)
+            )
         }
     }
 
@@ -180,7 +274,7 @@ enum ACPSlashCommand {
         for target in targets.reversed() {
             fragment.replaceCharacters(
                 in: NSRange(location: target.range.location - offset, length: target.range.length),
-                with: chip(for: target.command, font: font)
+                with: chip(for: target.command, font: font, suggestions: suggestions)
             )
         }
         return !targets.isEmpty
@@ -206,12 +300,21 @@ enum ACPSlashCommand {
 
 final class ACPCommandChipAttachment: NSTextAttachment {
     let command: String
+    @MainActor private(set) var isAlas: Bool
 
     @MainActor
-    init(command: String) {
+    init(command: String, isAlas: Bool) {
         self.command = command
+        self.isAlas = isAlas
         super.init(data: nil, ofType: nil)
-        attachmentCell = ACPCommandChipCell(command: command)
+        attachmentCell = ACPCommandChipCell(command: command, isAlas: isAlas)
+    }
+
+    @MainActor
+    func updateOwnership(isAlas: Bool) {
+        guard self.isAlas != isAlas else { return }
+        self.isAlas = isAlas
+        attachmentCell = ACPCommandChipCell(command: command, isAlas: isAlas)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -219,12 +322,86 @@ final class ACPCommandChipAttachment: NSTextAttachment {
 
 private final class ACPCommandChipCell: NSTextAttachmentCell {
     private let label: String
+    private let isAlas: Bool
+    private var animationTimer: Timer?
+    private weak var animationView: NSView?
+    private var animationFrame = NSRect.zero
+    private var editingObserver: (any NSObjectProtocol)?
+    private var accessibilityObserver: (any NSObjectProtocol)?
 
-    init(command: String) {
+    init(command: String, isAlas: Bool) {
+        self.isAlas = isAlas
         self.label = ACPCommandPillStyle.displayName(for: command)
         super.init(textCell: "")
+        if isAlas {
+            accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.stopAnimation()
+                    self.animationView?.setNeedsDisplay(self.animationFrame)
+                }
+            }
+        }
     }
     required init(coder: NSCoder) { fatalError() }
+
+    isolated deinit {
+        animationTimer?.invalidate()
+        if let editingObserver { NotificationCenter.default.removeObserver(editingObserver) }
+        if let accessibilityObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver)
+        }
+    }
+
+    private func stopAnimation() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+        if let editingObserver { NotificationCenter.default.removeObserver(editingObserver) }
+        editingObserver = nil
+    }
+
+    private func animate(in view: NSView?, frame: NSRect) {
+        guard isAlas else { return }
+        animationView = view
+        animationFrame = frame
+        if editingObserver == nil, let storage = (view as? NSTextView)?.textStorage {
+            editingObserver = NotificationCenter.default.addObserver(
+                forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // Undo may retain a removed attachment. Stop its timer;
+                    // the next draw restarts only chips still in the text.
+                    self?.stopAnimation()
+                    if let self { self.animationView?.setNeedsDisplay(self.animationFrame) }
+                }
+            }
+        }
+        guard animationTimer == nil, view?.window != nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let timer = Timer(timeInterval: 1 / 30, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated {
+                guard let view = self.animationView,
+                      let window = view.window, window.isVisible,
+                      !view.isHiddenOrHasHiddenAncestor,
+                      view.visibleRect.intersects(self.animationFrame),
+                      !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+                    self.stopAnimation()
+                    return
+                }
+                view.setNeedsDisplay(self.animationFrame)
+            }
+        }
+        timer.tolerance = 1 / 120
+        animationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
 
     private var size: NSSize {
         let textWidth = (label as NSString).size(withAttributes: [.font: ACPMentionChipMetrics.labelFont]).width
@@ -253,6 +430,7 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
     }
 
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
+        animate(in: controlView, frame: frame)
         let tint = ACPCommandPillStyle.tint
         let rect = frame.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
@@ -260,13 +438,22 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
 
         NSGraphicsContext.saveGraphicsState()
         path.addClip()
-        tint.withAlphaComponent(0.16).setFill()
-        rect.fill()
-        tint.withAlphaComponent(0.55).setFill()
-        capRect.fill()
+        if isAlas {
+            ACPAlasPrismStyle.draw(
+                in: rect, time: Date.timeIntervalSinceReferenceDate,
+                reducedMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            )
+            NSColor.white.withAlphaComponent(0.08).setFill()
+            capRect.fill()
+        } else {
+            tint.withAlphaComponent(0.16).setFill()
+            rect.fill()
+            tint.withAlphaComponent(0.55).setFill()
+            capRect.fill()
+        }
         NSGraphicsContext.restoreGraphicsState()
 
-        tint.withAlphaComponent(0.6).setStroke()
+        (isAlas ? ACPAlasPrismStyle.border : tint.withAlphaComponent(0.6)).setStroke()
         path.lineWidth = 0.75
         path.stroke()
 
@@ -286,7 +473,7 @@ private final class ACPCommandChipCell: NSTextAttachmentCell {
 
         let attrs: [NSAttributedString.Key: Any] = [
             .font: ACPMentionChipMetrics.labelFont,
-            .foregroundColor: ACPCommandPillStyle.nameColor,
+            .foregroundColor: isAlas ? NSColor.white : ACPCommandPillStyle.nameColor,
         ]
         (label as NSString).draw(at: NSPoint(
             x: capRect.maxX + ACPCommandPillStyle.nameHorizontalPadding,
@@ -379,25 +566,36 @@ struct ACPCommandPill: View {
     @State private var isHovering = false
     @State private var showsCard = false
 
+    private var isAlas: Bool { ACPAlasSlashCommand.isAlasCommand(suggestion) }
     var body: some View {
         HStack(spacing: 0) {
             Image(systemName: ACPCommandPillStyle.symbolName)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: ACPCommandPillStyle.capWidth, height: ACPMentionChipMetrics.height)
-                .background(Color(nsColor: ACPCommandPillStyle.tint).opacity(0.55))
+                .background(isAlas ? Color.white.opacity(0.08) : Color(nsColor: ACPCommandPillStyle.tint).opacity(0.55))
             Text(ACPCommandPillStyle.displayName(for: suggestion.command))
                 .font(Font(ACPMentionChipMetrics.labelFont))
-                .foregroundStyle(Color(nsColor: ACPCommandPillStyle.nameColor))
+                .foregroundStyle(isAlas ? .white : Color(nsColor: ACPCommandPillStyle.nameColor))
                 .lineLimit(1)
                 .padding(.horizontal, ACPCommandPillStyle.nameHorizontalPadding)
                 .frame(height: ACPMentionChipMetrics.height)
         }
-        .background(Color(nsColor: ACPCommandPillStyle.tint).opacity(0.16))
+        .background {
+            if isAlas {
+                ACPAlasPrismBackground()
+            } else {
+                Color(nsColor: ACPCommandPillStyle.tint).opacity(0.16)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(Color(nsColor: ACPCommandPillStyle.tint).opacity(0.6), lineWidth: 0.75)
+                .strokeBorder(
+                    isAlas ? Color(nsColor: ACPAlasPrismStyle.border)
+                        : Color(nsColor: ACPCommandPillStyle.tint).opacity(0.6),
+                    lineWidth: 0.75
+                )
         )
         .fixedSize()
         .onHover { isHovering = $0 }
