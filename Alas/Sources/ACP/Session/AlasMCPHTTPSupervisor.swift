@@ -33,7 +33,7 @@ final class AlasMCPHTTPSupervisor {
     ) async -> BuiltInAlasMCP.HTTPEndpoint? {
         if let existing = running[sessionId], existing.process.isRunning {
             return BuiltInAlasMCP.HTTPEndpoint(
-                url: "http://localhost:\(existing.port)/mcp", token: existing.token)
+                url: "http://localhost:\(existing.port)/mcp", token: existing.token, reused: true)
         }
         running[sessionId] = nil
 

@@ -30,12 +30,12 @@ enum MCPRegistrationDecision {
     /// - stdio: the server lives under the agent. A hello recorded over
     ///   another transport earlier in this app run means the previous attach
     ///   used a different server, so this stdio one is new and must say hello.
-    /// - HTTP: the app's supervisor keeps the process (same URL and token)
-    ///   across attaches within an app run, so the adapter sees an unchanged
-    ///   session and keeps its connection without a new `initialize`. An HTTP
-    ///   hello recorded in this app run proves that server; without one (e.g.
-    ///   after an app restart, which respawns it on a new port) the adapter
-    ///   reconnects and the server says hello again.
+    /// - HTTP: when the app's supervisor reuses its running process (same URL
+    ///   and token), the adapter sees an unchanged session and keeps its
+    ///   connection without a new `initialize`, so the hello that process
+    ///   sent earlier in this app run proves it. A respawned process (after a
+    ///   failed attach or an app restart) has a new URL and token, so the
+    ///   adapter reconnects and the new process must say hello.
     /// A previous attach in this app run that already found no server (a
     /// reconnect after the warning) has nothing that could have survived, so
     /// it keeps the fresh-launch rules and the warning.
@@ -43,6 +43,7 @@ enum MCPRegistrationDecision {
         builtInTransport: MCPTransportKind?,
         adoptedRunningAgent: Bool,
         recordedHelloTransport: MCPTransportKind?,
+        reusedHTTPServer: Bool = false,
         previousAttachFoundNoServer: Bool = false
     ) -> Bool {
         guard adoptedRunningAgent, !previousAttachFoundNoServer else { return false }
@@ -50,7 +51,7 @@ enum MCPRegistrationDecision {
         case .stdio:
             return recordedHelloTransport == nil || recordedHelloTransport == .stdio
         case .http:
-            return recordedHelloTransport == .http
+            return reusedHTTPServer && recordedHelloTransport == .http
         case .sse, nil:
             return false
         }

@@ -5666,7 +5666,7 @@ extension ACPSessionManager {
             // A broker-adopted agent that was already running keeps the
             // built-in server it connected to for an earlier attach: the stdio
             // `alas mcp` it spawned (possibly before an app restart), or the
-            // app-supervised HTTP server this app run still keeps. That server
+            // app-supervised HTTP process the supervisor reused. That server
             // said its one hello back then and won't again, so this attach
             // must not demand a fresh one (see `MCPRegistrationDecision`).
             let helloBeforeAttach = builtInMCPHello?(sessionId)
@@ -5675,6 +5675,7 @@ extension ACPSessionManager {
                     builtInTransport: builtInMCP?.status.transport,
                     adoptedRunningAgent: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true,
                     recordedHelloTransport: helloBeforeAttach?.transport,
+                    reusedHTTPServer: builtInMCP?.reusesRunningServer == true,
                     previousAttachFoundNoServer: session.builtInMCPRegistration == .notRegistered
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
