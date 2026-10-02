@@ -276,7 +276,7 @@ struct DelegatedPromptRow: View {
             HStack(spacing: 5) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                Text(isExpanded ? "Collapse" : "Show full prompt · \(lineCount) lines")
+                Text(isExpanded ? "Collapse" : "Show full prompt · \(lineCount) line\(lineCount == 1 ? "" : "s")")
             }
             .font(.system(size: 11.5))
             .foregroundStyle(theme.color("fg-dim"))

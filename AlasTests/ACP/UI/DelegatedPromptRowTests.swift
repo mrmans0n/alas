@@ -10,7 +10,8 @@ struct DelegatedPromptRowTests {
         (Array(repeating: "line", count: 13).joined(separator: "\n"), 13),
         (Array(repeating: "line", count: 13).joined(separator: "\r\n"), 13),
         (String(repeating: "a", count: 900), nil),
-        (String(repeating: "a", count: 901), 1)
+        (String(repeating: "a", count: 901), 1),
+        ("  " + String(repeating: "a", count: 900) + "\n\n", nil)
     ] as [(String, Int?)])
     func foldedLineCount(text: String, expected: Int?) {
         #expect(DelegatedPromptRow.foldedLineCount(for: text) == expected)
