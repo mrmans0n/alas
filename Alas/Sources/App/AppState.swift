@@ -372,12 +372,17 @@ final class AppState {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
             attentionNavigationGeneration += 1
+            if startupRecoveryNeedsMountedRightPaneRefresh {
+                startupRecoveryReadyRightPaneID = nil
+            }
             worktreeSelectionFollowUpGeneration += 1
             attentionPendingReviewReveal = nil
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
     }
-    let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
+    private(set) var suppressesRestoredRightPaneAfterAbandonedStartup: Bool
+    private var startupRecoveryNeedsMountedRightPaneRefresh: Bool
+    private var startupRecoveryReadyRightPaneID: String?
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -1463,6 +1468,7 @@ final class AppState {
         self.harnessAttentionSettleInterval = harnessAttentionSettleInterval
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
+        startupRecoveryNeedsMountedRightPaneRefresh = !restoreActiveTabsOnStartup
         _tabs = tabsManager
         self.lspManager = lspManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
@@ -2533,8 +2539,25 @@ final class AppState {
         }
     }
 
-    func completeStartupRecovery() {
+    func completeStartupRecovery(rightPaneReady: Bool = true) {
+        suppressesRestoredRightPaneAfterAbandonedStartup = false
+        guard rightPaneReady else { return }
+        startupRecoveryNeedsMountedRightPaneRefresh = false
         AlasTerminationCoordinator.shared.finish?()
+    }
+
+    func hasCompletedStartupRightPaneRefresh(for worktreeID: String) -> Bool {
+        !startupRecoveryNeedsMountedRightPaneRefresh || startupRecoveryReadyRightPaneID == worktreeID
+    }
+
+    func beginStartupRightPaneRefresh() {
+        guard startupRecoveryNeedsMountedRightPaneRefresh else { return }
+        startupRecoveryReadyRightPaneID = nil
+    }
+
+    func completeStartupRightPaneRefresh(for worktreeID: String) {
+        guard startupRecoveryNeedsMountedRightPaneRefresh else { return }
+        startupRecoveryReadyRightPaneID = worktreeID
     }
 
     func completeStartupRecoveryIfCenterPaneWillNotAppear() {

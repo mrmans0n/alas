@@ -131,7 +131,7 @@ struct CenterPaneView: View {
     /// A center-only layout still retains the legacy control as its recovery path.
     var hasRightPaneRail: Bool = false
     /// An abandoned-startup recovery intentionally suppresses the right pane
-    /// and rail for the whole launch, so its legacy reveal action cannot work.
+    /// and rail until startup settles, so its legacy reveal action cannot work yet.
     var rightPaneStartupSuppressed: Bool = false
     @Environment(\.theme) var theme
     @Environment(\.approvalNotificationInset) private var approvalNotificationInset
@@ -845,29 +845,31 @@ struct CenterPaneView: View {
             readyKey: startupRecoveryReadyKey,
             currentKey: startupRecoveryActiveKey
         ) else { return }
-        guard rightPaneStartupRecoveryReady else { return }
-        state.completeStartupRecovery()
+        state.completeStartupRecovery(rightPaneReady: rightPaneStartupRecoveryReady)
     }
 
     private var rightPaneStartupRecoveryReady: Bool {
+        guard !rightPaneStartupSuppressed else { return false }
         let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         return Self.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: effectiveRightPaneVisible,
+            isRightPaneMounted: hasRightPaneRail || effectiveRightPaneVisible,
             hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
             isLoading: rightPaneState?.loading ?? false,
             ggStackLoadState: rightPaneState?.ggStackLoadState ?? .inactive,
-            ggAvailabilityHasProbed: GGAvailability.shared.hasProbed
+            ggAvailabilityHasProbed: GGAvailability.shared.hasProbed,
+            hasCompletedMountRefresh: state.hasCompletedStartupRightPaneRefresh(for: worktree.id)
         )
     }
 
     static func shouldCompleteStartupRecoveryForRightPane(
-        isRightPaneVisible: Bool,
+        isRightPaneMounted: Bool,
         hasLoadedSnapshot: Bool,
         isLoading: Bool,
         ggStackLoadState: GGStackLoadState,
-        ggAvailabilityHasProbed: Bool
+        ggAvailabilityHasProbed: Bool,
+        hasCompletedMountRefresh: Bool = true
     ) -> Bool {
-        !isRightPaneVisible || (hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
+        !isRightPaneMounted || (hasCompletedMountRefresh && hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
     }
 
     static func shouldCompleteStartupRecoveryForCenterPane(
@@ -894,8 +896,7 @@ struct CenterPaneView: View {
         )
         guard composition.activeId == tabID else { return }
         startupRecoveryReadyKey = startupRecoveryActiveKey
-        guard rightPaneStartupRecoveryReady else { return }
-        state.completeStartupRecovery()
+        state.completeStartupRecovery(rightPaneReady: rightPaneStartupRecoveryReady)
     }
 
     private var startupRecoveryActiveKey: String? {

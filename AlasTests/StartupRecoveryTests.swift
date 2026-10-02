@@ -169,14 +169,36 @@ struct StartupRecoveryTests {
         #expect(didFinish)
     }
 
-    @Test func recoverySuppressesRestoredRightPaneForTheLaunch() {
+    @Test func recoveryRestoresRightPaneBeforeFinishingTheLaunch() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        defer { coordinator.finish = originalFinish }
+        var didFinish = false
+        coordinator.finish = { didFinish = true }
         let state = AppState(restoreActiveTabsOnStartup: false)
+        state.selectedWorktreeId = "restored"
 
         #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
 
-        state.completeStartupRecovery()
+        state.completeStartupRecovery(
+            rightPaneReady: state.hasCompletedStartupRightPaneRefresh(for: "restored")
+        )
 
-        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
+        #expect(!state.suppressesRestoredRightPaneAfterAbandonedStartup)
+        #expect(!didFinish)
+
+        state.completeStartupRightPaneRefresh(for: "other")
+        #expect(!state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.completeStartupRightPaneRefresh(for: "restored")
+        #expect(state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.beginStartupRightPaneRefresh()
+        #expect(!state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.completeStartupRightPaneRefresh(for: "restored")
+        state.completeStartupRecovery(
+            rightPaneReady: state.hasCompletedStartupRightPaneRefresh(for: "restored")
+        )
+
+        #expect(didFinish)
     }
 
     @Test func recoveryLaunchSkipsProjectTopologyRefresh() {
@@ -423,44 +445,52 @@ struct StartupRecoveryTests {
         ))
     }
 
-    @Test func startupRecoveryWaitsForVisibleRightPaneSnapshot() {
+    @Test func startupRecoveryWaitsForMountedRightPaneSnapshot() {
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneMounted: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .loaded,
+            ggAvailabilityHasProbed: true,
+            hasCompletedMountRefresh: false
+        ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: false,
+            isRightPaneMounted: false,
             hasLoadedSnapshot: false,
             isLoading: true,
             ggStackLoadState: .loading,
             ggAvailabilityHasProbed: false
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: true,
+            isRightPaneMounted: true,
             hasLoadedSnapshot: false,
             isLoading: false,
             ggStackLoadState: .inactive,
             ggAvailabilityHasProbed: true
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: true,
+            isRightPaneMounted: true,
             hasLoadedSnapshot: true,
             isLoading: true,
             ggStackLoadState: .inactive,
             ggAvailabilityHasProbed: true
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: true,
+            isRightPaneMounted: true,
             hasLoadedSnapshot: true,
             isLoading: false,
             ggStackLoadState: .loading,
             ggAvailabilityHasProbed: true
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: true,
+            isRightPaneMounted: true,
             hasLoadedSnapshot: true,
             isLoading: false,
             ggStackLoadState: .inactive,
             ggAvailabilityHasProbed: false
         ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: true,
+            isRightPaneMounted: true,
             hasLoadedSnapshot: true,
             isLoading: false,
             ggStackLoadState: .loaded,
