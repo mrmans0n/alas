@@ -101,7 +101,13 @@ struct NextPromptSettingsTests {
         manager.markSessionVisible(id: session.id)
         manager.unmarkSessionVisible(id: session.id)
         #expect(state.nextPromptCoordinator.offer == nil)
+
+        let otherSession = manager.createSession(id: UUID().uuidString, agentId: "test")
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: otherSession.id)
+        otherSession.nextPromptActivity.send()
+
         manager.markSessionVisible(id: session.id)
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
         #expect(state.nextPromptCoordinator.offer == "Show an example.")
         #expect(generationCount.withLock { $0 } == 1)
 

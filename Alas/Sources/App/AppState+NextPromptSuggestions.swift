@@ -343,7 +343,7 @@ extension AppState {
                             self.nextPromptCoordinator.invalidate(sessionID: parentID)
                         }
                         if self.nextPromptActiveIncarnation == incarnation {
-                            self.nextPromptComposerEpoch &+= 1
+                            self.nextPromptComposerEpochs[incarnation, default: 0] &+= 1
                         }
                     },
                     session.nextPromptVisibilityChanged.sink { [weak self] isVisible in
@@ -357,6 +357,7 @@ extension AppState {
                     session.nextPromptTeardown.sink { [weak self] in
                         guard let self else { return }
                         self.nextPromptCoordinator.sessionEnded(incarnation: incarnation)
+                        self.nextPromptComposerEpochs[incarnation] = nil
                         self.localTextObservers.sessions[incarnation] = nil
                         if self.nextPromptActiveIncarnation == incarnation {
                             self.clearNextPromptPresentationContext()
@@ -395,7 +396,7 @@ extension AppState {
         if environment.hasPendingInput || environment.hasSelection || environment.hasMarkedText ||
             environment.isDictating || environment.isPickerPresented {
             nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1)
-            nextPromptComposerEpoch &+= 1
+            nextPromptComposerEpochs[incarnation, default: 0] &+= 1
             return
         }
         nextPromptCoordinator.reconsider(incarnation: incarnation)
@@ -409,7 +410,7 @@ extension AppState {
             incarnation: session.incarnation,
             throughPromptID: session.nextPromptID - 1
         )
-        nextPromptComposerEpoch &+= 1
+        nextPromptComposerEpochs[session.incarnation, default: 0] &+= 1
     }
 
     func suspendNextPromptPresentation() {
@@ -468,7 +469,7 @@ extension AppState {
         environment.isRuntimeAvailable = nextPromptInferenceState == .ready ||
             nextPromptInferenceState == .running || nextPromptInferenceState == .failed
         environment.hasForkOrDelegationWork = environment.hasForkOrDelegationWork || nextPromptHasDelegatedWork(parentID: session.id)
-        environment.composerEpoch = nextPromptComposerEpoch
+        environment.composerEpoch = nextPromptComposerEpochs[session.incarnation, default: 0]
         environment.settingsGeneration = nextPromptSettingsGeneration
         environment.modelGeneration = localTextModelGeneration
         return .live(session: session, turn: turn, environment: environment)

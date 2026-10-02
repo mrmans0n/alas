@@ -225,7 +225,7 @@ final class AppState {
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
     var localTextRemovalInProgress = false
-    @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
+    @ObservationIgnored var nextPromptComposerEpochs: [UUID: UInt64] = [:]
     @ObservationIgnored var nextPromptShuttingDown = false
     @ObservationIgnored var nextPromptOwner: SessionOwnerID?
     @ObservationIgnored var nextPromptSessionID: String?
