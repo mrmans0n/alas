@@ -846,8 +846,11 @@ struct ClosedTabAppStateTests {
         fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: original.id)
 
         let reopenTask = Task { await fixture.state.reopenLastClosedTab() }
-        for _ in 0..<20 where fixture.state.repoHookApprovalQueue.activeRequest == nil {
-            await Task.yield()
+        // Loading the hook is asynchronous, so the request is awaited with a deadline: a fixed number of yields
+        // is not enough on a loaded runner.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while fixture.state.repoHookApprovalQueue.activeRequest == nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
         }
 
         #expect(fixture.state.repoHookApprovalQueue.activeRequest?.hook?.event == .sessionOpen)
