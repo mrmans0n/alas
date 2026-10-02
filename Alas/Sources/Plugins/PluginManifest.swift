@@ -307,10 +307,13 @@ struct PluginManifest: Equatable, Sendable {
     ) throws(PluginManifestError) -> [PluginPanelContribution] {
         guard raw.count <= maxPanels else { throw .invalidPanel("at most \(maxPanels) panels") }
         var panels: [PluginPanelContribution] = []
+        // Every declared id, skipped locations included, so uniqueness does not depend on order or on what this
+        // Alas supports.
+        var declared: Set<String> = []
         for entry in raw {
             let id = entry.id ?? ""
             guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidPanel("invalid panel id \"\(id)\"") }
-            guard !panels.contains(where: { $0.id == id }) else { throw .invalidPanel("duplicate panel id \"\(id)\"") }
+            guard declared.insert(id).inserted else { throw .invalidPanel("duplicate panel id \"\(id)\"") }
             guard !tabs.contains(where: { $0.id == id }) else { throw .invalidPanel("panel id \"\(id)\" is also a tab id") }
             let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard (1...maxTabTitleLength).contains(title.count) else {

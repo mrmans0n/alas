@@ -53,6 +53,7 @@ struct PluginManifestTests {
         (manifest(api: 4, panels(#"{"id":"p","title":"P"}"#)), .needsNewerAPI(#""contributes.panels""#)),
         (manifest(panels(#"{"id":"P!","title":"P"}"#)), .invalidPanel(#"invalid panel id "P!""#)),
         (manifest(panels(#"{"id":"p","title":"P"},{"id":"p","title":"Q"}"#)), .invalidPanel(#"duplicate panel id "p""#)),
+        (manifest(panels(#"{"id":"p","title":"P","location":"sidebar"},{"id":"p","title":"Q"}"#)), .invalidPanel(#"duplicate panel id "p""#)),
         (manifest(panels(#"{"id":"p","title":"P"}"#, tabs: #"{"id":"p","title":"T","kind":"view"}"#)), .invalidPanel(#"panel id "p" is also a tab id"#)),
         (manifest(panels(#"{"id":"p","title":"\#(String(repeating: "x", count: 41))"}"#)), .invalidPanel(#"panel "p" needs a title of 1 to 40 characters"#)),
         (manifest(panels(#"{"id":"a","title":"A"},{"id":"b","title":"B"},{"id":"c","title":"C"}"#)), .invalidPanel("at most 2 panels")),
