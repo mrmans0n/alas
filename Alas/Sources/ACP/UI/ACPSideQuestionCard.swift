@@ -360,11 +360,10 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
             .frame(height: isCollapsed ? 0 : nil, alignment: .top)
             .clipped()
             .opacity(isCollapsed ? 0 : 1)
-            .allowsHitTesting(!isCollapsed)
+            // Disabling resigns focus anywhere in the hidden body, including
+            // the prompts' own fields, so it can't keep taking keystrokes.
+            .disabled(isCollapsed)
             .accessibilityHidden(isCollapsed)
-        }
-        .onChange(of: isCollapsed) { _, collapsed in
-            if collapsed { fieldFocused = false }
         }
         .background(
             RoundedRectangle(cornerRadius: 12)
