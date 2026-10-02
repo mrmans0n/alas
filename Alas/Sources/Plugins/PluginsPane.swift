@@ -109,7 +109,8 @@ struct PluginsPane: View {
                 ForEach(index.plugins) { entry in
                     catalogRow(manager, entry, PluginCatalogRow(
                         entry: entry, installed: manager.plugin(id: entry.id),
-                        quarantined: manager.invalid.contains { $0.pluginID == entry.id }))
+                        // Duplicates of this plugin, or a broken folder at the path install would use.
+                        quarantined: manager.invalid.contains { $0.pluginID == entry.id || $0.folder.lastPathComponent == entry.id }))
                 }
             }
         }
