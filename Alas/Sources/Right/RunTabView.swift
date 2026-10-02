@@ -63,6 +63,7 @@ struct RunTabView: View {
     var body: some View {
         Group {
             let displayedScripts = activeOrAllScripts
+            let pluginCommands = state.pluginCommands(.runMenu, projectID: worktree.projectId)
             if RunTabLoadingPresentation.showsPlaceholder(
                 scannedWorktreeID: scannedWorktreeID,
                 worktreeID: worktree.id
@@ -81,7 +82,14 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                                 ForEach(scoped) { script in
                                     RunRowView(
                                         presentation: presentation(for: script),
-                                        onAction: { perform($0, script: script) }
+                                        onAction: { perform($0, script: script) },
+                                        pluginCommands: pluginCommands,
+                                        onRunPluginCommand: {
+                                            state.runPluginCommand($0, slot: .runMenu, worktreeID: worktree.id, detail: script.key)
+                                        },
+                                        pluginDecorations: state.pluginDecorations(
+                                            .runRow, projectID: worktree.projectId, worktree: worktree.id, target: script.key),
+                                        onRunPluginDecoration: { state.runPluginDecoration($0) }
                                     )
                                 }
                             }
@@ -498,6 +506,10 @@ private struct RunScopeHeader: View {
 private struct RunRowView: View {
     let presentation: RunRowPresentation
     let onAction: (RunRowAction) -> Void
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
+    var pluginDecorations: [PluginDecorationItem] = []
+    var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -514,6 +526,7 @@ private struct RunRowView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
+                PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
                 Spacer(minLength: 8)
                 if let action = primaryAction {
                     actionButton(action, prominent: true)
@@ -605,6 +618,10 @@ private struct RunRowView: View {
             }
             if presentation.actions.contains(.edit) {
                 Button("Edit") { onAction(.edit) }
+            }
+            if !pluginCommands.isEmpty {
+                Divider()
+                PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
             }
         } label: {
             Icon(name: "ellipsis", size: 12, color: theme.color("fg-muted"))

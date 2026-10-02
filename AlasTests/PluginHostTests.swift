@@ -28,6 +28,14 @@ private func fetch(_ id: Int = 1, url: String = "https://api.example.com/x", aut
     return request(id, "http/fetch", #"{"method":"GET","url":"\#(url)"\#(headers)}"#)
 }
 
+private let api6Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","contributes":{"commands":[{"id":"fix","title":"Fix","slots":["changes.toolbar"]}],"panels":[{"id":"checks","title":"Checks","location":"changes.section"},{"id":"explain","title":"Explain","location":"run.report.section"}]}}"#
+private let api5Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js"}"#
+
+private func decorate(_ slot: String, target: String, worktree: String? = nil, _ items: String) -> PluginFixtureStep {
+    let worktree = worktree.map { #","worktree":"\#($0)""# } ?? ""
+    return .send(#"{"jsonrpc":"2.0","method":"decorations/set","params":{"slot":"\#(slot)","target":"\#(target)"\#(worktree),"items":[\#(items)]}}"#)
+}
+
 /// `PluginHost` is main-actor isolated because it applies actions to AppState.
 @MainActor
 struct PluginHostTests {
@@ -41,6 +49,9 @@ struct PluginHostTests {
         /// How many upcoming starts are rejected before any is accepted.
         var rejections = 0
         var notes: [String] = []
+        var sent: [String] = []
+        var runsStarted: [String] = []
+        var comments: [String] = []
     }
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
@@ -69,7 +80,9 @@ struct PluginHostTests {
             project: PluginProjectRef(id: "proj", name: "Project"),
             grants: grants,
             actions: PluginHostActions(
-                snapshot: { PluginWorkspaceSnapshot(worktrees: []) },
+                snapshot: {
+                    PluginWorkspaceSnapshot(worktrees: [.init(id: "wt", branch: "main", current: true, dirty: nil, sessions: [])])
+                },
                 switchWorktree: { id in
                     recorder.switched.append(id)
                     return id == "wt"
@@ -95,7 +108,20 @@ struct PluginHostTests {
                     recorder.completions.append(completion)
                     return .started(sessionId: "s\(recorder.tasks.count)", branch: "task/x")
                 },
-                notify: { title, body in recorder.notes.append("\(title)|\(body)") }),
+                notify: { title, body in recorder.notes.append("\(title)|\(body)") },
+                sendToSession: { session, text in
+                    recorder.sent.append("\(session)|\(text)")
+                    return session == "s1"
+                },
+                startRun: { worktree, script in
+                    recorder.runsStarted.append("\(worktree)|\(script)")
+                    return script == "repo:dev.sh" ? nil : "unknown run script \(script)"
+                },
+                runOutput: { run in run == "live" ? .notFinished : .unknownRun },
+                addReviewComment: { comment, author in
+                    recorder.comments.append("\(author)|\(comment.worktree)|\(comment.path)|\(comment.line)")
+                    return nil
+                }),
             storage: storage,
             settings: settings ?? Self.settings(manifest),
             transport: transport,
@@ -725,19 +751,25 @@ struct PluginHostTests {
         ])
     }
 
-    /// Only the events the manifest lists, and only with the grant.
-    @Test(arguments: [(Set<PluginCapability>(), 0), (Set<PluginCapability>([.sessionRead]), 1)])
-    func sessionEventsNeedTheSubscriptionAndTheGrant(grants: Set<PluginCapability>, deliveries: Int) async throws {
-        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["session.read"],"events":["session.finished"]}"#
+    /// Only the events the manifest lists, and each only with its own grant.
+    @Test(arguments: [
+        (Set<PluginCapability>(), [String]()),
+        (Set<PluginCapability>([.sessionRead]), ["session/finished"]),
+        (Set<PluginCapability>([.sessionRead, .runsRead]), ["session/finished", "run/finished"]),
+    ] as [(Set<PluginCapability>, [String])])
+    func eventsNeedTheSubscriptionAndTheirGrant(grants: Set<PluginCapability>, methods: [String]) async throws {
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","capabilities":["session.read","runs.read"],"events":["session.finished","run.finished"]}"#
         let host = try makeHost([[.send(activateOK)]], grants: grants, manifest: manifest)
         await host.activate()
-        await host.sessionEvents([
-            PluginSessionEvent(event: .sessionState, session: "s1", worktree: "w", state: "idle"),
-            PluginSessionEvent(event: .sessionFinished, session: "s1", worktree: "w"),
+        await host.events([
+            PluginEventMessage(event: .sessionState, params: PluginEventParams(session: "s1", worktree: "w", state: "idle")),
+            PluginEventMessage(event: .sessionFinished, params: PluginEventParams(session: "s1", worktree: "w")),
+            PluginEventMessage(event: .runFinished, params: PluginEventParams(worktree: "w", script: "repo:a", run: "r1", exitCode: 0)),
         ])
-        let sent = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("session/") }.map(\.text)
-        #expect(sent.count == deliveries)
-        #expect(sent.allSatisfy { $0.contains(#""method":"session/finished""#) && !$0.contains("state") })
+        let sent = host.trace.filter { $0.direction == .toPlugin && $0.text.contains(#""method":"#) && !$0.text.contains("alas/") }
+            .map(\.text)
+        #expect(sent.map { $0.firstMatch(of: /"method":"([^"]+)"/).map { String($0.1) } ?? "" } == methods)
+        #expect(sent.allSatisfy { !$0.contains("state") })
     }
 
     // MARK: - API 5: settings, network, timers
@@ -940,5 +972,130 @@ struct PluginHostTests {
         #expect(await awaitCondition { sleeper.waiting == 8 })
         await host.deactivate()
         #expect(await awaitCondition { sleeper.cancellations == 8 })
+    }
+
+    // MARK: - API 6
+
+    struct DecorationCase: Sendable {
+        let step: PluginFixtureStep
+        var manifest = api6Manifest
+        /// "text|tone|command" for each item on worktree "wt"'s row, or nil when the plugin stops.
+        let items: [String]?
+        var warns = 0
+    }
+
+    /// Caps and checks of one `decorations/set`: at most two items, text cut to 24 scalars, only rows of the project,
+    /// and only declared commands and known tones.
+    @Test(arguments: [
+        DecorationCase(
+            step: decorate("worktree.row", target: "wt", #"{"text":"CI \#(String(repeating: "x", count: 30))","tone":"danger","command":"fix"},{"text":"b"},{"text":"c"}"#),
+            items: ["CI \(String(repeating: "x", count: 21))|danger|fix", "b||"]),
+        DecorationCase(step: decorate("worktree.row", target: "gone", #"{"text":"a"}"#), items: [], warns: 1),
+        DecorationCase(step: decorate("sidebar.row", target: "wt", #"{"text":"a"}"#), items: [], warns: 1),
+        DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a","command":"nope"}"#), items: nil),
+        DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a","tone":"pink"}"#), items: nil),
+        DecorationCase(step: decorate("run.row", target: "repo:dev.sh", #"{"text":"a"}"#), items: nil),
+        DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a"}"#), manifest: api5Manifest, items: []),
+    ])
+    func decorationsAreCappedAndScopedToTheProject(_ c: DecorationCase) async throws {
+        let host = try makeHost([[.send(activateOK), c.step]], manifest: c.manifest)
+        await host.activate()
+        guard let expected = c.items else {
+            #expect(host.state != .active)
+            return
+        }
+        #expect(host.state == .active)
+        let items = host.decorations[PluginDecorationKey(slot: .worktreeRow, target: "wt")] ?? []
+        #expect(items.map { "\($0.text)|\($0.tone?.rawValue ?? "")|\($0.command ?? "")" } == expected)
+        #expect(host.log.filter { $0.level == "warn" }.count == c.warns)
+    }
+
+    /// Setting replaces that row's items, no items clear them, and stopping the plugin clears everything.
+    @Test func decorationsReplaceAndClearWithTheInstance() async throws {
+        let host = try makeHost(
+            [
+                [.send(activateOK), decorate("worktree.row", target: "wt", #"{"text":"a"}"#),
+                 decorate("worktree.row", target: "wt", #"{"text":"b"}"#),
+                 decorate("changes.file", target: "a.swift", worktree: "wt", #"{"text":"lint"}"#),
+                 decorate("repo.row", target: "proj", #"{"text":"p"}"#)],
+                [decorate("changes.file", target: "a.swift", worktree: "wt", "")],
+            ],
+            grants: [.workspaceRead], manifest: api6Manifest)
+        await host.activate()
+        #expect(host.decorations[PluginDecorationKey(slot: .worktreeRow, target: "wt")]?.map(\.text) == ["b"])
+        #expect(host.decorations.count == 3)
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        #expect(host.decorations[PluginDecorationKey(slot: .changesFile, worktree: "wt", target: "a.swift")] == nil)
+        #expect(host.decorations.count == 2)
+        await host.deactivate()
+        #expect(host.decorations.isEmpty)
+    }
+
+    /// A panel at a location with a worktree or run must name it, and shows only for that place and while not empty.
+    @Test func inlinePanelsRenderForTheirPlaceAndHideWhileEmpty() async throws {
+        let checks = PluginPanelPlace(panel: "checks", worktree: "wt")
+        let host = try makeHost(
+            [[.send(activateOK),
+              .send(#"{"jsonrpc":"2.0","method":"view/render","params":{"panel":"checks","worktree":"wt","root":\#(buttonTree)}}"#)],
+             [.send(#"{"jsonrpc":"2.0","method":"view/render","params":{"panel":"checks","worktree":"wt","root":{"id":"r","kind":"vstack","children":[]}}}"#)],
+             [.send(render(panel: "explain"))]],
+            grants: [.workspaceRead], manifest: api6Manifest)
+        await host.activate()
+        #expect(host.panelTree(for: checks)?.id == "root")
+        #expect(host.panelTree(for: PluginPanelPlace(panel: "checks", worktree: "other")) == nil)
+        // Shown for a run: the plugin hears which one, and re-renders the section empty.
+        await host.setPanelVisible(PluginPanelPlace(panel: "explain", run: "r1"), true)?.value
+        #expect(host.trace.contains { $0.text.contains("panel/visible") && $0.text.contains(#""run":"r1""#) })
+        #expect(host.panelTree(for: checks) == nil)
+        // The run report section needs its run.
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("needs run"))
+    }
+
+    struct API6RequestCase: Sendable {
+        let request: String
+        var grants: Set<PluginCapability> = [.sessionWrite, .runsStart, .runsRead, .reviewWrite]
+        var manifest = api6Manifest
+        let reply: String
+        /// What reached the app: "sent", "runs" or "comments" entries.
+        var acted: [String] = []
+    }
+
+    /// Each request is checked against its grant and bounded before anything is acted on.
+    @Test(arguments: [
+        API6RequestCase(request: request(1, "session/send", #"{"session":"s1","text":"hi"}"#), grants: [], reply: #""code":-32001"#),
+        API6RequestCase(request: request(1, "session/send", #"{"session":"s1","text":"hi"}"#), manifest: api5Manifest, reply: #""code":-32601"#),
+        API6RequestCase(request: request(1, "session/send", #"{"session":"s1","text":"hi"}"#), reply: #""result":{}"#, acted: ["s1|hi"]),
+        API6RequestCase(request: request(1, "session/send", #"{"session":"other","text":"hi"}"#), reply: #""code":-32003"#, acted: ["other|hi"]),
+        API6RequestCase(request: request(1, "session/send", #"{"session":"s1","text":" "}"#), reply: #""code":-32602"#),
+        API6RequestCase(request: request(1, "run/start", #"{"worktree":"wt","script":"repo:dev.sh"}"#), reply: #""result":{}"#, acted: ["wt|repo:dev.sh"]),
+        API6RequestCase(request: request(1, "run/start", #"{"worktree":"wt","script":"repo:nope"}"#), reply: "unknown run script", acted: ["wt|repo:nope"]),
+        API6RequestCase(request: request(1, "run/output", #"{"run":"live"}"#), reply: "has not finished"),
+        API6RequestCase(request: request(1, "run/output", #"{"run":"gone"}"#), reply: "unknown run gone"),
+        API6RequestCase(request: request(1, "review/comment", #"{"worktree":"wt","path":"a/b.swift","line":3,"body":"Nit"}"#), reply: #""result":{}"#, acted: ["Test|wt|a/b.swift|3"]),
+        API6RequestCase(request: request(1, "review/comment", #"{"worktree":"wt","path":"../b.swift","line":3,"body":"Nit"}"#), reply: #""code":-32602"#),
+        API6RequestCase(request: request(1, "review/comment", #"{"worktree":"wt","path":"a.swift","line":0,"body":"Nit"}"#), reply: #""code":-32602"#),
+        API6RequestCase(request: request(1, "review/comment", #"{"worktree":"wt","path":"a.swift","line":1,"body":"\#(String(repeating: "x", count: 16 * 1024 + 1))"}"#), reply: #""code":-32602"#),
+    ])
+    func api6RequestsAreGatedAndBounded(_ c: API6RequestCase) async throws {
+        let recorder = Recorder()
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 17
+        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, recorder: recorder, limits: limits, manifest: c.manifest)
+        await host.activate()
+        #expect(await awaitCondition { replies(host).count == 2 })
+        #expect(host.state == .active)
+        #expect(lastReply(host)?.contains(c.reply) == true)
+        #expect(recorder.sent + recorder.runsStarted + recorder.comments == c.acted)
+    }
+
+    /// `run/output` keeps the tail, starting on a scalar boundary.
+    @Test(arguments: [(5, "aéx"), (3, "éx"), (2, "x")])
+    func runOutputKeepsTheTail(maxBytes: Int, output: String) {
+        #expect(PluginRunOutputResult.tail("aéx", maxBytes: maxBytes) == PluginRunOutputResult(output: output, truncated: output != "aéx"))
     }
 }

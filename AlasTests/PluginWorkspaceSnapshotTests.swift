@@ -2,6 +2,24 @@ import Foundation
 import Testing
 @testable import Alas
 
+private func state(
+    _ worktrees: [(String, Int?, Bool)] = [("w", 1, false)],
+    runs: [PluginRunState] = [],
+    reviews: [PluginReviewState] = []
+) -> PluginEventState {
+    PluginEventState(
+        workspace: PluginWorkspaceSnapshot(worktrees: worktrees.map { id, files, current in
+            PluginWorkspaceSnapshot.WorktreeEntry(
+                id: id, branch: id, current: current,
+                dirty: files.map { PluginWorkspaceSnapshot.Dirty(files: $0, conflicts: 0) }, sessions: [])
+        }),
+        runs: runs, reviews: reviews)
+}
+
+private func run(_ id: String, _ outcome: RunOutcome?) -> PluginRunState {
+    PluginRunState(run: id, worktree: "w", script: "repo:dev.sh", outcome: outcome)
+}
+
 struct PluginWorkspaceSnapshotTests {
     @Test func mapsWorktreesAndSessionsToTheWireShape() throws {
         func worktree(_ id: String, _ branch: String) -> Worktree {
@@ -48,7 +66,50 @@ struct PluginWorkspaceSnapshotTests {
                 })])
         }
         let events = snapshot(c.after).sessionEvents(since: snapshot(c.before))
-        #expect(events.allSatisfy { $0.worktree == "w" })
-        #expect(events.map { ([$0.event.rawValue, $0.session] + ($0.state.map { [$0] } ?? [])).joined(separator: ":") } == c.events)
+        #expect(events.allSatisfy { $0.params.worktree == "w" })
+        #expect(events.map { ([$0.event.rawValue, $0.params.session ?? ""] + ($0.params.state.map { [$0] } ?? [])).joined(separator: ":") } == c.events)
+    }
+
+    struct StateCase: Sendable {
+        let before: PluginEventState
+        let after: PluginEventState
+        /// "event:worktree", plus ":run:outcome:exitCode" for runs and ":state:number:failed" for reviews.
+        let events: [String]
+    }
+
+    @Test(arguments: [
+        StateCase(before: state(), after: state([("w", 1, false), ("x", nil, false)]), events: ["worktree.created:x"]),
+        StateCase(before: state([("w", 1, false), ("x", nil, false)]), after: state(), events: ["worktree.removed:x"]),
+        StateCase(before: state(), after: state([("w", 2, false)]), events: ["git.changed:w"]),
+        // The first scan finishing is not a change.
+        StateCase(before: state([("w", nil, false)]), after: state(), events: []),
+        StateCase(before: state(), after: state([("w", 1, true)]), events: ["focus.changed:w"]),
+        StateCase(before: state([("w", 1, true)]), after: state(), events: []),
+        StateCase(before: state(), after: state(runs: [run("r1", nil)]), events: ["run.started:w:r1::"]),
+        StateCase(
+            before: state(runs: [run("r1", nil)]), after: state(runs: [run("r1", .failed(exitCode: 2))]),
+            events: ["run.finished:w:r1:failed:2"]),
+        StateCase(
+            before: state(runs: [run("r1", .succeeded)]), after: state(runs: [run("r2", .succeeded)]),
+            events: ["run.started:w:r2::", "run.finished:w:r2:succeeded:0"]),
+        StateCase(
+            before: state(), after: state(reviews: [PluginReviewState(worktree: "w", state: "none")]),
+            events: ["review.changed:w:none::"]),
+        StateCase(
+            before: state(reviews: [PluginReviewState(worktree: "w", state: "open", number: 7, checks: .init(passed: 1, failed: 0, pending: 1))]),
+            after: state(reviews: [PluginReviewState(worktree: "w", state: "open", number: 7, checks: .init(passed: 1, failed: 1, pending: 0))]),
+            events: ["review.changed:w:open:7:1"]),
+    ])
+    func eventsFollowWorktreeRunAndReviewChanges(_ c: StateCase) {
+        let events = c.after.events(since: c.before).map { message -> String in
+            let p = message.params
+            var parts = [message.event.rawValue, p.worktree ?? ""]
+            if p.run != nil { parts += [p.run ?? "", p.outcome ?? "", p.exitCode.map(String.init) ?? ""] }
+            if message.event == .reviewChanged {
+                parts += [p.state ?? "", p.number.map(String.init) ?? "", p.checks.map { String($0.failed) } ?? ""]
+            }
+            return parts.joined(separator: ":")
+        }
+        #expect(events == c.events)
     }
 }

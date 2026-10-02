@@ -105,6 +105,7 @@
 		0C74DD1581313ABE6DA6F6D9 /* MermaidDiagramBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07BD2664AF3A3B7665A1382A /* MermaidDiagramBlockView.swift */; };
 		0C7A044AC34BF225A4149556 /* RemoteTerminalLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90E25D0520B813E8AC9A7174 /* RemoteTerminalLaunchTests.swift */; };
 		0C8C81114DDC3629F90619B3 /* CommitPublishModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB86F9BBBDDEF3D9BB3B9F0D /* CommitPublishModels.swift */; };
+		0CB7CC70D568B0B35C55A320 /* PluginDecorations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 164F0840942DD163D1D88EFC /* PluginDecorations.swift */; };
 		0CDC1232955139B230B6600C /* ReviewDraftCommentAgentModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7344582814CCAF81B0E354 /* ReviewDraftCommentAgentModelTests.swift */; };
 		0CED0EFC7D198E3BB9D8601A /* ACPTurnCompletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABAC4D9C8ED8FC7FB7FC569 /* ACPTurnCompletion.swift */; };
 		0CF488290CC525EA7C11A43C /* DiffParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE26221DC8E8837FFEB87474 /* DiffParserTests.swift */; };
@@ -2410,6 +2411,7 @@
 		163616126043BC277DDE52F6 /* WebPageMetadataFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageMetadataFetcher.swift; sourceTree = "<group>"; };
 		163D115CEC0B818FD6538301 /* SemanticTokensClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticTokensClientTests.swift; sourceTree = "<group>"; };
 		163D378BCA43555D00D1C1AD /* ACPUpstreamReferenceDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUpstreamReferenceDetector.swift; sourceTree = "<group>"; };
+		164F0840942DD163D1D88EFC /* PluginDecorations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginDecorations.swift; sourceTree = "<group>"; };
 		166844386117E6A01FDE589E /* CheckpointDiffTabTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointDiffTabTests.swift; sourceTree = "<group>"; };
 		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		169FC38D03727F34855EB521 /* AlasFieldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasFieldTests.swift; sourceTree = "<group>"; };
@@ -7706,6 +7708,7 @@
 				7F6602E3EE8B43A85FB5C881 /* AppState+Plugins.swift */,
 				A790B5264313ADCF5431D2B6 /* PluginCatalog.swift */,
 				AFAB3B0EF938880D1073E2D9 /* PluginCommands.swift */,
+				164F0840942DD163D1D88EFC /* PluginDecorations.swift */,
 				AC10D39329569C06E5BC2D82 /* PluginHost.swift */,
 				E6E5EADE023F1BB6BF4ABC13 /* PluginManager.swift */,
 				B7C91A5C7EA37E4FF35F48E0 /* PluginManifest.swift */,
@@ -8976,6 +8979,7 @@
 				CE3F1650AEEC80D937F8E0E9 /* PiMCPConfigWriter.swift in Sources */,
 				42913D3A78AD2085DDB354F7 /* PluginCatalog.swift in Sources */,
 				9B737B25989848466D918EF0 /* PluginCommands.swift in Sources */,
+				0CB7CC70D568B0B35C55A320 /* PluginDecorations.swift in Sources */,
 				A17CA5FB1DD1FD864037B5EC /* PluginHost.swift in Sources */,
 				149FE77C3B5D2C7F43D9E948 /* PluginManager.swift in Sources */,
 				1FE191F15E75A5038B26EAF4 /* PluginManifest.swift in Sources */,

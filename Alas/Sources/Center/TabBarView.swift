@@ -57,6 +57,9 @@ struct TabBarView: View {
     var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
+    /// Plugin commands for an agent session tab's context menu, run with its session id.
+    var sessionPluginCommands: [PluginCommandItem] = []
+    var onRunSessionPluginCommand: (PluginCommandItem, String) -> Void = { _, _ in }
     @State private var tabStripWidth: CGFloat = 0
     @Environment(\.theme) var theme
 
@@ -180,11 +183,15 @@ struct TabBarView: View {
                 Button("Rename…") { onRenameTerminal(tab.id) }
                 Divider()
             }
-            if case .acpSession = tab {
+            if case .acpSession(let session) = tab {
                 Button("Rename…") { onRenameACPSession(tab.id) }
                 Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
                 Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
                 Divider()
+                if !sessionPluginCommands.isEmpty {
+                    PluginCommandButtons(items: sessionPluginCommands) { onRunSessionPluginCommand($0, session.sessionId) }
+                    Divider()
+                }
             }
             let revisionCapability = revisionFollowCapability(tab)
             if revisionCapability.isSupported {

@@ -317,7 +317,8 @@ struct AlasActionService {
         side: String?,
         body: String,
         sessionID: String?,
-        projectWorktrees: [Worktree]
+        projectWorktrees: [Worktree],
+        author: ReviewDraftCommentAuthor = AlasActionService.cliAgentAuthor
     ) async -> AlasCLIResponse {
         let targetSessionID: ReviewDraftSessionID
         let worktreeForPath: Worktree
@@ -382,7 +383,7 @@ struct AlasActionService {
             state: .active,
             createdAt: timestamp,
             updatedAt: timestamp,
-            author: Self.cliAgentAuthor
+            author: author
         )
         do {
             try draftCommentStore().save(comment)

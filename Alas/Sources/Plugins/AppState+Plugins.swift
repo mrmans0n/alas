@@ -91,7 +91,100 @@ extension AppState {
                 guard let target = worktrees.first(where: { $0.id == self.selectedWorktreeId }) ?? worktrees.first else { return }
                 self.inAppNotifications.post(
                     body.isEmpty ? title : "\(title)\n\(body)", severity: .information, worktreeID: target.id)
+            },
+            runs: { [weak self] in
+                guard let self else { return [] }
+                return (self.projectsManager.worktreesByProject[project.id] ?? []).flatMap { worktree in
+                    self.runRecords.records(worktreeID: worktree.id).map { record in
+                        var outcome: RunOutcome?
+                        if case .finished(let finished) = record.status { outcome = finished }
+                        return PluginRunState(run: record.id, worktree: worktree.id, script: record.scriptKey, outcome: outcome)
+                    }
+                }.sorted { $0.run < $1.run }
+            },
+            reviews: { [weak self] in
+                guard let self else { return [] }
+                return (self.projectsManager.worktreesByProject[project.id] ?? []).compactMap { worktree in
+                    // ponytail: only worktrees whose right pane has loaded its review loop; the loop runs per pane.
+                    guard let snapshot = self.rightPaneStore.activeState(worktreeId: worktree.id)?.reviewLoop.snapshot else {
+                        return nil
+                    }
+                    return PluginReviewState(snapshot: snapshot, worktree: worktree.id)
+                }
+            },
+            sendToSession: { [weak self] id, text in
+                // Only live agent sessions of this project's worktrees; terminal sessions take no prompts.
+                guard let self, let worktree = (self.projectsManager.worktreesByProject[project.id] ?? []).first(where: {
+                    self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
+                }) else { return false }
+                Task { @MainActor in
+                    await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { _ in })
+                }
+                return true
+            },
+            startRun: { [weak self] worktreeID, key in
+                guard let self else { return "Alas is shutting down" }
+                return await self.startPluginRun(worktreeID: worktreeID, scriptKey: key, projectID: project.id)
+            },
+            runOutput: { [weak self] runID in
+                guard let self else { return .unknownRun }
+                return await self.pluginRunOutput(runID, projectID: project.id)
+            },
+            addReviewComment: { [weak self] comment, author in
+                guard let self else { return "Alas is shutting down" }
+                guard let worktree = self.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == comment.worktree })
+                else { return "unknown worktree \(comment.worktree)" }
+                let response = await self.makeCLICommandRouter(sessionWorktreeLookup: { _ in nil }).service.reviewCommentAdd(
+                    origin: worktree, path: comment.path, startLine: comment.line, endLine: nil, side: nil,
+                    body: comment.body, sessionID: nil, projectWorktrees: [worktree], author: .agent(name: author))
+                switch response {
+                case .error(let message), .errorWithExitCode(let message, _): return message
+                case .ok, .text: return nil
+                }
             })
+    }
+
+    /// Starts a run script for a plugin the way the Run tab's start button does. Refuses one that is already running
+    /// rather than focusing its terminal, which would move the user's selection.
+    private func startPluginRun(worktreeID: String, scriptKey: String, projectID: String) async -> String? {
+        guard let worktree = projectsManager.worktreesByProject[projectID]?.first(where: { $0.id == worktreeID }) else {
+            return "unknown worktree \(worktreeID)"
+        }
+        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+        switch await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: remoteHost) {
+        case .failed(let message):
+            return message
+        case .scripts(let scripts):
+            guard let script = scripts.first(where: { $0.key == scriptKey }) else { return "unknown run script \(scriptKey)" }
+            if runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true
+                || runningScriptTab(for: script, in: worktree) != nil {
+                return "\(script.key) is already running"
+            }
+            runOrFocusScript(script, in: worktree)
+            return nil
+        }
+    }
+
+    /// A run of the project: its kept output once it finished.
+    private func pluginRunOutput(_ runID: String, projectID: String) async -> PluginRunOutput {
+        let worktreeIDs = Set((projectsManager.worktreesByProject[projectID] ?? []).map(\.id))
+        for worktreeID in worktreeIDs {
+            guard let record = runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID }) else { continue }
+            if record.status.isActive { return .notFinished }
+            // A run that just finished may still be on its way to the history store.
+            await flushRunHistoryPersistence(worktreeID: worktreeID)
+        }
+        let entry: RunHistoryEntry?
+        if let transient = worktreeIDs.lazy.compactMap({ self.transientRunReport(worktreeID: $0, runID: runID) }).first {
+            entry = transient
+        } else {
+            entry = try? await runHistoryStore?.entry(id: runID)
+        }
+        guard let entry, worktreeIDs.contains(entry.worktreeID) else { return .unknownRun }
+        switch entry.output {
+        case .available(let text, _): return .text(text)
+        case .unavailable: return .unavailable
+        }
     }
 
     /// Starts a plugin task on the scheduled-run path: a new worktree, created without changing
@@ -203,6 +296,19 @@ extension AppState {
         })
     }
 
+    /// Inline panels at `location` from plugins running in `projectID`, placed for the worktree or run shown there.
+    func pluginPanelTargets(
+        _ location: PluginPanelLocation, projectID: String?, worktree: String? = nil, run: String? = nil
+    ) -> [PluginPanelTarget] {
+        guard let manager = pluginManager, let projectID else { return [] }
+        return manager.plugins.flatMap { plugin -> [PluginPanelTarget] in
+            guard let host = manager.host(pluginID: plugin.id, projectID: projectID), host.state == .active else { return [] }
+            return plugin.manifest.panels.filter { $0.location == location }.map {
+                PluginPanelTarget(host: host, place: PluginPanelPlace(panel: $0.id, worktree: worktree, run: run), title: $0.title)
+            }
+        }
+    }
+
     /// The commands `slot` shows for `projectID`, from plugins running there.
     func pluginCommands(_ slot: PluginCommandSlot, projectID: String?) -> [PluginCommandItem] {
         guard let manager = pluginManager, let projectID else { return [] }
@@ -217,12 +323,35 @@ extension AppState {
         selectedWorktreeId.flatMap { worktree(withId: $0)?.projectId }
     }
 
-    /// `worktreeID` is the worktree the slot acts on; slots that act on the project ignore it.
-    func runPluginCommand(_ item: PluginCommandItem, slot: PluginCommandSlot, worktreeID: String? = nil) {
+    /// `worktreeID` is the worktree the slot acts on and `detail` what its row names (see `PluginCommandRouting.target`);
+    /// slots that act on the project ignore both.
+    func runPluginCommand(_ item: PluginCommandItem, slot: PluginCommandSlot, worktreeID: String? = nil, detail: String? = nil) {
         guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
-              let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID)
+              let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID, detail: detail)
         else { return }
         Task { await host.runCommand(item.command.id, target: target) }
+    }
+
+    /// Badges plugins running in `projectID` put on one row, in plugin order.
+    func pluginDecorations(
+        _ slot: PluginDecorationSlot, projectID: String, worktree: String? = nil, target: String
+    ) -> [PluginDecorationItem] {
+        guard let manager = pluginManager else { return [] }
+        let key = PluginDecorationKey(slot: slot, worktree: worktree, target: target)
+        return manager.plugins.flatMap { plugin -> [PluginDecorationItem] in
+            guard let host = manager.host(pluginID: plugin.id, projectID: projectID), host.state == .active else { return [] }
+            return (host.decorations[key] ?? []).enumerated().map {
+                PluginDecorationItem(pluginID: plugin.id, projectID: projectID, key: key, index: $0.offset, decoration: $0.element)
+            }
+        }
+    }
+
+    func runPluginDecoration(_ item: PluginDecorationItem) {
+        guard let command = item.decoration.command,
+              let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
+              let target = PluginCommandRouting.target(for: item.key)
+        else { return }
+        Task { await host.runCommand(command, target: target) }
     }
 
     func openPluginTab(_ tab: PluginTabState) {

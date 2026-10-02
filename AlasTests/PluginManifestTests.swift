@@ -32,11 +32,15 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 6), .unsupportedAPI(6)),
+        (manifest(api: 7), .unsupportedAPI(7)),
         (manifest(api: 4, commands(#"{"id":"a","title":"A","slots":["palette"]}"#)), .needsNewerAPI(#""contributes.commands""#)),
         (manifest(api: 4, #","capabilities":["notify"]"#), .needsNewerAPI(#"capability "notify""#)),
         (manifest(api: 4, #","capabilities":["session.read"],"events":["session.finished"]"#), .needsNewerAPI(#""events""#)),
-        (manifest(#","capabilities":["session.read"],"events":["git.changed"]"#), .unknownEvent("git.changed")),
+        (manifest(#","capabilities":["session.read"],"events":["nope.x"]"#), .unknownEvent("nope.x")),
+        (manifest(#","capabilities":["workspace.read"],"events":["git.changed"]"#), .needsNewerAPI(#"event "git.changed""#, api: 6)),
+        (manifest(#","capabilities":["runs.read"]"#), .needsNewerAPI(#"capability "runs.read""#, api: 6)),
+        (manifest(api: 6, #","capabilities":["workspace.read"],"events":["run.finished"]"#), .eventNeedsCapability("run.finished")),
+        (manifest(api: 6, panels((0...4).map { #"{"id":"p\#($0)","title":"P"}"# }.joined(separator: ","))), .invalidPanel("at most 4 panels")),
         (manifest(#","events":["session.state"]"#), .eventNeedsCapability("session.state")),
         (manifest(commands(#"{"id":"A!","title":"A","slots":["palette"]}"#)), .invalidCommand(#"invalid command id "A!""#)),
         (manifest(commands(#"{"id":"a","title":"A","slots":["palette"]},{"id":"a","title":"B","slots":["palette"]}"#)), .invalidCommand(#"duplicate command id "a""#)),
@@ -85,24 +89,33 @@ struct PluginManifestTests {
         #expect(manifest.capabilities == [.tasksStart])
     }
 
-    /// Unknown slots are skipped rather than refused, because slots keep growing.
-    @Test func commandsKeepKnownSlotsAndEventsNeedTheirCapability() throws {
-        let parsed = try PluginManifest.parse(Data(manifest(
-            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar"]}]}"#).utf8))
-        #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: [.worktreeMenu])])
+    /// Unknown slots, and slots newer than the manifest's API, are skipped rather than refused, because slots keep growing.
+    @Test(arguments: [(5, [PluginCommandSlot.worktreeMenu]), (6, [.worktreeMenu, .changesToolbar])])
+    func commandsKeepKnownSlotsAndEventsNeedTheirCapability(api: Int, slots: [PluginCommandSlot]) throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: api,
+            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar","nope"]}]}"#).utf8))
+        #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: slots)])
         #expect(parsed.events == [.sessionFinished])
     }
 
-    /// Unknown locations are skipped like unknown command slots; the icon defaults.
-    @Test func panelsDefaultTheirIconAndSkipUnknownLocations() throws {
-        let parsed = try PluginManifest.parse(Data(manifest(panels(
+    /// Locations newer than the manifest's API are skipped like unknown command slots; the icon defaults.
+    @Test(arguments: [(5, ["a"]), (6, ["a", "b"])])
+    func panelsDefaultTheirIconAndSkipUnknownLocations(api: Int, ids: [String]) throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: api, panels(
             #"{"id":"a","title":"A","location":"right"},{"id":"b","title":"B","icon":"checklist","location":"changes.section"}"#)).utf8))
-        #expect(parsed.panels == [PluginPanelContribution(id: "a", title: "A")])
+        #expect(parsed.panels.map(\.id) == ids)
+        #expect(parsed.panels.first == PluginPanelContribution(id: "a", title: "A"))
+        #expect(parsed.panels.dropFirst().allSatisfy { $0.location == .changesSection && $0.icon == "checklist" })
+    }
+
+    @Test func eventNeedsCapabilityNamesTheEventsOwnCapability() {
+        #expect(PluginManifestError.eventNeedsCapability("review.changed").description
+            == #"event "review.changed" needs capability "review.read""#)
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 5"),
-        (6, "requires plugin API 6; this Alas supports up to 5"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 6"),
+        (7, "requires plugin API 7; this Alas supports up to 6"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

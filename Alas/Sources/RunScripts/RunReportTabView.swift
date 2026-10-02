@@ -31,10 +31,12 @@ struct RunReportTabView: View {
         }
     }
 
-    @ViewBuilder
     private func report(_ entry: RunHistoryEntry) -> some View {
-        VStack(spacing: 0) {
+        let pluginSections = state.pluginPanelTargets(
+            .runReportSection, projectID: state.worktree(withId: entry.worktreeID)?.projectId, run: entry.id)
+        return VStack(spacing: 0) {
             reportHeader(entry)
+            ForEach(pluginSections) { PluginPanelSectionView(target: $0) }
             if let brief = RunFailureBriefPresentation(state: state.runFailureBriefs.state(for: entry.id)) {
                 RunFailureBriefSection(
                     presentation: brief,
@@ -47,6 +49,7 @@ struct RunReportTabView: View {
             reportOutput(entry.output)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .pluginPanelsVisible(pluginSections)
     }
 
     private func reportHeader(_ entry: RunHistoryEntry) -> some View {
@@ -80,6 +83,15 @@ struct RunReportTabView: View {
                 }
             }
             Spacer(minLength: 12)
+            let pluginCommands = state.worktree(withId: entry.worktreeID)
+                .map { state.pluginCommands(.runReport, projectID: $0.projectId) } ?? []
+            if !pluginCommands.isEmpty {
+                ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
+                    PluginCommandButtons(items: pluginCommands) {
+                        state.runPluginCommand($0, slot: .runReport, worktreeID: entry.worktreeID, detail: entry.id)
+                    }
+                }
+            }
             if case let .available(text, _) = entry.output {
                 Button("Copy Output") { Clipboard.copy(text) }
                     .controlSize(.small)

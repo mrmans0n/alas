@@ -408,7 +408,11 @@ struct CenterPaneView: View {
                         ?? AgentBuiltins.entry(id: session.agentId)
                 },
                 pluginCommands: state.pluginCommands(.toolbar, projectID: worktree.projectId),
-                onRunPluginCommand: { state.runPluginCommand($0, slot: .toolbar, worktreeID: worktree.id) }
+                onRunPluginCommand: { state.runPluginCommand($0, slot: .toolbar, worktreeID: worktree.id) },
+                sessionPluginCommands: state.pluginCommands(.sessionMenu, projectID: worktree.projectId),
+                onRunSessionPluginCommand: { item, session in
+                    state.runPluginCommand(item, slot: .sessionMenu, worktreeID: worktree.id, detail: session)
+                }
             )
             .onAppear {
                 state.synchronizeVisibleWorktreeCenterTabIfNeeded(

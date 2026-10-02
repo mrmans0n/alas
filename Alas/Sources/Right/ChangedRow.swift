@@ -28,6 +28,10 @@ struct ChangedRow: View {
     /// Peer rows: open and copy only. No diff copy, stage or discard, which
     /// have no peer endpoints.
     var readOnly: Bool = false
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
+    var pluginDecorations: [PluginDecorationItem] = []
+    var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     @Environment(\.theme) var theme
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
@@ -50,6 +54,7 @@ struct ChangedRow: View {
                         .font(.system(size: 11.5, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
                 }
                 .contentShape(Rectangle())
                 Spacer()
@@ -112,6 +117,10 @@ struct ChangedRow: View {
                     Divider()
                     ignoreMenu
                 }
+            }
+            if !pluginCommands.isEmpty {
+                Divider()
+                PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
             }
         }
         .dragOut { dragPayload?() }

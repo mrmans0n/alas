@@ -17,7 +17,7 @@ struct PluginPanelItem: Equatable, Identifiable {
     /// panels, so the panel can say it stopped and offer a restart.
     static func items(_ plugins: [(manifest: PluginManifest, hasHost: Bool)]) -> [PluginPanelItem] {
         plugins.filter(\.hasHost).flatMap { plugin in
-            plugin.manifest.panels.map {
+            plugin.manifest.panels.filter { $0.location == .right }.map {
                 PluginPanelItem(
                     ref: PluginPanelRef(pluginID: plugin.manifest.id, panelID: $0.id), title: $0.title, icon: $0.icon)
             }
@@ -36,8 +36,6 @@ struct PluginPanelView: View {
     let projectID: String
     let item: PluginPanelItem
     @Environment(\.theme) var theme
-    /// The host told the panel is shown, so the same one is told when it goes.
-    @State private var reported: PluginHost?
 
     var body: some View {
         let manager = state.pluginManager
@@ -70,19 +68,64 @@ struct PluginPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // ponytail: shown means selected in a mounted pane; window occlusion is not tracked as it is for canvases.
-        .onAppear {
-            reported = host
-            if let host { host.setPanelVisible(panel, true) }
-        }
-        .onDisappear {
-            if let reported { reported.setPanelVisible(panel, false) }
-            reported = nil
-        }
-        // A reload or update replaces the host while the panel stays on screen: the report moves to the new one.
-        .onChange(of: host.map(ObjectIdentifier.init)) { _, _ in
-            if let reported, reported !== host { reported.setPanelVisible(panel, false) }
-            reported = host
-            if let host { host.setPanelVisible(panel, true) }
+        .pluginPanelsVisible(host.map { [PluginPanelTarget(host: $0, place: PluginPanelPlace(panel: panel))] } ?? [])
+    }
+}
+
+/// One panel in one place, on the host that renders it.
+struct PluginPanelTarget: Equatable, Identifiable {
+    let host: PluginHost
+    let place: PluginPanelPlace
+    var title = ""
+    var id: String { "\(host.manifest.id)/\(place.panel)" }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.host === rhs.host && lhs.place == rhs.place }
+}
+
+/// Tells each host its panels are shown while the view is, including when a reload replaces a host or the place
+/// changes while the view stays on screen.
+private struct PluginPanelVisibility: ViewModifier {
+    let targets: [PluginPanelTarget]
+    /// The targets told they are shown, so the same ones are told when they go.
+    @State private var reported: [PluginPanelTarget] = []
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { report(targets) }
+            .onDisappear { report([]) }
+            .onChange(of: targets) { _, new in report(new) }
+    }
+
+    private func report(_ new: [PluginPanelTarget]) {
+        for old in reported where !new.contains(old) { old.host.setPanelVisible(old.place, false) }
+        for target in new where !reported.contains(target) { target.host.setPanelVisible(target.place, true) }
+        reported = new
+    }
+}
+
+extension View {
+    func pluginPanelsVisible(_ targets: [PluginPanelTarget]) -> some View {
+        modifier(PluginPanelVisibility(targets: targets))
+    }
+}
+
+/// A panel drawn inline, in the Changes tab or a run report. Shows nothing until the plugin renders for this place.
+struct PluginPanelSectionView: View {
+    let target: PluginPanelTarget
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        if let root = target.host.panelTree(for: target.place) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(target.title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                PluginViewNodeView(node: root, events: PluginViewEvents(host: target.host, tabIndex: 0, panel: target.place.panel))
+                    .id(root.id)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

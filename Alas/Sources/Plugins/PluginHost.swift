@@ -53,6 +53,21 @@ struct PluginHostActions {
     var startTask: (PluginTaskRequest, @escaping @MainActor (String?) -> Void) -> PluginTaskStart
     /// Shows `title` and `body`, already bounded and naming the plugin.
     var notify: (_ title: String, _ body: String) -> Void
+    /// The latest run of each script in the project's worktrees.
+    var runs: () -> [PluginRunState] = { [] }
+    /// The pull request state of the project's worktrees whose review loop has loaded.
+    var reviews: () -> [PluginReviewState] = { [] }
+    /// Queues `text` as a prompt for a live agent session of this project; false when there is none with that id.
+    var sendToSession: (_ session: String, _ text: String) -> Bool = { _, _ in false }
+    /// Starts a run script, by its key, in a worktree of this project. Returns why not, or nil.
+    var startRun: @MainActor (_ worktree: String, _ script: String) async -> String? = { _, _ in "runs are not available" }
+    /// The output of a run of this project.
+    var runOutput: @MainActor (_ run: String) async -> PluginRunOutput = { _ in .unknownRun }
+    /// Adds a draft review comment, written by `author`, on a line of a file in a worktree of this project.
+    /// Returns why not, or nil.
+    var addReviewComment: @MainActor (_ comment: PluginReviewCommentParams, _ author: String) async -> String? = { _, _ in
+        "review comments are not available"
+    }
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
@@ -87,7 +102,15 @@ final class PluginHost {
         "http/fetch": .network,
         "timer/set": .timers,
         "timer/cancel": .timers,
+        "session/send": .sessionWrite,
+        "run/start": .runsStart,
+        "run/output": .runsRead,
+        "review/comment": .reviewWrite,
     ]
+    /// Methods a manifest for an older API does not know.
+    private static let api6Methods: Set<String> = ["session/send", "run/start", "run/output", "review/comment"]
+    static let maxRunOutputBytes = 64 * 1024
+    static let maxRequestsInFlight = 4
     static let maxPromptBytes = 32 * 1024
     static let maxSecretSubstitutions = 8
     private static let traceLimit = 100
@@ -115,11 +138,14 @@ final class PluginHost {
     private(set) var frames: [Int: PluginFrame] = [:]
     private(set) var regions: [Int: [PluginRegion]] = [:]
     private(set) var views: [Int: PluginViewNode] = [:]
-    /// Panel trees, by the manifest's panel id.
+    /// Panel trees, by the manifest's panel id, and the worktree or run each was last rendered for.
     private(set) var panelViews: [String: PluginViewNode] = [:]
+    private(set) var panelPlaces: [String: PluginPanelPlace] = [:]
+    /// Badges the plugin put on rows with `decorations/set`. Cleared whenever the instance ends.
+    private(set) var decorations: [PluginDecorationKey: [PluginDecoration]] = [:]
     @ObservationIgnored private var visibleViews = 0
-    /// How many places show each panel. Owned by the UI, so it outlives a restart.
-    @ObservationIgnored private var visiblePanels: [String: Int] = [:]
+    /// How many views show each panel in each place. Owned by the UI, so it outlives a restart.
+    @ObservationIgnored private var visiblePanels: [PluginPanelPlace: Int] = [:]
     @ObservationIgnored private var lastTick: ContinuousClock.Instant?
     @ObservationIgnored private var deliveriesInFlight = 0
     /// One `task/start` at a time. The generation ties a completion to its own start, so a late,
@@ -135,6 +161,8 @@ final class PluginHost {
     @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var nextFetchToken = 0
     @ObservationIgnored private var panelDelivery: Task<Void, Never>?
+    /// Requests answered in a later delivery (`run/start`, `run/output`, `review/comment`), by token.
+    @ObservationIgnored private var requests: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored private let source: Data
@@ -203,10 +231,18 @@ final class PluginHost {
             encode(JSONRPCEnvelope(id: Self.activateID, method: "alas/activate", params: params)),
             isActivation: true)
         // A fresh instance learns which of its panels are already on screen.
-        for panel in manifest.panels where visiblePanels[panel.id, default: 0] > 0 {
+        let shown = visiblePanels.filter { $0.value > 0 }.keys
+            .sorted { ($0.panel, $0.worktree ?? "", $0.run ?? "") < ($1.panel, $1.worktree ?? "", $1.run ?? "") }
+        for place in shown {
             guard state == .active else { return }
-            await sendPanelVisible(panel.id, true)
+            await sendPanelVisible(place, true)
         }
+    }
+
+    /// The tree to show for `place`: nil until the plugin renders for that worktree or run, and while it is empty.
+    func panelTree(for place: PluginPanelPlace) -> PluginViewNode? {
+        guard panelPlaces[place.panel] == place, let root = panelViews[place.panel] else { return nil }
+        return root.isEmpty ? nil : root
     }
 
     /// Each place that shows the panel holds one count; `panel/visible` is sent when the first appears or the last goes.
@@ -214,10 +250,16 @@ final class PluginHost {
     /// transition after the previous one, so the plugin sees them in order. Returns the delivery, if any.
     @discardableResult
     func setPanelVisible(_ panel: String, _ visible: Bool) -> Task<Void, Never>? {
-        guard manifest.panels.contains(where: { $0.id == panel }) else { return nil }
-        let before = visiblePanels[panel, default: 0]
+        setPanelVisible(PluginPanelPlace(panel: panel), visible)
+    }
+
+    /// Counted per place, so a panel shown for one run and then another is reported for each.
+    @discardableResult
+    func setPanelVisible(_ place: PluginPanelPlace, _ visible: Bool) -> Task<Void, Never>? {
+        guard manifest.panels.contains(where: { $0.id == place.panel }) else { return nil }
+        let before = visiblePanels[place, default: 0]
         let after = max(0, before + (visible ? 1 : -1))
-        visiblePanels[panel] = after
+        visiblePanels[place] = after == 0 ? nil : after
         guard (before == 0) != (after == 0), state == .active else { return nil }
         let previous = panelDelivery
         let instance = instance
@@ -225,15 +267,16 @@ final class PluginHost {
             await previous?.value
             // Meant for this instance only: a restart in between gets its own report after activating.
             guard let self, self.instance == instance, !Task.isCancelled else { return }
-            await self.sendPanelVisible(panel, visible)
+            await self.sendPanelVisible(place, visible)
         }
         panelDelivery = delivery
         return delivery
     }
 
-    private func sendPanelVisible(_ panel: String, _ visible: Bool) async {
+    private func sendPanelVisible(_ place: PluginPanelPlace, _ visible: Bool) async {
         await deliver(encode(JSONRPCEnvelope(
-            id: nil, method: "panel/visible", params: PluginPanelVisibleParams(panel: panel, visible: visible))))
+            id: nil, method: "panel/visible",
+            params: PluginPanelVisibleParams(panel: place.panel, worktree: place.worktree, run: place.run, visible: visible))))
     }
 
     func workspaceChanged(_ snapshot: PluginWorkspaceSnapshot) async {
@@ -249,12 +292,12 @@ final class PluginHost {
             id: nil, method: "command/run", params: PluginCommandRunParams(command: id, target: target))))
     }
 
-    var receivesSessionEvents: Bool { !manifest.events.isEmpty && grants.contains(.sessionRead) }
+    /// Whether the manifest subscribes to an event whose capability was granted.
+    var receivesEvents: Bool { manifest.events.contains { grants.contains($0.capability) } }
 
-    /// Sends the events the manifest subscribes to.
-    func sessionEvents(_ events: [PluginSessionEvent]) async {
-        guard receivesSessionEvents else { return }
-        for event in events where manifest.events.contains(event.event) {
+    /// Sends the events the manifest subscribes to and has the grant for.
+    func events(_ events: [PluginEventMessage]) async {
+        for event in events where manifest.events.contains(event.event) && grants.contains(event.event.capability) {
             guard state == .active else { return }
             await deliver(encode(JSONRPCEnvelope(id: nil, method: event.event.method, params: event.params)))
         }
@@ -292,6 +335,8 @@ final class PluginHost {
         regions = [:]
         views = [:]
         panelViews = [:]
+        panelPlaces = [:]
+        decorations = [:]
         lastTick = nil
     }
 
@@ -328,8 +373,11 @@ final class PluginHost {
     /// Only nodes in the panel's current tree can send events.
     func viewEvent(panel: String, id: String, kind: String, value: String?) async {
         guard state == .active, let root = panelViews[panel], Self.contains(root, id: id) else { return }
+        let place = panelPlaces[panel]
         await deliver(encode(JSONRPCEnvelope(
-            id: nil, method: "view/event", params: PluginViewEventParams(panel: panel, id: id, kind: kind, value: value))))
+            id: nil, method: "view/event",
+            params: PluginViewEventParams(
+                panel: panel, worktree: place?.worktree, run: place?.run, id: id, kind: kind, value: value))))
     }
 
     private static func contains(_ node: PluginViewNode, id: String) -> Bool {
@@ -434,7 +482,7 @@ final class PluginHost {
 
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data? {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
-        guard let capability = Self.methods[method] else {
+        guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method) else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
         if let capability, !grants.contains(capability) {
@@ -525,6 +573,63 @@ final class PluginHost {
             }
             timers.removeValue(forKey: params.id)?.cancel()
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "session/send":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginSessionSendParams>.self, from: data).params,
+                  !params.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  params.text.utf8.count <= Self.maxPromptBytes
+            else {
+                return errorReply(id, code: -32602, "invalid params for \(method): text must be 1 byte to 32 KiB")
+            }
+            guard actions.sendToSession(params.session, params.text) else {
+                return errorReply(id, code: -32003, "unknown session \(params.session)")
+            }
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "run/start":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginRunStartParams>.self, from: data).params,
+                  !params.script.isEmpty, params.script.utf8.count <= 1024
+            else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            let actions = self.actions
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                if let failure = await actions.startRun(params.worktree, params.script) {
+                    return self.errorReply(id, code: -32003, failure)
+                }
+                return self.encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+            }
+        case "run/output":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginRunOutputParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            let actions = self.actions
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                switch await actions.runOutput(params.run) {
+                case .unknownRun: return self.errorReply(id, code: -32003, "unknown run \(params.run)")
+                case .notFinished: return self.errorReply(id, code: -32003, "run \(params.run) has not finished")
+                case .unavailable:
+                    return self.encode(PluginResponse(id: id, result: PluginRunOutputResult(output: nil, truncated: false), error: nil))
+                case .text(let text):
+                    let tail = PluginRunOutputResult.tail(text, maxBytes: Self.maxRunOutputBytes)
+                    return self.encode(PluginResponse(id: id, result: tail, error: nil))
+                }
+            }
+        case "review/comment":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginReviewCommentParams>.self, from: data).params,
+                  params.isValid
+            else {
+                return errorReply(id, code: -32602, "invalid params for \(method): a relative path, a line from 1 and a body of 1 byte to 16 KiB")
+            }
+            let actions = self.actions
+            let author = manifest.name
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                if let failure = await actions.addReviewComment(params, author) {
+                    return self.errorReply(id, code: -32003, failure)
+                }
+                return self.encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+            }
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -690,11 +795,32 @@ final class PluginHost {
         return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
     }
 
+    /// Answers `id` in a later delivery with what `work` returns, if this instance is still running then. The work
+    /// itself is not undone when the instance ends: a run it started keeps running.
+    private func replyLater(_ id: JSONRPCID, _ work: @escaping @MainActor () async -> Data) -> Data? {
+        guard requests.count < Self.maxRequestsInFlight else { return errorReply(id, code: -32003, "too many requests in flight") }
+        let token = nextFetchToken
+        nextFetchToken += 1
+        let instance = instance
+        requests[token] = Task { [weak self] in
+            let reply = await work()
+            guard let self, self.instance == instance else { return }
+            self.requests[token] = nil
+            guard self.state == .active, !reply.isEmpty else { return }
+            // A reply over the limit would stop the plugin, so it is refused instead, as for an immediate reply.
+            await self.deliver(reply.count <= self.limits.maxMessageBytes
+                ? reply : self.errorReply(id, code: -32003, "the result is too large"))
+        }
+        return nil
+    }
+
     /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled.
     private func endInstance() {
         instance += 1
         for fetch in fetches.values { fetch.cancel() }
         fetches = [:]
+        for request in requests.values { request.cancel() }
+        requests = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]
         panelDelivery?.cancel()
@@ -720,12 +846,23 @@ final class PluginHost {
             }
             switch (header.tab, header.panel) {
             case (let tab?, nil):
-                guard tabIs(tab, .view) else {
+                guard tabIs(tab, .view), header.worktree == nil, header.run == nil else {
                     return .violation("plugin sent view/render to tab \(tab), which is not a view tab")
                 }
             case (nil, let panel?):
-                guard manifest.panels.contains(where: { $0.id == panel }) else {
+                guard let location = manifest.panels.first(where: { $0.id == panel })?.location else {
                     return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which it does not declare"))
+                }
+                // A panel names exactly the context its location has.
+                let needs: (worktree: Bool, run: Bool) = switch location {
+                case .right: (false, false)
+                case .changesSection: (true, false)
+                case .runReportSection: (false, true)
+                }
+                guard (header.worktree != nil) == needs.worktree, (header.run != nil) == needs.run else {
+                    return .violation(Self.bounded(
+                        "plugin sent a malformed view/render: panel \"\(panel)\" at \(location.rawValue) "
+                            + (needs.worktree ? "needs worktree" : needs.run ? "needs run" : "takes no worktree or run")))
                 }
             default:
                 return .violation("plugin sent a malformed view/render: needs exactly one of tab and panel")
@@ -737,11 +874,33 @@ final class PluginHost {
             else { return .violation("plugin sent a malformed view/render") }
             switch PluginViewTree.decode(rootData) {
             case .success(let node):
-                if let panel = header.panel { panelViews[panel] = node } else if let tab = header.tab { views[tab] = node }
+                if let panel = header.panel {
+                    panelViews[panel] = node
+                    panelPlaces[panel] = PluginPanelPlace(panel: panel, worktree: header.worktree, run: header.run)
+                } else if let tab = header.tab {
+                    views[tab] = node
+                }
                 return .none
             case .failure(let error):
                 return .violation(Self.bounded("plugin sent a malformed view/render: \(error.reason)"))
             }
+        case "decorations/set" where manifest.api >= 6:
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginDecorationSetParams>.self, from: data).params else {
+                return .violation("plugin sent a malformed decorations/set")
+            }
+            let outcome = PluginDecorations.apply(
+                params, to: decorations, commands: Set(manifest.commands.map(\.id)),
+                inProject: { key in
+                    key.slot == .repoRow
+                        ? key.target == project.id
+                        : actions.snapshot().worktrees.contains { $0.id == (key.worktree ?? key.target) }
+                })
+            switch outcome {
+            case .set(let updated): decorations = updated
+            case .dropped(let reason): appendLog("warn", reason)
+            case .violation(let reason): return .violation(Self.bounded(reason))
+            }
+            return .none
         case "canvas/regions":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
                   tabIs(params.tab, .canvas),

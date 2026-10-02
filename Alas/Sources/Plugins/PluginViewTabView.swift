@@ -41,7 +41,7 @@ struct PluginViewTabView: View {
     }
 }
 
-private struct PluginViewEvents {
+struct PluginViewEvents {
     let host: PluginHost
     let tabIndex: Int
     let panel: String?
@@ -61,7 +61,7 @@ private extension EnvironmentValues {
     @Entry var inClickableCard = false
 }
 
-private struct PluginViewNodeView: View {
+struct PluginViewNodeView: View {
     let node: PluginViewNode
     let events: PluginViewEvents
     @Environment(\.theme) var theme
@@ -177,13 +177,7 @@ private struct PluginViewNodeView: View {
     }
 
     private func color(_ tone: PluginViewNode.Tone?) -> Color {
-        switch tone ?? .normal {
-        case .normal: theme.color("fg")
-        case .dim: theme.color("fg-dim")
-        case .accent: theme.color("accent")
-        case .warn: theme.color("warn")
-        case .danger: theme.color("del")   // the theme has no "danger" key; "del" is its red
-        }
+        theme.color((tone ?? .normal).colorKey)
     }
 }
 
