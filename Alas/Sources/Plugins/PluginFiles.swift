@@ -66,7 +66,14 @@ enum PluginFiles {
                 return .failure(.notFound(dir.isEmpty ? "." : dir))
             }
             let visible = names.filter { $0.lowercased() != ".git" }.sorted()
-            let entries = visible.prefix(maxListEntries).map { name in
+            // Names that JSON-escape badly could still overflow the reply, so the list also stops at half the
+            // message limit of encoded names.
+            var budget = maxFileBytes
+            let fitting = visible.prefix(maxListEntries).prefix { name in
+                budget -= ((try? JSONEncoder().encode(name).count) ?? name.utf8.count * 6) + 32
+                return budget >= 0
+            }
+            let entries = fitting.map { name in
                 let type = (try? FileManager.default.attributesOfItem(atPath: url.appending(path: name).path))?[.type] as? FileAttributeType
                 let kind = switch type {
                 case .typeDirectory?: "directory"
@@ -75,7 +82,7 @@ enum PluginFiles {
                 }
                 return PluginFileListResult.Entry(name: name, kind: kind)
             }
-            return .success(PluginFileListResult(entries: Array(entries), truncated: visible.count > maxListEntries))
+            return .success(PluginFileListResult(entries: Array(entries), truncated: visible.count > entries.count))
         }
     }
 

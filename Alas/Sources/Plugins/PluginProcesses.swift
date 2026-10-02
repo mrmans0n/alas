@@ -56,6 +56,7 @@ final class PluginProcessOutput: @unchecked Sendable {
     private var exit: Int32?
     private var done = false
     private let wake: AsyncStream<Void>.Continuation
+    private var emitted = false
     /// Only the reader touches it.
     private var waiter: AsyncStream<Void>.Iterator
 
@@ -94,12 +95,15 @@ final class PluginProcessOutput: @unchecked Sendable {
         wake.yield()
     }
 
+    /// Waits `interval` after each batch, however much is pending, so output that arrives meanwhile joins the next.
     private func next() async -> PluginProcessEvent? {
+        if emitted, interval > .zero { try? await Task.sleep(for: interval) }
         while true {
-            if let event = take() { return event }
+            if let event = take() {
+                emitted = true
+                return event
+            }
             guard await waiter.next() != nil else { return nil }
-            // Lets output that arrives meanwhile join this batch.
-            if interval > .zero { try? await Task.sleep(for: interval) }
         }
     }
 
@@ -206,7 +210,10 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
             let status = process.terminationReason == .uncaughtSignal
                 ? 128 + process.terminationStatus : process.terminationStatus
             self?.settle { $0.exitStatus = status }
+            // What it leaves running goes with it, killed if it outlasts the grace.
+            self?.signalLeftovers(SIGTERM)
             DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.signalLeftovers(SIGKILL)
                 self?.settle { $0.openPipes = 0 }
             }
         }
@@ -259,6 +266,15 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
             _ = Darwin.kill(-pid, signal)
             _ = Darwin.kill(pid, signal)
         }
+        for descendant in ACPTerminal.currentlyMatching(lock.withLock { descendants }) {
+            _ = Darwin.kill(descendant.pid, signal)
+        }
+    }
+
+    /// After the root exits: its group, whose id cannot be reused while any member is left, and every tracked
+    /// descendant that is still the same process.
+    private func signalLeftovers(_ signal: Int32) {
+        _ = Darwin.kill(-process.processIdentifier, signal)
         for descendant in ACPTerminal.currentlyMatching(lock.withLock { descendants }) {
             _ = Darwin.kill(descendant.pid, signal)
         }

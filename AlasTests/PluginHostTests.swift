@@ -1292,6 +1292,21 @@ struct PluginHostTests {
         #expect(await awaitCondition { Darwin.kill(child, 0) != 0 })
     }
 
+    /// A command that exits on its own takes what it left running with it.
+    @Test func aProcessThatExitsStopsWhatItLeftBehind() async throws {
+        let handle = try PluginFoundationLauncher().launch(
+            ["/bin/sh", "-c", "sleep 0.2; sleep 30 & echo $!"], in: FileManager.default.temporaryDirectory, stdin: nil,
+            keep: .head, limit: 1024)
+        var child: pid_t?
+        for await event in handle.events {
+            if case .stdout(let data) = event {
+                child = pid_t(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        let pid = try #require(child)
+        #expect(await awaitCondition { Darwin.kill(pid, 0) != 0 })
+    }
+
     @Test func processRunIsStoppedThenKilledAtTheTimeLimit() async throws {
         let launcher = FakeLauncher()
         let sleeper = Sleeper()

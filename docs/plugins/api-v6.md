@@ -266,6 +266,8 @@ or `process.exec` without `processes`, is refused.
 - When the plugin stops, is disabled or fails, Alas stops all its processes,
   and nothing it started answers the next instance. Stopping sends `SIGTERM` to
   the process and every process it started, then `SIGKILL` after 5 seconds.
+  When a process exits on its own, whatever it left running gets `SIGTERM`, then
+  `SIGKILL` a second later: a declared command cannot leave a daemon behind.
 
 ### `files.read` and `files.write`
 
@@ -285,8 +287,9 @@ or `process.exec` without `processes`, is refused.
   `.git` are refused too. `file/list` leaves `.git` out.
 - `file/read` answers with UTF-8 text of up to 512 KiB; a larger file, one that
   is not UTF-8, or a reply that does not fit in a message answers `-32003`.
-- `file/list` answers with up to 2000 entries sorted by name, with `kind`
-  `file`, `directory` or `symlink`, and `truncated: true` when there were more.
+- `file/list` answers with up to 2000 entries sorted by name, fewer when their
+  names would not fit in one reply, with `kind` `file`, `directory` or
+  `symlink`, and `truncated: true` when there were more.
 - `file/write` writes `content`, up to 512 KiB and within the message limit,
   replacing the file and creating missing folders inside the worktree. Writes
   show up in the Changes tab like any other edit.
