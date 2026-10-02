@@ -82,11 +82,12 @@ plugin's log gets one warning.
 
 | Event | Capability | Notification | Sent when |
 |---|---|---|---|
-| `session.state` | `session.read` | `session/state {session, worktree, state}` | A session in the project appears or changes state. |
+| `session.state` | `session.read` | `session/state {session, worktree, state}` | A session in the project appears, changes state, or leaves. |
 | `session.finished` | `session.read` | `session/finished {session, worktree}` | A session goes from `running` to `idle`. |
 
-`state` uses the values of `workspace/snapshot`: `running`, `awaiting_input`,
-`permission_request`, `idle`, `detached`, `unknown`. Alas compares snapshots
+`state` uses the values of `workspace/snapshot` (`running`, `awaiting_input`,
+`permission_request`, `idle`, `unknown`), plus `gone` when a session leaves the
+project: it was closed, or it disconnected and is no longer live. Alas compares snapshots
 every half second, so a change shorter than that may not be seen. The first
 snapshot after the plugin starts is the baseline and sends nothing.
 

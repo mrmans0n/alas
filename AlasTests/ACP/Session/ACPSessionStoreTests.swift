@@ -137,6 +137,8 @@ struct ACPSessionStoreSchemaTests {
             (.live, 100, false),
             (.stale, 100, true),
             (.deadOwner, 100, true),
+            (.deadOwner, 0, true),
+            (.live, 0, false),
         ]
     )
     func purgesOrphanedEphemeralSessions(lease: SideSessionLease, idleSeconds: Int64, orphaned: Bool) throws {

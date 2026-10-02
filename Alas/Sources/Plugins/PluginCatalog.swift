@@ -55,7 +55,13 @@ enum PluginCatalogRow: Equatable {
 
     /// The catalog installs into a folder named after the id. A plugin is the catalog's only if it sits
     /// there and its files are byte-for-byte a published version.
-    init(entry: PluginCatalogIndex.Entry, installed: PluginManager.Plugin?) {
+    /// `quarantined`: something the catalog does not own holds this plugin: duplicates of it, or anything at its
+    /// catalog path that is not exactly a release (a broken folder, a symlink, a release with added files).
+    init(entry: PluginCatalogIndex.Entry, installed: PluginManager.Plugin?, quarantined: Bool = false) {
+        if quarantined {
+            self = .installedLocally
+            return
+        }
         guard let installed else {
             self = entry.newestCompatible.map(PluginCatalogRow.install) ?? .incompatible
             return
@@ -138,17 +144,16 @@ final class PluginCatalog {
     }
 
     nonisolated static func download(_ url: URL) async throws -> Data {
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw URLError(.badServerResponse)
+        // Never from the local URL cache: an index cached there would hide a release just published. The timeout is
+        // the whole transfer's budget, so a server trickling bytes cannot keep one going.
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        let data: Data, response: HTTPURLResponse
+        do {
+            (data, response) = try await boundedFetch(request, maxBytes: maxDownloadBytes)
+        } catch URLError.dataLengthExceedsMaximum {
+            throw PluginCatalogError.tooLarge
         }
-        guard response.expectedContentLength <= Int64(maxDownloadBytes) else { throw PluginCatalogError.tooLarge }
-        // Counted while receiving, so an oversized body is cut off instead of buffered; leaving the loop cancels it.
-        var data = Data()
-        for try await byte in bytes {
-            data.append(byte)
-            guard data.count <= maxDownloadBytes else { throw PluginCatalogError.tooLarge }
-        }
+        guard (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
         return data
     }
 }
