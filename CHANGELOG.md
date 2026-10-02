@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
-- Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill, and existing chips refresh when session ownership changes.
+- Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill, and existing or undo-restored chips refresh when session ownership changes.
 
 ### 🐛 Fixes
 

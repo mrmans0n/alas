@@ -1297,6 +1297,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
     override func didChangeText() {
         invalidateNextPromptSuggestion()
         super.didChangeText()
+        if undoManager?.isUndoing == true || undoManager?.isRedoing == true,
+           let textStorage, let coordinator {
+            // Undo can restore an attachment removed before a lease change.
+            ACPSlashCommand.refreshChipOwnership(in: textStorage, suggestions: coordinator.promptSuggestions)
+        }
         onNextPromptStateChange(nextPromptInputState)
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
