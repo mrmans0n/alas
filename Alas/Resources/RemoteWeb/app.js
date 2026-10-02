@@ -2131,6 +2131,10 @@ function upsertMessage(m) {
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function jparse(s) { try { return JSON.parse(s); } catch { return null; } }
+function legacyFileEditPath(json) {
+  const encoded = json?.match(/(?:^|[{,])\s*"path"\s*:\s*("(?:\\.|[^"\\])*")/)?.[1];
+  return encoded ? jparse(encoded) : null;
+}
 
 // Small inline glyph set for the repo list and transcript cards — kept as
 // literal, trusted SVG strings (never interpolated with server/user data) so
@@ -3017,7 +3021,7 @@ function renderMessage(m, sid, open) {
   } else if (m.kind === "toolCall") {
     node = toolCard(jparse(m.json) || {});
   } else if (m.kind === "fileEdit") {
-    node = structCard("Edit", m.text || "file", "");
+    node = structCard("Edit", m.text || legacyFileEditPath(m.json) || "file", "");
   } else if (m.kind === "plan") {
     node = structCard("Plan", "", planText(jparse(m.json)) || m.json || "");
   } else {
