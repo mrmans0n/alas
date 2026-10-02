@@ -239,6 +239,13 @@ registrations, and broker credentials remain local. Same-Mac mirrors keep the
 existing shared-SQLite fast path. Release, helper restart, and local Forget
 retain the remote replica; an authorized agent-history deletion removes it.
 
+On writer stand-down, Alas stops the runner and flushes its queued writes
+before retiring the local lease fence. It cannot publish under a lost remote
+fence. During manager disposal, remote publication stays alive until stopped
+runners have flushed and their final replica changes have drained before lease
+release. The coordinator shuts down once the disposed manager has no owned
+leases, including after an in-flight attachment releases its lease.
+
 ## Security
 
 Filesystem RPCs only serve paths under registered roots. `watch/subscribe` resolves

@@ -4396,6 +4396,7 @@ extension ACPSessionManager {
             ownedLeaseTokens.removeValue(forKey: sessionId)
             observedLeases[sessionId] = nil
         }
+        if isDisposed, _ownedLeases.isEmpty { remoteCoordinator?.shutdown() }
     }
 
     /// True when this session is open here and the latest observed lease is
@@ -4750,9 +4751,11 @@ extension ACPSessionManager {
         // Every cache mutation above happens before suspension. A later claim
         // gets a new token; this teardown can only touch its captured old one.
         let fence = ACPSessionLeaseFence(sessionId: sessionId, ownerInstance: instanceId, token: leaseToken)
+        // Queued writes still carry this local fence even though remote
+        // authority is gone. Preserve them before retiring the local lease.
+        await runner?.flushPersistence()
         try? await persistence.disableReplicaExport(sessionId: sessionId, localFence: fence)
         try? await persistence.releaseLease(sessionId: sessionId, instanceId: instanceId, leaseToken: leaseToken)
-        await runner?.flushPersistence()
         await runner?.connection.detach()
         if sessions[sessionId] != nil, !_ownedLeases.contains(sessionId),
            runners[sessionId] == nil, attachingSessions[sessionId] == nil {
@@ -4833,6 +4836,8 @@ extension ACPSessionManager {
     /// all runner connections have been shut down (`detach` loops in
     /// `disposeACPManager`) so a freed lease is never claimable while the
     /// old agent process is still alive.
+    /// Remote publication remains alive until the final lease release has
+    /// drained the stopped runners' persistence.
     func shutdownBackgroundTasks() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
         for session in sessions.values {
@@ -4843,7 +4848,6 @@ extension ACPSessionManager {
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
-        remoteCoordinator?.shutdown()
     }
 
     /// Release every lease this manager still owns. Call AFTER runner
@@ -4859,6 +4863,7 @@ extension ACPSessionManager {
         for sid in Array(_ownedLeases) where attachingSessions[sid] == nil {
             await releaseWriterLease(sessionId: sid)
         }
+        if isDisposed, _ownedLeases.isEmpty { remoteCoordinator?.shutdown() }
     }
 
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {

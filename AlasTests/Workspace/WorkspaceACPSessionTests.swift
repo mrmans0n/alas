@@ -116,12 +116,19 @@ struct WorkspaceACPSessionTests {
         client.script(method: "session/new") { _ in Data(#"{"sessionId":"remote-new"}"#.utf8) }
         var capturedSpec: ACPLaunchSpec?
         var capturedHost: String?
+        let instanceId = UUID().uuidString
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "test-mac", instanceId: instanceId)) {
+            method, data in try await endpoint.request(method, data)
+        }
         let manager = ACPSessionManager(
             worktreeId: "checkout",
             worktreePath: "/checkout",
             owner: .workspaceCheckout(UUID(), .ssh("checkout-host")),
             store: try ACPSessionStore(path: path.path),
+            instanceId: instanceId,
             remoteHost: "checkout-host",
+            remoteSessionCoordinator: coordinator,
             setupEvaluator: { _ in .ready },
             remoteAdapterResolver: { _, _, _ in
                 .ready(.init(adapterPath: "/tmp/claude-agent-acp", nodeBinDirectory: ""))

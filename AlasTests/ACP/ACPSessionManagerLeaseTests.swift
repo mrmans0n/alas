@@ -13,6 +13,99 @@ import Foundation
                           hydratorPath: hydratorPath)
     }
 
+    @Test("cross-Mac stand-down preserves runner writes queued behind the lost remote fence")
+    func remoteStandDownFlushesPendingTranscriptBeforeLocalLeaseRelease() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, store, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer { manager.shutdownBackgroundTasks()
+        coordinator.shutdown() }
+        let gate = LeaseTestGate()
+        let completion = AsyncStream<Bool>.makeStream()
+        defer { completion.continuation.finish() }
+        runner.beforePersistenceForTesting = { await gate.wait() }
+        runner.onPersistenceFlushForTesting = { Task { await gate.open() } }
+        session.transcript.messages.append(.user(id: UUID(), text: "Pending before takeover", attachments: []))
+        #expect(runner.persistIndices([0], completion: { completion.continuation.yield($0) }))
+        let params = RemoteSessionClaimParams(
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation"),
+            owner: .init(serverId: "mac-b", instanceId: "B"), proposedProcId: "replacement",
+            requestedToken: "replacement")
+        _ = try await endpoint.request("lease/seize", JSONEncoder().encode(params))
+        await coordinator.flush(sessionId: session.id)
+        var persisted: Bool?
+        for await value in completion.stream { persisted = value
+        break }
+        #expect(persisted == true)
+        let messages = try store.loadMessages(sessionId: session.id)
+        #expect(messages.map(\.payload) == [try ACPMessageCodec.encode(session.transcript.messages[0])])
+        #expect(manager.isMirror(sessionId: session.id))
+    }
+
+    @Test("manager disposal publishes the final queued transcript before releasing remote ownership")
+    func disposalPublishesPendingTranscriptBeforeRemoteLeaseRelease() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer { coordinator.shutdown() }
+        let message = ACPMessage.user(id: UUID(), text: "Final transcript before disposal", attachments: [])
+        session.transcript.messages.append(message)
+        #expect(runner.persistIndices([0]))
+        runner.stop()
+        manager.shutdownBackgroundTasks()
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        await manager.releaseAllOwnedLeases()
+
+        let reader = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        defer { reader.shutdown() }
+        let lease = try #require(try await reader.observe(sessionId: "mirror",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")))
+        #expect(lease.owner == nil)
+        let mirrorStore = try ACPSessionStore(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try mirrorStore.upsertSession(.init(id: "mirror", agentId: "claude", title: "Mirror",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try await reader.syncMirror(sessionId: "mirror", lease: lease,
+            persistence: ACPSessionPersistence(path: mirrorStore.path)) { true }
+        #expect(try mirrorStore.loadMessages(sessionId: "mirror").map(\.payload) == [ACPMessageCodec.encode(message)])
+    }
+
+    private func remoteWriter(in folder: URL) async throws -> (
+        ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
+    ) {
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
+        try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: []))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "A", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let session = try #require(manager.placeholderSession(id: "session"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id],
+            "Attach state: \(session.agentState), persistence error: \(manager.persistenceError ?? "none")")
+        await coordinator.flush(sessionId: session.id)
+        return (manager, session, store, coordinator, runner, endpoint)
+    }
+
     @Test("an SSH takeover fences the old writer despite independent Mac-local lease databases")
     func remoteTakeoverReplacesAuthorityAcrossIndependentStores() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -41,7 +134,7 @@ import Foundation
         #expect(try storeB.loadLease(sessionId: "local-b") == nil)
         _ = b.placeholderSession(id: "local-b")
         #expect(await b.takeOver(sessionId: "local-b"))
-        #expect(await a.heartbeatTick(sessionId: "local-a"))
+        _ = await a.heartbeatTick(sessionId: "local-a")
         #expect(!a.isWriter(for: "local-a"))
         #expect(a.isMirror(sessionId: "local-a"))
         #expect(b.isWriter(for: "local-b"))

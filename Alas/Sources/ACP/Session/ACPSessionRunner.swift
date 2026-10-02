@@ -161,6 +161,8 @@ final class ACPSessionRunner {
 #if DEBUG
     var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
     var queueDispatchProvenancePersistedForTesting: (@MainActor @Sendable (UUID) async -> Void)?
+    var beforePersistenceForTesting: (@MainActor () async -> Void)?
+    var onPersistenceFlushForTesting: (@MainActor () -> Void)?
 #endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -421,8 +423,14 @@ final class ACPSessionRunner {
     ) {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         persistenceTail = Task { @MainActor in
+#if DEBUG
+            await beforePersistence?()
+#endif
             await previous?.value
             guard !Task.isCancelled else { return }
             try? await operation(persistence)
@@ -435,8 +443,14 @@ final class ACPSessionRunner {
     ) {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         let task = Task { @MainActor in
+#if DEBUG
+            await beforePersistence?()
+#endif
             await previous?.value
             guard !Task.isCancelled else { return }
             await completion(try? await operation(persistence))
@@ -445,6 +459,9 @@ final class ACPSessionRunner {
     }
 
     func flushPersistence() async {
+#if DEBUG
+        onPersistenceFlushForTesting?()
+#endif
         while let tail = persistenceTail {
             let generation = persistenceGeneration
             await tail.value
