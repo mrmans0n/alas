@@ -138,7 +138,8 @@ final class PluginCatalog {
     }
 
     nonisolated static func download(_ url: URL) async throws -> Data {
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
+        // Never from the local URL cache: an index cached there would hide a release just published.
+        let (bytes, response) = try await URLSession.shared.bytes(for: URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
