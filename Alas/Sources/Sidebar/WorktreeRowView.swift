@@ -195,6 +195,10 @@ struct WorktreeRowView: View {
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
     var commitQuery: CommitQuery? = nil
+    var worktreeExplanation: String? = nil
+    var worktreeExplainerEvidence: WorktreeExplainerEvidence? = nil
+    var onPrepareWorktreeExplanation: @MainActor (WorktreeExplainerEvidence) async -> Void = { _ in }
+
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     /// Keyboard cursor from the sidebar filter; drawn like hover.
@@ -237,6 +241,26 @@ struct WorktreeRowView: View {
         isMain: Bool
     ) -> Bool {
         !isMain && harnessState == nil && worktreeStatus == .clean
+    }
+
+    nonisolated static func showsExplanation(
+        isMain: Bool,
+        hasOperation: Bool,
+        hasWorkspaceCheckout: Bool,
+        hasStatus: Bool,
+        hasVisibleCommits: Bool,
+        commitQueryResolved: Bool,
+        hasDiff: Bool,
+        hasStackStatus: Bool
+    ) -> Bool {
+        !isMain
+            && !hasOperation
+            && !hasWorkspaceCheckout
+            && !hasStatus
+            && !hasVisibleCommits
+            && commitQueryResolved
+            && !hasDiff
+            && !hasStackStatus
     }
 
     nonisolated static func diffBarAdditionCount(added: Int, deleted: Int) -> Int? {
@@ -319,6 +343,8 @@ struct WorktreeRowView: View {
             harnessState: harnessSummary?.state,
             worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path)
         )
+        let explanationEvidence = explanationEvidence(status: status)
+
         ZStack(alignment: .leading) {
             if isSelected {
                 RoundedRectangle(cornerRadius: 9)
@@ -378,6 +404,11 @@ struct WorktreeRowView: View {
             loadedCommitQuery = query
             branchCommits = summary
         }
+        .task(id: explanationEvidence) {
+            guard let explanationEvidence else { return }
+            await onPrepareWorktreeExplanation(explanationEvidence)
+        }
+
     }
 
     private func firstLine() -> some View {
@@ -441,6 +472,23 @@ struct WorktreeRowView: View {
     private var diffStats: WorktreeDiffStats {
         WorktreeStatusStore.shared.diffStats(forPath: worktree.path.path)
             ?? WorktreeDiffStats(added: worktree.addedLines, deleted: worktree.deletedLines)
+    }
+
+    private func explanationEvidence(status: StatusPresentation?) -> WorktreeExplainerEvidence? {
+        guard let worktreeExplainerEvidence,
+              Self.showsExplanation(
+                isMain: isMain,
+                hasOperation: operationState != nil,
+                hasWorkspaceCheckout: workspaceCheckout != nil,
+                hasStatus: status != nil,
+                hasVisibleCommits: visibleBranchCommits != nil,
+                commitQueryResolved: activeCommitQuery == nil
+                    || loadedCommitQuery?.identity == activeCommitQuery?.identity,
+                hasDiff: Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) != nil,
+                hasStackStatus: stackSummary != nil || ggMenuModel.showsStatusIndicator
+              )
+        else { return nil }
+        return worktreeExplainerEvidence
     }
 
     private func subtitleContents(status: StatusPresentation?, showsDiffBar: Bool) -> some View {
@@ -535,6 +583,11 @@ struct WorktreeRowView: View {
                 .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
             }
             stackSummaryView
+            if explanationEvidence(status: status) != nil, let worktreeExplanation {
+                Text(worktreeExplanation)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             Spacer(minLength: 0)
             Text(relative(worktree.lastActivity))
                 .monospacedDigit()

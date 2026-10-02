@@ -58,6 +58,10 @@ struct RepoGroupView: View {
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
     var commitQuery: (Worktree) -> WorktreeRowView.CommitQuery? = { _ in nil }
+    var worktreeExplanation: (Worktree) -> String? = { _ in nil }
+    var worktreeExplainerEvidence: (Worktree) -> WorktreeExplainerEvidence? = { _ in nil }
+    var onPrepareWorktreeExplanation: @MainActor (Worktree, WorktreeExplainerEvidence) async -> Void = { _, _ in }
+
     var pluginCommands: (PluginCommandSlot) -> [PluginCommandItem] = { _ in [] }
     var onRunPluginCommand: (PluginCommandItem, PluginCommandSlot, Worktree?) -> Void = { _, _, _ in }
     /// Set while the sidebar filter is active and `worktrees` holds only the
@@ -194,6 +198,11 @@ struct RepoGroupView: View {
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
                             workspaceCheckout: workspaceCheckout(wt),
                             commitQuery: commitQuery(wt),
+                            worktreeExplanation: worktreeExplanation(wt),
+                            worktreeExplainerEvidence: worktreeExplainerEvidence(wt),
+                            onPrepareWorktreeExplanation: { evidence in
+                                await onPrepareWorktreeExplanation(wt, evidence)
+                            },
                             pluginCommands: pluginCommands(.worktreeMenu),
                             onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
                             isHighlighted: wt.id == highlightedWorktreeId

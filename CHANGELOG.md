@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
+
 ### 🐛 Fixes
 
 - Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.

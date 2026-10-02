@@ -243,6 +243,25 @@ struct SidebarView: View {
                                             revision: state.revisionChangeGeneration(worktreeID: wt.id)
                                         )
                                     },
+                                    worktreeExplanation: { wt in
+                                        guard let evidence = state.worktreeExplainerEvidence(
+                                            for: wt,
+                                            in: project
+                                        ) else { return nil }
+                                        return state.worktreeExplainerStore.explanation(
+                                            for: wt.id,
+                                            evidence: evidence
+                                        )
+                                    },
+                                    worktreeExplainerEvidence: { wt in
+                                        state.worktreeExplainerEvidence(for: wt, in: project)
+                                    },
+                                    onPrepareWorktreeExplanation: { wt, evidence in
+                                        await state.worktreeExplainerStore.prepare(
+                                            worktreeID: wt.id,
+                                            evidence: evidence
+                                        )
+                                    },
                                     pluginCommands: { state.pluginCommands($0, projectID: project.id) },
                                     onRunPluginCommand: { item, slot, wt in
                                         state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
