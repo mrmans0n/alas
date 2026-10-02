@@ -35,6 +35,7 @@ struct PluginCatalogTests {
         let installed: (folder: String, version: String, hash: String)?
         let expected: PluginCatalogRow
         var linked = false
+        var quarantined = false
         var testDescription: String { name }
     }
 
@@ -46,11 +47,12 @@ struct PluginCatalogTests {
         RowCase(name: "edited in place", installed: ("io.x.p", "0.2.0", "edited"), expected: .installedLocally),
         // Removing it would delete the symlink's target, perhaps someone's checkout.
         RowCase(name: "symlinked in under the id", installed: ("io.x.p", "0.3.0", "new"), expected: .installedLocally, linked: true),
+        RowCase(name: "local copies quarantined as duplicates", installed: nil, expected: .installedLocally, quarantined: true),
     ])
     func rowStateFollowsWhatIsInstalled(_ c: RowCase) throws {
         let entry = Self.entry([Self.version("0.3.0", hash: "new"), Self.version("0.2.0", hash: "old")])
         let installed = try c.installed.map { try Self.installed(folder: $0.folder, version: $0.version, hash: $0.hash, linked: c.linked) }
-        #expect(PluginCatalogRow(entry: entry, installed: installed) == c.expected)
+        #expect(PluginCatalogRow(entry: entry, installed: installed, quarantined: c.quarantined) == c.expected)
     }
 
     /// A plugins folder and a manager whose catalog serves one valid 0.3.0 release of `io.x.p`.

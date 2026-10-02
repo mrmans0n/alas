@@ -107,7 +107,9 @@ struct PluginsPane: View {
                 }
             case .loaded(let index):
                 ForEach(index.plugins) { entry in
-                    catalogRow(manager, entry, PluginCatalogRow(entry: entry, installed: manager.plugin(id: entry.id)))
+                    catalogRow(manager, entry, PluginCatalogRow(
+                        entry: entry, installed: manager.plugin(id: entry.id),
+                        quarantined: manager.invalid.contains { $0.pluginID == entry.id }))
                 }
             }
         }
