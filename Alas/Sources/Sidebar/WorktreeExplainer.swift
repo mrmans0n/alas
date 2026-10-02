@@ -6,6 +6,11 @@ struct WorktreeExplainerEvidence: Hashable, Sendable {
     let issueTitle: String?
 }
 
+enum WorktreeExplanationResult: Equatable, Sendable {
+    case explanation(String)
+    case abstained
+}
+
 enum WorktreeExplainerPolicy {
     static let inputTokenLimit = 2_048
     static let maxTokens = 64
@@ -45,16 +50,18 @@ enum WorktreeExplainerPolicy {
         ]]
     }
 
-    static func parse(_ output: String) -> String? {
+    static func parse(_ output: String) -> WorktreeExplanationResult? {
         let normalized = normalize(output)
         guard normalized != "null",
               let data = normalized.data(using: .utf8),
               data.count <= 1_024,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object.count == 1,
-              let raw = object["explanation"] as? String
+              let raw = object["explanation"]
         else { return nil }
 
+        if raw is NSNull { return .abstained }
+        guard let raw = raw as? String else { return nil }
         let explanation = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let words = explanation.split(whereSeparator: \Character.isWhitespace)
         let rejected = ["null", "...", "worktree for development"]
@@ -63,7 +70,7 @@ enum WorktreeExplainerPolicy {
               !explanation.contains(where: \Character.isNewline),
               !rejected.contains(explanation.lowercased())
         else { return nil }
-        return explanation
+        return .explanation(explanation)
     }
 
     private static func normalize(_ output: String) -> String {
@@ -97,7 +104,7 @@ struct WorktreeExplainerSuggester {
     }
 
     @MainActor
-    func suggest(for evidence: WorktreeExplainerEvidence) async -> String? {
+    func suggest(for evidence: WorktreeExplainerEvidence) async -> WorktreeExplanationResult? {
         let request = LocalTextGenerationRequest(
             messageCandidates: WorktreeExplainerPolicy.messageCandidates(for: evidence),
             inputTokenLimit: WorktreeExplainerPolicy.inputTokenLimit,
@@ -115,7 +122,7 @@ struct WorktreeExplainerSuggester {
 @Observable
 @MainActor
 final class WorktreeExplainerStore {
-    typealias Generator = @MainActor @Sendable (WorktreeExplainerEvidence) async -> String?
+    typealias Generator = @MainActor @Sendable (WorktreeExplainerEvidence) async -> WorktreeExplanationResult?
 
     private struct Key: Hashable {
         let worktreeID: String
@@ -134,8 +141,9 @@ final class WorktreeExplainerStore {
     }
 
     func explanation(for worktreeID: String, evidence: WorktreeExplainerEvidence) -> String? {
+        let explanation = explanations[worktreeID]
         guard currentEvidenceByWorktreeID[worktreeID] == evidence else { return nil }
-        return explanations[worktreeID]
+        return explanation
     }
 
     @discardableResult
@@ -143,7 +151,7 @@ final class WorktreeExplainerStore {
         let key = Key(worktreeID: worktreeID, evidence: evidence)
         if currentEvidenceByWorktreeID[worktreeID] != evidence {
             currentEvidenceByWorktreeID[worktreeID] = evidence
-            explanations[worktreeID] = nil
+            if explanations[worktreeID] != nil { explanations[worktreeID] = nil }
         }
         if completed.contains(key) { return true }
         if let job = jobs[key] {
@@ -160,11 +168,13 @@ final class WorktreeExplainerStore {
                 jobs[key] = nil
                 return
             }
-            let explanation = await generate(evidence)
-            if explanation != nil { completed.insert(key) }
+            let result = await generate(evidence)
+            if result != nil { completed.insert(key) }
             jobs[key] = nil
             if currentEvidenceByWorktreeID[worktreeID] == evidence {
-                explanations[worktreeID] = explanation
+                if case let .explanation(explanation) = result {
+                    explanations[worktreeID] = explanation
+                }
             }
         }
         jobs[key] = job

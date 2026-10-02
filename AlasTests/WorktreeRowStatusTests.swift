@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import Alas
 
@@ -157,12 +158,11 @@ struct WorktreeRowStatusTests {
         """, "Generate short worktree explanations"),
     ])
     func acceptsBoundedWorktreeExplanation(output: String, expected: String) {
-        #expect(WorktreeExplainerPolicy.parse(output) == expected)
+        #expect(WorktreeExplainerPolicy.parse(output) == .explanation(expected))
     }
 
     @Test(arguments: [
         "null",
-        #"{"explanation":null}"#,
         #"{"explanation":"null"}"#,
         #"{"explanation":"..."}"#,
         #"{"explanation":"Worktree for development"}"#,
@@ -171,8 +171,12 @@ struct WorktreeRowStatusTests {
         #"{"explanation":"This explanation is deliberately made much longer than sixty characters"}"#,
         #"{"explanation":"Fix sidebar text","extra":true}"#,
     ])
-    func rejectsWorktreeExplanationAbstentionsPlaceholdersAndInvalidOutput(output: String) {
+    func rejectsWorktreeExplanationPlaceholdersAndInvalidOutput(output: String) {
         #expect(WorktreeExplainerPolicy.parse(output) == nil)
+    }
+
+    @Test func acceptsExplicitWorktreeExplanationAbstention() {
+        #expect(WorktreeExplainerPolicy.parse(#"{"explanation":null}"#) == .abstained)
     }
 
     @Test @MainActor
@@ -220,6 +224,43 @@ struct WorktreeRowStatusTests {
 
         #expect(await probe.receivedEvidence == [evidence, evidence])
         #expect(store.explanation(for: "worktree", evidence: evidence) == "Explain retried worktree")
+    }
+
+    @Test @MainActor
+    func worktreeExplanationAbstentionIsCached() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "wip", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(withResult: .abstained)
+        #expect(await first.value)
+        #expect(await store.prepare(worktreeID: "worktree", evidence: evidence))
+
+        #expect(await probe.receivedEvidence == [evidence])
+        #expect(store.explanation(for: "worktree", evidence: evidence) == nil)
+    }
+
+    @Test @MainActor
+    func generatedExplanationInvalidatesObservation() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        await confirmation { invalidated in
+            withObservationTracking {
+                _ = store.explanation(for: "worktree", evidence: evidence)
+            } onChange: {
+                invalidated()
+            }
+            let preparation = Task {
+                await store.prepare(worktreeID: "worktree", evidence: evidence)
+            }
+            await probe.waitForCallCount(1)
+            await probe.finishNext(withResult: .explanation("Explain observed worktree"))
+            #expect(await preparation.value)
+        }
     }
 
     @Test @MainActor
@@ -295,10 +336,10 @@ private actor WorktreeExplainerGenerationProbe {
     private(set) var cancelledCallCount = 0
     private(set) var maximumConcurrentCalls = 0
     private var activeCalls = 0
-    private var completions: [CheckedContinuation<String?, Never>] = []
+    private var completions: [CheckedContinuation<WorktreeExplanationResult?, Never>] = []
     private var callCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-    func generate(_ evidence: WorktreeExplainerEvidence) async -> String? {
+    func generate(_ evidence: WorktreeExplainerEvidence) async -> WorktreeExplanationResult? {
         receivedEvidence.append(evidence)
         activeCalls += 1
         maximumConcurrentCalls = max(maximumConcurrentCalls, activeCalls)
@@ -315,6 +356,10 @@ private actor WorktreeExplainerGenerationProbe {
     }
 
     func finishNext(with result: String?) {
+        completions.removeFirst().resume(returning: result.map(WorktreeExplanationResult.explanation))
+    }
+
+    func finishNext(withResult result: WorktreeExplanationResult?) {
         completions.removeFirst().resume(returning: result)
     }
 
