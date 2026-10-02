@@ -77,6 +77,11 @@ struct PluginCatalogTests {
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == hash)
         #expect(!manager.isApproved(plugin))
         #expect(!FileManager.default.fileExists(atPath: root.appending(path: ".staging/io.x.p").path))
+
+        // Edited after the scan the row came from: no longer the catalog's files, so Remove keeps them.
+        try Data("globalThis.handle = () => { /* mine */ };".utf8).write(to: plugin.folder.appending(path: "plugin.js"))
+        await manager.uninstall(plugin)
+        #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "plugin.js").path))
     }
 
     /// A folder at `Plugins/<id>` the catalog did not put there, even a broken one, is the user's.

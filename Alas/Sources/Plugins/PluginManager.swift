@@ -151,13 +151,18 @@ final class PluginManager {
 
     /// Deletes a plugin the catalog installed. Its approval and stored data stay, so reinstalling keeps them.
     func uninstall(_ plugin: Plugin) async {
-        // Only a real folder the catalog owns; a symlink's target is never deleted.
-        guard plugin.isCatalogFolder else { return }
         await serialized {
+            // Checked on disk now, not against the row: files changed since the last scan are not the catalog's.
+            guard let current = self.catalogInstall(id: plugin.id), current.hash == plugin.hash else { return }
             await self.stopHosts { $0.pluginID == plugin.id }
-            try? FileManager.default.removeItem(at: plugin.folder)
+            try? FileManager.default.removeItem(at: current.folder)
             await self.performReload()
         }
+    }
+
+    /// The catalog's own install of `id` as it is on disk right now: a real `Plugins/<id>` folder, not linked.
+    private func catalogInstall(id: String) -> Plugin? {
+        Self.discover(in: directory).plugins.first { $0.id == id && $0.isCatalogFolder }
     }
 
     private func performInstall(_ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async throws {
@@ -196,7 +201,7 @@ final class PluginManager {
         // Something already at `Plugins/<id>` is replaced only if it is the catalog's own install: a real folder
         // holding a published version of this plugin. A symlink, a local build or a broken folder stays.
         if FileManager.default.fileExists(atPath: target.path) || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-            guard let current = plugin(id: id), current.isCatalogFolder, entry.versions.contains(where: { $0.hash == current.hash })
+            guard let current = catalogInstall(id: id), entry.versions.contains(where: { $0.hash == current.hash })
             else { throw PluginCatalogError.installedLocally }
         }
         await stopHosts { $0.pluginID == id }
