@@ -74,9 +74,8 @@ struct EditorTheme {
         }
     }
 
-    /// Bridge `theme.color(_:)` (SwiftUI `Color`) to `NSColor`. Works on
-    /// macOS 12+; the project deploys to macOS 14.
+    /// A theme token as an sRGB drawing color; see `NSColor.drawingColor(_:)`.
     private func nsColor(_ token: String) -> NSColor {
-        NSColor(theme.color(token))
+        theme.nsColor(token)
     }
 }

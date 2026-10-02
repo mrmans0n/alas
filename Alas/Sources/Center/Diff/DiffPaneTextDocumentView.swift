@@ -352,9 +352,9 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
         lastUpdateSignature = signature
 
         self.layoutMode = layoutMode
-        layer?.backgroundColor = NSColor(theme.color("bg-1")).cgColor
+        layer?.backgroundColor = theme.nsColor("bg-1").cgColor
         dividerView.wantsLayer = true
-        dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
+        dividerView.layer?.backgroundColor = theme.nsColor("line").cgColor
 
         // Mounting happens inside the scroll tick; the shared document cache
         // (warmed by DiffHighlightPrewarmer, and by earlier mounts of the
@@ -557,9 +557,9 @@ final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTarge
         lastRowsUpdateSignature = signature
 
         self.layoutMode = layoutMode
-        layer?.backgroundColor = NSColor(theme.color("bg-1")).cgColor
+        layer?.backgroundColor = theme.nsColor("bg-1").cgColor
         dividerView.wantsLayer = true
-        dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
+        dividerView.layer?.backgroundColor = theme.nsColor("line").cgColor
 
         switch layoutMode {
         case .split:
@@ -829,7 +829,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView.lspContext = lspContext
         textView.allowedLSPSide = allowedLSPSide
         textView.updateLSPController()
-        textView.insertionPointColor = NSColor(theme.color("fg"))
+        textView.insertionPointColor = theme.nsColor("fg")
 
         if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
             ruler.update(
@@ -1909,7 +1909,7 @@ final class DiffPaneCodeTextView: NSTextView {
         )
         guard rect != .zero, rect.intersects(dirtyRect) else { return }
 
-        let accent = NSColor(theme.color("accent"))
+        let accent = theme.nsColor("accent")
         accent.withAlphaComponent(0.12).setFill()
         let fillPath = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
         fillPath.fill()
@@ -2008,13 +2008,13 @@ final class DiffPaneCodeTextView: NSTextView {
     private func rowFill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor {
         switch tone {
         case .add:
-            return NSColor(theme.color("add")).withAlphaComponent(0.18)
+            return theme.nsColor("add").withAlphaComponent(0.18)
         case .delete:
-            return NSColor(theme.color("del")).withAlphaComponent(0.18)
+            return theme.nsColor("del").withAlphaComponent(0.18)
         case .placeholder:
-            return NSColor(theme.color("bg-2")).withAlphaComponent(0.55)
+            return theme.nsColor("bg-2").withAlphaComponent(0.55)
         case .collapsed:
-            return NSColor(theme.color("bg-3")).withAlphaComponent(0.72)
+            return theme.nsColor("bg-3").withAlphaComponent(0.72)
         case .context:
             return .clear
         }
@@ -2035,7 +2035,7 @@ final class DiffPaneCodeTextView: NSTextView {
             x += spacing
         }
         path.lineWidth = 1
-        NSColor(theme.color("line")).withAlphaComponent(0.35).setStroke()
+        theme.nsColor("line").withAlphaComponent(0.35).setStroke()
         path.stroke()
     }
 
@@ -2048,7 +2048,7 @@ final class DiffPaneCodeTextView: NSTextView {
         // drawn instead of centering it in the full synchronized row.
         // The chevron is drawn here (not baked into the text) so the backing
         // string stays a plain label for selection/copy.
-        let tint = NSColor(theme.color("seg-pill-active-fg"))
+        let tint = theme.nsColor("seg-pill-active-fg")
         for action in actions {
             guard let pillRect = expansionPillRect(action: action, rowRect: rowRect) else { continue }
             let target = ExpansionTarget(row: row, action: action)
@@ -2057,7 +2057,7 @@ final class DiffPaneCodeTextView: NSTextView {
                 pressed: pressedExpansionTarget == target
             )
             let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
-            NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
+            theme.nsColor("accent").withAlphaComponent(alpha).setFill()
             path.fill()
 
             guard
@@ -2371,7 +2371,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let dirtyRect = rect.intersection(visibleRect).intersection(bounds)
         guard !dirtyRect.isEmpty else { return }
         guard let theme else { return }
-        NSColor(theme.color("bg-0")).setFill()
+        theme.nsColor("bg-0").setFill()
         dirtyRect.fill()
 
         guard let scrollView, !labels.isEmpty else { return }
@@ -2656,11 +2656,11 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         if let theme {
             let tone = row.flatMap(labelTone(at:))
             if tone == .add || (tone == nil && label.hasPrefix("+")) {
-                color = NSColor(theme.color("add"))
+                color = theme.nsColor("add")
             } else if tone == .delete || (tone == nil && label.hasPrefix("-")) {
-                color = NSColor(theme.color("del"))
+                color = theme.nsColor("del")
             } else {
-                color = NSColor(theme.color("fg-faint"))
+                color = theme.nsColor("fg-faint")
             }
         } else {
             color = .secondaryLabelColor
@@ -2682,13 +2682,13 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let fill: NSColor
         switch tone {
         case .add:
-            fill = NSColor(theme.color("add")).withAlphaComponent(0.16)
+            fill = theme.nsColor("add").withAlphaComponent(0.16)
         case .delete:
-            fill = NSColor(theme.color("del")).withAlphaComponent(0.16)
+            fill = theme.nsColor("del").withAlphaComponent(0.16)
         case .placeholder:
-            fill = NSColor(theme.color("bg-2")).withAlphaComponent(0.55)
+            fill = theme.nsColor("bg-2").withAlphaComponent(0.55)
         case .collapsed:
-            fill = NSColor(theme.color("bg-3")).withAlphaComponent(0.72)
+            fill = theme.nsColor("bg-3").withAlphaComponent(0.72)
         case .context:
             fill = .clear
         }
@@ -2698,9 +2698,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let railColor: NSColor?
         switch tone {
         case .add:
-            railColor = NSColor(theme.color("add"))
+            railColor = theme.nsColor("add")
         case .delete:
-            railColor = NSColor(theme.color("del"))
+            railColor = theme.nsColor("del")
         default:
             railColor = nil
         }
@@ -2713,12 +2713,12 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private func drawReviewAffordance(in rowRect: NSRect, theme: Theme) {
         let rect = Self.reviewAffordanceRect(in: rowRect, ruleThickness: ruleThickness)
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        NSColor(theme.color("accent")).setFill()
+        theme.nsColor("accent").setFill()
         path.fill()
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .bold),
-            .foregroundColor: NSColor(theme.color("bg-1")),
+            .foregroundColor: theme.nsColor("bg-1"),
         ]
         let string = "+" as NSString
         let size = string.size(withAttributes: attributes)
@@ -2753,7 +2753,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         )
         guard outlineRect != .zero else { return }
 
-        NSColor(theme.color("accent")).setStroke()
+        theme.nsColor("accent").setStroke()
         let path = NSBezierPath(roundedRect: outlineRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
         path.lineWidth = 1.5
         path.stroke()
@@ -2771,7 +2771,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         )
         guard highlightRect != .zero else { return }
 
-        let accent = NSColor(theme.color("accent"))
+        let accent = theme.nsColor("accent")
         accent.withAlphaComponent(0.18).setFill()
         highlightRect.fill()
     }

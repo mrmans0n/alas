@@ -172,7 +172,29 @@ extension Color {
     }
 }
 
+extension Theme {
+    /// `color(_:)` as an AppKit drawing color; see `NSColor.drawingColor(_:)`.
+    func nsColor(_ token: String) -> NSColor {
+        NSColor.drawingColor(color(token))
+    }
+}
+
 extension NSColor {
+    /// Bridges a static SwiftUI color to an AppKit drawing color in standard
+    /// sRGB. `NSColor(color)` alone lands in extended sRGB, and Core Graphics
+    /// checks the content headroom of every extended-range color it records
+    /// into a layer's display list (a ColorSync profile lookup per draw call),
+    /// which roughly doubles the draw cost of color-dense text such as diffs.
+    /// Theme colors are clipped to 0...1, so the conversion is lossless.
+    ///
+    /// Only for static colors (theme tokens and values derived from them).
+    /// Converting a dynamic or catalog color freezes it to the current
+    /// appearance.
+    static func drawingColor(_ color: Color) -> NSColor {
+        let bridged = NSColor(color)
+        return bridged.usingColorSpace(.sRGB) ?? bridged
+    }
+
     /// Resolves per appearance, so AppKit drawing with no `Theme` in reach
     /// still follows the in-app theme (which drives `NSApp.appearance`).
     static func appearanceAware(dark: NSColor, light: NSColor) -> NSColor {
