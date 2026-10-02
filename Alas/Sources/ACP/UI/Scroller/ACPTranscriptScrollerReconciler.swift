@@ -296,6 +296,12 @@ final class ACPTranscriptScrollerReconciler {
         lastAppliedSpecs = specs
         lastFollowsTail = followsTail
         layoutMountedRows(pinToTail: repins)
+        // Rows that left the transcript can never be revived from the parked
+        // cache. Dropped after the layout pass, which is what parks the views
+        // of rows this update just removed. A deferred non-positive width
+        // returned early and touched nothing; the next real-width call drops
+        // against its own id set.
+        pool.dropParked(notIn: Set(newIds))
     }
 
     /// Drops any remembered vanished anchor. Called by the coordinator on

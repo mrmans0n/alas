@@ -363,8 +363,27 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
             contentWidth: 500, followsTail: false
         )
 
-        // The reset's own layout pass may park views it just unmounted; what
-        // matters is that the view parked at the old width is gone.
+        // Observable outcome: r0's old view is gone, so mounting r0 again
+        // builds it again instead of reviving the parked one.
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(counter.count("r0") >= 2)
+    }
+
+    @Test("rows removed from the specs are not parked")
+    func removedRowsAreNotParked() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        reconciler.apply(specs: Array(specs.dropFirst()), contentWidth: 600, followsTail: false)
+
         #expect(!pool.parkedIdsForTesting.contains("r0"))
     }
 
@@ -1692,6 +1711,21 @@ struct ACPTranscriptRowHostingPoolParkingTests {
         #expect(contentChanged)
         #expect(again.needsRemeasure)
         #expect(pool.mountedView(id: "a") === first)
+    }
+
+    @Test("dropParked keeps only the listed ids")
+    func dropParkedKeepsListedIds() {
+        let pool = ACPTranscriptRowHostingPool()
+        for id in ["a", "b", "c"] {
+            _ = pool.view(for: spec(id))
+            pool.release(id: id)
+        }
+
+        pool.dropParked(notIn: ["a", "c", "zzz"])
+
+        #expect(pool.parkedIdsForTesting == ["a", "c"])
+        // The order slots went with the entries: the survivors still revive.
+        #expect(pool.view(for: spec("a")).contentChanged)
     }
 
     @Test("a released row whose content changed is rebuilt")
