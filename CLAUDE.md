@@ -77,14 +77,22 @@ code they cover should be able to justify it.
 
   ```bash
   xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
-    -skipPackagePluginValidation -only-testing AlasTests/<SuiteName> test
+    -skipPackagePluginValidation -skipMacroValidation -only-testing AlasTests/<SuiteName> test
   ```
 
 - If no focused test covers the change, run the build locally:
 
   ```bash
   xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
-    -skipPackagePluginValidation -quiet build
+    -skipPackagePluginValidation -skipMacroValidation -quiet build
+  ```
+
+- `-skipMacroValidation` is needed for the pinned `mlx-swift-lm` tokenizer macro; without it a fresh build stops at macro trust.
+- Check the `Test run with N tests in M suites` line: a suite name that matches nothing is skipped silently, so a typo or a suite outside the default selection reports success without running.
+- In a fresh worktree, submodule URLs may point at a local checkout, which git refuses over the file transport by default. Initialize them with:
+
+  ```bash
+  git -c protocol.file.allow=always submodule update --init --recursive
   ```
 
 - Do not run the entire test plan locally by default. CI owns repository-wide configured validation. Run broader local tests only when CI does not cover the affected behavior, the change is too cross-cutting for a reliable targeted selection, or the user requests it.
