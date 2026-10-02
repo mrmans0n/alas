@@ -16,4 +16,13 @@ struct DelegatedPromptRowTests {
     func foldedLineCount(text: String, expected: Int?) {
         #expect(DelegatedPromptRow.foldedLineCount(for: text) == expected)
     }
+
+    @Test("a folded prompt mounts only its first lines, never the hidden tail", arguments: [
+        (Array(repeating: "line", count: 13).joined(separator: "\n"), Array(repeating: "line", count: 8).joined(separator: "\n")),
+        ("\n  first\nsecond\n\n", "first\nsecond"),
+        (String(repeating: "a", count: 901), String(repeating: "a", count: 640))
+    ] as [(String, String)])
+    func foldedPreview(text: String, expected: String) {
+        #expect(DelegatedPromptRow.foldedPreview(of: text) == expected)
+    }
 }
