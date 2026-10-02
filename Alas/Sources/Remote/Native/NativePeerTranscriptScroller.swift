@@ -202,14 +202,30 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
             let (rows, proxies) = renderRows(host: host)
             let messages = host.transcript.messages
+            let currentTurnUserIndex = proxies.lastIndex {
+                if case .user = $0 { return true }
+                return false
+            } ?? 0
+            let isTurnActive = host.transcript.streamingState != "idle"
             for renderRow in rows {
+                let indices: [Int]
                 switch renderRow {
                 case .message(let row):
                     specs.append(messageSpec(messages[row.index], inGroup: false, host: host))
+                    indices = [row.index]
                 case .toolCallGroupMember(let row, _):
                     specs.append(messageSpec(messages[row.index], inGroup: true, host: host))
+                    indices = [row.index]
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                     specs.append(groupHeaderSpec(group, proxies: proxies, host: host))
+                    indices = group.members.map(\.index)
+                }
+                let hasLiveTool = indices.contains { index in
+                    guard case .toolCall(let call) = proxies[index] else { return false }
+                    return call.status == "pending" || call.status == "in_progress"
+                }
+                if hasLiveTool || (isTurnActive && indices.contains { $0 >= currentTurnUserIndex }) {
+                    specs[specs.count - 1].parksWhenReleased = false
                 }
             }
 

@@ -225,6 +225,8 @@ final class ACPTranscriptScrollerReconciler {
         // real width is diffed as a normal (likely initial) update.
         guard width > 0 else { return }
 
+        pool.updateParkingPolicies(specs)
+
         // Whether this update should end by re-pinning to the tail. Read
         // BEFORE any mutation below moves the document or the offset, and
         // gated on the viewport actually SITTING at the tail rather than on

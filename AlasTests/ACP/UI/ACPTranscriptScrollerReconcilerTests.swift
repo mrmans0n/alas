@@ -369,8 +369,8 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(counter.count("r0") == 2)
     }
 
-    @Test("rows removed from the specs are not parked")
-    func removedRowsAreNotParked() {
+    @Test("rows removed from the specs are dropped from the parked cache")
+    func removedRowsAreDroppedFromParkedCache() {
         let counter = RowBuildCounter()
         let (reconciler, scroller, _, pool) = makeStackWithPool()
         let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
@@ -386,6 +386,27 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(!pool.parkedIdsForTesting.contains("r0"))
     }
 
+    @Test("an apply disables parking for off-band rows without changing their content tokens")
+    func applyUpdatesOffBandParkingPolicy() {
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        var specs = (0..<100).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+        #expect(pool.mountedView(id: "r60") != nil)
+
+        specs[0].parksWhenReleased = false
+        specs[60].parksWhenReleased = false
+        scroller.setScrollY(0)
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+
+        #expect(!pool.parkedIdsForTesting.contains("r60"))
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(!pool.parkedIdsForTesting.contains("r0"))
+    }
+
     @Test("an unchanged-width reset keeps parked views")
     func unchangedWidthResetKeepsParked() {
         let counter = RowBuildCounter()
@@ -398,10 +419,23 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         reconciler.layoutMountedRowsForScroll()
         #expect(pool.parkedIdsForTesting.contains("r0"))
 
-        // Same width, a different id set: the reconciler resets geometry.
-        reconciler.apply(specs: [countingSpec("new", counter: counter)] + specs, contentWidth: 600, followsTail: false)
+        // Observe during reset measurement, before the layout pass releases
+        // other rows in dictionary order and can evict r0 from the LRU cache.
+        var retainedBeforeLayout: Bool?
+        let appended = ACPTranscriptRowSpec(
+            id: "r100", equalityToken: ACPRowEqualityToken(0),
+            build: {
+                retainedBeforeLayout = pool.parkedIdsForTesting.contains("r0")
+                return AnyView(Color.clear.frame(height: 100))
+            }
+        )
+        let resetSpecs = specs.filter { $0.id != "r50" } + [appended]
+        #expect(ACPTranscriptScrollerReconciler.diff(
+            oldIds: specs.map(\.id), newIds: resetSpecs.map(\.id)
+        ) == .reset)
+        reconciler.apply(specs: resetSpecs, contentWidth: 600, followsTail: false)
 
-        #expect(pool.parkedIdsForTesting.contains("r0"))
+        #expect(retainedBeforeLayout == true)
     }
 
     private func spec(
@@ -1694,6 +1728,29 @@ struct ACPTranscriptRowHostingPoolParkingTests {
             equalityToken: ACPRowEqualityToken(token),
             build: { AnyView(Color.clear.frame(height: 100)) }
         )
+    }
+
+    @Test("release uses the latest parking policy on fresh, mounted and revived rows", arguments: [false, true])
+    func releaseUsesLatestParkingPolicy(changesToken: Bool) {
+        let pool = ACPTranscriptRowHostingPool()
+        var liveSpec = spec("a")
+        liveSpec.parksWhenReleased = false
+        let initial = pool.view(for: liveSpec).view
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== initial)
+
+        pool.release(id: "a")
+        let revived = pool.view(for: liveSpec).view
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+
+        let mounted = pool.view(for: spec("a")).view
+        if changesToken { liveSpec = spec("a", token: 1); liveSpec.parksWhenReleased = false }
+        #expect(pool.view(for: liveSpec).view === mounted)
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== revived)
     }
 
     @Test("a released row with unchanged content comes back as the same view, flagged for re-measure")

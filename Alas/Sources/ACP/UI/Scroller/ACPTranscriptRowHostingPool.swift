@@ -5,6 +5,7 @@ import SwiftUI
 /// reused across layout passes; rootView is only replaced when the row's
 /// equality token changes, mirroring the legacy `.equatable()` gating. Released
 /// views are parked in an LRU cache for reuse when rows return with unchanged content.
+/// Build-captured inputs must stay stable or be represented in the equality token.
 @MainActor
 final class ACPTranscriptRowHostingPool {
     /// How many released rows keep their built hosting view, so scrolling back
@@ -17,6 +18,7 @@ final class ACPTranscriptRowHostingPool {
     private struct Entry {
         let view: ACPTranscriptRowHostingView
         var token: ACPRowEqualityToken
+        var parksWhenReleased: Bool
     }
 
     private let parkedCapacity: Int
@@ -41,6 +43,8 @@ final class ACPTranscriptRowHostingPool {
 
     func view(for spec: ACPTranscriptRowSpec) -> (view: ACPTranscriptRowHostingView, contentChanged: Bool) {
         if var entry = entries[spec.id] {
+            entry.parksWhenReleased = spec.parksWhenReleased
+            entries[spec.id] = entry
             if entry.token.isEqual(to: spec.equalityToken) {
                 return (entry.view, false)
             }
@@ -49,8 +53,9 @@ final class ACPTranscriptRowHostingPool {
             entries[spec.id] = entry
             return (entry.view, true)
         }
-        if let parkedEntry = unpark(id: spec.id) {
+        if var parkedEntry = unpark(id: spec.id) {
             if parkedEntry.token.isEqual(to: spec.equalityToken) {
+                parkedEntry.parksWhenReleased = spec.parksWhenReleased
                 attachCallback(to: parkedEntry.view, id: spec.id)
                 parkedEntry.view.markNeedsRemeasure()
                 entries[spec.id] = parkedEntry
@@ -60,7 +65,7 @@ final class ACPTranscriptRowHostingPool {
         }
         let view = ACPTranscriptRowHostingView(rootView: spec.build())
         attachCallback(to: view, id: spec.id)
-        entries[spec.id] = Entry(view: view, token: spec.equalityToken)
+        entries[spec.id] = Entry(view: view, token: spec.equalityToken, parksWhenReleased: spec.parksWhenReleased)
         return (view, true)
     }
 
@@ -70,7 +75,19 @@ final class ACPTranscriptRowHostingPool {
         // Retiring a row must end its ability to change transcript geometry.
         entry.view.onIntrinsicSizeInvalidated = nil
         entry.view.removeFromSuperview()
-        park(entry, id: id)
+        if entry.parksWhenReleased { park(entry, id: id) }
+    }
+
+    /// Apply can skip equal-token and off-band rows. Refresh their release
+    /// policy before layout, and stop retaining parked graphs that became live.
+    func updateParkingPolicies(_ specs: [ACPTranscriptRowSpec]) {
+        for spec in specs {
+            if var entry = entries[spec.id] {
+                entry.parksWhenReleased = spec.parksWhenReleased
+                entries[spec.id] = entry
+            }
+            if !spec.parksWhenReleased { _ = unpark(id: spec.id) }
+        }
     }
 
     func releaseAll(except keep: Set<String> = []) {
