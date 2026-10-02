@@ -63,6 +63,35 @@ enum ACPAlasSlashCommand: Equatable {
     }
 }
 
+/// What the composer's submit does with a draft that may be `/btw`.
+enum ACPSideQuestionSubmitRoute: Equatable {
+    /// Not a side question here; the draft goes to the main session.
+    case passThrough
+    /// A side question that can't be asked as drafted; the draft stays.
+    case refuse(String)
+    case ask(question: String)
+
+    /// `isAvailable` is whether this tab offers `/btw` at all; elsewhere an
+    /// agent's own `/btw` goes through untouched.
+    static func resolve(
+        text: String,
+        hasAttachments: Bool,
+        intent: ACPSubmitIntent,
+        isAvailable: Bool
+    ) -> ACPSideQuestionSubmitRoute {
+        guard isAvailable, case .btw(let question)? = ACPAlasSlashCommand.parse(text) else {
+            return .passThrough
+        }
+        if hasAttachments {
+            return .refuse("/btw doesn't support attachments yet. Remove them to ask a side question.")
+        }
+        if case .schedule = intent {
+            return .refuse("/btw can't be scheduled. Send it now to ask a side question.")
+        }
+        return .ask(question: question)
+    }
+}
+
 /// What the side card shows, derived from the question and its session.
 enum ACPSideQuestionPhase: Equatable {
     case composing
@@ -77,15 +106,17 @@ enum ACPSideQuestionPhase: Equatable {
         hasSession: Bool,
         sessionError: String?,
         isTurnActive: Bool,
+        hasPrompt: Bool,
         hasOutput: Bool
     ) -> ACPSideQuestionPhase {
         if let error = creationError ?? sessionError { return .failed(error) }
         guard hasSession else { return question.isEmpty ? .composing : .starting }
         // Output is anything the latest turn produced after its question:
-        // text, tool calls, or blocked calls. A finished turn with only tool
-        // calls is done, not still starting.
+        // text, tool calls, or blocked calls.
         if isTurnActive { return hasOutput ? .streaming : .starting }
-        return hasOutput ? .answered : .starting
+        // Once its prompt is in the transcript, an idle turn has finished,
+        // even one that ended with only a stop reason.
+        return hasPrompt ? .answered : .starting
     }
 }
 

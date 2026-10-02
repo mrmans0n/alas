@@ -51,6 +51,7 @@ struct ACPSideQuestionCard: View {
                     hasSession: false,
                     sessionError: nil,
                     isTurnActive: false,
+                    hasPrompt: false,
                     hasOutput: false
                 ),
                 modelName: nil,
@@ -126,6 +127,12 @@ struct ACPSideQuestionCard: View {
                 .joined(separator: "\n\n")
         }
 
+        private var latestHasOutput: Bool {
+            !latestBlocked.isEmpty || latestTurn.dropFirst().contains {
+                if case .user = $0 { false } else { true }
+            }
+        }
+
         var body: some View {
             let phase = ACPSideQuestionPhase.resolve(
                 question: entry.question,
@@ -133,16 +140,15 @@ struct ACPSideQuestionCard: View {
                 hasSession: true,
                 sessionError: side.lastError ?? failureReason,
                 isTurnActive: transcript.streamingState != .idle,
-                hasOutput: !latestBlocked.isEmpty || latestTurn.dropFirst().contains {
-                    if case .user = $0 { false } else { true }
-                }
+                hasPrompt: latestTurn.first.map { if case .user = $0 { true } else { false } } ?? false,
+                hasOutput: latestHasOutput
             )
             ACPSideQuestionCardChrome(
                 question: entry.question,
                 phase: phase,
                 modelName: side.currentModelDisplayName,
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
-                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty,
+                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty,
                 // A follow-up before the first question is sent would run first.
                 canAsk: entry.isSubmitted,
                 onAsk: onAsk,
@@ -163,14 +169,21 @@ struct ACPSideQuestionCard: View {
                     ForEach(Array(latestBlocked.enumerated()), id: \.offset) { _, blocked in
                         blockedNotice(blocked.title)
                     }
+                    if phase == .answered, !latestHasOutput {
+                        Text("The side agent finished without an answer.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(theme.color("fg-faint"))
+                    }
                     // Plan approvals and input requests have no place in the
                     // card; let the user end the turn instead of waiting.
                     if transcript.streamingState == .awaitingInput, transcript.pendingPermission == nil {
                         awaitingInputNotice
                     }
-                    // A failed queued follow-up blocks the ones behind it.
-                    ForEach(side.queue.filter { $0.lastError != nil }) { item in
-                        failedFollowUp(item)
+                    // Follow-ups wait here until the current turn ends; a
+                    // failed one blocks the ones behind it.
+                    // One being sent is about to show up in the transcript.
+                    ForEach(side.queue.filter { $0.status == .pending || $0.lastError != nil }) { item in
+                        queuedFollowUp(item)
                     }
                     if transcript.pendingPermission != nil, let policy {
                         ACPPermissionPrompt(
@@ -210,16 +223,31 @@ struct ACPSideQuestionCard: View {
                 .lineLimit(2)
         }
 
-        private func failedFollowUp(_ item: QueuedPrompt) -> some View {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Couldn't send “\(ACPQueueItemRow.textPreview(of: item.blocks))”: \(item.lastError ?? "")")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(theme.color("del"))
-                    .lineLimit(3)
-                HStack(spacing: 6) {
-                    Button("Retry") { onRetryQueued(item.id) }.controlSize(.small)
+        @ViewBuilder
+        private func queuedFollowUp(_ item: QueuedPrompt) -> some View {
+            let preview = ACPQueueItemRow.textPreview(of: item.blocks)
+            if let error = item.lastError {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Couldn't send “\(preview)”: \(error)")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.color("del"))
+                        .lineLimit(3)
+                    HStack(spacing: 6) {
+                        Button("Retry") { onRetryQueued(item.id) }.controlSize(.small)
+                        Button("Remove") { onRemoveQueued(item.id) }.controlSize(.small)
+                    }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("↳ \(preview)")
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .lineLimit(2)
+                    Text("queued")
+                        .foregroundStyle(theme.color("fg-faint"))
+                    Spacer(minLength: 4)
                     Button("Remove") { onRemoveQueued(item.id) }.controlSize(.small)
                 }
+                .font(.system(size: 11.5))
             }
         }
 

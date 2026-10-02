@@ -74,25 +74,50 @@ struct ACPSideQuestionPolicyTests {
     }
 
     @Test(
+        "/btw opens a side question only when it can run as drafted",
+        arguments: [
+            ("/btw why?", false, ACPSubmitIntent.auto, true, ACPSideQuestionSubmitRoute.ask(question: "why?")),
+            ("/btw why?", false, .steer, true, .ask(question: "why?")),
+            ("/btw why?", false, .auto, false, .passThrough),
+            ("why?", false, .auto, true, .passThrough),
+            ("/btw why?", true, .auto, true,
+             .refuse("/btw doesn't support attachments yet. Remove them to ask a side question.")),
+            ("/btw why?", false, .schedule(.distantFuture), true,
+             .refuse("/btw can't be scheduled. Send it now to ask a side question.")),
+        ] as [(String, Bool, ACPSubmitIntent, Bool, ACPSideQuestionSubmitRoute)]
+    )
+    func submitRoute(
+        text: String, hasAttachments: Bool, intent: ACPSubmitIntent, isAvailable: Bool,
+        expected: ACPSideQuestionSubmitRoute
+    ) {
+        #expect(ACPSideQuestionSubmitRoute.resolve(
+            text: text, hasAttachments: hasAttachments, intent: intent, isAvailable: isAvailable
+        ) == expected)
+    }
+
+    @Test(
         "card phase follows creation, session errors, and the turn's output",
         arguments: [
-            ("", nil, false, nil, false, false, ACPSideQuestionPhase.composing),
-            ("q", nil, false, nil, false, false, .starting),
-            ("q", "fork failed", false, nil, false, false, .failed("fork failed")),
-            ("q", nil, true, "adapter crashed", true, true, .failed("adapter crashed")),
-            ("q", nil, true, nil, true, false, .starting),
-            ("q", nil, true, nil, true, true, .streaming),
-            ("q", nil, true, nil, false, true, .answered),
-        ] as [(String, String?, Bool, String?, Bool, Bool, ACPSideQuestionPhase)]
+            ("", nil, false, nil, false, false, false, ACPSideQuestionPhase.composing),
+            ("q", nil, false, nil, false, false, false, .starting),
+            ("q", "fork failed", false, nil, false, false, false, .failed("fork failed")),
+            ("q", nil, true, "adapter crashed", true, true, true, .failed("adapter crashed")),
+            ("q", nil, true, nil, false, false, false, .starting),
+            ("q", nil, true, nil, true, true, false, .starting),
+            ("q", nil, true, nil, true, true, true, .streaming),
+            ("q", nil, true, nil, false, true, true, .answered),
+            ("q", nil, true, nil, false, true, false, .answered),
+        ] as [(String, String?, Bool, String?, Bool, Bool, Bool, ACPSideQuestionPhase)]
     )
     func phase(
         question: String, creationError: String?, hasSession: Bool,
-        sessionError: String?, isTurnActive: Bool, hasOutput: Bool,
+        sessionError: String?, isTurnActive: Bool, hasPrompt: Bool, hasOutput: Bool,
         expected: ACPSideQuestionPhase
     ) {
         #expect(ACPSideQuestionPhase.resolve(
             question: question, creationError: creationError, hasSession: hasSession,
-            sessionError: sessionError, isTurnActive: isTurnActive, hasOutput: hasOutput
+            sessionError: sessionError, isTurnActive: isTurnActive,
+            hasPrompt: hasPrompt, hasOutput: hasOutput
         ) == expected)
     }
 

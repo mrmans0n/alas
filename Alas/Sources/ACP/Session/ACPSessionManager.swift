@@ -1832,7 +1832,9 @@ final class ACPSessionManager: ObservableObject {
         sideQuestions[parentID]?.sessionID = side.id
         await attach(to: side.id, freshlyCreated: true)
         guard sideQuestions[parentID]?.id == entry.id else { return side }
-        guard await enterReadOnlyMode(side) else {
+        // Attach enters the read-only mode before it marks the session ready;
+        // a failed attach would otherwise queue the question for a later one.
+        guard side.agentState == .ready, await enterReadOnlyMode(side) else {
             await discardSideSession(id: side.id)
             failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
             throw ACPSideQuestionError.unsafeMode
@@ -1851,7 +1853,9 @@ final class ACPSessionManager: ObservableObject {
     /// through whichever source backs its mode chip, and waits for the agent
     /// to accept. False when the session would stay in such a mode.
     private func enterReadOnlyMode(_ side: ACPSession) async -> Bool {
-        guard let mode = side.chipState.mode else { return true }
+        // Supported agents always advertise modes once attached; none means
+        // the attach failed or the mode can't be checked.
+        guard let mode = side.chipState.mode else { return false }
         guard let target = ACPSideQuestionModePolicy.preferredModeID(
             options: mode.options,
             currentID: mode.currentId
@@ -6764,6 +6768,19 @@ extension ACPSessionManager {
                 break
             }
             modelModeRestorationGates[sessionId] = nil
+            // Every connection starts in the agent's default mode. A side
+            // session re-enters a read-only one before its queue can drain,
+            // and stays unready if it can't.
+            if session.readOnlyRestricted {
+                let isReadOnly = await enterReadOnlyMode(session)
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+                      session.agentState == .spawning else { return }
+                guard isReadOnly else {
+                    session.agentState = .failed(ACPSideQuestionError.unsafeMode.localizedDescription)
+                    stderrTask.cancel()
+                    return
+                }
+            }
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()

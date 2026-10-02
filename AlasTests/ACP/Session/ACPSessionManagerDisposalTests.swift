@@ -688,9 +688,9 @@ struct ACPSessionManagerDisposalTests {
                 try JSONEncoder().encode(ACPSessionNewResult(
                     sessionId: "remote",
                     availableModels: [],
-                    availableModes: [],
+                    availableModes: [ACPModeInfo(id: "plan", name: "Plan")],
                     currentModel: nil,
-                    currentMode: nil,
+                    currentMode: "plan",
                     promptSuggestions: []
                 ))
             }
@@ -698,9 +698,9 @@ struct ACPSessionManagerDisposalTests {
                 try JSONEncoder().encode(ACPSessionNewResult(
                     sessionId: "remote",
                     availableModels: [],
-                    availableModes: [],
+                    availableModes: [ACPModeInfo(id: "plan", name: "Plan")],
                     currentModel: nil,
-                    currentMode: nil,
+                    currentMode: "plan",
                     promptSuggestions: []
                 ))
             }

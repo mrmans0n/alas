@@ -785,17 +785,19 @@ private struct ACPSessionView: View {
             // time the completion fires, the conditional checks in
             // purge/reinstate skip and the new draft survives.
             // `/btw` never reaches the main session: it opens a side question.
-            // Only where `/btw` is offered; elsewhere an agent's own `/btw`
-            // goes through untouched.
-            if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror,
-               !session.readOnlyRestricted,
-               ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId) {
-                // Side questions don't take attachments yet; keep the draft
-                // rather than drop them.
-                guard attachments.isEmpty else {
-                    session.lastError = "/btw doesn't support attachments yet. Remove them to ask a side question."
-                    return false
-                }
+            switch ACPSideQuestionSubmitRoute.resolve(
+                text: text,
+                hasAttachments: !attachments.isEmpty,
+                intent: intent,
+                isAvailable: !isMirror && !session.readOnlyRestricted
+                    && ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId)
+            ) {
+            case .passThrough:
+                break
+            case .refuse(let reason):
+                session.lastError = reason
+                return false
+            case .ask(let question):
                 // Complete the composer's submission like a sent prompt, so
                 // its persisted draft is cleared and `/btw …` doesn't come
                 // back. Deferred: the composer records the pending submit
@@ -1315,13 +1317,17 @@ private struct ACPSideQuestionSlot: View {
                 typography: typography,
                 onAsk: { text, completion in
                     if let side {
-                        return manager.submit(
+                        let accepted = manager.submit(
                             sessionId: side.id,
                             text: text,
                             attachments: [],
                             intent: .auto,
                             onCompleted: completion
                         )
+                        // The card shows the session's last prompt error as a
+                        // failure; a new turn supersedes it.
+                        if accepted { side.lastError = nil }
+                        return accepted
                     }
                     Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
                     return true
@@ -1333,6 +1339,7 @@ private struct ACPSideQuestionSlot: View {
                 onKeep: onKeep,
                 onRetryQueued: { itemID in
                     guard let side else { return }
+                    side.lastError = nil
                     Task { await manager.queueRetry(for: side.id, itemId: itemID) }
                 },
                 onRemoveQueued: { itemID in
