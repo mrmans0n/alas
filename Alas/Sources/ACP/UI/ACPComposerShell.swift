@@ -378,6 +378,7 @@ struct ACPComposer: View {
                 nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
                 upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot),
                 alasCommands: manager.isMirror(sessionId: session.id) || session.readOnlyRestricted
+                    || !ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId)
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion]
             )

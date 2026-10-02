@@ -1798,6 +1798,9 @@ final class ACPSessionManager: ObservableObject {
             guard let parent = sessions[parentID], parent.hydrationState == .ready else {
                 throw ACPSessionForkCreationError.sourceUnavailable
             }
+            guard ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: parent.agentId) else {
+                throw ACPSideQuestionError.unenforceable
+            }
             let title = ACPSideQuestionBoundaryPolicy.title(for: question)
             if let boundary = ACPSideQuestionBoundaryPolicy.boundary(
                 messages: parent.transcript.messages,
