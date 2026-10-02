@@ -17,6 +17,7 @@ actor ReplicaEndpoint {
     private var coordinationSupported = true
     private var leaseFresh = true
     private var publicationUnavailable = false
+    private var unavailableMethod: String?
     private let recordId: String
 
     init(recordId: String = "record") { self.recordId = recordId }
@@ -25,6 +26,7 @@ actor ReplicaEndpoint {
     func setCoordinationSupported(_ value: Bool) { coordinationSupported = value }
     func expireLease() { leaseFresh = false }
     func setPublicationUnavailable(_ value: Bool) { publicationUnavailable = value }
+    func setUnavailableMethod(_ method: String?) { unavailableMethod = method }
     private func encoded<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
     private var lease: RemoteSessionLease {
@@ -34,6 +36,7 @@ actor ReplicaEndpoint {
         guard supplied == fence else { throw RemoteHelperClientError.jsonrpc(.init(code: -32081, message: "lease lost", data: nil)) }
     }
     func request(_ method: String, _ data: Data) throws -> Data {
+        if method == unavailableMethod { throw NSError(domain: "TransientTeardownFailure", code: 1) }
         switch method {
         case "hello":
             return try encoded(RemoteHelperHelloResult(name: "alas-helper", protocolVersion: 1, binaryVersion: "0.6.0", capabilities: .init(watchKinds: [], fs: .init(read: true, write: true, stat: true, lineCounts: nil, list: nil), search: nil, proc: true, acp: nil, ping: true, sessionCoordination: coordinationSupported ? 1 : nil)))

@@ -82,6 +82,32 @@ import Foundation
         #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [payload])
     }
 
+    @Test("failed SSH teardown retains ownership and can be retried without waiting for expiry", arguments: ["proc/kill", "lease/release"])
+    func failedRemoteTeardownRetainsOwnershipUntilRetry(method: String) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, _, endpoint) = try await remoteWriter(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        await endpoint.setUnavailableMethod(method)
+        await manager.releaseWriterLease(sessionId: session.id)
+        let foreign = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        defer { foreign.shutdown() }
+        let key = RemoteSessionKey(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")
+        let blocked = try await foreign.claim(sessionId: "foreign", key: key, proposedProcId: "foreign", requestedToken: "foreign")
+        #expect(blocked.fence == nil)
+        #expect(blocked.lease.owner == coordinator.owner)
+        await endpoint.setUnavailableMethod(nil)
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.releaseWriterLease(sessionId: session.id)
+        let acquired = try await foreign.claim(sessionId: "foreign", key: key, proposedProcId: "foreign", requestedToken: "foreign")
+        #expect(acquired.fence != nil)
+    }
+
     private func remoteWriter(in folder: URL) async throws -> (
         ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
     ) {

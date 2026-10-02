@@ -152,7 +152,8 @@ final class ACPRemoteSessionCoordinator {
         guard fence(sessionId: sessionId) == expectedFence else { try? await release(fence: expectedFence)
         return }
         stopPublishing(sessionId: sessionId)
-        try? await release(fence: expectedFence)
+        markUnavailable(sessionId: sessionId)
+        do { try await release(fence: expectedFence) } catch { return }
         if fence(sessionId: sessionId) == expectedFence {
             authorities[sessionId]?.fence = nil
             authorities[sessionId]?.confirmed = false
@@ -165,7 +166,9 @@ final class ACPRemoteSessionCoordinator {
     }
 
     func stopAndRelease(procId: String, expectedFence: RemoteSessionFence) async {
-        let _: RemoteHelperProcKillResult? = try? await call("proc/kill", RemoteHelperProcKillParams(procId: procId, leaseFence: expectedFence))
+        do {
+            let _: RemoteHelperProcKillResult = try await call("proc/kill", RemoteHelperProcKillParams(procId: procId, leaseFence: expectedFence))
+        } catch { return }
         try? await release(fence: expectedFence)
     }
 

@@ -4375,8 +4375,13 @@ extension ACPSessionManager {
         if ownedLeaseTokens[sessionId] == leaseToken, let coordinator = remoteCoordinator,
            let fence = coordinator.fence(sessionId: sessionId), fence.token == leaseToken {
             if await coordinator.flush(sessionId: sessionId) {
-                try? await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
-                await coordinator.release(sessionId: sessionId, expectedFence: fence)
+                do {
+                    try await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+                    await coordinator.release(sessionId: sessionId, expectedFence: fence)
+                } catch {
+                    coordinator.stopPublishing(sessionId: sessionId)
+                    coordinator.markUnavailable(sessionId: sessionId)
+                }
             }
         }
         if ownedLeaseTokens[sessionId] == leaseToken, effectiveRemoteHost() != nil {

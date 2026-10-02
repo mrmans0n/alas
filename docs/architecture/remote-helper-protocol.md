@@ -267,6 +267,9 @@ After a publication failure, final flush reconfirms the same fence and drains
 pending batches before any fenced kill or release. If synchronization remains
 unavailable, Alas retains the local outbox and leaves remote ownership to expire
 instead of claiming a clean release.
+Ownership release also requires a successful process kill. A failed kill leaves
+the remote record owned, and a failed release leaves the active coordinator's
+fence available for immediate reclaim or retry rather than waiting for expiry.
 
 ## Security
 
