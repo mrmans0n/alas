@@ -643,7 +643,7 @@ final class ACPSessionRunner {
                     // Agents may write without asking first, so the read-only
                     // permission gate alone can't stop a side session.
                     if self.session.readOnlyRestricted {
-                        self.session.readOnlyBlockedTools.append("write \(params.path)")
+                        self.session.recordReadOnlyBlock("write \(params.path)")
                         self.connection.client.respondToFileRequest(
                             id: id,
                             result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
@@ -1638,7 +1638,7 @@ final class ACPSessionRunner {
         case .create(let id, let p):
             // Same as file writes: never rely on a permission request alone.
             if session.readOnlyRestricted {
-                session.readOnlyBlockedTools.append("run \(p.command)")
+                session.recordReadOnlyBlock("run \(p.command)")
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
                 break
