@@ -41,16 +41,22 @@ struct RightPaneRail: View {
                     }
                 )
             }
-            ForEach(panels) { panel in
-                RightPaneRailButton(
-                    label: panel.title,
-                    icon: panel.icon,
-                    state: panel.ref != activePanel ? .inactive : collapsed ? .activeCollapsed : .active,
-                    badge: .none,
-                    collapsed: collapsed,
-                    onTap: { onPanel(panel.ref) }
-                )
+            // Plugins can add any number of panels, so their part of the rail scrolls rather than overflowing.
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 3) {
+                    ForEach(panels) { panel in
+                        RightPaneRailButton(
+                            label: panel.title,
+                            icon: panel.icon,
+                            state: panel.ref != activePanel ? .inactive : collapsed ? .activeCollapsed : .active,
+                            badge: .none,
+                            collapsed: collapsed,
+                            onTap: { onPanel(panel.ref) }
+                        )
+                    }
+                }
             }
+            .scrollBounceBehavior(.basedOnSize)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
