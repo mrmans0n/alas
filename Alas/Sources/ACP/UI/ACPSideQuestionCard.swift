@@ -349,10 +349,20 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !isCollapsed {
+            // Collapsing hides the body rather than removing it, so a
+            // half-filled input prompt keeps what the user typed.
+            VStack(alignment: .leading, spacing: 0) {
                 body(for: phase)
                 footer
             }
+            .frame(height: isCollapsed ? 0 : nil, alignment: .top)
+            .clipped()
+            .opacity(isCollapsed ? 0 : 1)
+            .allowsHitTesting(!isCollapsed)
+            .accessibilityHidden(isCollapsed)
+        }
+        .onChange(of: isCollapsed) { _, collapsed in
+            if collapsed { fieldFocused = false }
         }
         .background(
             RoundedRectangle(cornerRadius: 12)
