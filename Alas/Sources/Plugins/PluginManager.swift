@@ -201,14 +201,20 @@ final class PluginManager {
     nonisolated static func isCatalogOwned(_ plugin: Plugin) -> Bool {
         guard plugin.isCatalogFolder else { return false }
         let folder = plugin.folder.standardizedFileURL.path + "/"
-        let files = (FileManager.default.enumerator(at: plugin.folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
-            .map { String($0.standardizedFileURL.path.dropFirst(folder.count)) }
-        let release = Set(["plugin.json", plugin.manifest.entry])
+        // Every path relative to the folder in the same normalized form, so an entry like `./plugin.js` compares equal.
+        func relative(_ url: URL) -> String { String(url.standardizedFileURL.path.dropFirst(folder.count)) }
+        let found = (FileManager.default.enumerator(at: plugin.folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .map(relative)
+        let entry = plugin.folder.appending(path: plugin.manifest.entry)
+        let release = Set(["plugin.json", relative(entry)])
         // The entry may sit in a subfolder, which the enumerator lists too.
-        let folders = Set(release.flatMap { path in
-            path.split(separator: "/").dropLast().indices.map { path.split(separator: "/")[...$0].joined(separator: "/") }
-        })
-        return Set(files).subtracting(folders) == release
+        var folders: Set<String> = []
+        var parent = entry.standardizedFileURL.deletingLastPathComponent()
+        while parent.path.count + 1 > folder.count {
+            folders.insert(relative(parent))
+            parent = parent.deletingLastPathComponent()
+        }
+        return Set(found).subtracting(folders) == release
     }
 
     /// Whether something the catalog did not install sits at `Plugins/<id>`, symlinks included, without following one.

@@ -106,6 +106,23 @@ struct PluginCatalogTests {
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == f.release.hash)
         #expect(!f.manager.isApproved(plugin))
         #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: ".staging/io.x.p").path))
+        #expect(!f.manager.catalogPathIsTaken(id: "io.x.p"))
+    }
+
+    /// An entry written as `./plugin.js` or in a subfolder is still exactly the release.
+    @Test(arguments: ["plugin.js", "./plugin.js", "dist/plugin.js"])
+    func aReleaseFolderIsCatalogOwnedWhateverTheEntryPath(entry: String) throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)/io.x.p")
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        let file = folder.appending(path: entry)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: file)
+        try Data().write(to: folder.appending(path: "plugin.json"))
+        let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"1","api":4,"entry":"\#(entry)"}"#.utf8))
+        let plugin = PluginManager.Plugin(folder: folder, manifest: manifest, source: Data(), hash: "h")
+        #expect(PluginManager.isCatalogOwned(plugin))
+        try Data().write(to: folder.appending(path: "extra.txt"))
+        #expect(!PluginManager.isCatalogOwned(plugin))
     }
 
     /// Installing one plugin leaves every other running plugin, and its state, alone.
