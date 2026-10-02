@@ -65,6 +65,7 @@ struct PluginManifestTests {
         (manifest(settings(#"{"key":"a b","title":"A","type":"string"}"#)), .invalidSetting(#"invalid setting key "a b""#)),
         (manifest(settings(#"{"key":"a","title":"A","type":"number"}"#)), .invalidSetting(#"setting "a" has unknown type "number""#)),
         (manifest(settings(#"{"key":"a","title":"A","type":"bool","default":"yes"}"#)), .invalidSetting(#"setting "a" has a default of the wrong type"#)),
+        (manifest(settings(#"{"key":"token","title":"A","type":"string"},{"key":"Token","title":"B","type":"string"}"#)), .invalidSetting(#"duplicate setting key "Token""#)),
         (manifest(settings(#"{"key":"a","title":"A","type":"string","default":"\#(String(repeating: "x", count: 4097))"}"#)), .invalidSetting(#"setting "a" has a default longer than 4096 bytes"#)),
         (manifest(settings(#"{"key":"a","title":"A","type":"secret"}"#)), .invalidSetting(#"secret "a" needs at least one host"#)),
         (manifest(settings(#"{"key":"a","title":"A","type":"secret","hosts":["b.com"]}"#)), .invalidSetting(#"secret "a" names "b.com", which is not in "network""#)),
