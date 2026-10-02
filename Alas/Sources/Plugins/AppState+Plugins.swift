@@ -144,8 +144,9 @@ extension AppState {
             })
     }
 
-    /// Starts a run script for a plugin the way the Run tab's start button does. Refuses one that is already running
-    /// rather than focusing its terminal, which would move the user's selection.
+    /// Starts a run script for a plugin the way the Run tab's start button does: a finished run, or one whose
+    /// terminal is still open after it ended, is restarted. Refuses one that is actively running rather than
+    /// focusing its terminal, which would move the user's selection.
     private func startPluginRun(worktreeID: String, scriptKey: String, projectID: String) async -> String? {
         guard let worktree = projectsManager.worktreesByProject[projectID]?.first(where: { $0.id == worktreeID }) else {
             return "unknown worktree \(worktreeID)"
@@ -156,11 +157,15 @@ extension AppState {
             return message
         case .scripts(let scripts):
             guard let script = scripts.first(where: { $0.key == scriptKey }) else { return "unknown run script \(scriptKey)" }
-            if runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true
-                || runningScriptTab(for: script, in: worktree) != nil {
-                return "\(script.key) is already running"
+            let record = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+            if record?.status.isActive == true { return "\(script.key) is already running" }
+            if case .finished? = record?.status {
+                restartScript(script, in: worktree)
+            } else if scriptTab(for: script, in: worktree) != nil {
+                restartScript(script, in: worktree)
+            } else {
+                runOrFocusScript(script, in: worktree)
             }
-            runOrFocusScript(script, in: worktree)
             return nil
         }
     }
@@ -169,11 +174,13 @@ extension AppState {
     private func pluginRunOutput(_ runID: String, projectID: String) async -> PluginRunOutput {
         let worktreeIDs = Set((projectsManager.worktreesByProject[projectID] ?? []).map(\.id))
         for worktreeID in worktreeIDs {
-            guard let record = runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID }) else { continue }
-            if record.status.isActive { return .notFinished }
-            // A run that just finished may still be on its way to the history store.
-            await flushRunHistoryPersistence(worktreeID: worktreeID)
+            if runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID })?.status.isActive == true {
+                return .notFinished
+            }
         }
+        // A run that just finished may still be on its way to the history store, even one a newer run of the same
+        // script has since replaced in the records.
+        for worktreeID in worktreeIDs { await flushRunHistoryPersistence(worktreeID: worktreeID) }
         let entry: RunHistoryEntry?
         if let transient = worktreeIDs.lazy.compactMap({ self.transientRunReport(worktreeID: $0, runID: runID) }).first {
             entry = transient

@@ -153,6 +153,10 @@ struct PluginEventState: Equatable, Sendable {
         for worktree in workspace.worktrees {
             guard let previous = before[worktree.id] else {
                 events.append(PluginEventMessage(event: .worktreeCreated, params: PluginEventParams(worktree: worktree.id)))
+                // Created and selected between two polls: the move to it is still a focus change.
+                if worktree.current {
+                    events.append(PluginEventMessage(event: .focusChanged, params: PluginEventParams(worktree: worktree.id)))
+                }
                 continue
             }
             if previous.dirty != nil, worktree.dirty != nil, previous.dirty != worktree.dirty {

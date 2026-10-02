@@ -79,6 +79,8 @@ struct PluginWorkspaceSnapshotTests {
 
     @Test(arguments: [
         StateCase(before: state(), after: state([("w", 1, false), ("x", nil, false)]), events: ["worktree.created:x"]),
+        // Created and selected between two polls.
+        StateCase(before: state(), after: state([("w", 1, false), ("x", nil, true)]), events: ["worktree.created:x", "focus.changed:x"]),
         StateCase(before: state([("w", 1, false), ("x", nil, false)]), after: state(), events: ["worktree.removed:x"]),
         StateCase(before: state(), after: state([("w", 2, false)]), events: ["git.changed:w"]),
         // The first scan finishing is not a change.
