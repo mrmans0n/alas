@@ -485,6 +485,9 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"case "transcriptPage""#))
         #expect(js.contains(#"case "stopPending""#))
         #expect(js.contains(#"type: "fetchOlder""#))
+        let fileEdit = try #require(js.range(of: #"m.kind === "fileEdit""#).map { js[$0.lowerBound...].prefix(140) })
+        #expect(fileEdit.contains(#"m.text || legacyFileEditPath(m.json) || "file""#))
+        #expect(!fileEdit.contains("jparse(m.json)"))
     }
 
     @Test func remoteWebStopDoesNotTakeOverFirst() throws {
