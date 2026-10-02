@@ -1756,6 +1756,22 @@ struct ACPTranscriptRowHostingPoolParkingTests {
         #expect(pool.view(for: spec("a")).view !== revived)
     }
 
+    @Test("removed mounted rows cannot evict reusable parked rows")
+    func removedRowsDoNotEvictReusableViews() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 2)
+        let kept = pool.view(for: spec("kept")).view
+        pool.release(id: "kept")
+        _ = pool.view(for: spec("obsolete"))
+        pool.release(id: "obsolete")
+        for id in ["removed-a", "removed-b"] { _ = pool.view(for: spec(id)) }
+
+        pool.updateParkingPolicies(["kept": spec("kept")])
+        pool.releaseAll()
+
+        #expect(pool.parkedIdsForTesting == ["kept"])
+        #expect(pool.view(for: spec("kept")).view === kept)
+    }
+
     @Test("a released row with unchanged content comes back as the same view, flagged for re-measure")
     func revivesSameInstance() {
         let pool = ACPTranscriptRowHostingPool()

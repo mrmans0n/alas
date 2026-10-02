@@ -78,16 +78,15 @@ final class ACPTranscriptRowHostingPool {
         if entry.parksWhenReleased { park(entry, id: id) }
     }
 
-    /// Apply can skip equal-token and off-band rows. Refresh their release
-    /// policy before layout, and stop retaining parked graphs that became live.
-    func updateParkingPolicies(_ specs: [ACPTranscriptRowSpec]) {
-        for spec in specs {
-            if var entry = entries[spec.id] {
-                entry.parksWhenReleased = spec.parksWhenReleased
-                entries[spec.id] = entry
-            }
-            if !spec.parksWhenReleased { _ = unpark(id: spec.id) }
+    /// Refresh every retained row before layout, including equal-token and
+    /// off-band rows. Obsolete or newly live views must not occupy cache slots.
+    func updateParkingPolicies(_ specsById: [String: ACPTranscriptRowSpec]) {
+        for id in entries.keys {
+            guard var entry = entries[id] else { continue }
+            entry.parksWhenReleased = specsById[id]?.parksWhenReleased ?? false
+            entries[id] = entry
         }
+        dropParked(where: { specsById[$0]?.parksWhenReleased != true })
     }
 
     func releaseAll(except keep: Set<String> = []) {
