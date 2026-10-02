@@ -377,7 +377,7 @@ final class AppState {
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
     }
-    let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
+    private(set) var suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -2535,6 +2535,7 @@ final class AppState {
 
     func completeStartupRecovery() {
         AlasTerminationCoordinator.shared.finish?()
+        suppressesRestoredRightPaneAfterAbandonedStartup = false
     }
 
     func completeStartupRecoveryIfCenterPaneWillNotAppear() {

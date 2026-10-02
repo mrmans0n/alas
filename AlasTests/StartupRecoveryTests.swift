@@ -169,14 +169,14 @@ struct StartupRecoveryTests {
         #expect(didFinish)
     }
 
-    @Test func recoverySuppressesRestoredRightPaneForTheLaunch() {
+    @Test func recoveryRestoresRightPaneAfterStartupSettles() {
         let state = AppState(restoreActiveTabsOnStartup: false)
 
         #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
 
         state.completeStartupRecovery()
 
-        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
+        #expect(!state.suppressesRestoredRightPaneAfterAbandonedStartup)
     }
 
     @Test func recoveryLaunchSkipsProjectTopologyRefresh() {
