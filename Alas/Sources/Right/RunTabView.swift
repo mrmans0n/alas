@@ -94,6 +94,13 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                                 }
                             }
                         }
+                        let pluginProcesses = state.pluginProcessRuns(projectID: worktree.projectId, worktreeID: worktree.id)
+                        if !pluginProcesses.isEmpty {
+                            RunScopeHeader(title: "Plugins", count: pluginProcesses.count)
+                            ForEach(pluginProcesses) { item in
+                                PluginProcessRowView(item: item) { state.stopPluginProcess(item) }
+                            }
+                        }
                         historySection
                     }
                     .padding(.top, PaneBandLayout.outerVertical)
@@ -709,6 +716,61 @@ private struct RunRowView: View {
         case .showReport:       "Report"
         case .edit:             "Edit"
         }
+    }
+}
+
+/// A long-running process a plugin started: its output and a Stop button, so no plugin process is invisible.
+private struct PluginProcessRowView: View {
+    let item: PluginProcessItem
+    let stop: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var showsOutput = false
+
+    var body: some View {
+        let running = item.run.exit == nil
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                RunStatusDot(tone: running ? .active : item.run.exit == 0 ? .success : .failure, isActive: running)
+                Text("\(item.pluginName) · \(item.run.process)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if running {
+                    Button("Stop", action: stop)
+                        .controlSize(.small)
+                        .accessibilityLabel("Stop \(item.pluginName) \(item.run.process)")
+                }
+            }
+            Text(running ? "Running" : "Exited \(item.run.exit ?? 0)")
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("fg-faint"))
+                .padding(.leading, 13)
+            Text(item.run.command.joined(separator: " "))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.leading, 13)
+            DisclosureGroup("Output", isExpanded: $showsOutput) {
+                ScrollView {
+                    Text(item.run.output.isEmpty ? "No output yet" : item.run.output)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
+            }
+            .font(.system(size: 10.5))
+            .padding(.leading, 13)
+        }
+        .padding(10)
+        .rightPaneCardChrome(accent: theme.color(running ? "accent" : "fg-faint"), isHovering: false)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
     }
 }
 

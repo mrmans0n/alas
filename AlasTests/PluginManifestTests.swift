@@ -15,6 +15,8 @@ private func panels(_ list: String, tabs: String = "") -> String {
 
 private func network(_ hosts: String) -> String { #","capabilities":["network"],"network":[\#(hosts)]"# }
 
+private func processes(_ list: String) -> String { #","capabilities":["process.exec"],"processes":[\#(list)]"# }
+
 private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
 
 struct PluginManifestTests {
@@ -53,7 +55,16 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":5}"#, .malformed),
-        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.write"]}"#, .unknownCapability("files.write")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.delete"]}"#, .unknownCapability("files.delete")),
+        (manifest(api: 4, #","capabilities":["files.write"]"#), .needsNewerAPI(#"capability "files.write""#, api: 6)),
+        (manifest(#","processes":[{"id":"a","command":["ls"]}]"#), .needsNewerAPI(#""processes""#, api: 6)),
+        (manifest(api: 6, #","processes":[{"id":"a","command":["ls"]}]"#), .invalidProcess(#""processes" needs capability "process.exec""#)),
+        (manifest(api: 6, #","capabilities":["process.exec"]"#), .invalidProcess(#"capability "process.exec" needs at least one process"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":[]}"#)), .invalidProcess(#"process "a" needs a command"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":["ls","\#(String(repeating: "x", count: 1025))"]}"#)), .invalidProcess(#"process "a" has an argument longer than 1024 bytes"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":["ls"]},{"id":"a","command":["pwd"]}"#)), .invalidProcess(#"duplicate process id "a""#)),
+        (manifest(api: 6, processes(#"{"id":"A!","command":["ls"]}"#)), .invalidProcess(#"invalid process id "A!""#)),
+        (manifest(api: 6, processes((0...16).map { #"{"id":"p\#($0)","command":["ls"]}"# }.joined(separator: ","))), .invalidProcess("at most 16 processes")),
         (manifest(api: 4, panels(#"{"id":"p","title":"P"}"#)), .needsNewerAPI(#""contributes.panels""#)),
         (manifest(panels(#"{"id":"P!","title":"P"}"#)), .invalidPanel(#"invalid panel id "P!""#)),
         (manifest(panels(#"{"id":"p","title":"P"},{"id":"p","title":"Q"}"#)), .invalidPanel(#"duplicate panel id "p""#)),
@@ -106,6 +117,15 @@ struct PluginManifestTests {
         #expect(parsed.panels.map(\.id) == ids)
         #expect(parsed.panels.first == PluginPanelContribution(id: "a", title: "A"))
         #expect(parsed.panels.dropFirst().allSatisfy { $0.location == .changesSection && $0.icon == "checklist" })
+    }
+
+    @Test func processesKeepTheirArgvAndFlags() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 6, processes(
+            #"{"id":"install","command":["pnpm","install"]},{"id":"dev","command":["pnpm","dev"],"appendArgs":true,"longRunning":true}"#)).utf8))
+        #expect(parsed.processes == [
+            PluginProcessContribution(id: "install", command: ["pnpm", "install"]),
+            PluginProcessContribution(id: "dev", command: ["pnpm", "dev"], appendArgs: true, longRunning: true),
+        ])
     }
 
     @Test func eventNeedsCapabilityNamesTheEventsOwnCapability() {
