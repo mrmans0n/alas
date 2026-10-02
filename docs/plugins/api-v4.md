@@ -1,6 +1,7 @@
 # Alas plugin API v4 reference
 
-API 4 is the current plugin API. A plugin is one JavaScript file that Alas runs
+API 4 is the base plugin API; [API 5](api-v5.md) adds commands, notifications
+and session events on top of it. A plugin is one JavaScript file that Alas runs
 in JavaScriptCore. The messages, capabilities, view trees and storage are the
 ones API 1 to 3 introduced; their shapes are documented in the
 [API v1](api-v1.md), [API v2](api-v2.md) and [API v3](api-v3.md) message
@@ -51,7 +52,7 @@ folder takes precedence over a release there.
 | `id` | string | yes | Reverse-DNS: `[a-z0-9-]+(\.[a-z0-9-]+)+`. Unique across installed plugins. |
 | `name` | string | yes | Non-blank. Shown to the user. |
 | `version` | string | yes | Non-blank. Shown to the user; not interpreted. |
-| `api` | integer | yes | Must be `4`. |
+| `api` | integer | yes | `4` or `5`. See [API v5](api-v5.md#the-api-field). |
 | `entry` | string | yes | The script, relative to the plugin folder. No leading `/`, no `..` segment, a regular file (not a symlink) that resolves inside the folder. |
 | `capabilities` | array of strings | no | Any of the capabilities below. May be omitted, but not `null`. |
 | `contributes.tabs` | array | no | Up to 4 tabs, each `{id, title, kind?}`. `kind` is `canvas` (default) or `view`. See [API v2](api-v2.md#manifest-contributestabs) and [API v3](api-v3.md#manifest-tab-kind). |

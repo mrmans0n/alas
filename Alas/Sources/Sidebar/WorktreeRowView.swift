@@ -195,6 +195,8 @@ struct WorktreeRowView: View {
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
     var commitQuery: CommitQuery? = nil
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     /// Keyboard cursor from the sidebar filter; drawn like hover.
     var isHighlighted = false
     @Environment(\.theme) var theme
@@ -664,6 +666,10 @@ struct WorktreeRowView: View {
                 Divider()
                 Text(explanation)
             }
+            Divider()
+        }
+        if !pluginCommands.isEmpty {
+            PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
             Divider()
         }
         if Self.showsRemovalActions(isMain: isMain, workspaceOwned: workspaceCheckout?.isActive == true) {

@@ -90,3 +90,46 @@ extension PluginWorkspaceSnapshot.SessionInput {
         self.init(id: id, agent: row.agentID, title: row.title, state: row.state, plan: row.plan)
     }
 }
+
+/// `session/state` and `session/finished` params; `state` is only sent with `session/state`.
+struct PluginSessionEventParams: Codable, Equatable, Sendable {
+    let session: String
+    let worktree: String
+    var state: String?
+}
+
+struct PluginSessionEvent: Equatable, Sendable {
+    let event: PluginEvent
+    let session: String
+    let worktree: String
+    var state: String?
+
+    var params: PluginSessionEventParams { PluginSessionEventParams(session: session, worktree: worktree, state: state) }
+}
+
+extension PluginWorkspaceSnapshot {
+    /// What changed for sessions since `old`: a state event for every session that is new or changed state,
+    /// a finished event when one went from running to idle, and a `gone` state for one that left the snapshot
+    /// (closed, or disconnected and detached), so a subscriber never keeps a stale state.
+    func sessionEvents(since old: PluginWorkspaceSnapshot) -> [PluginSessionEvent] {
+        let before = Dictionary(
+            old.worktrees.flatMap { $0.sessions.map { ($0.id, $0.state) } }, uniquingKeysWith: { first, _ in first })
+        let now = Set(worktrees.flatMap { $0.sessions.map(\.id) })
+        var events: [PluginSessionEvent] = []
+        for worktree in old.worktrees {
+            for session in worktree.sessions where !now.contains(session.id) {
+                events.append(PluginSessionEvent(event: .sessionState, session: session.id, worktree: worktree.id, state: "gone"))
+            }
+        }
+        for worktree in worktrees {
+            for session in worktree.sessions where before[session.id] != session.state {
+                events.append(PluginSessionEvent(
+                    event: .sessionState, session: session.id, worktree: worktree.id, state: session.state))
+                if before[session.id] == "running", session.state == "idle" {
+                    events.append(PluginSessionEvent(event: .sessionFinished, session: session.id, worktree: worktree.id))
+                }
+            }
+        }
+        return events
+    }
+}

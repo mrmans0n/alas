@@ -467,11 +467,14 @@ struct AlasApp: App {
         CommandGroup(after: .toolbar) {
             Divider()
             let pluginTabs = state.pluginTabContributions()
-            if !pluginTabs.isEmpty {
+            let pluginCommands = state.pluginCommands(.menubar, projectID: state.selectedPluginProjectID)
+            if !pluginTabs.isEmpty || !pluginCommands.isEmpty {
                 Menu("Plugins") {
                     ForEach(pluginTabs) { tab in
                         Button(tab.title) { state.openPluginTab(tab) }
                     }
+                    if !pluginTabs.isEmpty, !pluginCommands.isEmpty { Divider() }
+                    PluginCommandButtons(items: pluginCommands) { state.runPluginCommand($0, slot: .menubar) }
                 }
                 Divider()
             }

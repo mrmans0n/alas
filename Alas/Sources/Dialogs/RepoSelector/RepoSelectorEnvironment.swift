@@ -22,4 +22,7 @@ struct RepoSelectorEnvironment {
     /// The worktree currently focused in the app (`AppState.selectedWorktreeId`).
     /// Used to mark the "current" worktree in the list.
     var currentWorktreeId: () -> String?
+    /// Plugin commands in the `palette` slot for the current project.
+    var pluginCommands: () -> [PluginCommandItem] = { [] }
+    var runPluginCommand: (PluginCommandItem) -> Void = { _ in }
 }

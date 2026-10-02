@@ -431,10 +431,14 @@ final class PluginManager {
 
     private func pushChangedSnapshots() async {
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for (key, host) in hostsByKey where host.state == .active && host.grants.contains(.workspaceRead) {
+        for (key, host) in hostsByKey where host.state == .active
+            && (host.grants.contains(.workspaceRead) || host.receivesSessionEvents) {
             guard let project = projectsByID[key.projectID] else { continue }
             let snapshot = actions(project).snapshot()
-            guard snapshot != lastSnapshots[key] else { continue }
+            let previous = lastSnapshots[key]
+            guard snapshot != previous else { continue }
+            // The first snapshot after a start is the baseline, so a restart does not replay every session.
+            if let previous { await host.sessionEvents(snapshot.sessionEvents(since: previous)) }
             lastSnapshots[key] = snapshot
             await host.workspaceChanged(snapshot)
         }

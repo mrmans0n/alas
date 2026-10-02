@@ -2780,7 +2780,12 @@ final class AppState {
             },
             openNewProject: openNewProject,
             openNewWorktree: openNewWorktree,
-            currentWorktreeId: { [weak self] in self?.selectedWorktreeId }
+            currentWorktreeId: { [weak self] in self?.selectedWorktreeId },
+            pluginCommands: { [weak self] in
+                guard let self else { return [] }
+                return self.pluginCommands(.palette, projectID: self.selectedPluginProjectID)
+            },
+            runPluginCommand: { [weak self] in self?.runPluginCommand($0, slot: .palette) }
         )
     }
 

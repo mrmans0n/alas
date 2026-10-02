@@ -73,6 +73,9 @@ struct RepoSelectorRowView: View {
         case .action(.newProject):
             actionContent(label: "Add project…")
 
+        case .action(.pluginCommand(let item)):
+            actionContent(label: item.command.title, icon: item.command.icon ?? "puzzlepiece.extension")
+
         case .emptyHint, .recentHeader, .projectHeader, .actionsHeader:
             EmptyView()
         }
@@ -119,9 +122,9 @@ struct RepoSelectorRowView: View {
     }
 
     @ViewBuilder
-    private func actionContent(label: String) -> some View {
+    private func actionContent(label: String, icon: String = "plus") -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "plus")
+            Image(systemName: icon)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(theme.color("fg-faint"))
                 .frame(width: 16)
