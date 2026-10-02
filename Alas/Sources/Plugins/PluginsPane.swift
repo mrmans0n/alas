@@ -255,8 +255,7 @@ private struct PluginSecretSetting: View {
     }
 
     private func commit() {
-        guard !draft.isEmpty else { return }
-        settings.setSecret(key, draft)
+        guard !draft.isEmpty, settings.setSecret(key, draft) else { return }
         draft = ""
     }
 }

@@ -66,7 +66,11 @@ final class PluginSettings {
         return false
     }
 
+    /// Settings are configuration, not data: a value this size always fits the messages that carry them.
+    static let maxStringBytes = 4096
+
     func set(_ key: String, _ value: PluginSettingValue) {
+        if case .string(let text) = value, text.utf8.count > Self.maxStringBytes { return }
         guard let setting = declaration(key), setting.kind != .secret,
               let data = try? JSONEncoder().encode(value),
               storage.set(key, value: data) == .stored
@@ -86,11 +90,14 @@ final class PluginSettings {
     }
 
     /// Empty or nil clears it.
-    func setSecret(_ key: String, _ value: String?) {
-        guard declaration(key)?.kind == .secret else { return }
+    /// Returns false when nothing was stored, so the form can keep what the user pasted.
+    @discardableResult
+    func setSecret(_ key: String, _ value: String?) -> Bool {
+        guard declaration(key)?.kind == .secret else { return false }
         let value = value?.isEmpty == false ? value : nil
-        secrets.setSecret(value.map { Data($0.utf8) }, for: account(key))
+        guard secrets.setSecret(value.map { Data($0.utf8) }, for: account(key)) else { return false }
         changed()
+        return true
     }
 
     func declaration(_ key: String) -> PluginSetting? {
