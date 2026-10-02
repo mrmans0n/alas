@@ -74,7 +74,9 @@ final class ACPSessionManager: ObservableObject {
         _ host: String?,
         _ worktreePath: String
     ) throws -> ACPConnection
-    typealias ACPLaunchSpecTransformer = @MainActor (_ spec: ACPLaunchSpec) -> ACPLaunchSpec
+    /// `allowsPermissionBypass` is false for read-only side sessions, which
+    /// must launch without the project's bypass-permissions flag.
+    typealias ACPLaunchSpecTransformer = @MainActor (_ spec: ACPLaunchSpec, _ allowsPermissionBypass: Bool) -> ACPLaunchSpec
     typealias ACPBrokerServiceFactory = @MainActor () async throws -> ACPBrokerServicing
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
     /// Checkout sessions provide their descriptors from the immutable checkout
@@ -1493,7 +1495,7 @@ final class ACPSessionManager: ObservableObject {
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
-        self.launchSpecTransformer = launchSpecTransformer ?? { $0 }
+        self.launchSpecTransformer = launchSpecTransformer ?? { spec, _ in spec }
         self.builtInMCPProvider = builtInMCPProvider
         self.builtInMCPHello = builtInMCPHello
         self.clearMCPRegistration = clearMCPRegistration
@@ -1628,6 +1630,7 @@ final class ACPSessionManager: ObservableObject {
             title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
             hydrationState: .ready)
         session.autoRunEnabled = row.autoRun
+        session.readOnlyRestricted = isEphemeral
         sessions[id] = session
         return session
     }
@@ -1745,6 +1748,7 @@ final class ACPSessionManager: ObservableObject {
                 hydrationState: .ready
             )
             target.autoRunEnabled = targetRow.autoRun
+            target.readOnlyRestricted = isEphemeral
             target.forkRecord = forkRecord
             // Same-agent forks start with the source's command/skill list
             // (carried on the persisted row); pills render before the attach
@@ -1788,6 +1792,9 @@ final class ACPSessionManager: ObservableObject {
             guard let parent = sessions[parentID], parent.hydrationState == .ready else {
                 throw ACPSessionForkCreationError.sourceUnavailable
             }
+            guard ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: parent.agentId) else {
+                throw ACPSideQuestionError.unenforceable
+            }
             let title = ACPSideQuestionBoundaryPolicy.title(for: question)
             if let boundary = ACPSideQuestionBoundaryPolicy.boundary(
                 messages: parent.transcript.messages,
@@ -1819,6 +1826,12 @@ final class ACPSessionManager: ObservableObject {
         sideQuestions[parentID]?.sessionID = side.id
         await attach(to: side.id, freshlyCreated: true)
         guard sideQuestions[parentID]?.id == entry.id else { return side }
+        guard await enterReadOnlyMode(side) else {
+            await discardSideSession(id: side.id)
+            failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
+            throw ACPSideQuestionError.unsafeMode
+        }
+        guard sideQuestions[parentID]?.id == entry.id else { return side }
         guard submit(sessionId: side.id, text: question, attachments: [], intent: .auto, onCompleted: { _ in }) else {
             await discardSideSession(id: side.id)
             failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.notAccepted)
@@ -1826,6 +1839,57 @@ final class ACPSessionManager: ObservableObject {
         }
         sideQuestions[parentID]?.isSubmitted = true
         return side
+    }
+
+    /// Moves a side session out of modes that run tool calls without asking,
+    /// through whichever source backs its mode chip, and waits for the agent
+    /// to accept. False when the session would stay in such a mode.
+    private func enterReadOnlyMode(_ side: ACPSession) async -> Bool {
+        guard let mode = side.chipState.mode else { return true }
+        guard let target = ACPSideQuestionModePolicy.preferredModeID(
+            options: mode.options,
+            currentID: mode.currentId
+        ) else {
+            return ACPSideQuestionModePolicy.allows(options: mode.options, currentID: mode.currentId)
+        }
+        guard let runner = runners[side.id] else { return false }
+        let remoteID = side.remoteSessionId ?? side.id
+        do {
+            switch mode.source {
+            case .mode:
+                try await runner.connection.setMode(sessionId: remoteID, modeId: target)
+                guard runners[side.id] === runner, sessions[side.id] === side else { return false }
+                side.currentMode = target
+            case .configOption(let configID):
+                let echoed = try await runner.connection.setConfigOption(
+                    sessionId: remoteID,
+                    configId: configID,
+                    value: .string(target)
+                )
+                guard runners[side.id] === runner, sessions[side.id] === side else { return false }
+                guard ACPSideQuestionModePolicy.acceptsEcho(echoed, configID: configID, target: target) else {
+                    return false
+                }
+                if !echoed.isEmpty {
+                    side.availableConfigOptions = echoed
+                } else if let index = side.availableConfigOptions.firstIndex(where: { $0.id == configID }) {
+                    let option = side.availableConfigOptions[index]
+                    side.availableConfigOptions[index] = ACPConfigOption(
+                        id: option.id,
+                        name: option.name,
+                        type: option.type,
+                        category: option.category,
+                        currentValue: .string(target),
+                        options: option.options
+                    )
+                }
+            case .model:
+                return false
+            }
+        } catch {
+            return false
+        }
+        return true
     }
 
     /// Installs `entry` as the parent's side question, then discards the one
@@ -1889,6 +1953,9 @@ final class ACPSessionManager: ObservableObject {
             return nil
         }
         sideQuestions[parentID] = nil
+        // Auto-run stays off; the session keeps running without the bypass
+        // flag until its next launch.
+        side.readOnlyRestricted = false
         if var row = persistedRows[sideID] {
             row.ephemeralParentId = nil
             persistedRows[sideID] = row
@@ -3065,13 +3132,13 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
         let host = effectiveRemoteHost()
-        let setupSpec = launchSpecTransformer(spec)
+        let setupSpec = launchSpecTransformer(spec, true)
         let setup = await evaluateSetup(for: setupSpec)
         guard case .ready = setup else {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host))
+        let launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
@@ -5158,7 +5225,7 @@ extension ACPSessionManager {
             return
         }
         let host = effectiveRemoteHost()
-        let setupSpec = launchSpecTransformer(spec)
+        let setupSpec = launchSpecTransformer(spec, !session.readOnlyRestricted)
         let setup = await evaluateSetup(for: setupSpec)
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         guard !disposingAttachments.contains(sessionId), !isDisposed else {
@@ -5205,7 +5272,7 @@ extension ACPSessionManager {
         do {
             let resolvedSpec = await resolvedLaunchSpec(for: spec, host: host)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
-            var launchSpec = launchSpecTransformer(resolvedSpec)
+            var launchSpec = launchSpecTransformer(resolvedSpec, !session.readOnlyRestricted)
             if host == nil {
                 let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
@@ -5355,6 +5422,8 @@ extension ACPSessionManager {
             session: session,
             client: connection.client,
             onInputAwaiting: { [weak self] session, request in
+                // Hidden side sessions never notify or block orchestration.
+                guard !session.readOnlyRestricted else { return }
                 self?.onInputAwaiting?(session, request)
                 let trimmedTitle = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let trimmedMessage = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5370,6 +5439,7 @@ extension ACPSessionManager {
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
             onPlanAwaiting: { [weak self] session, request in
+                guard !session.readOnlyRestricted else { return }
                 self?.onPlanAwaiting?(session, request)
                 let trimmedName = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 self?.onChildBlocked?(ACPChildBlocker(
@@ -5772,17 +5842,20 @@ extension ACPSessionManager {
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                           },
                                           onSuccessfulTurn: { [weak self] turn in
-                                              self?.onSuccessfulTurn(turn)
+                                              guard let self, self.sessions[sessionId]?.readOnlyRestricted != true else { return }
+                                              self.onSuccessfulTurn(turn)
                                           },
                                           onTurnCompleted: { [weak self] completion in
                                               guard let self,
-                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
+                                                    self.sessions[sessionId]?.readOnlyRestricted != true
                                               else { return }
                                               self.onTurnCompleted?(completion)
                                           },
                                           onPermissionBlocked: { [weak self] blocker in
                                               guard let self,
-                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
+                                                    self.sessions[sessionId]?.readOnlyRestricted != true
                                               else { return }
                                               self.onChildBlocked?(blocker)
                                           },

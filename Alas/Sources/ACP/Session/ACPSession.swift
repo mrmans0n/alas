@@ -75,6 +75,14 @@ enum ACPConnectionRecoveryState: Equatable {
     case exhausted(attempts: Int?)
 }
 
+/// A tool call the read-only gate rejected in a `/btw` side session.
+/// `messageIndex` is the transcript length when it was blocked, which places
+/// it in a turn.
+struct ACPBlockedToolCall: Equatable {
+    let title: String
+    let messageIndex: Int
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -195,6 +203,17 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
+    /// A hidden `/btw` side session: only read-only tools run (see
+    /// `ACPSideQuestionPermissionRule`), and the agent launches without the
+    /// project's bypass-permissions flag. In-memory only; side sessions never
+    /// outlive the app.
+    @Published var readOnlyRestricted = false
+    /// Tool calls the read-only gate rejected, for the side card.
+    @Published private(set) var readOnlyBlockedTools: [ACPBlockedToolCall] = []
+
+    func recordReadOnlyBlock(_ title: String) {
+        readOnlyBlockedTools.append(.init(title: title, messageIndex: transcript.messages.count))
+    }
     @Published var setupState: SetupState = .checking { willSet { nextPromptActivity.send() } }
     @Published var lastError: String?
     /// Runtime-only state reported by Codex while its current turn retries.

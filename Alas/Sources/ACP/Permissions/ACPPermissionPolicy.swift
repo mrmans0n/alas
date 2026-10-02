@@ -34,6 +34,40 @@ final class ACPPermissionPolicy {
                   requestID: JSONRPCID) async -> ACPPermissionResponse {
         pendingRequestID = requestID
         cancelledBeforeParked = false
+        // Ahead of auto-run and remembered decisions: a project-wide "always
+        // allow" must not let a read-only side session write.
+        if session.readOnlyRestricted {
+            switch ACPSideQuestionPermissionRule.decide(kind: params.toolCall.kind) {
+            case .allow:
+                // Never a persistent allow: the adapter could stop asking for
+                // that scope, and later calls would skip this gate.
+                if let allow = options.first(where: { $0.kind == "allow_once" }) {
+                    return .init(outcome: .selected(optionId: allow.optionId))
+                }
+            case .reject:
+                session.recordReadOnlyBlock(params.toolCall.title ?? params.toolCall.kind ?? "tool")
+                // Never a persistent rejection either: a kept session must be
+                // able to use the tool.
+                if let reject = options.first(where: { $0.kind == "reject_once" }) {
+                    return .init(outcome: .selected(optionId: reject.optionId))
+                }
+                return .init(outcome: .cancelled)
+            case .ask:
+                break
+            }
+            // The prompt offers one-shot choices only, for the same reason.
+            let oneShot = params.options.filter { $0.kind == "allow_once" || $0.kind == "reject_once" }
+            guard !oneShot.isEmpty else { return .init(outcome: .cancelled) }
+            return await awaitUserDecision(
+                scopeKey: scopeKey,
+                params: ACPPermissionRequestParams(
+                    sessionId: params.sessionId,
+                    toolCall: params.toolCall,
+                    options: oneShot,
+                    metadata: params.metadata
+                )
+            )
+        }
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }

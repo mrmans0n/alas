@@ -30,7 +30,12 @@ final class ACPHarnessBridge {
     /// existing subscription.
     func observe(session: ACPSession) {
         var isSnapshot = true
-        sessionCancellables[session.id] = session.transcript.$streamingState
+        // Hidden `/btw` side sessions never badge or notify; a promoted one
+        // starts reporting from its current state.
+        sessionCancellables[session.id] = session.$readOnlyRestricted
+            .combineLatest(session.transcript.$streamingState)
+            .filter { restricted, _ in !restricted }
+            .map(\.1)
             .sink { [weak self, weak session] state in
                 guard let self, let session else { return }
                 self.apply(state: state, session: session, isSnapshot: isSnapshot)
