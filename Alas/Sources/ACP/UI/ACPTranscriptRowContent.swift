@@ -193,6 +193,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                         label: delegatedLabel
                             ?? ACPDelegatedPromptSource.transcriptLabel(for: delegatedSource, agentDisplayName: { $0 }),
                         isFromChild: delegatedSource.isFromChild,
+                        contentMaxWidth: contentMaxWidth,
                         typography: typography
                     )
                 } else {
