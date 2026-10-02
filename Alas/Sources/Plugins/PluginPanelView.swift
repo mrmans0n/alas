@@ -78,5 +78,11 @@ struct PluginPanelView: View {
             if let reported { Task { await reported.setPanelVisible(panel, false) } }
             reported = nil
         }
+        // A reload or update replaces the host while the panel stays on screen: the report moves to the new one.
+        .onChange(of: host.map(ObjectIdentifier.init)) { _, _ in
+            if let reported, reported !== host { Task { await reported.setPanelVisible(panel, false) } }
+            reported = host
+            if let host { Task { await host.setPanelVisible(panel, true) } }
+        }
     }
 }
