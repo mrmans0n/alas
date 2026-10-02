@@ -232,7 +232,10 @@ struct PluginManifest: Equatable, Sendable {
             guard key.wholeMatch(of: /[A-Za-z0-9_-]{1,64}/) != nil else {
                 throw .invalidSetting("invalid setting key \"\(key)\"")
             }
-            guard !settings.contains(where: { $0.key == key }) else { throw .invalidSetting("duplicate setting key \"\(key)\"") }
+            // Case-insensitive: secrets may fall back to files, and the default macOS volume folds case.
+            guard !settings.contains(where: { $0.key.lowercased() == key.lowercased() }) else {
+                throw .invalidSetting("duplicate setting key \"\(key)\"")
+            }
             let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard (1...maxTabTitleLength).contains(title.count) else {
                 throw .invalidSetting("setting \"\(key)\" needs a title of 1 to \(maxTabTitleLength) characters")
