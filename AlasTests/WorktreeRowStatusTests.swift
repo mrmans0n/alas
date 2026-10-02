@@ -288,7 +288,6 @@ struct WorktreeRowStatusTests {
             ))
         }
     }
-
 }
 
 private actor WorktreeExplainerGenerationProbe {

@@ -424,7 +424,6 @@ struct WorktreeRowView: View {
             }
             _ = await onPrepareWorktreeExplanation(explanationEvidence)
         }
-
     }
 
     private func firstLine() -> some View {
