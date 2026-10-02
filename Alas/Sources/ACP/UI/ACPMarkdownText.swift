@@ -147,7 +147,7 @@ struct ACPMarkdownText: View {
             availableWidth: tableViewportWidth,
             columnCount: columnCount
         )
-        return ScrollView(.horizontal, showsIndicators: false) {
+        return ACPHorizontalScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 tableRow(
                     cells: header,
@@ -178,7 +178,6 @@ struct ACPMarkdownText: View {
             tableViewportWidth = width
         }
         .background(theme.color("bg-1").opacity(0.4))
-        .background(ACPBlockWheelRouter())
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
@@ -567,11 +566,11 @@ private struct CodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ScrollView(.horizontal, showsIndicators: false) {
-                codeText
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-            }
-            .background(ACPBlockWheelRouter())
+            // Wraps rather than scrolling sideways: a horizontal SwiftUI
+            // ScrollView here swallowed vertical trackpad gestures, freezing
+            // the transcript while the pointer hovered a code block.
+            codeText
+                .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .background(theme.color("bg-0").opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 6))

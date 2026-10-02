@@ -36,7 +36,7 @@ struct PluginWorkspaceSnapshotTests {
         EventCase(before: ["s1:running"], after: ["s1:running"], events: []),
         EventCase(before: [], after: ["s1:running"], events: ["session.state:s1:running"]),
         EventCase(before: ["s1:awaiting_input"], after: ["s1:idle"], events: ["session.state:s1:idle"]),
-        EventCase(before: ["s1:running"], after: [], events: []),
+        EventCase(before: ["s1:running"], after: [], events: ["session.state:s1:gone"]),
     ])
     func sessionEventsFollowStateChanges(_ c: EventCase) {
         func snapshot(_ sessions: [String]) -> PluginWorkspaceSnapshot {
