@@ -203,7 +203,12 @@ final class PluginManager {
         guard PluginTrust.hash(manifest: manifestData, entry: source) == version.hash else {
             throw PluginCatalogError.hashMismatch
         }
-        let manifest = try PluginManifest.parse(manifestData)
+        let manifest: PluginManifest
+        do {
+            manifest = try PluginManifest.parse(manifestData)
+        } catch {
+            throw PluginCatalogError.invalidDownload(String(describing: error))
+        }
         guard manifest.id == id else { throw PluginCatalogError.wrongPlugin(manifest.id) }
         // A record that names another release would keep offering itself as an update after installing.
         guard manifest.version == version.version, manifest.api == version.api else {

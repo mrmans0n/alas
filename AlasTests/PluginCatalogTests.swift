@@ -3,10 +3,12 @@ import Testing
 @testable import Alas
 
 struct PluginCatalogTests {
-    static func version(_ version: String, api: Int = 4, hash: String = "h", entry: Bool = true) -> PluginCatalogIndex.Version {
+    static func version(
+        _ version: String, api: Int = 4, hash: String = "h", entry: Bool = true, manifest: String = "plugin"
+    ) -> PluginCatalogIndex.Version {
         let base = URL(string: "https://example.com/\(version)/")!
         return PluginCatalogIndex.Version(
-            version: version, api: api, capabilities: [], manifest: base.appending(path: "plugin.json"),
+            version: version, api: api, capabilities: [], manifest: base.appending(path: "\(manifest).json"),
             entry: entry ? base.appending(path: "plugin.js") : nil, hash: hash)
     }
 
@@ -58,12 +60,15 @@ struct PluginCatalogTests {
         let suite = "PluginCatalogTests.\(UUID().uuidString)"
         let release: PluginCatalogIndex.Version
         let manager: PluginManager
+        let script = Data("globalThis.handle = () => {};".utf8)
 
         init() throws {
             let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
-            let script = Data("globalThis.handle = () => {};".utf8)
             let base = "https://example.com/0.3.0/"
-            let files = [URL(string: base + "plugin.json")!: manifest, URL(string: base + "plugin.js")!: script]
+            let files = [
+                URL(string: base + "plugin.json")!: manifest, URL(string: base + "plugin.js")!: self.script,
+                URL(string: base + "bad.json")!: Data("{".utf8),
+            ]
             release = PluginCatalogTests.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
             manager = PluginManager(
                 directory: root, approvals: PluginApprovalStore(defaults: try #require(UserDefaults(suiteName: suite))),
@@ -89,6 +94,9 @@ struct PluginCatalogTests {
 
         #expect(await f.install(Self.version("0.3.0", hash: "wrong")) == PluginCatalogError.hashMismatch.description)
         #expect(f.manager.plugins.isEmpty)
+        // A release whose files match its hash but whose manifest is invalid says why.
+        let failure = await f.install(Self.version("0.3.0", hash: PluginTrust.hash(manifest: Data("{".utf8), entry: f.script), manifest: "bad"))
+        #expect(failure == PluginCatalogError.invalidDownload(PluginManifestError.malformed.description).description)
 
         #expect(await f.install() == nil)
         let plugin = try #require(f.manager.plugin(id: "io.x.p"))
