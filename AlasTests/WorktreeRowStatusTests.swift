@@ -222,6 +222,23 @@ struct WorktreeRowStatusTests {
         #expect(store.explanation(for: "worktree", evidence: evidence) == "Explain retried worktree")
     }
 
+    @Test @MainActor
+    func cancellingPreparationCancelsActiveGeneration() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        let preparation = Task {
+            await store.prepare(worktreeID: "worktree", evidence: evidence)
+        }
+        await probe.waitForCallCount(1)
+        preparation.cancel()
+        await probe.finishNext(with: nil)
+        _ = await preparation.value
+
+        #expect(await probe.cancelledCallCount == 1)
+    }
+
     @Test func explanationUsesOnlyAResolvedEmptyMetadataSlot() {
         let available = WorktreeRowView.showsExplanation(
             isMain: false,
@@ -276,6 +293,7 @@ struct WorktreeRowStatusTests {
 
 private actor WorktreeExplainerGenerationProbe {
     private(set) var receivedEvidence: [WorktreeExplainerEvidence] = []
+    private(set) var cancelledCallCount = 0
     private(set) var maximumConcurrentCalls = 0
     private var activeCalls = 0
     private var completions: [CheckedContinuation<String?, Never>] = []
@@ -288,6 +306,7 @@ private actor WorktreeExplainerGenerationProbe {
         resumeCallCountWaiters()
         let result = await withCheckedContinuation { completions.append($0) }
         activeCalls -= 1
+        if Task.isCancelled { cancelledCallCount += 1 }
         return result
     }
 

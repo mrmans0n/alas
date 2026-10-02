@@ -197,7 +197,7 @@ struct WorktreeRowView: View {
     var commitQuery: CommitQuery? = nil
     var worktreeExplanation: String? = nil
     var worktreeExplainerEvidence: WorktreeExplainerEvidence? = nil
-    var onPrepareWorktreeExplanation: @MainActor (WorktreeExplainerEvidence) async -> Void = { _ in }
+    var onPrepareWorktreeExplanation: @MainActor (WorktreeExplainerEvidence) async -> Bool = { _ in true }
 
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
@@ -415,7 +415,14 @@ struct WorktreeRowView: View {
         }
         .task(id: explanationEvidence) {
             guard let explanationEvidence else { return }
-            await onPrepareWorktreeExplanation(explanationEvidence)
+            let completed = await onPrepareWorktreeExplanation(explanationEvidence)
+            guard !completed else { return }
+            do {
+                try await Task.sleep(for: WorktreeExplainerPolicy.retryDelay)
+            } catch {
+                return
+            }
+            _ = await onPrepareWorktreeExplanation(explanationEvidence)
         }
 
     }

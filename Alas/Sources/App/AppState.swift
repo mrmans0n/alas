@@ -1766,7 +1766,8 @@ final class AppState {
         for worktree: Worktree,
         in project: ProjectConfig
     ) -> WorktreeExplainerEvidence? {
-        guard !projectsManager.isMain(worktree, in: project),
+        guard issueWorktreeNameSuggestionAvailable,
+              !projectsManager.isMain(worktree, in: project),
               !worktree.path.isRemoteAlasPath
         else { return nil }
         let title = projectsManager.issueAttachment(

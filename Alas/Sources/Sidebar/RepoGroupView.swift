@@ -60,7 +60,8 @@ struct RepoGroupView: View {
     var commitQuery: (Worktree) -> WorktreeRowView.CommitQuery? = { _ in nil }
     var worktreeExplanation: (Worktree) -> String? = { _ in nil }
     var worktreeExplainerEvidence: (Worktree) -> WorktreeExplainerEvidence? = { _ in nil }
-    var onPrepareWorktreeExplanation: @MainActor (Worktree, WorktreeExplainerEvidence) async -> Void = { _, _ in }
+    var onPrepareWorktreeExplanation:
+        @MainActor (Worktree, WorktreeExplainerEvidence) async -> Bool = { _, _ in true }
 
     var pluginCommands: (PluginCommandSlot) -> [PluginCommandItem] = { _ in [] }
     var onRunPluginCommand: (PluginCommandItem, PluginCommandSlot, Worktree?) -> Void = { _, _, _ in }

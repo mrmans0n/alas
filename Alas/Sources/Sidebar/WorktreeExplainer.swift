@@ -10,6 +10,7 @@ enum WorktreeExplainerPolicy {
     static let inputTokenLimit = 2_048
     static let maxTokens = 64
     static let timeout: Duration = .seconds(20)
+    static let retryDelay: Duration = .seconds(5)
     static let maximumLength = 60
     static let minimumWords = 3
     static let maximumWords = 8
@@ -137,16 +138,17 @@ final class WorktreeExplainerStore {
         return explanations[worktreeID]
     }
 
-    func prepare(worktreeID: String, evidence: WorktreeExplainerEvidence) async {
+    @discardableResult
+    func prepare(worktreeID: String, evidence: WorktreeExplainerEvidence) async -> Bool {
         let key = Key(worktreeID: worktreeID, evidence: evidence)
         if currentEvidenceByWorktreeID[worktreeID] != evidence {
             currentEvidenceByWorktreeID[worktreeID] = evidence
             explanations[worktreeID] = nil
         }
-        if completed.contains(key) { return }
+        if completed.contains(key) { return true }
         if let job = jobs[key] {
             await job.value
-            return
+            return completed.contains(key)
         }
 
         let previous = tail
@@ -154,6 +156,10 @@ final class WorktreeExplainerStore {
         let job = Task { @MainActor [weak self] in
             _ = await previous?.value
             guard let self else { return }
+            guard !Task.isCancelled else {
+                jobs[key] = nil
+                return
+            }
             let explanation = await generate(evidence)
             if explanation != nil { completed.insert(key) }
             jobs[key] = nil
@@ -163,6 +169,11 @@ final class WorktreeExplainerStore {
         }
         jobs[key] = job
         tail = job
-        await job.value
+        await withTaskCancellationHandler {
+            await job.value
+        } onCancel: {
+            job.cancel()
+        }
+        return completed.contains(key)
     }
 }
