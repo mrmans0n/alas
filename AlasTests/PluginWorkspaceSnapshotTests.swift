@@ -123,4 +123,17 @@ struct PluginWorkspaceSnapshotTests {
         }
         #expect(events == c.events)
     }
+
+    /// A worktree is created before its first session is reported, and that session is gone before it is removed.
+    @Test func worktreeEventsBracketTheirSessionEvents() {
+        func state(sessions: [String]) -> PluginEventState {
+            PluginEventState(workspace: PluginWorkspaceSnapshot(worktrees: sessions.isEmpty ? [] : [.init(
+                id: "x", branch: "x", current: false, dirty: nil,
+                sessions: sessions.map { .init(id: $0, agent: "claude", title: "", state: "running", plan: nil) })]))
+        }
+        let created = state(sessions: ["s1"]).events(since: state(sessions: [])).map(\.event)
+        #expect(created == [.worktreeCreated, .sessionState])
+        let removed = state(sessions: []).events(since: state(sessions: ["s1"])).map(\.event)
+        #expect(removed == [.sessionState, .worktreeRemoved])
+    }
 }
