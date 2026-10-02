@@ -21,6 +21,13 @@ final class ACPDelayedHoverVisibility: ObservableObject {
         isVisible = true
     }
 
+    /// Detaching a retained row must clear hover without the pointer-exit delay.
+    func reset() {
+        hideTask?.cancel()
+        hideTask = nil
+        isVisible = false
+    }
+
     func leave() {
         hideTask?.cancel()
         let delay = hideDelayNanoseconds

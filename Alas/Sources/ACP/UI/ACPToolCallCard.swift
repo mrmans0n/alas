@@ -127,6 +127,7 @@ struct ACPToolCallCard: View {
             expandedSyntax.clear()
         }
         .onHover { isHovering = $0 }
+        .onDisappear { isHovering = false }
     }
 
     /// What to draw inside the expanded card. Prefers the just-fetched

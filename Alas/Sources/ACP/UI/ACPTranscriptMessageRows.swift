@@ -122,6 +122,10 @@ private struct ACPUserReferenceSummaryItem: View {
         .disabled(store.url(for: reference) == nil)
         .onAppear { store.ensureLoaded(reference) }
         .onHover { isHovering = $0 }
+        .onDisappear {
+            isHovering = false
+            showsCard = false
+        }
         .task(id: isHovering) {
             guard isHovering else {
                 showsCard = false
