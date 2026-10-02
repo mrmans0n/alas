@@ -8,17 +8,18 @@ API 6 puts plugins next to the work: commands in the Changes, Run and agent
 session menus, badges on rows, panels inside the Changes tab and run reports,
 events for git, worktrees, focus, runs and pull requests, and requests that
 send to agent sessions, start runs, read their output and add review comments.
-It is being built in steps, so this page lists only what Alas already does.
-Running processes and reading or writing files (`process.exec`, `files.*`) come
-later.
+For plugins that need more, it adds two high-trust capabilities: running the
+commands a plugin declares, and reading and writing files in the project's
+worktrees. See [Processes and files](#processes-and-files).
 
 ## The `api` field
 
 Alas loads plugins with `"api": 4`, `5` or `6`. Everything below needs
 `"api": 6`:
 
-- The capabilities `session.write`, `runs.read`, `runs.start`, `review.read`
-  and `review.write`, and the events of [Events](#events). An older manifest
+- The capabilities `session.write`, `runs.read`, `runs.start`, `review.read`,
+  `review.write`, `process.exec`, `files.read` and `files.write`, the
+  `processes` field, and the events of [Events](#events). An older manifest
   that asks for them is refused.
 - The new command slots and panel locations. An older manifest that names them
   has them skipped, not refused, as an older Alas would.
@@ -193,3 +194,99 @@ it, but what it asked for still happens: a run it started keeps running.
 | `runs.start` | Start run scripts in this project |
 | `review.read` | Read the pull request state and checks of this project's worktrees |
 | `review.write` | Add review comments to changes in this project |
+| `process.exec` | Run the commands listed below in this project's worktrees (full access) |
+| `files.read` | Read files in this project's worktrees |
+| `files.write` | Create and change files in this project's worktrees (full access) |
+
+## Processes and files
+
+**These run with your permissions, outside the sandbox.** A command a plugin
+runs can do anything you can do from a terminal, and a file it writes is
+written as you. Everything else about the plugin stays sandboxed, and a call
+without the grant answers `-32001` whatever the plugin's code does.
+
+The approval sheet groups capabilities into *Sandboxed* and *Full access*
+(`process.exec` and `files.write`), lists every declared command, and enables
+Approve only once the user ticks "I understand this plugin can run these
+commands and change files in my worktrees". The catalog marks plugins that ask
+for full access. The approval covers the manifest's exact bytes, so a plugin
+that adds or changes a command in an update is approved again.
+
+### `process.exec`
+
+The manifest lists every command the plugin may run, as an exact argv prefix:
+
+```json
+"capabilities": ["process.exec"],
+"processes": [
+  { "id": "install", "command": ["pnpm", "install"] },
+  { "id": "op", "command": ["op", "read"], "appendArgs": true },
+  { "id": "dev", "command": ["pnpm", "dev"], "longRunning": true }
+]
+```
+
+At most 16 entries. `id` follows the command id rules, `command` is not empty
+and each of its arguments is at most 1 KiB. `processes` without `process.exec`,
+or `process.exec` without `processes`, is refused.
+
+| Request | Result |
+|---|---|
+| `process/run {id, worktree, args?, stdin?}` | `{exit, stdout, stderr, truncated, timedOut}`, in a later delivery |
+| `process/start {id, worktree, args?}` | `{run}` |
+| `process/stop {run}` | `{}` |
+
+- The process runs in `worktree`, a local worktree of the project; any other
+  id, or a worktree on a remote host, answers `-32003`.
+- `args` are appended only when the entry has `appendArgs`, at most 32 of up to
+  1 KiB each; otherwise the argv is exactly the manifest's and `args` answers
+  `-32602`. `process/run` takes entries without `longRunning`, `process/start`
+  entries with it.
+- Alas resolves the executable: an absolute path as it is, a path with a slash
+  (`./bin/x`) relative to the worktree, and a bare name on the `PATH` of your
+  login shell. A command it cannot find answers `-32003`.
+- The environment is Alas's own, with your login shell's `PATH`. A plugin
+  cannot set variables: ones like `PATH` or `NODE_OPTIONS` would change what
+  the approved command runs. Secrets are never passed to processes; commands
+  that need credentials use their own login (`op signin`, `gh auth login`).
+- `stdin`, up to 256 KiB of text, is written to `process/run`'s input, which is
+  then closed. Long-running processes get no input.
+- `process/run` keeps the first 512 KiB of output, stdout and stderr together,
+  so its answer fits in a message; `truncated` is `true` when more was
+  dropped. Output is decoded as UTF-8, invalid bytes replaced. After 10 minutes
+  Alas stops the process, kills it 5 seconds later if it is still there, and
+  answers with `timedOut: true`. `exit` is the exit code, or 128 plus the
+  signal number when a signal ended it.
+- An instance has at most 2 processes running, of both kinds; more answer
+  `-32003`. `process/run` also counts towards the 4 requests answered later.
+- A long-running process shows in the Run tab of its worktree, under
+  *Plugins*, named after the plugin and the process id, with its latest output
+  and a Stop button. When it exits the plugin gets
+  `process/exited {run, exit}`. `process/stop` stops one by its `run`.
+- When the plugin stops, is disabled or fails, Alas stops all its processes,
+  and nothing it started answers the next instance. Stopping sends `SIGTERM` to
+  the process and its process group, then `SIGKILL` after 5 seconds.
+
+### `files.read` and `files.write`
+
+| Request | Capability | Result |
+|---|---|---|
+| `file/read {worktree, path}` | `files.read` | `{content}` |
+| `file/list {worktree, dir}` | `files.read` | `{entries: [{name, kind}], truncated}` |
+| `file/write {worktree, path, content}` | `files.write` | `{}` |
+
+- Paths are relative to a local worktree of the project; `dir` may be `""` for
+  the worktree itself. Alas refuses absolute paths, `..`, and anything that
+  resolves outside the worktree, through symlinks too, including symlinks that
+  lead nowhere.
+- Nothing named `.git`, compared case-insensitively, can be read, listed or
+  written at any depth, checked on the resolved path: in a linked worktree
+  `.git` points git at the repository, so `.GIT/config` and a symlink into
+  `.git` are refused too. `file/list` leaves `.git` out.
+- `file/read` answers with UTF-8 text of up to 1 MiB; a larger file, one that
+  is not UTF-8, or a reply that does not fit in a message answers `-32003`.
+- `file/list` answers with up to 2000 entries sorted by name, with `kind`
+  `file`, `directory` or `symlink`, and `truncated: true` when there were more.
+- `file/write` writes `content`, up to 1 MiB and within the message limit,
+  replacing the file and creating missing folders inside the worktree. Writes
+  show up in the Changes tab like any other edit.
+- Refusals answer `-32003` with the reason.
