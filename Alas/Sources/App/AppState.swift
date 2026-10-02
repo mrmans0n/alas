@@ -12681,14 +12681,15 @@ final class AppState {
                     return nil
                 }
             },
-            launchSpecTransformer: { [weak self] spec in
+            launchSpecTransformer: { [weak self] spec, allowsPermissionBypass in
                 guard let self else { return spec }
                 let project = self.projects.first(where: { $0.id == worktree.projectId })
                 return self.workspaceACPLaunchSpec(
                     from: spec,
                     remoteHome: nil,
                     treatsHomeAsRemote: project?.host != nil,
-                    useBypassPermissions: project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false
+                    useBypassPermissions: allowsPermissionBypass
+                        && (project.map { self.agentBypassPermissionsEnabled(for: $0) } ?? false)
                 )
             },
             brokerServiceFactory: {
@@ -13114,13 +13115,14 @@ final class AppState {
                     await self?.acpOrchestration.childBlocked(blocker)
                 }
             },
-            launchSpecTransformer: { [weak self] spec in
+            launchSpecTransformer: { [weak self] spec, allowsPermissionBypass in
                 guard let self else { return spec }
                 return self.workspaceACPLaunchSpec(
                     from: spec,
                     remoteHome: launchSpecRemoteHome,
                     treatsHomeAsRemote: pinnedRemoteHost != nil,
-                    useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
+                    useBypassPermissions: allowsPermissionBypass
+                        && checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
                 )
             },
             brokerServiceFactory: {

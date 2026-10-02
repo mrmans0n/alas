@@ -175,9 +175,9 @@ dropped.
 |---|---|
 | `https` only, on the default port | `-32602` (`http`), `-32001` (another port) |
 | The host must be in `network` | `-32001` |
-| Request body up to 1 MiB | `-32602` |
+| Request body up to 512 KiB, and the whole request message within the 1 MiB message limit | `-32602`; a request message over 1 MiB stops the plugin, like any oversized message |
 | 4 requests in flight per instance | `-32003` "too many requests in flight" |
-| Response body up to 1 MiB, UTF-8 text | `-32003`; binary bodies are not supported yet |
+| Response body up to 512 KiB, UTF-8 text, and the whole reply, JSON-encoded, within the 1 MiB message limit | `-32003` "the response is too large for one message"; binary bodies are not supported yet |
 | 30 seconds | `-32003` "request failed: …", as for any network error |
 
 Redirects are followed only to `https` hosts in `network`, and when a header

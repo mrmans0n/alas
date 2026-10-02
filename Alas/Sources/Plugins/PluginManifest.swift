@@ -261,6 +261,10 @@ struct PluginManifest: Equatable, Sendable {
             case (_, nil), (.string, .string?), (.bool, .bool?): break
             default: throw .invalidSetting("setting \"\(key)\" has a default of the wrong type")
             }
+            // The same limit the form enforces, so every settings message fits.
+            if case .string(let text)? = entry.defaultValue, text.utf8.count > PluginSettings.maxStringBytes {
+                throw .invalidSetting("setting \"\(key)\" has a default longer than \(PluginSettings.maxStringBytes) bytes")
+            }
             let hosts = entry.hosts ?? []
             if kind == .secret {
                 guard !hosts.isEmpty else { throw .invalidSetting("secret \"\(key)\" needs at least one host") }

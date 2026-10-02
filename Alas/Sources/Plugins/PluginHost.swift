@@ -561,7 +561,7 @@ final class PluginHost {
             return errorReply(id, code: -32001, "host not allowed: \(url.host() ?? params.url)")
         }
         guard (params.body?.utf8.count ?? 0) <= PluginHTTP.maxBodyBytes else {
-            return errorReply(id, code: -32602, "the request body is larger than 1 MiB")
+            return errorReply(id, code: -32602, "the request body is larger than 512 KiB")
         }
         guard fetchesInFlight < Self.maxFetchesInFlight else { return errorReply(id, code: -32003, "too many requests in flight") }
         var request = URLRequest(url: url, timeoutInterval: PluginHTTP.timeout)
@@ -609,11 +609,11 @@ final class PluginHost {
         guard instance == self.instance else { return }
         fetchesInFlight -= 1
         guard state == .active else { return }
-        let tooLarge = "the response body is larger than 1 MiB"
+        let tooLarge = "the response is too large for one message"
         var reply: Data
         switch outcome {
         case .success(let (body, response)):
-            guard body.count <= PluginHTTP.maxBodyBytes else {
+            guard body.count <= PluginHTTP.maxResponseBodyBytes else {
                 reply = errorReply(id, code: -32003, tooLarge)
                 break
             }

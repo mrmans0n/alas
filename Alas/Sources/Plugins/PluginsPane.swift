@@ -222,6 +222,7 @@ private struct PluginTextSetting: View {
             .onAppear { draft = settings.string(key) }
             .onSubmit(commit)
             .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .onDisappear(perform: commit)
     }
 
     private func commit() {
@@ -235,21 +236,27 @@ private struct PluginSecretSetting: View {
     let key: String
     let isSet: Bool
     @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
+            // Saved on Return, when focus leaves, or when Settings closes, so a pasted value is never lost.
             SecureField(isSet ? "Replace" : "Paste a value", text: $draft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 160)
-                .onSubmit {
-                    guard !draft.isEmpty else { return }
-                    settings.setSecret(key, draft)
-                    draft = ""
-                }
+                .focused($focused)
+                .onSubmit(commit)
+                .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+                .onDisappear(perform: commit)
             if isSet {
                 AlasButton(title: "Clear", style: .subtle) { settings.setSecret(key, nil) }
             }
         }
+    }
+
+    private func commit() {
+        guard !draft.isEmpty, settings.setSecret(key, draft) else { return }
+        draft = ""
     }
 }
 

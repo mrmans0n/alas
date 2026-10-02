@@ -286,6 +286,45 @@ struct ACPSessionForkManagerTests {
         #expect(try !store.recentSessions().contains { $0.id == side.id })
     }
 
+    @Test("a side question is not sent when its session can't leave a self-approving mode")
+    func sideQuestionAbortsWithoutReadOnlyMode() async throws {
+        struct SetModeRejected: Error {}
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(resume: nil, close: nil)),
+                authMethods: []
+            ))
+        }
+        client.script(method: "session/new") { _ in
+            Data(#"""
+            {"sessionId":"remote","modes":{"currentModeId":"bypass","availableModes":[
+              {"id":"default","name":"Manual","_meta":{"kind":"standard"}},
+              {"id":"bypass","name":"Bypass","_meta":{"kind":"full_access"}}]}}
+            """#.utf8)
+        }
+        client.script(method: "session/set_mode") { _ in throw SetModeRejected() }
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let parent = manager.createSession(agentId: "claude")
+
+        await #expect(throws: ACPSideQuestionError.unsafeMode) {
+            try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        }
+
+        #expect(client.sent.contains { $0.method == "session/set_mode" })
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+        #expect(manager.sideQuestions[parent.id]?.sessionID == nil)
+        #expect(manager.sideQuestions[parent.id]?.error == ACPSideQuestionError.unsafeMode.errorDescription)
+    }
+
     @Test("streaming agent is ineligible while earlier messages remain eligible")
     func messageEligibility() {
         let session = ACPSession(
