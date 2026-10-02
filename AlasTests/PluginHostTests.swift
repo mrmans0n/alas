@@ -1142,7 +1142,9 @@ struct PluginHostTests {
 
         var handles: [Handle] { lock.withLock { launched } }
 
-        func launch(_ argv: [String], in directory: URL, stdin: Data?) throws -> any PluginProcessHandle {
+        func launch(
+            _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
+        ) throws -> any PluginProcessHandle {
             let handle = Handle(argv: argv, directory: directory)
             lock.withLock { launched.append(handle) }
             return handle
@@ -1221,6 +1223,53 @@ struct PluginHostTests {
         #expect(!host.trace.contains { $0.text.contains(#""exit":137"#) })
     }
 
+    /// Control characters escape to six bytes each, so the output is cut until the reply fits rather than the
+    /// whole result being refused.
+    @Test func processRunReplyAlwaysCarriesTheExitStatus() async throws {
+        let launcher = FakeLauncher()
+        var limits = Self.limits
+        limits.maxMessageBytes = 1024
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1))]], grants: [.processExec], limits: limits,
+            manifest: Self.processManifest, launcher: launcher)
+        await host.activate()
+        launcher.handles[0].emit(.stdout(Data(repeating: 0x01, count: 500)), .exit(5))
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":5"#) == true })
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(#""truncated":true"#) && reply.contains(#"\u0001"#))
+        #expect(reply.utf8.count <= 1024)
+    }
+
+    /// Output is bounded where it is produced, and the reader gets it as one batch, then the truncation, then the exit.
+    @Test(arguments: [(PluginProcessOutput.Keep.head, "abcd"), (.tail, "cdef")])
+    func processOutputIsBoundedBeforeTheReaderSeesIt(keep: PluginProcessOutput.Keep, kept: String) async {
+        let output = PluginProcessOutput(keep: keep, limit: 4, interval: .zero)
+        output.append(Data("abc".utf8), stream: 0)
+        output.append(Data("def".utf8), stream: 0)
+        output.append(Data("e".utf8), stream: 1)
+        output.finish(exit: 3)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        #expect(events == [.stdout(Data(kept.utf8)), .stderr(Data("e".utf8)), .truncated, .exit(3)])
+    }
+
+    /// Stopping reaches a child that left the process group, which a group signal alone would miss.
+    @Test func stoppingAProcessStopsWhatItStarted() async throws {
+        let handle = try PluginFoundationLauncher().launch(
+            ["/bin/sh", "-c", "set -m; sleep 30 & echo $!; wait"], in: FileManager.default.temporaryDirectory, stdin: nil,
+            keep: .head, limit: 1024)
+        var iterator = handle.events.makeAsyncIterator()
+        guard case .stdout(let data)? = await iterator.next(),
+              let child = pid_t(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        else {
+            Issue.record("expected the child's pid")
+            return
+        }
+        handle.terminate()
+        while await iterator.next() != nil {}
+        #expect(await awaitCondition { Darwin.kill(child, 0) != 0 })
+    }
+
     @Test func processRunIsStoppedThenKilledAtTheTimeLimit() async throws {
         let launcher = FakeLauncher()
         let sleeper = Sleeper()
@@ -1262,7 +1311,8 @@ struct PluginHostTests {
 
     /// One real process: the command is found on `PATH` and gets its stdin.
     @Test func theLauncherFindsCommandsAndFeedsStdin() async throws {
-        let handle = try PluginFoundationLauncher().launch(["cat"], in: FileManager.default.temporaryDirectory, stdin: Data("hi".utf8))
+        let handle = try PluginFoundationLauncher().launch(
+            ["cat"], in: FileManager.default.temporaryDirectory, stdin: Data("hi".utf8), keep: .head, limit: 1024)
         var events: [PluginProcessEvent] = []
         for await event in handle.events { events.append(event) }
         #expect(events == [.stdout(Data("hi".utf8)), .exit(0)])

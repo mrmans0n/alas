@@ -740,9 +740,14 @@ final class PluginHost {
             return errorReply(id, code: -32003, "too many requests in flight")
         }
         let argv = entry.command + args
+        // stdout and stderr together, half the message limit, so the reply usually fits as it is; the Run tab keeps
+        // the latest output.
+        let maxOutput = limits.maxMessageBytes / 2
         let handle: any PluginProcessHandle
         do {
-            handle = try launcher.launch(argv, in: directory, stdin: params.stdin.map { Data($0.utf8) })
+            handle = try launcher.launch(
+                argv, in: directory, stdin: params.stdin.map { Data($0.utf8) },
+                keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
         } catch {
             return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
         }
@@ -760,8 +765,6 @@ final class PluginHost {
             return encode(PluginResponse(id: id, result: PluginProcessStartResult(run: run), error: nil))
         }
         let sleep = sleep
-        // stdout and stderr together: half the message limit, so the reply, JSON-escaped, still fits as a rule.
-        let maxOutput = limits.maxMessageBytes / 2
         return replyLater(id) { [weak self] in
             let timeout = Task { () -> Bool in
                 do { try await sleep(Self.processTimeout) } catch { return false }
@@ -779,6 +782,8 @@ final class PluginHost {
                     let room = max(0, maxOutput - stdout.count - stderr.count)
                     if chunk.count > room { truncated = true }
                     if case .stdout = event { stdout.append(chunk.prefix(room)) } else { stderr.append(chunk.prefix(room)) }
+                case .truncated:
+                    truncated = true
                 case .exit(let code):
                     exit = code
                 }
@@ -787,9 +792,32 @@ final class PluginHost {
             let timedOut = await timeout.value
             guard let self else { return Data() }
             if self.instance == instance { self.processes[run] = nil }
-            return self.encode(PluginResponse(id: id, result: PluginProcessRunResult(
+            return self.processRunReply(
+                id, exit: exit, stdout: stdout, stderr: stderr, truncated: truncated, timedOut: timedOut)
+        }
+    }
+
+    /// The run's result, its output cut until the encoded reply fits in a message: control characters escape to six
+    /// bytes, so the raw size does not tell. The exit status always gets through.
+    private func processRunReply(
+        _ id: JSONRPCID, exit: Int32, stdout: Data, stderr: Data, truncated: Bool, timedOut: Bool
+    ) -> Data {
+        var stdout = stdout
+        var stderr = stderr
+        var truncated = truncated
+        while true {
+            let reply = encode(PluginResponse(id: id, result: PluginProcessRunResult(
                 exit: exit, stdout: String(decoding: stdout, as: UTF8.self), stderr: String(decoding: stderr, as: UTF8.self),
                 truncated: truncated, timedOut: timedOut), error: nil))
+            let excess = reply.count - limits.maxMessageBytes
+            guard excess > 0, !(stdout.isEmpty && stderr.isEmpty) else { return reply }
+            // Cuts the longer stream by its share of the excess, at its own escaping rate, so little more than
+            // needed goes and a few passes settle it.
+            truncated = true
+            let longer = stdout.count >= stderr.count ? stdout : stderr
+            let escaped = max(1, encode(String(decoding: longer, as: UTF8.self)).count)
+            let kept = longer.prefix(max(0, longer.count - max(1, (longer.count * excess + escaped - 1) / escaped)))
+            if stdout.count >= stderr.count { stdout = kept } else { stderr = kept }
         }
     }
 
@@ -806,6 +834,8 @@ final class PluginHost {
                     output = String(decoding: output.utf8.suffix(Self.processRunOutputBytes), as: UTF8.self)
                 }
                 processRuns[index].output = output
+            case .truncated:
+                break
             case .exit(let code):
                 exit = code
                 if let index { processRuns[index].exit = code }

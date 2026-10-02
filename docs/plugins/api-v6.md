@@ -251,8 +251,9 @@ or `process.exec` without `processes`, is refused.
 - `stdin`, up to 256 KiB of text, is written to `process/run`'s input, which is
   then closed. Long-running processes get no input.
 - `process/run` keeps the first 512 KiB of output, stdout and stderr together,
-  so its answer fits in a message; `truncated` is `true` when more was
-  dropped. Output is decoded as UTF-8, invalid bytes replaced. After 10 minutes
+  and cuts it further when the escaped answer would not fit in a message, so
+  the answer always carries the exit status; `truncated` is `true` when
+  output was dropped. Output is decoded as UTF-8, invalid bytes replaced. After 10 minutes
   Alas stops the process, kills it 5 seconds later if it is still there, and
   answers with `timedOut: true`. `exit` is the exit code, or 128 plus the
   signal number when a signal ended it.
@@ -264,7 +265,7 @@ or `process.exec` without `processes`, is refused.
   `process/exited {run, exit}`. `process/stop` stops one by its `run`.
 - When the plugin stops, is disabled or fails, Alas stops all its processes,
   and nothing it started answers the next instance. Stopping sends `SIGTERM` to
-  the process and its process group, then `SIGKILL` after 5 seconds.
+  the process and every process it started, then `SIGKILL` after 5 seconds.
 
 ### `files.read` and `files.write`
 
