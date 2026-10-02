@@ -552,7 +552,9 @@ final class AppState {
     }
 #endif
     @ObservationIgnored
-    private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
+    private var acpAuthTerminalExitHandlers: [
+        String: (acpSessionId: ACPSession.ID, onExit: () -> Void)
+    ] = [:]
     @ObservationIgnored
     private var attemptedRemoteHelperHosts: Set<String> = []
     @ObservationIgnored
@@ -5199,6 +5201,7 @@ final class AppState {
     @discardableResult
     func openACPAuthTerminalTab(
         for worktree: Worktree,
+        acpSessionId: ACPSession.ID,
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) throws -> Tab {
@@ -5217,7 +5220,7 @@ final class AppState {
             environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
         if case .terminal(let terminal) = tab {
-            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = (acpSessionId, onExit)
         }
         return tab
     }
@@ -5225,6 +5228,7 @@ final class AppState {
     @discardableResult
     func openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(
         for worktree: Worktree,
+        acpSessionId: ACPSession.ID,
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) async throws -> Tab {
@@ -5243,7 +5247,7 @@ final class AppState {
             environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
         if case .terminal(let terminal) = tab {
-            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = (acpSessionId, onExit)
         }
         return tab
     }
@@ -7903,9 +7907,22 @@ final class AppState {
     /// ahead), returns without side effects.
     func handleTerminalProcessExited(owner: SessionOwnerID, leafId: String, processAlive: Bool) {
         guard !processAlive else { return }
-        let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
+        let authExitHandler = takeACPAuthTerminalExitHandler(terminalId: leafId, owner: owner)
         closePaneForProcessExit(owner: owner, leafId: leafId)
         authExitHandler?()
+    }
+
+    private func takeACPAuthTerminalExitHandler(
+        terminalId: String,
+        owner: SessionOwnerID
+    ) -> (() -> Void)? {
+        guard let handler = acpAuthTerminalExitHandlers.removeValue(forKey: terminalId),
+              tabs.tabs(for: owner).contains(where: {
+                  guard case .acpSession(let tab) = $0 else { return false }
+                  return tab.sessionId == handler.acpSessionId
+              })
+        else { return nil }
+        return handler.onExit
     }
 
     /// Legacy worktree compatibility route. Existing terminal callers retain
@@ -7978,12 +7995,17 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
+            let authExitHandler = takeACPAuthTerminalExitHandler(
+                terminalId: closedLeafId,
+                owner: .worktree(worktreeId)
+            )
             scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
+            authExitHandler?()
         }
     }
 
@@ -9117,10 +9139,15 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = takeACPAuthTerminalExitHandler(
+                        terminalId: leaf.id,
+                        owner: .worktree(worktreeId)
+                    )
                     if cancelRunScriptMonitors {
                         scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
             if case .editor = tab {
@@ -9170,8 +9197,13 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = takeACPAuthTerminalExitHandler(
+                        terminalId: leaf.id,
+                        owner: .worktree(worktreeId)
+                    )
                     scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
         }

@@ -79,10 +79,9 @@ struct ACPAuthNudgeBanner: View {
                 Button(ACPAuthNudgeBannerCopy.buttonTitle(method: terminalMethod)) {
                     onSignIn(terminalMethod)
                 }
-            } else {
-                Button("Reconnect") {
-                    onReconnect()
-                }
+            }
+            Button("Reconnect") {
+                onReconnect()
             }
         }
         .padding(.horizontal, 12)
