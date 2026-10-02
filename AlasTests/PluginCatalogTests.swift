@@ -48,6 +48,7 @@ struct PluginCatalogTests {
         // Removing it would delete the symlink's target, perhaps someone's checkout.
         RowCase(name: "symlinked in under the id", installed: ("io.x.p", "0.3.0", "new"), expected: .installedLocally, linked: true),
         RowCase(name: "local copies quarantined as duplicates", installed: nil, expected: .installedLocally, quarantined: true),
+        RowCase(name: "release with files added", installed: ("io.x.p", "0.2.0", "old"), expected: .installedLocally, quarantined: true),
     ])
     func rowStateFollowsWhatIsInstalled(_ c: RowCase) throws {
         let entry = Self.entry([Self.version("0.3.0", hash: "new"), Self.version("0.2.0", hash: "old")])
@@ -167,7 +168,9 @@ struct PluginCatalogTests {
         try Data("notes".utf8).write(to: plugin.folder.appending(path: "notes.txt"))
         #expect(await f.manager.uninstall(plugin) == PluginCatalogError.installedLocally.description)
         #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "notes.txt").path))
-        #expect(f.manager.catalogPathIsTaken(id: "io.x.p") == false)
+        // Once rescanned, the row offers neither Remove nor Update for it.
+        await f.manager.reload()
+        #expect(f.manager.catalogPathIsTaken(id: "io.x.p"))
     }
 
     /// A folder at `Plugins/<id>` the catalog did not put there, even a broken one, is the user's.

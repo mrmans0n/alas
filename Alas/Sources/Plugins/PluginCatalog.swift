@@ -55,10 +55,15 @@ enum PluginCatalogRow: Equatable {
 
     /// The catalog installs into a folder named after the id. A plugin is the catalog's only if it sits
     /// there and its files are byte-for-byte a published version.
-    /// `quarantined`: copies of this plugin, or a broken folder at its catalog path, exist but were not loaded.
+    /// `quarantined`: something the catalog does not own holds this plugin: duplicates of it, or anything at its
+    /// catalog path that is not exactly a release (a broken folder, a symlink, a release with added files).
     init(entry: PluginCatalogIndex.Entry, installed: PluginManager.Plugin?, quarantined: Bool = false) {
+        if quarantined {
+            self = .installedLocally
+            return
+        }
         guard let installed else {
-            self = quarantined ? .installedLocally : entry.newestCompatible.map(PluginCatalogRow.install) ?? .incompatible
+            self = entry.newestCompatible.map(PluginCatalogRow.install) ?? .incompatible
             return
         }
         guard installed.isCatalogFolder, entry.versions.contains(where: { $0.hash == installed.hash }) else {
