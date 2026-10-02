@@ -159,14 +159,20 @@ extension AppState {
             guard let script = scripts.first(where: { $0.key == scriptKey }) else { return "unknown run script \(scriptKey)" }
             let record = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
             if record?.status.isActive == true { return "\(script.key) is already running" }
+            // A refusal goes back to the plugin rather than into an alert in front of the user.
+            let result: RunScriptLaunchStart
             if case .finished? = record?.status {
-                restartScript(script, in: worktree)
+                result = restartScript(script, in: worktree, presentsLaunchFailure: false)
             } else if scriptTab(for: script, in: worktree) != nil {
-                restartScript(script, in: worktree)
+                result = restartScript(script, in: worktree, presentsLaunchFailure: false)
             } else {
-                runOrFocusScript(script, in: worktree)
+                result = launchScript(script, in: worktree, presentsLaunchFailure: false)
             }
-            return nil
+            switch result {
+            case .started, .alreadyStarting: return nil
+            case .projectUnavailable: return "the project is unavailable"
+            case let .refused(title, message): return "\(title): \(message)"
+            }
         }
     }
 

@@ -88,6 +88,10 @@ struct PluginWorkspaceSnapshotTests {
         StateCase(before: state(), after: state([("w", 1, true)]), events: ["focus.changed:w"]),
         StateCase(before: state([("w", 1, true)]), after: state(), events: []),
         StateCase(before: state(), after: state(runs: [run("r1", nil)]), events: ["run.started:w:r1::"]),
+        // Still going at the last poll, then restarted before this one: the old run ends as unknown.
+        StateCase(
+            before: state(runs: [run("r1", nil)]), after: state(runs: [run("r2", nil)]),
+            events: ["run.finished:w:r1:unknown:", "run.started:w:r2::"]),
         StateCase(
             before: state(runs: [run("r1", nil)]), after: state(runs: [run("r1", .failed(exitCode: 2))]),
             events: ["run.finished:w:r1:failed:2"]),

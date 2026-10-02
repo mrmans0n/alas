@@ -167,6 +167,13 @@ struct PluginEventState: Equatable, Sendable {
             }
         }
         let runsBefore = Dictionary(old.runs.map { ($0.run, $0) }, uniquingKeysWith: { first, _ in first })
+        // A run still going at the last poll that a restart replaced before this one: its end was never seen.
+        let runsNow = Set(runs.map(\.run))
+        for run in old.runs where run.outcome == nil && !runsNow.contains(run.run) {
+            var finished = PluginEventParams(worktree: run.worktree, script: run.script, run: run.run)
+            finished.outcome = "unknown"
+            events.append(PluginEventMessage(event: .runFinished, params: finished))
+        }
         for run in runs {
             let previous = runsBefore[run.run]
             let params = PluginEventParams(worktree: run.worktree, script: run.script, run: run.run)
