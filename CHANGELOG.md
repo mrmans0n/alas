@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
+
 ## [0.19.22] - 2026-10-02
 
 ### ✨ Features

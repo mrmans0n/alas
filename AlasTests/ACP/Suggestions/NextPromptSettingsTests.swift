@@ -25,6 +25,85 @@ struct NextPromptSettingsTests {
         await state.shutdownNextPromptSuggestions()
     }
 
+    @Test func unfocusedCompletionIsOfferedAfterComposerReturns() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let generationCount = Mutex(0)
+        let inference = NextPromptInference(
+            acquireLease: { try await fixture.store.acquireVerifiedLease() },
+            load: { _ in
+                { _ in
+                    generationCount.withLock { $0 += 1 }
+                    return #"{"suggestion":"Show an example."}"#
+                }
+            }
+        )
+        let state = makeState(fixture, SettingsStore(), inference: inference)
+        await state.enableNextPromptSuggestions()
+        let worktree = Worktree(
+            id: UUID().uuidString,
+            projectId: "p",
+            name: "Test",
+            branch: "test",
+            path: fixture.root,
+            status: .clean,
+            lastActivity: .now
+        )
+        let owner = SessionOwnerID.worktree(worktree.id)
+        let manager = try #require(state.acpManager(for: worktree))
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(id: UUID().uuidString, agentId: "test")
+        session.agentState = .ready
+        state.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak state, weak session] turn in
+            guard let state, let session,
+                  state.nextPromptActiveIncarnation == turn.incarnation,
+                  state.nextPromptComposerEnvironment.hasComposerFocus,
+                  state.nextPromptComposerEnvironment.hasKeyWindow else { return nil }
+            return state.nextPromptSnapshot(
+                session: session,
+                turn: turn,
+                environment: state.nextPromptComposerEnvironment
+            )
+        }
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(
+            sessionID: session.id,
+            incarnation: session.incarnation,
+            promptID: session.allocatePromptID(),
+            userMessageID: userID,
+            transcriptRevision: session.transcript.messagesGeneration
+        )
+
+        state.nextPromptCompleted(turn, owner: owner)
+        #expect(state.nextPromptCoordinator.generationTask == nil)
+
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+        environment.hasKeyWindow = true
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        await state.nextPromptCoordinator.generationTask?.value
+        #expect(state.nextPromptCoordinator.offer == "Show an example.")
+        #expect(generationCount.withLock { $0 } == 1)
+
+        environment.hasComposerFocus = false
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        #expect(state.nextPromptCoordinator.offer == nil)
+        environment.hasComposerFocus = true
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        #expect(state.nextPromptCoordinator.offer == "Show an example.")
+        #expect(generationCount.withLock { $0 } == 1)
+
+        state.dismissNextPromptOffer(owner: owner, sessionID: session.id)
+        state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        #expect(state.nextPromptCoordinator.offer == nil)
+        await state.shutdownNextPromptSuggestions()
+    }
+
     @Test(arguments: ["stream", "delivery", "pending message"])
     func delegatedChildWorkBlocksAndInvalidatesParentSuggestions(_ work: String) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
@@ -53,8 +132,8 @@ struct NextPromptSettingsTests {
         facts.isActiveVisibleWriter = true
         facts.hasComposerFocus = true
         let environment = facts
-        state.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak state, weak parent] in
-            guard let state, let parent, let turn = state.nextPromptCompletedTurn else { return nil }
+        state.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak state, weak parent] turn in
+            guard let state, let parent else { return nil }
             return state.nextPromptSnapshot(session: parent, turn: turn, environment: environment)
         }
 
@@ -117,8 +196,8 @@ struct NextPromptSettingsTests {
         facts.hasComposerFocus = true
         facts.hasKeyWindow = true
         let environment = facts
-        state.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak state, weak session] in
-            guard let state, let session, let turn = state.nextPromptCompletedTurn else { return nil }
+        state.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak state, weak session] turn in
+            guard let state, let session else { return nil }
             return state.nextPromptSnapshot(session: session, turn: turn, environment: environment)
         }
         let activity = session.nextPromptActivity.sink { [weak state] in state?.nextPromptCoordinator.invalidate() }

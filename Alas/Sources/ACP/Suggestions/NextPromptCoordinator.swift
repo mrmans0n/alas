@@ -71,8 +71,10 @@ final class NextPromptCoordinator: ObservableObject {
     @Published private(set) var offer: String?
     private(set) var generationTask: Task<Void, Never>?
     private let engine: any NextPromptGenerating
-    private let snapshot: @MainActor () -> NextPromptEligibilitySnapshot?
+    private let snapshot: @MainActor (NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot?
     private let clock: NextPromptInference.Clock
+    private var opportunities: [UUID: Opportunity] = [:]
+    private var activeIncarnation: UUID?
     private var requestID: NextPromptRequestID?
     private var epoch: UInt64 = 0
     private var consumedPromptIDs: [UUID: Int] = [:]
@@ -80,9 +82,20 @@ final class NextPromptCoordinator: ObservableObject {
     private var drainTask: Task<Void, Never>?
     private var hasUsedEngine = false
 
+    private struct Opportunity {
+        let turn: NextPromptCompletedTurn
+        var state: State
+
+        enum State {
+            case pending
+            case generating(NextPromptRequestID)
+            case offered(NextPromptRequestID, String)
+        }
+    }
+
     init(engine: any NextPromptGenerating,
          clock: NextPromptInference.Clock = .init(),
-         snapshot: @escaping @MainActor () -> NextPromptEligibilitySnapshot?) {
+         snapshot: @escaping @MainActor (NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot?) {
         self.engine = engine
         self.clock = clock
         self.snapshot = snapshot
@@ -102,17 +115,141 @@ final class NextPromptCoordinator: ObservableObject {
 
     func completed(_ turn: NextPromptCompletedTurn) {
         guard turn.promptID > consumedPromptIDs[turn.incarnation, default: -1] else { return }
-        consumedPromptIDs[turn.incarnation] = turn.promptID
-        let current = snapshot()
-        guard current?.id.incarnation == turn.incarnation || requestID?.incarnation == turn.incarnation else { return }
-        let nextEpoch = epoch &+ 1
-        invalidate()
-        guard epoch == nextEpoch, let current, current.isEligible,
-              current.id.sessionID == turn.sessionID,
-              current.id.incarnation == turn.incarnation,
-              current.id.promptID == turn.promptID,
-              current.id.transcriptRevision == turn.transcriptRevision else { return }
+        if let current = opportunities[turn.incarnation] {
+            guard turn.promptID >= current.turn.promptID else { return }
+            if turn.promptID == current.turn.promptID {
+                reconsider(incarnation: turn.incarnation)
+                return
+            }
+            invalidate(incarnation: turn.incarnation)
+            guard opportunities[turn.incarnation] == nil else { return }
+        }
+        opportunities[turn.incarnation] = Opportunity(turn: turn, state: .pending)
+        reconsider(incarnation: turn.incarnation)
+    }
+
+    /// Rechecks a retained live turn after temporary presentation blockers clear.
+    func reconsider(incarnation: UUID) {
+        guard let opportunity = opportunities[incarnation],
+              let current = matchingSnapshot(for: opportunity.turn) else { return }
+        switch opportunity.state {
+        case .generating:
+            return
+        case .offered(let id, let text):
+            guard current.id == id else {
+                invalidate(incarnation: incarnation)
+                return
+            }
+            if activeIncarnation != incarnation {
+                suspendActive()
+            }
+            activeIncarnation = incarnation
+            requestID = id
+            offer = text
+        case .pending:
+            if activeIncarnation != incarnation {
+                suspendActive()
+            }
+            startGeneration(opportunity.turn, snapshot: current)
+        }
+    }
+
+    /// Hides presentation and cancels in-flight work without consuming the live turn.
+    func suspend(incarnation: UUID) {
+        guard activeIncarnation == incarnation else { return }
+        suspendActive()
+    }
+
+    /// Permanently consumes the retained opportunity for one live session.
+    func invalidate(incarnation: UUID) {
+        guard let opportunity = opportunities[incarnation] else {
+            if activeIncarnation == incarnation { deactivateActive() }
+            return
+        }
+        consumedPromptIDs[incarnation] = max(
+            consumedPromptIDs[incarnation, default: -1],
+            opportunity.turn.promptID
+        )
+        opportunities[incarnation] = nil
+        if activeIncarnation == incarnation { deactivateActive() }
+    }
+
+
+    /// Permanently consumes a prompt even when its completion has not arrived yet.
+    func invalidate(incarnation: UUID, throughPromptID promptID: Int) {
+        invalidate(incarnation: incarnation)
+        consumedPromptIDs[incarnation] = max(
+            consumedPromptIDs[incarnation, default: -1],
+            promptID
+        )
+    }
+    func invalidate(sessionID: String) {
+        let incarnations = opportunities.values
+            .filter { $0.turn.sessionID == sessionID }
+            .map(\.turn.incarnation)
+        for incarnation in incarnations {
+            invalidate(incarnation: incarnation)
+        }
+    }
+
+    /// Permanently consumes the currently presented or generating opportunity.
+    func invalidate() {
+        guard let activeIncarnation else { return }
+        invalidate(incarnation: activeIncarnation)
+    }
+
+    func invalidateAll() {
+        let retained = opportunities.values.map(\.turn)
+        opportunities.removeAll()
+        for turn in retained {
+            consumedPromptIDs[turn.incarnation] = max(
+                consumedPromptIDs[turn.incarnation, default: -1],
+                turn.promptID
+            )
+        }
+        deactivateActive()
+    }
+
+    func shutdown() async {
+        invalidateAll()
+        await drainTask?.value
+    }
+
+    /// Called when the live session object is removed, not when its tab loses focus.
+    func sessionEnded(incarnation: UUID) {
+        opportunities[incarnation] = nil
+        if activeIncarnation == incarnation { deactivateActive() }
+        consumedPromptIDs[incarnation] = nil
+    }
+
+    func takeOffer() -> String? {
+        guard let incarnation = activeIncarnation,
+              let opportunity = opportunities[incarnation],
+              case .offered(let id, let text) = opportunity.state,
+              requestID == id,
+              matchingSnapshot(for: opportunity.turn)?.id == id
+        else {
+            invalidate()
+            return nil
+        }
+        consumedPromptIDs[incarnation] = max(
+            consumedPromptIDs[incarnation, default: -1],
+            opportunity.turn.promptID
+        )
+        opportunities[incarnation] = nil
+        requestID = nil
+        activeIncarnation = nil
+        offer = nil
+        return text
+    }
+
+    private func startGeneration(
+        _ turn: NextPromptCompletedTurn,
+        snapshot current: NextPromptEligibilitySnapshot
+    ) {
+        activeIncarnation = turn.incarnation
         requestID = current.id
+        opportunities[turn.incarnation]?.state = .generating(current.id)
         let request = NextPromptRequest(id: current.id, turns: current.turns)
         let capturedEpoch = epoch
         let deadline = clock.now().advanced(by: .seconds(15))
@@ -121,33 +258,57 @@ final class NextPromptCoordinator: ObservableObject {
         generationTask = Task { [weak self, engine, clock] in
             await previousDrain?.value
             guard !Task.isCancelled, clock.now() < deadline else { return }
-            let text = try? await engine.generate(request)
-            guard let self, self.epoch == capturedEpoch, self.requestID == request.id else { return }
+            let result: Result<String?, Error>
+            do {
+                result = .success(try await engine.generate(request))
+            } catch {
+                result = .failure(error)
+            }
+            guard let self, self.epoch == capturedEpoch, self.requestID == request.id,
+                  self.activeIncarnation == turn.incarnation else { return }
             self.generationTask = nil
             self.deadlineTask?.cancel()
             self.deadlineTask = nil
             guard !Task.isCancelled, clock.now() < deadline,
-                  self.matchesCurrentSnapshot(request.id) else {
-                self.invalidate()
+                  self.matchingSnapshot(for: turn)?.id == request.id else {
+                self.invalidate(incarnation: turn.incarnation)
                 return
             }
-            self.offer = text
-            // @Published stores after notifying; a subscriber may have invalidated this value.
-            if self.epoch != capturedEpoch { self.offer = nil }
+            switch result {
+            case .success(let text?):
+                self.consumedPromptIDs[turn.incarnation] = max(
+                    self.consumedPromptIDs[turn.incarnation, default: -1],
+                    turn.promptID
+                )
+                self.opportunities[turn.incarnation]?.state = .offered(request.id, text)
+                self.offer = text
+                // @Published stores after notifying; a subscriber may have invalidated this value.
+                if self.epoch != capturedEpoch { self.offer = nil }
+            case .success(nil), .failure:
+                self.invalidate(incarnation: turn.incarnation)
+            }
         }
         deadlineTask = Task { [weak self, clock] in
             do {
                 try await clock.sleep(deadline)
                 try Task.checkCancellation()
                 guard let self, self.epoch == capturedEpoch else { return }
-                self.invalidate()
+                self.invalidate(incarnation: turn.incarnation)
             } catch {}
         }
     }
 
-    func invalidate() {
-        // Detach old work before publishing; an observer may start a newer completion.
+    private func suspendActive() {
+        if let incarnation = activeIncarnation,
+           case .generating = opportunities[incarnation]?.state {
+            opportunities[incarnation]?.state = .pending
+        }
+        deactivateActive()
+    }
+
+    private func deactivateActive() {
         requestID = nil
+        activeIncarnation = nil
         epoch &+= 1
         let oldDeadline = deadlineTask
         let oldGeneration = generationTask
@@ -166,30 +327,12 @@ final class NextPromptCoordinator: ObservableObject {
         oldGeneration?.cancel()
     }
 
-    func shutdown() async {
-        invalidate()
-        await drainTask?.value
-    }
-
-    /// Called when the live session object is removed, not when its tab loses focus.
-    func sessionEnded(incarnation: UUID) {
-        consumedPromptIDs[incarnation] = nil
-        if requestID?.incarnation == incarnation { invalidate() }
-    }
-
-    func takeOffer() -> String? {
-        guard let id = requestID else { return nil }
-        guard matchesCurrentSnapshot(id), let text = offer else {
-            invalidate()
-            return nil
-        }
-        requestID = nil
-        offer = nil
-        return text
-    }
-
-    private func matchesCurrentSnapshot(_ id: NextPromptRequestID) -> Bool {
-        guard let current = snapshot() else { return false }
-        return current.isEligible && current.id == id
+    private func matchingSnapshot(for turn: NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot? {
+        guard let current = snapshot(turn), current.isEligible,
+              current.id.sessionID == turn.sessionID,
+              current.id.incarnation == turn.incarnation,
+              current.id.promptID == turn.promptID,
+              current.id.transcriptRevision == turn.transcriptRevision else { return nil }
+        return current
     }
 }

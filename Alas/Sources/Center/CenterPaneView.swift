@@ -676,9 +676,7 @@ struct CenterPaneView: View {
                                 return state.nextPromptCoordinator.takeOffer()
                             },
                             dismissNextPromptOffer: {
-                                if state.nextPromptOwner == suggestionOwner && state.nextPromptSessionID == s.sessionId {
-                                    state.nextPromptCoordinator.invalidate()
-                                }
+                                state.dismissNextPromptOffer(owner: suggestionOwner, sessionID: s.sessionId)
                             },
                             onNextPromptStateChange: { state.nextPromptComposerChanged($0, owner: suggestionOwner, sessionID: s.sessionId) },
                             nextPromptInputBlocked: { state.nextPromptInputBlocked(owner: suggestionOwner, sessionID: s.sessionId) }

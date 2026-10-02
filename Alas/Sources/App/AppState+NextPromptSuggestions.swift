@@ -68,7 +68,7 @@ extension AppState {
             pressure.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.invalidateNextPromptContext()
+                    self.invalidateAllNextPromptContexts()
                     self.sessionSummaryCoordinator.teardown()
                     Task { await self.localTextInference.cancelAndUnload() }
                 }
@@ -86,7 +86,7 @@ extension AppState {
                     guard !Task.isCancelled else { return }
                     guard let self else { return }
                     if value == .unavailable || value == .retryRequired {
-                        self.nextPromptCoordinator.invalidate()
+                        self.nextPromptCoordinator.invalidateAll()
                     }
                     self.nextPromptInferenceState = value
                 }
@@ -98,7 +98,17 @@ extension AppState {
                 let token = NotificationCenter.default.addObserver(
                     forName: name, object: nil, queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.invalidateNextPromptContext() }
+                    MainActor.assumeIsolated { self?.suspendNextPromptPresentation() }
+                }
+                localTextObservers.notifications.append(
+                    AnyCancellable { NotificationCenter.default.removeObserver(token) }
+                )
+            }
+            for name in [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeKeyNotification] {
+                let token = NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reconsiderNextPromptPresentation() }
                 }
                 localTextObservers.notifications.append(
                     AnyCancellable { NotificationCenter.default.removeObserver(token) }
@@ -139,7 +149,7 @@ extension AppState {
     func updateLocalTextModelState(_ value: LocalTextModelState) {
         guard value != localTextModelState else { return }
         if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled {
-            nextPromptCoordinator.invalidate()
+            nextPromptCoordinator.invalidateAll()
         }
         if config.sessionSummariesEnabled || sessionSummariesRuntimeEnabled {
             sessionSummaryCoordinator.teardown()
@@ -288,7 +298,7 @@ extension AppState {
     }
 
     private func beginNextPromptSettingsChange() {
-        nextPromptCoordinator.invalidate()
+        nextPromptCoordinator.invalidateAll()
         nextPromptSettingsGeneration &+= 1
         nextPromptRuntimeEnabled = false
         if !nextPromptDisableSavePending { nextPromptSettingsError = nil }
@@ -327,17 +337,22 @@ extension AppState {
                 let sessionID = session.id
                 self.localTextObservers.sessions[incarnation] = [
                     session.nextPromptActivity.sink { [weak self] in
-                        guard let self,
-                              self.nextPromptActiveIncarnation == incarnation ||
-                              self.delegatedSessionParents[sessionID].map({ $0 == self.nextPromptSessionID }) == true
-                        else { return }
-                        self.nextPromptCoordinator.invalidate()
+                        guard let self else { return }
+                        self.nextPromptCoordinator.invalidate(incarnation: incarnation)
+                        if let parentID = self.delegatedSessionParents[sessionID] {
+                            self.nextPromptCoordinator.invalidate(sessionID: parentID)
+                        }
+                        if self.nextPromptActiveIncarnation == incarnation {
+                            self.nextPromptComposerEpoch &+= 1
+                        }
                     },
                     session.nextPromptTeardown.sink { [weak self] in
                         guard let self else { return }
                         self.nextPromptCoordinator.sessionEnded(incarnation: incarnation)
                         self.localTextObservers.sessions[incarnation] = nil
-                        if self.nextPromptActiveIncarnation == incarnation { self.invalidateNextPromptContext() }
+                        if self.nextPromptActiveIncarnation == incarnation {
+                            self.clearNextPromptPresentationContext()
+                        }
                     }
                 ]
             }
@@ -345,38 +360,69 @@ extension AppState {
     }
 
     func nextPromptCompleted(_ turn: NextPromptCompletedTurn, owner: SessionOwnerID) {
-        guard nextPromptOwner == owner, nextPromptSessionID == turn.sessionID else {
-            nextPromptCoordinator.completed(turn) // Consume hidden turns without replacing active context.
-            return
-        }
-        nextPromptCompletedTurn = turn
-        if nextPromptSnapshot() != nil { nextPromptActiveIncarnation = turn.incarnation }
         nextPromptCoordinator.completed(turn)
     }
 
     func nextPromptComposerChanged(_ environment: NextPromptEligibilitySnapshot.Environment,
                                    owner: SessionOwnerID, sessionID: String) {
         guard environment.hasComposerFocus, environment.hasKeyWindow else {
-            if nextPromptOwner == owner, nextPromptSessionID == sessionID { invalidateNextPromptContext() }
+            if nextPromptOwner == owner, nextPromptSessionID == sessionID {
+                nextPromptComposerEnvironment = environment
+                suspendNextPromptPresentation()
+            }
             return
         }
         if nextPromptOwner != owner || nextPromptSessionID != sessionID {
-            invalidateNextPromptContext()
+            suspendNextPromptPresentation()
             nextPromptOwner = owner
             nextPromptSessionID = sessionID
         }
-        nextPromptActiveIncarnation = acpManager(for: owner)?.sessions[sessionID]?.incarnation
-        if nextPromptComposerEnvironment != environment {
-            nextPromptCoordinator.invalidate()
-            nextPromptComposerEpoch &+= 1
-            nextPromptComposerEnvironment = environment
+        guard let session = acpManager(for: owner)?.sessions[sessionID] else {
+            clearNextPromptPresentationContext()
+            return
         }
+        let incarnation = session.incarnation
+        nextPromptActiveIncarnation = incarnation
+        nextPromptComposerEnvironment = environment
+        if environment.hasPendingInput || environment.hasSelection || environment.hasMarkedText ||
+            environment.isDictating || environment.isPickerPresented {
+            nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1)
+            nextPromptComposerEpoch &+= 1
+            return
+        }
+        nextPromptCoordinator.reconsider(incarnation: incarnation)
     }
 
-    func invalidateNextPromptContext() {
-        nextPromptCoordinator.invalidate()
+    func dismissNextPromptOffer(owner: SessionOwnerID, sessionID: String) {
+        guard nextPromptOwner == owner, nextPromptSessionID == sessionID,
+              let session = acpManager(for: owner)?.sessions[sessionID],
+              session.incarnation == nextPromptActiveIncarnation else { return }
+        nextPromptCoordinator.invalidate(
+            incarnation: session.incarnation,
+            throughPromptID: session.nextPromptID - 1
+        )
         nextPromptComposerEpoch &+= 1
-        nextPromptCompletedTurn = nil
+    }
+
+    func suspendNextPromptPresentation() {
+        guard let incarnation = nextPromptActiveIncarnation else { return }
+        nextPromptCoordinator.suspend(incarnation: incarnation)
+    }
+
+    func reconsiderNextPromptPresentation() {
+        guard let incarnation = nextPromptActiveIncarnation else { return }
+        nextPromptCoordinator.reconsider(incarnation: incarnation)
+    }
+
+
+    func invalidateAllNextPromptContexts() {
+        nextPromptCoordinator.invalidateAll()
+        clearNextPromptPresentationContext()
+    }
+
+    private func clearNextPromptPresentationContext() {
+        nextPromptOwner = nil
+        nextPromptSessionID = nil
         nextPromptActiveIncarnation = nil
         nextPromptComposerEnvironment = .init()
     }
@@ -394,9 +440,10 @@ extension AppState {
         return false
     }
 
-    func nextPromptSnapshot() -> NextPromptEligibilitySnapshot? {
+    func nextPromptSnapshot(for turn: NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot? {
         guard let owner = nextPromptOwner, let id = nextPromptSessionID,
-              let session = acpManager(for: owner)?.sessions[id], let turn = nextPromptCompletedTurn,
+              let session = acpManager(for: owner)?.sessions[id],
+              session.incarnation == turn.incarnation,
               !nextPromptInputBlocked(owner: owner, sessionID: id),
               let native = NSApp.keyWindow?.firstResponder as? ACPNSTextView else { return nil }
         var environment = native.nextPromptInputState

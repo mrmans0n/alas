@@ -197,8 +197,8 @@ final class AppState {
             scheduleCancellation: { action in _ = Task { await action() } }
         )
     }
-    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
-        self?.nextPromptSnapshot()
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
+        self?.nextPromptSnapshot(for: turn)
     }
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
@@ -230,7 +230,6 @@ final class AppState {
     @ObservationIgnored var nextPromptOwner: SessionOwnerID?
     @ObservationIgnored var nextPromptSessionID: String?
     @ObservationIgnored var nextPromptActiveIncarnation: UUID?
-    @ObservationIgnored var nextPromptCompletedTurn: NextPromptCompletedTurn?
     @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
@@ -12262,7 +12261,7 @@ final class AppState {
     /// has to invalidate the view.
     private(set) var delegatedSessionParents: [String: String] = [:] {
         willSet {
-            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidate() }
+            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidateAll() }
         }
     }
 

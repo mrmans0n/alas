@@ -61,7 +61,7 @@ struct NextPromptCoordinatorTests {
         var eligible = true
         var coordinator: NextPromptCoordinator!
         init(clock: NextPromptInference.Clock = .init()) {
-            coordinator = NextPromptCoordinator(engine: generator, clock: clock) { [weak self] in self?.snapshot }
+            coordinator = NextPromptCoordinator(engine: generator, clock: clock) { [weak self] _ in self?.snapshot }
         }
         var id: NextPromptRequestID {
             .init(sessionID: sessionID, incarnation: incarnation, promptID: promptID,
@@ -123,6 +123,35 @@ struct NextPromptCoordinatorTests {
         #expect(fixture.generator.requests.count == 2)
     }
 
+    @Test func terminalComposerActivityBeforeCompletionConsumesTheTurn() {
+        let fixture = Fixture()
+        fixture.coordinator.invalidate(
+            incarnation: fixture.incarnation,
+            throughPromptID: fixture.promptID
+        )
+
+        fixture.coordinator.completed(fixture.turn)
+
+        #expect(fixture.coordinator.generationTask == nil)
+        #expect(fixture.generator.requests.isEmpty)
+    }
+
+    @Test func newerCompletionReplacesAnInactiveRetainedOffer() async throws {
+        let fixture = Fixture()
+        await fixture.start()
+        await fixture.finish()
+        fixture.coordinator.suspend(incarnation: fixture.incarnation)
+
+        fixture.promptID = 2
+        fixture.coordinator.completed(fixture.turn)
+        _ = try #require(fixture.coordinator.generationTask)
+
+        await fixture.generator.waitForStart()
+        #expect(fixture.generator.requests.last?.id.promptID == 2)
+        await fixture.finish()
+        #expect(fixture.coordinator.takeOffer() == "Explain the tradeoff.")
+    }
+
     @Test func recreatedSessionWithSameDurableIDRejectsOldResult() async {
         let fixture = Fixture()
         await fixture.start()
@@ -135,57 +164,84 @@ struct NextPromptCoordinatorTests {
         #expect(fixture.coordinator.takeOffer() != nil)
     }
 
-    @Test func focusLeaveAndReturnRejectsLateResultsAndCannotReplayToken() async {
+    @Test func focusLeaveDuringGenerationReconsidersTheTurnAfterReturn() async {
         let fixture = Fixture()
         await fixture.start()
         let oldTask = fixture.coordinator.generationTask
         fixture.eligible = false
-        fixture.coordinator.invalidate()
+        fixture.coordinator.suspend(incarnation: fixture.incarnation)
         #expect(fixture.coordinator.offer == nil)
-        fixture.eligible = true
-        fixture.coordinator.completed(fixture.turn)
         fixture.generator.finish()
         await oldTask?.value
-        #expect(fixture.coordinator.offer == nil)
-        #expect(fixture.generator.requests.count == 1)
-        fixture.promptID += 1
-        await fixture.start()
+
+        fixture.eligible = true
+        fixture.coordinator.reconsider(incarnation: fixture.incarnation)
+        await fixture.generator.waitForStart()
         await fixture.finish()
-        #expect(fixture.coordinator.takeOffer() != nil)
+
+        #expect(fixture.coordinator.takeOffer() == "Explain the tradeoff.")
+        #expect(fixture.generator.requests.count == 2)
     }
 
-    @Test func ineligibleEventIsConsumedBeforeSnapshotAndOlderCallbackCannotReplaceNewer() async {
+    @Test func ineligibleCompletionStartsWhenTheComposerBecomesEligible() async {
         let fixture = Fixture()
         fixture.eligible = false
-        let older = fixture.turn
-        fixture.coordinator.completed(older)
-        fixture.eligible = true
-        fixture.coordinator.completed(older)
-        #expect(fixture.coordinator.generationTask == nil)
-        fixture.promptID = 2
-        await fixture.start()
-        await fixture.finish()
-        fixture.coordinator.completed(older)
         fixture.coordinator.completed(fixture.turn)
-        #expect(fixture.coordinator.takeOffer() != nil)
+        #expect(fixture.coordinator.generationTask == nil)
+
+        fixture.eligible = true
+        fixture.coordinator.reconsider(incarnation: fixture.incarnation)
+        await fixture.generator.waitForStart()
+        await fixture.finish()
+
+        #expect(fixture.coordinator.takeOffer() == "Explain the tradeoff.")
         #expect(fixture.generator.requests.count == 1)
     }
 
-    @Test func inactiveCompletionIsConsumedWithoutDismissingActiveOffer() async {
+    @Test func duplicateFocusNotificationsDoNotStartConcurrentGeneration() async {
         let fixture = Fixture()
+        fixture.eligible = false
+        fixture.coordinator.completed(fixture.turn)
+        fixture.eligible = true
+
+        fixture.coordinator.reconsider(incarnation: fixture.incarnation)
+        fixture.coordinator.reconsider(incarnation: fixture.incarnation)
+        await fixture.generator.waitForStart()
+
+        #expect(fixture.generator.requests.count == 1)
+        await fixture.finish()
+        #expect(fixture.coordinator.takeOffer() != nil)
+    }
+
+    @Test func inactiveCompletionDoesNotReplaceTheActiveOfferAndRemainsSessionIsolated() async {
+        let fixture = Fixture()
+        let firstIncarnation = fixture.incarnation
         await fixture.start()
         await fixture.finish()
-        let inactiveIncarnation = UUID()
-        let inactiveTurn = NextPromptCompletedTurn(sessionID: "background", incarnation: inactiveIncarnation,
-                                                   promptID: 1, userMessageID: UUID(), transcriptRevision: 1)
-        fixture.coordinator.completed(inactiveTurn)
+
+        let secondIncarnation = UUID()
+        let secondTurn = NextPromptCompletedTurn(
+            sessionID: "background",
+            incarnation: secondIncarnation,
+            promptID: 4,
+            userMessageID: UUID(),
+            transcriptRevision: 9
+        )
+        fixture.coordinator.completed(secondTurn)
         #expect(fixture.coordinator.offer == "Explain the tradeoff.")
-        fixture.coordinator.invalidate()
-        fixture.sessionID = inactiveTurn.sessionID
-        fixture.incarnation = inactiveIncarnation
-        fixture.coordinator.completed(inactiveTurn)
-        #expect(fixture.coordinator.generationTask == nil)
         #expect(fixture.generator.requests.count == 1)
+
+        fixture.coordinator.suspend(incarnation: firstIncarnation)
+        fixture.sessionID = secondTurn.sessionID
+        fixture.incarnation = secondIncarnation
+        fixture.promptID = secondTurn.promptID
+        fixture.transcriptRevision = secondTurn.transcriptRevision
+        fixture.coordinator.reconsider(incarnation: secondIncarnation)
+        await fixture.generator.waitForStart()
+        await fixture.finish()
+
+        #expect(fixture.coordinator.takeOffer() == "Explain the tradeoff.")
+        #expect(fixture.generator.requests.map(\.id.incarnation) == [firstIncarnation, secondIncarnation])
     }
 
     @Test(arguments: ["eligibility", "draft", "focus", "transcript", "settings", "model", "incarnation", "session", "prompt"])
@@ -304,8 +360,8 @@ struct NextPromptCoordinatorTests {
         session.registerSubagent(.init(subagentSessionId: "child"))
         let (_, turn, environment) = readySession(session)
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
         coordinator.completed(turn)
@@ -331,8 +387,8 @@ struct NextPromptCoordinatorTests {
         session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
         let (_, turn, environment) = readySession(session)
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
         coordinator.completed(turn)
@@ -410,8 +466,8 @@ struct NextPromptCoordinatorTests {
     func sessionActivityClearsOfferSynchronously(_ activity: String) async {
         let (session, turn, environment) = readySession()
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
         coordinator.completed(turn)
@@ -447,8 +503,8 @@ struct NextPromptCoordinatorTests {
     func transcriptInvalidatesBeforeArrayAndBufferObserversCanAccept(streaming: Bool) async throws {
         let (session, turn, environment) = readySession()
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let activity = session.nextPromptActivity.sink { coordinator.invalidate() }
         coordinator.completed(turn)
@@ -479,8 +535,8 @@ struct NextPromptCoordinatorTests {
         let (session, firstTurn, environment) = readySession()
         var turn = firstTurn
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
         coordinator.completed(turn)
@@ -513,8 +569,8 @@ struct NextPromptCoordinatorTests {
         withExtendedLifetime(observation) {}
     }
 
-    @Test(arguments: ["settings", "model", "app", "selection", "IME", "pending input", "picker", "dictation", "remount", "memory"])
-    func externalActivityCannotRestoreTheConsumedOpportunity(_ reason: String) async {
+    @Test(arguments: ["settings", "model", "selection", "IME", "pending input", "picker", "dictation", "memory"])
+    func terminalActivityCannotRestoreTheConsumedOpportunity(_ reason: String) async {
         let fixture = Fixture()
         await fixture.start()
         let task = fixture.coordinator.generationTask
@@ -597,8 +653,8 @@ struct NextPromptCoordinatorTests {
         manager.markSessionVisible(id: session.id)
         manager._ownedLeases.insert(session.id)
         let generator = Generator()
-        let coordinator = NextPromptCoordinator(engine: generator) {
-            .live(session: session, turn: turn, environment: environment)
+        let coordinator = NextPromptCoordinator(engine: generator) { candidate in
+            .live(session: session, turn: candidate, environment: environment)
         }
         let activity = session.nextPromptActivity.sink { coordinator.invalidate() }
         var ended = false
