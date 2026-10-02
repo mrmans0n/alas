@@ -65,6 +65,11 @@ struct PluginCatalogTests {
         let manager = PluginManager(
             directory: root, approvals: PluginApprovalStore(defaults: defaults),
             projects: { [] }, actions: { _ in .inert }, catalog: catalog)
+        // A staging folder symlinked elsewhere must not lead install to clean up inside its target.
+        let elsewhere = root.appending(path: "elsewhere")
+        try FileManager.default.createDirectory(at: elsewhere.appending(path: "io.x.p"), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: elsewhere.appending(path: "io.x.p/keep"))
+        try FileManager.default.createSymbolicLink(at: root.appending(path: ".staging"), withDestinationURL: elsewhere)
         await manager.reload()
 
         let failure = await manager.install(Self.entry([Self.version("0.3.0", hash: "wrong")]), Self.version("0.3.0", hash: "wrong"))
@@ -77,6 +82,7 @@ struct PluginCatalogTests {
         #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == hash)
         #expect(!manager.isApproved(plugin))
         #expect(!FileManager.default.fileExists(atPath: root.appending(path: ".staging/io.x.p").path))
+        #expect(FileManager.default.fileExists(atPath: elsewhere.appending(path: "io.x.p/keep").path))
 
         // Edited after the scan the row came from: no longer the catalog's files, so Remove keeps them.
         try Data("globalThis.handle = () => { /* mine */ };".utf8).write(to: plugin.folder.appending(path: "plugin.js"))

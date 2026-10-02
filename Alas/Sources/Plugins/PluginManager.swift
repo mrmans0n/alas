@@ -136,14 +136,22 @@ final class PluginManager {
     /// the folder named after the id. The new files are unapproved, so nothing runs until the user approves.
     /// Returns the failure to show, or nil.
     func install(_ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async -> String? {
+        func describe(_ error: Error) -> String { (error as? PluginCatalogError)?.description ?? error.localizedDescription }
+        // Downloaded and checked outside the serialized queue, so a slow server never holds up reloads or shutdown.
+        let download: (manifest: PluginManifest, manifestData: Data, source: Data)
+        do {
+            download = try await self.download(entry, version)
+        } catch {
+            return describe(error)
+        }
         var failure: String?
         await serialized {
             do {
-                try await self.performInstall(entry, version)
+                try await self.performInstall(entry, version, download)
                 await self.performReload()
             } catch {
                 // Nothing was stopped or replaced, so the installed version keeps running untouched.
-                failure = (error as? PluginCatalogError)?.description ?? error.localizedDescription
+                failure = describe(error)
             }
         }
         return failure
@@ -165,7 +173,10 @@ final class PluginManager {
         Self.discover(in: directory).plugins.first { $0.id == id && $0.isCatalogFolder }
     }
 
-    private func performInstall(_ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async throws {
+    /// The release's two files, checked against the record before anything is written.
+    private func download(
+        _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version
+    ) async throws -> (manifest: PluginManifest, manifestData: Data, source: Data) {
         let id = entry.id
         guard let entryURL = version.entry else { throw PluginCatalogError.hashMismatch }
         let manifestData = try await catalog.fetch(version.manifest)
@@ -183,9 +194,24 @@ final class PluginManager {
         guard Set(manifest.capabilities.map(\.rawValue)) == Set(version.capabilities) else {
             throw PluginCatalogError.invalidDownload("it asks for different capabilities than the catalog lists")
         }
+        return (manifest, manifestData, source)
+    }
+
+    private func performInstall(
+        _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version,
+        _ download: (manifest: PluginManifest, manifestData: Data, source: Data)
+    ) async throws {
+        let id = entry.id
+        let (manifest, manifestData, source) = download
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
         let stagingRoot = directory.appending(path: ".staging")
+        // A symlink here would make the cleanup below delete inside its target; replace it with a real folder.
+        let rootValues = try? stagingRoot.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+        if rootValues?.isSymbolicLink == true || (rootValues != nil && rootValues?.isDirectory != true) {
+            try fileManager.removeItem(at: stagingRoot)  // removes the link itself, not what it points to
+        }
+        try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
         let staging = stagingRoot.appending(path: id)
         try? fileManager.removeItem(at: staging)
         try fileManager.createDirectory(
