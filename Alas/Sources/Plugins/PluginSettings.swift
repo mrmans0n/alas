@@ -95,6 +95,8 @@ final class PluginSettings {
     func setSecret(_ key: String, _ value: String?) -> Bool {
         guard declaration(key)?.kind == .secret else { return false }
         let value = value?.isEmpty == false ? value : nil
+        // Same cap as text settings: a secret ends up in a request header, which nothing else bounds.
+        if let value, value.utf8.count > Self.maxStringBytes { return false }
         guard secrets.setSecret(value.map { Data($0.utf8) }, for: account(key)) else { return false }
         // A store can report success on a failed delete, so a clear counts only once the secret is gone.
         if value == nil, secret(key) != nil { return false }
