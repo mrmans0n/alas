@@ -415,14 +415,9 @@ struct WorktreeRowView: View {
         }
         .task(id: explanationEvidence) {
             guard let explanationEvidence else { return }
-            let completed = await onPrepareWorktreeExplanation(explanationEvidence)
-            guard !completed else { return }
-            do {
-                try await Task.sleep(for: WorktreeExplainerPolicy.retryDelay)
-            } catch {
-                return
+            await WorktreeExplanationRetry.run {
+                await onPrepareWorktreeExplanation(explanationEvidence)
             }
-            _ = await onPrepareWorktreeExplanation(explanationEvidence)
         }
     }
 

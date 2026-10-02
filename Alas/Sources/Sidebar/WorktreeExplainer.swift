@@ -9,6 +9,11 @@ struct WorktreeExplainerEvidence: Hashable, Sendable {
 enum WorktreeExplanationResult: Equatable, Sendable {
     case explanation(String)
     case abstained
+
+    var text: String? {
+        if case let .explanation(text) = self { return text }
+        return nil
+    }
 }
 
 enum WorktreeExplainerPolicy {
@@ -119,6 +124,23 @@ struct WorktreeExplainerSuggester {
     }
 }
 
+enum WorktreeExplanationRetry {
+    @MainActor
+    static func run(
+        delay: Duration = WorktreeExplainerPolicy.retryDelay,
+        prepare: @MainActor () async -> Bool
+    ) async {
+        while !Task.isCancelled {
+            if await prepare() { return }
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class WorktreeExplainerStore {
@@ -132,7 +154,7 @@ final class WorktreeExplainerStore {
     private(set) var explanations: [String: String] = [:]
     @ObservationIgnored private let generate: Generator
     @ObservationIgnored private var currentEvidenceByWorktreeID: [String: WorktreeExplainerEvidence] = [:]
-    @ObservationIgnored private var completed: Set<Key> = []
+    @ObservationIgnored private var results: [Key: WorktreeExplanationResult] = [:]
     @ObservationIgnored private var jobs: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private var tail: Task<Void, Never>?
 
@@ -151,12 +173,13 @@ final class WorktreeExplainerStore {
         let key = Key(worktreeID: worktreeID, evidence: evidence)
         if currentEvidenceByWorktreeID[worktreeID] != evidence {
             currentEvidenceByWorktreeID[worktreeID] = evidence
-            if explanations[worktreeID] != nil { explanations[worktreeID] = nil }
+            let restored = results[key]?.text
+            if explanations[worktreeID] != restored { explanations[worktreeID] = restored }
         }
-        if completed.contains(key) { return true }
+        if results[key] != nil { return true }
         if let job = jobs[key] {
             await job.value
-            return completed.contains(key)
+            return results[key] != nil
         }
 
         let previous = tail
@@ -169,10 +192,11 @@ final class WorktreeExplainerStore {
                 return
             }
             let result = await generate(evidence)
-            if result != nil { completed.insert(key) }
+            if let result { results[key] = result }
             jobs[key] = nil
             if currentEvidenceByWorktreeID[worktreeID] == evidence {
-                if case let .explanation(explanation) = result {
+                let explanation = result?.text
+                if explanations[worktreeID] != explanation {
                     explanations[worktreeID] = explanation
                 }
             }
@@ -184,6 +208,6 @@ final class WorktreeExplainerStore {
         } onCancel: {
             job.cancel()
         }
-        return completed.contains(key)
+        return results[key] != nil
     }
 }

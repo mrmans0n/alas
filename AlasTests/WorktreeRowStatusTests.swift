@@ -243,6 +243,39 @@ struct WorktreeRowStatusTests {
     }
 
     @Test @MainActor
+    func cachedWorktreeExplanationIsRestoredWhenEvidenceReverts() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let firstEvidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let secondEvidence = WorktreeExplainerEvidence(branch: "fix-shadow", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: firstEvidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: "Explain first worktree")
+        #expect(await first.value)
+        let second = Task { await store.prepare(worktreeID: "worktree", evidence: secondEvidence) }
+        await probe.waitForCallCount(2)
+        await probe.finishNext(with: "Explain second worktree")
+        #expect(await second.value)
+
+        #expect(await store.prepare(worktreeID: "worktree", evidence: firstEvidence))
+        #expect(store.explanation(for: "worktree", evidence: firstEvidence) == "Explain first worktree")
+        #expect(await probe.receivedEvidence == [firstEvidence, secondEvidence])
+    }
+
+    @Test @MainActor
+    func worktreeExplanationRetriesUntilPreparationCompletes() async {
+        var attempts = 0
+
+        await WorktreeExplanationRetry.run(delay: .zero) {
+            attempts += 1
+            return attempts == 3
+        }
+
+        #expect(attempts == 3)
+    }
+
+    @Test @MainActor
     func generatedExplanationInvalidatesObservation() async {
         let probe = WorktreeExplainerGenerationProbe()
         let store = WorktreeExplainerStore { await probe.generate($0) }
