@@ -15,6 +15,7 @@ struct RemotePeerConnectionTests {
     /// as distinct from an upgrade the server actually refused. Answers any
     /// non-upgrade request (e.g. `/health`) with a plain 200, so a link's
     /// own health probe reads this Mac as reachable.
+    /// Configured frames instead keep the upgraded socket open until `stop()`.
     @MainActor
     private final class HandshakeThenDropServer {
         private(set) var port: UInt16?
@@ -30,9 +31,12 @@ struct RemotePeerConnectionTests {
         ///   client never sees any HTTP response, simulating a reset before
         ///   any reply arrives (e.g. the peer restarting mid-handshake).
         private let upgradeResponseStatus: String?
+        private let framesAfterUpgrade: Data
+        private var connections: [NWConnection] = []
 
-        init(upgradeResponseStatus: String? = "101 Switching Protocols") {
+        init(upgradeResponseStatus: String? = "101 Switching Protocols", framesAfterUpgrade: Data = Data()) {
             self.upgradeResponseStatus = upgradeResponseStatus
+            self.framesAfterUpgrade = framesAfterUpgrade
         }
 
         func start() throws {
@@ -46,7 +50,14 @@ struct RemotePeerConnectionTests {
                     self.port = assigned
                 }
             }
-            listener.newConnectionHandler = { [queue, upgradeResponseStatus] conn in
+            listener.newConnectionHandler = { [weak self, queue, upgradeResponseStatus, framesAfterUpgrade] conn in
+                Task { @MainActor [weak self] in
+                    guard let self, self.listener === listener else {
+                        conn.cancel()
+                        return
+                    }
+                    self.connections.append(conn)
+                }
                 conn.start(queue: queue)
                 var buffer = Data()
                 func receiveLoop() {
@@ -71,8 +82,12 @@ struct RemotePeerConnectionTests {
                                     .trimmingCharacters(in: .whitespaces) ?? ""
                                 let accept = RemoteConnection.acceptKey(for: key)
                                 let response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n"
-                                conn.send(content: Data(response.utf8), completion: .contentProcessed { _ in
-                                    conn.cancel()   // drop immediately — no hello frame ever sent
+                                var responseData = Data(response.utf8)
+                                responseData.append(framesAfterUpgrade)
+                                conn.send(content: responseData, completion: .contentProcessed { error in
+                                    if error != nil || framesAfterUpgrade.isEmpty {
+                                        conn.cancel()
+                                    }
                                 })
                             } else {
                                 let body = #"{"ok":true,"federationEnabled":true}"#
@@ -94,6 +109,8 @@ struct RemotePeerConnectionTests {
         func stop() {
             listener?.cancel()
             listener = nil
+            connections.forEach { $0.cancel() }
+            connections.removeAll()
         }
     }
 
@@ -173,6 +190,72 @@ struct RemotePeerConnectionTests {
         #expect(events.origins == [origin])
         #expect(link.lastOrigin == origin)
         #expect(events.states.first == .connecting)
+    }
+
+    @Test func receivesLegacyLargeTranscriptSnapshotAndFollowingMessage() async throws {
+        let row = RemoteWireMessage(
+            stableId: "large-agent-message", kind: "agent",
+            text: String(repeating: "Legacy transcript text.\n", count: 550_000),
+            json: nil, index: 0
+        )
+        let snapshot = RemoteServerMessage.transcriptSnapshot(
+            sessionId: "legacy-session", streamingState: "idle", canDrive: true,
+            messages: [row], firstIndex: 0, totalCount: 1, epoch: 3, revision: 7
+        )
+        let encoder = JSONEncoder()
+        let snapshotData = try encoder.encode(snapshot)
+        // Bypass the gateway so newer snapshot batching cannot mask the
+        // URLSession default 1 MiB receive limit when talking to older peers.
+        #expect(snapshotData.count > 1_048_576)
+        #expect(snapshotData.count < WebSocketFrame.maxPayloadLength)
+        var frames = WebSocketFrame.encode(
+            opcode: .text,
+            payload: try encoder.encode(RemoteServerMessage.hello(
+                protocolVersion: RemoteProtocolVersion.current, serverId: "srv-a", name: "Mac A"
+            ))
+        )
+        frames.append(WebSocketFrame.encode(opcode: .text, payload: snapshotData))
+        frames.append(WebSocketFrame.encode(
+            opcode: .text,
+            payload: try encoder.encode(RemoteServerMessage.sessionRenamed(
+                sessionId: "legacy-session", title: "After snapshot"
+            ))
+        ))
+        let server = HandshakeThenDropServer(framesAfterUpgrade: frames)
+        try server.start()
+        defer { server.stop() }
+        try await waitUntil { server.port != nil }
+        let port = try #require(server.port)
+        let events = Events()
+        let link = RemotePeerConnection(
+            origins: ["http://127.0.0.1:\(port)"], lastOrigin: nil,
+            token: "legacy-peer-token", config: fastConfig()
+        ) { events.all.append($0) }
+        link.connect()
+        defer { link.disconnect() }
+        try await waitUntil { events.messages.count >= 2 }
+        guard case .transcriptSnapshot(
+            let sessionId, let state, let canDrive, let messages,
+            let firstIndex, let totalCount, let epoch, let revision
+        ) = events.messages[0] else {
+            Issue.record("Expected the complete legacy transcript snapshot")
+            return
+        }
+        #expect(sessionId == "legacy-session")
+        #expect(state == "idle")
+        #expect(canDrive)
+        #expect(messages == [row])
+        #expect(firstIndex == 0)
+        #expect(totalCount == 1)
+        #expect(epoch == 3)
+        #expect(revision == 7)
+        guard case .sessionRenamed(let renamedSessionId, let title) = events.messages[1] else {
+            Issue.record("Expected the message following the large snapshot")
+            return
+        }
+        #expect(renamedSessionId == "legacy-session")
+        #expect(title == "After snapshot")
+        #expect(link.state == .online)
     }
 
     @Test func fallsBackToTheNextOriginWhenTheFirstIsDead() async throws {
