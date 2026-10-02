@@ -255,6 +255,10 @@ struct RightPaneView: View {
                 onAction: { action in handle(action, rps: rps) }
             )
         }
+        // A panel that stops being offered is forgotten, so it cannot take over the pane when it comes back.
+        .onChange(of: panels.map(\.ref), initial: true) { _, refs in
+            if let selected = rps.activePluginPanel, !refs.contains(selected) { rps.activePluginPanel = nil }
+        }
     }
 
     private func paneToolbar(rps: RightPaneState, panelTitle: String?) -> some View {
