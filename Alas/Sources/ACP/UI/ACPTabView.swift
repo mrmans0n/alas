@@ -790,7 +790,6 @@ private struct ACPSessionView: View {
                 hasAttachments: !attachments.isEmpty,
                 intent: intent,
                 isAvailable: !isMirror && !session.readOnlyRestricted
-                    && ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId)
             ) {
             case .passThrough:
                 break
@@ -1313,6 +1312,9 @@ private struct ACPSideQuestionSlot: View {
             ACPSideQuestionCard(
                 entry: entry,
                 side: side,
+                enforcesReadOnly: manager.liveSession(for: parentID).map {
+                    ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: $0.agentId)
+                } ?? true,
                 policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
                 typography: typography,
                 onAsk: { text, completion in
@@ -1349,7 +1351,25 @@ private struct ACPSideQuestionSlot: View {
                 onCancelTurn: {
                     guard let side, let runner = manager.runners[side.id] else { return }
                     Task { await runner.userCancel() }
-                }
+                },
+                inputActions: ACPSideQuestionInputActions(
+                    onUserInput: { token, action in
+                        guard let side else { return }
+                        manager.respondToUserInput(for: side.id, token: token, action: action)
+                    },
+                    onPlan: { requestId, response in
+                        guard let side else { return }
+                        manager.respondToPlan(for: side.id, requestId: requestId, response)
+                    },
+                    onOpenURL: { token in
+                        guard let side else { return false }
+                        return await manager.openElicitationURL(for: side.id, token: token)
+                    },
+                    onDismissURLWait: { elicitationId in
+                        guard let side else { return }
+                        manager.dismissElicitationURLWait(for: side.id, elicitationId: elicitationId)
+                    }
+                )
             )
             .id(entry.id)
             .transition(.move(edge: .bottom).combined(with: .opacity))

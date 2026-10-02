@@ -286,20 +286,24 @@ struct ACPSessionForkManagerTests {
         #expect(try !store.recentSessions().contains { $0.id == side.id })
     }
 
+    // Can't leave a self-approving mode.
+    private nonisolated static let bypassOnly = #"""
+        {"sessionId":"remote","modes":{"currentModeId":"bypass","availableModes":[
+          {"id":"default","name":"Manual","_meta":{"kind":"standard"}},
+          {"id":"bypass","name":"Bypass","_meta":{"kind":"full_access"}}]}}
+        """#
+    private nonisolated static let noModes = #"{"sessionId":"remote"}"#
+
     @Test(
-        "a side question is not sent unless its session is in a read-only mode",
+        "a side question needs a read-only mode only on agents whose read-only mode holds",
         arguments: [
-            // Can't leave a self-approving mode.
-            #"""
-            {"sessionId":"remote","modes":{"currentModeId":"bypass","availableModes":[
-              {"id":"default","name":"Manual","_meta":{"kind":"standard"}},
-              {"id":"bypass","name":"Bypass","_meta":{"kind":"full_access"}}]}}
-            """#,
-            // Advertises no mode to check.
-            #"{"sessionId":"remote"}"#,
+            ("claude", bypassOnly, false),
+            ("claude", noModes, false),
+            ("opencode", bypassOnly, true),
+            ("opencode", noModes, true),
         ]
     )
-    func sideQuestionAbortsWithoutReadOnlyMode(sessionNewResponse: String) async throws {
+    func sideQuestionReadOnlyMode(agentId: String, sessionNewResponse: String, sends: Bool) async throws {
         struct SetModeRejected: Error {}
         let client = ACPMockClient()
         client.script(method: "initialize") { _ in
@@ -319,15 +323,18 @@ struct ACPSessionForkManagerTests {
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
-        let parent = manager.createSession(agentId: "claude")
+        let parent = manager.createSession(agentId: agentId)
 
-        await #expect(throws: ACPSideQuestionError.unsafeMode) {
-            try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        let side = try? await manager.startSideQuestion(parentID: parent.id, question: "why?")
+
+        #expect((side != nil) == sends)
+        #expect(manager.sideQuestions[parent.id]?.isSubmitted == sends)
+        if !sends {
+            #expect(!client.sent.contains { $0.method == "session/prompt" })
+            #expect(manager.sideQuestions[parent.id]?.sessionID == nil)
+            #expect(manager.sideQuestions[parent.id]?.error == ACPSideQuestionError.unsafeMode.errorDescription)
         }
-
-        #expect(!client.sent.contains { $0.method == "session/prompt" })
-        #expect(manager.sideQuestions[parent.id]?.sessionID == nil)
-        #expect(manager.sideQuestions[parent.id]?.error == ACPSideQuestionError.unsafeMode.errorDescription)
+        if let side { await manager.detach(sessionId: side.id) }
     }
 
     @Test("streaming agent is ineligible while earlier messages remain eligible")

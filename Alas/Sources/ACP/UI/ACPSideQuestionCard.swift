@@ -8,6 +8,15 @@ typealias ACPSideQuestionAsk = (
     _ completion: @escaping @MainActor (Bool) -> Void
 ) -> Bool
 
+/// Answers the side agent's input requests: forms, Cursor plan approvals,
+/// and URL elicitations, as the main transcript does.
+struct ACPSideQuestionInputActions {
+    let onUserInput: (UUID, ACPUserInputAction) -> Void
+    let onPlan: (JSONRPCID, ACPCursorPlanResponse) -> Void
+    let onOpenURL: (UUID) async -> Bool
+    let onDismissURLWait: (String) -> Void
+}
+
 /// Floating card above the composer that shows a `/btw` side question and
 /// its answer. The answer comes from a hidden, read-only fork and never
 /// enters the parent's transcript.
@@ -15,6 +24,8 @@ struct ACPSideQuestionCard: View {
     let entry: ACPSideQuestion
     /// Nil until the side session exists.
     let side: ACPSession?
+    /// Whether the agent's read-only mode holds; see `ACPSideQuestionSupportPolicy`.
+    let enforcesReadOnly: Bool
     /// Looked up when a permission request shows, so a reconnect's new
     /// runner answers it rather than the stopped one.
     let policy: () -> ACPPermissionPolicy?
@@ -27,6 +38,7 @@ struct ACPSideQuestionCard: View {
     let onRetryQueued: (UUID) -> Void
     let onRemoveQueued: (UUID) -> Void
     let onCancelTurn: () -> Void
+    let inputActions: ACPSideQuestionInputActions
 
     var body: some View {
         if let side {
@@ -42,7 +54,9 @@ struct ACPSideQuestionCard: View {
                 onKeep: onKeep,
                 onRetryQueued: onRetryQueued,
                 onRemoveQueued: onRemoveQueued,
-                onCancelTurn: onCancelTurn
+                onCancelTurn: onCancelTurn,
+                inputActions: inputActions,
+                enforcesReadOnly: enforcesReadOnly
             )
         } else {
             ACPSideQuestionCardChrome(
@@ -57,6 +71,8 @@ struct ACPSideQuestionCard: View {
                     hasOutput: false
                 ),
                 modelName: nil,
+                enforcesReadOnly: enforcesReadOnly,
+                needsAttention: false,
                 answer: nil,
                 hasContent: false,
                 // Retry after a failure; not while the question is starting.
@@ -82,6 +98,8 @@ struct ACPSideQuestionCard: View {
         let onRetryQueued: (UUID) -> Void
         let onRemoveQueued: (UUID) -> Void
         let onCancelTurn: () -> Void
+        let inputActions: ACPSideQuestionInputActions
+        let enforcesReadOnly: Bool
 
         @Environment(\.theme) private var theme
 
@@ -113,7 +131,7 @@ struct ACPSideQuestionCard: View {
 
         private var awaitingInputNotice: some View {
             VStack(alignment: .leading, spacing: 4) {
-                Text("The side agent is asking for input that side questions can't answer.")
+                Text("The side agent is waiting for input the card can't show.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(theme.color("fg-muted"))
                 Button("Cancel turn", action: onCancelTurn).controlSize(.small)
@@ -149,6 +167,9 @@ struct ACPSideQuestionCard: View {
                 question: entry.question,
                 phase: phase,
                 modelName: side.currentModelDisplayName,
+                enforcesReadOnly: enforcesReadOnly,
+                needsAttention: transcript.pendingPermission != nil || transcript.pendingPlan != nil
+                    || !transcript.pendingUserInputs.isEmpty,
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
                 hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty,
                 // A follow-up before the first question is sent would run first.
@@ -176,9 +197,33 @@ struct ACPSideQuestionCard: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(theme.color("fg-faint"))
                     }
-                    // Plan approvals and input requests have no place in the
+                    if let pendingPlan = transcript.pendingPlan {
+                        ACPPlanApprovalPrompt(plan: pendingPlan.params) { response in
+                            inputActions.onPlan(pendingPlan.id, response)
+                        }
+                        // A queued plan must not inherit the last one's rejection reason.
+                        .id(pendingPlan.id)
+                    }
+                    if let request = transcript.pendingUserInputs.first {
+                        ACPUserInputPrompt(
+                            request: request,
+                            onRespond: inputActions.onUserInput,
+                            onOpenURL: inputActions.onOpenURL
+                        )
+                        .id(request.id)
+                    }
+                    ForEach(transcript.urlElicitationWaits) { wait in
+                        ACPURLElicitationWaitView(
+                            wait: wait,
+                            onOpenAgain: { NSWorkspace.shared.open($0) },
+                            onDismiss: inputActions.onDismissURLWait
+                        )
+                    }
+                    // Anything else the agent waits on has no place in the
                     // card; let the user end the turn instead of waiting.
-                    if transcript.streamingState == .awaitingInput, transcript.pendingPermission == nil {
+                    if transcript.streamingState == .awaitingInput, transcript.pendingPermission == nil,
+                       transcript.pendingPlan == nil, transcript.pendingUserInputs.isEmpty,
+                       transcript.urlElicitationWaits.isEmpty {
                         awaitingInputNotice
                     }
                     // Follow-ups wait here until the current turn ends; a
@@ -285,6 +330,9 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     let question: String
     let phase: ACPSideQuestionPhase
     let modelName: String?
+    let enforcesReadOnly: Bool
+    /// The agent is waiting on the user; a collapsed card opens.
+    let needsAttention: Bool
     /// The latest answer, for Copy and Insert; nil until there is one.
     let answer: String?
     let hasContent: Bool
@@ -303,10 +351,19 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !isCollapsed {
+            // Collapsing hides the body rather than removing it, so a
+            // half-filled input prompt keeps what the user typed.
+            VStack(alignment: .leading, spacing: 0) {
                 body(for: phase)
                 footer
             }
+            .frame(height: isCollapsed ? 0 : nil, alignment: .top)
+            .clipped()
+            .opacity(isCollapsed ? 0 : 1)
+            // Disabling resigns focus anywhere in the hidden body, including
+            // the prompts' own fields, so it can't keep taking keystrokes.
+            .disabled(isCollapsed)
+            .accessibilityHidden(isCollapsed)
         }
         .background(
             RoundedRectangle(cornerRadius: 12)
@@ -322,6 +379,9 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
                 .hidden()
         }
         .onAppear { fieldFocused = phase == .composing }
+        .onChange(of: needsAttention) { _, needed in
+            if needed { isCollapsed = false }
+        }
     }
 
     private var header: some View {
@@ -335,12 +395,15 @@ private struct ACPSideQuestionCardChrome<Content: View>: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
-            Text("read-only")
+            Text(enforcesReadOnly ? "read-only" : "read-only, not enforced")
                 .font(.system(size: 10.5))
-                .foregroundStyle(theme.color("fg-muted"))
+                .foregroundStyle(theme.color(enforcesReadOnly ? "fg-muted" : "warn"))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
                 .overlay(Capsule().strokeBorder(theme.color("line")))
+                .help(enforcesReadOnly
+                    ? "The side agent runs in a read-only mode, and Alas rejects writes and commands."
+                    : "This agent can run tools without asking, so it may still change files or run commands. Alas rejects the writes and commands it's asked about.")
             status
             Button { isCollapsed.toggle() } label: {
                 Image(systemName: isCollapsed ? "chevron.up" : "chevron.down")
