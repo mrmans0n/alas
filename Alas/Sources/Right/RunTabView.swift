@@ -747,7 +747,7 @@ private struct PluginProcessRowView: View {
                 .font(.system(size: 10.5))
                 .foregroundColor(theme.color("fg-faint"))
                 .padding(.leading, 13)
-            Text(item.run.command.joined(separator: " "))
+            Text(PluginArgv.display(item.run.command))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
                 .lineLimit(1)

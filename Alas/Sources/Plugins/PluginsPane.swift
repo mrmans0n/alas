@@ -347,7 +347,7 @@ private struct PluginApprovalSheet: View {
                     .font(.subheadline.weight(.semibold))
                 ForEach(fullAccess, id: \.self) { Text("• \($0.summary)") }
                 ForEach(manifest.processes, id: \.id) { process in
-                    Text(process.command.joined(separator: " ") + (process.appendArgs ? " …" : ""))
+                    Text(PluginArgv.display(process.command) + (process.appendArgs ? " …" : ""))
                         .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
                         .padding(.leading, 12)
                 }

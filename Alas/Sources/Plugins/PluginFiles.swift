@@ -65,6 +65,8 @@ enum PluginFiles {
             guard let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
                 return .failure(.notFound(dir.isEmpty ? "." : dir))
             }
+            // ponytail: every name is read and sorted before the cap, off the main actor; enumerate with a bound if
+            // directories of millions of entries show up.
             let visible = names.filter { $0.lowercased() != ".git" }.sorted()
             // Names that JSON-escape badly could still overflow the reply, so the list also stops at half the
             // message limit of encoded names.
@@ -133,12 +135,12 @@ struct PluginFileWriteParams: Decodable, Sendable {
     let content: String
 }
 
-struct PluginFileReadResult: Encodable, Equatable {
+struct PluginFileReadResult: Encodable, Equatable, Sendable {
     let content: String
 }
 
-struct PluginFileListResult: Encodable, Equatable {
-    struct Entry: Encodable, Equatable {
+struct PluginFileListResult: Encodable, Equatable, Sendable {
+    struct Entry: Encodable, Equatable, Sendable {
         let name: String
         let kind: String
     }

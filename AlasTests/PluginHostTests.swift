@@ -1280,6 +1280,29 @@ struct PluginHostTests {
         #expect(events == [.stdout(Data(kept.utf8)), .stderr(Data("e".utf8)), .truncated, .exit(3)])
     }
 
+    @Test(arguments: [
+        (["git", "status"], "git status"),
+        (["sh", "-c", "a b"], #"sh -c "a b""#),
+        (["x", ""], #"x """#),
+        (["echo", "a\nApprove everything"], #"echo "a\u{a}Approve everything""#),
+        (["echo", "\u{202E}txt.exe", #"q"\"#], #"echo "\u{202e}txt.exe" "q\"\\""#),
+    ])
+    func argvDisplayKeepsEveryArgumentDistinct(argv: [String], shown: String) {
+        #expect(PluginArgv.display(argv) == shown)
+    }
+
+    /// Bytes split anywhere, a multibyte character included, read the same once joined; a character the limit cuts
+    /// at the front is left out.
+    @Test(arguments: [(1, 64, "aé€b"), (2, 64, "aé€b"), (4, 64, "aé€b"), (3, 5, "€b")])
+    func processRunOutputDecodesAcrossBatches(chunk: Int, limit: Int, shown: String) {
+        var run = PluginProcessRun(id: "p1", process: "x", worktree: "wt", command: [])
+        let bytes = Array("aé€b".utf8)
+        for start in stride(from: 0, to: bytes.count, by: chunk) {
+            run.append(Data(bytes[start..<min(start + chunk, bytes.count)]), keeping: limit)
+        }
+        #expect(run.output == shown)
+    }
+
     /// Stopping reaches a child that left the process group, which a group signal alone would miss.
     @Test func stoppingAProcessStopsWhatItStarted() async throws {
         let handle = try PluginFoundationLauncher().launch(
@@ -1395,6 +1418,7 @@ struct PluginHostTests {
         let host = try makeHost(
             [[.send(activateOK), .send(c.request)]], grants: c.grants, limits: c.limits ?? Self.limits, manifest: Self.processManifest, worktreeRoot: root)
         await host.activate()
+        #expect(await awaitCondition { replies(host).count == 2 })
         let reply = try #require(lastReply(host))
         #expect(reply.contains(c.reply))
         if let absent = c.absent { #expect(!reply.contains(absent)) }

@@ -698,13 +698,19 @@ final class PluginHost {
         }
     }
 
-    private func fileReply<Result: Encodable>(
-        _ id: JSONRPCID, _ worktree: String, _ work: (URL) -> Swift.Result<Result, PluginFilesError>
-    ) -> Data {
+    /// The filesystem work runs off the main actor, so a large folder or a slow disk does not stall the app; the
+    /// answer comes in a later delivery.
+    private func fileReply<Result: Encodable & Sendable>(
+        _ id: JSONRPCID, _ worktree: String, _ work: @escaping @Sendable (URL) -> Swift.Result<Result, PluginFilesError>
+    ) -> Data? {
         guard let root = actions.worktreePath(worktree) else { return errorReply(id, code: -32003, "unknown worktree \(worktree)") }
-        switch work(root) {
-        case .success(let result): return encode(PluginResponse(id: id, result: result, error: nil))
-        case .failure(let error): return errorReply(id, code: -32003, error.message)
+        return replyLater(id) { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { work(root) }.value
+            guard let self else { return Data() }
+            switch outcome {
+            case .success(let result): return self.encode(PluginResponse(id: id, result: result, error: nil))
+            case .failure(let error): return self.errorReply(id, code: -32003, error.message)
+            }
         }
     }
 
@@ -831,11 +837,7 @@ final class PluginHost {
             switch event {
             case .stdout(let chunk), .stderr(let chunk):
                 guard let index else { continue }
-                var output = processRuns[index].output + String(decoding: chunk, as: UTF8.self)
-                if output.utf8.count > Self.processRunOutputBytes {
-                    output = String(decoding: output.utf8.suffix(Self.processRunOutputBytes), as: UTF8.self)
-                }
-                processRuns[index].output = output
+                processRuns[index].append(chunk, keeping: Self.processRunOutputBytes)
             case .truncated:
                 break
             case .exit(let code):

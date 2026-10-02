@@ -209,12 +209,14 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
         process.terminationHandler = { [weak self] process in
             let status = process.terminationReason == .uncaughtSignal
                 ? 128 + process.terminationStatus : process.terminationStatus
-            self?.settle { $0.exitStatus = status }
-            // What it leaves running goes with it, killed if it outlasts the grace.
-            self?.signalLeftovers(SIGTERM)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
-                self?.signalLeftovers(SIGKILL)
-                self?.settle { $0.openPipes = 0 }
+            guard let self else { return }
+            settle { $0.exitStatus = status }
+            // What it leaves running goes with it, killed if it outlasts the grace. Held until then: the reader may
+            // let go of the handle as soon as the pipes close.
+            signalLeftovers(SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [self] in
+                signalLeftovers(SIGKILL)
+                settle { $0.openPipes = 0 }
             }
         }
         try process.run()
@@ -319,9 +321,40 @@ struct PluginProcessRun: Identifiable, Equatable, Sendable {
     let process: String
     let worktree: String
     let command: [String]
-    /// The latest output, stdout and stderr interleaved as they arrived.
-    var output = ""
+    /// The latest output, stdout and stderr interleaved as they arrived, as bytes: a character split across two
+    /// batches decodes whole.
+    private(set) var bytes = Data()
     var exit: Int32?
+
+    /// A character cut at the front by the limit is left out rather than shown as a replacement.
+    var output: String { String(decoding: bytes.drop { $0 & 0xC0 == 0x80 }, as: UTF8.self) }
+
+    mutating func append(_ chunk: Data, keeping limit: Int) {
+        bytes.append(chunk)
+        if bytes.count > limit { bytes = Data(bytes.suffix(limit)) }
+    }
+}
+
+enum PluginArgv {
+    /// A command line the approval sheet can show without ambiguity: a word of plain characters as it is, anything
+    /// else in double quotes with quotes, backslashes and every character outside printable ASCII escaped, so
+    /// spaces, newlines and bidirectional controls can neither hide an argument's bounds nor fake more text.
+    static func display(_ argv: [String]) -> String {
+        argv.map { arg in
+            let plain = !arg.isEmpty && arg.unicodeScalars.allSatisfy { $0.isASCII && (
+                CharacterSet.alphanumerics.contains($0) || "-_./:=@%+,".unicodeScalars.contains($0)) }
+            if plain { return arg }
+            let escaped = arg.unicodeScalars.map { scalar -> String in
+                switch scalar {
+                case "\\": return "\\\\"
+                case "\"": return "\\\""
+                case " "..."~": return String(scalar)
+                default: return "\\u{\(String(scalar.value, radix: 16))}"
+                }
+            }.joined()
+            return "\"\(escaped)\""
+        }.joined(separator: " ")
+    }
 }
 
 /// A long-running plugin process as the Run tab lists it.
