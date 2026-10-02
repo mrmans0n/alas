@@ -132,6 +132,9 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 expansionSeeds = ACPToolCallGroupExpansionSeeds()
                 observeExpansionSeeds()
                 fold = nil
+                // Ids come from message position, so a new epoch can reuse an
+                // id for a different message: never revive a view across epochs.
+                pool.purgeParked()
             }
             reconciler.apply(
                 specs: specs(host: host),
