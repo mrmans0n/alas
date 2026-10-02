@@ -178,6 +178,12 @@ struct AppStateFocusMainWorktreeTests {
         let clone = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-pullnotif-clone-\(UUID().uuidString)")
         _ = try await Process.git(["clone", "-q", remote.path, clone.path], cwd: nil)
+        // Local to the template clone and inherited by every copy: copies
+        // commit locally (the conflict case) and must not depend on the
+        // developer machine's global identity or signing config.
+        _ = try await Process.git(["config", "user.email", "c@e"], cwd: clone)
+        _ = try await Process.git(["config", "user.name", "c"], cwd: clone)
+        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: clone)
         return GitFixture(clone: clone, remote: remote)
     }
 
@@ -233,14 +239,15 @@ struct AppStateFocusMainWorktreeTests {
         return state
     }
 
-    /// Polls `condition` up to ~5s. The sidebar pull posts asynchronously on
-    /// the main actor after a real git round trip, so the test waits on the
-    /// event instead of a fixed sleep.
+    /// Polls `condition` up to ~5s and reports failure on the deadline. The
+    /// sidebar pull posts asynchronously on the main actor after a real git
+    /// round trip, so the test waits on the event instead of a fixed sleep.
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
+        try #require(condition())
     }
 
     /// The sidebar pull task clears the pulling flag last — after the
