@@ -29,7 +29,10 @@ Plugins/
 
 Alas scans `~/Library/Application Support/Alas/Plugins/`, or `Plugins/` under
 `ALAS_APP_SUPPORT_DIR` when that is set. Symlinked folders are followed. The
-folder name does not matter; only `id` identifies a plugin.
+folder name does not matter; only `id` identifies a plugin. The one exception is
+a folder named exactly after the plugin's `id`: that is where the catalog in
+**Settings → Plugins → Available** installs, and a copy you build into any other
+folder takes precedence over a release there.
 
 ```json
 {

@@ -8,7 +8,11 @@ JSON messages with Alas, and Alas answers only the requests the user approved.
 > **Settings → Advanced → Experimental → Plugins**; the Advanced section appears
 > as **Debug** in the settings sidebar and shows only when `~/.alas/.debug`
 > exists. **Settings → Plugins** then lists installed plugins, where you approve,
-> enable, revoke and restart them and read their logs. Canvas tabs open from
+> enable, revoke and restart them and read their logs. Its **Available** section
+> lists the plugins published in
+> [alas-plugins](https://github.com/mrmans0n/alas-plugins) and installs, updates
+> and removes them; a download is checked against the catalog's hash and still
+> needs your approval before it runs. Canvas tabs open from
 > **View → Plugins**. The API may still change: API 4 replaced the WebAssembly
 > runtime of API 1 to 3 with JavaScript, and older plugins no longer load (see
 > [Migrating](api-v4.md#6-migrating-from-api-1-to-3)). Progress is tracked in
