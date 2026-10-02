@@ -2991,6 +2991,11 @@ final class AppState {
             return
         }
         worktreeUpstreamStatusStore.markPullingUpstream(worktreeID: id)
+        // Captured before the async pull starts: the project row can be
+        // removed while it runs, and a linked worktree's path component is
+        // its branch (the template ends in `{branch}`), not the repo name.
+        let repoName = projectsManager.projects.first(where: { $0.id == worktree.projectId })?.name
+            ?? worktree.path.lastPathComponent
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
@@ -3030,19 +3035,19 @@ final class AppState {
                 switch result {
                 case .clean:
                     self.inAppNotifications.post(
-                        "Pulled \(worktree.branch)",
+                        "Pulled \(worktree.branch) from \(repoName)",
                         severity: .success,
                         worktreeID: bannerWorktreeID
                     )
                 case .conflict:
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) hit conflicts",
+                        "Pull of \(worktree.branch) in \(repoName) hit conflicts",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
                 case .error(let message):
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) failed: \(message)",
+                        "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
@@ -3051,19 +3056,19 @@ final class AppState {
                 switch result {
                 case .clean:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pulled \(worktree.branch)",
+                        body: "Pulled \(worktree.branch) from \(repoName)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .conflict:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) hit conflicts — click to resolve.",
+                        body: "Pull of \(worktree.branch) in \(repoName) hit conflicts — click to resolve.",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .error(let message):
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) failed: \(message)",
+                        body: "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
