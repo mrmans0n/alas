@@ -33,7 +33,8 @@ struct PluginViewTabView: View {
     var body: some View {
         if let root {
             // Every node is keyed by its id, so a re-render keeps focus, scroll position and typing.
-            PluginViewNodeView(node: root, events: PluginViewEvents(host: host, tabIndex: tabIndex, panel: panel))
+            PluginViewNodeView(
+                node: root, events: PluginViewEvents(host: host, tabIndex: tabIndex, panel: panel.map { PluginPanelPlace(panel: $0) }))
                 .id(root.id)
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -44,12 +45,12 @@ struct PluginViewTabView: View {
 struct PluginViewEvents {
     let host: PluginHost
     let tabIndex: Int
-    let panel: String?
+    let panel: PluginPanelPlace?
 
     func send(_ id: String, _ kind: String, _ value: String? = nil) {
         Task {
             if let panel {
-                await host.viewEvent(panel: panel, id: id, kind: kind, value: value)
+                await host.viewEvent(place: panel, id: id, kind: kind, value: value)
             } else {
                 await host.viewEvent(tab: tabIndex, id: id, kind: kind, value: value)
             }
