@@ -213,6 +213,8 @@ final class ACPSessionManager: ObservableObject {
         }
     }
     @Published private(set) var recent: [ACPSessionRow] = []
+    /// The open `/btw` side question of each parent session that has one.
+    @Published private(set) var sideQuestions: [ACPSession.ID: ACPSideQuestion] = [:]
     @Published private(set) var persistenceError: String?
     @Published private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
     @Published private var missingPersistedSessionIds: Set<ACPSession.ID> = []
@@ -1593,37 +1595,54 @@ final class ACPSessionManager: ObservableObject {
         return createSession(id: id, agentId: agentId, autoRunDefault: autoRunDefault)
     }
 
-    func createSession(id: String, agentId: String, autoRunDefault: Bool = false) -> ACPSession {
+    /// `ephemeralParentID` creates a hidden `/btw` side session titled
+    /// `ephemeralTitle`, kept out of `recent`.
+    func createSession(
+        id: String,
+        agentId: String,
+        autoRunDefault: Bool = false,
+        ephemeralParentID: ACPSession.ID? = nil,
+        ephemeralTitle: String? = nil
+    ) -> ACPSession {
         precondition(sessions[id] == nil && persistedRows[id] == nil, "ACP session id already exists")
         let now = Int64(Date().timeIntervalSince1970)
+        let isEphemeral = ephemeralParentID != nil
         let row = ACPSessionRow(
-            id: id, agentId: agentId, title: "New session",
-            titleSource: .placeholder,
+            id: id, agentId: agentId, title: isEphemeral ? ephemeralTitle ?? "/btw" : "New session",
+            titleSource: isEphemeral ? .manual : .placeholder,
             currentModel: nil, currentMode: nil,
             nativeSubagentsDisabled: nativeSubagentsPreference(agentId: agentId),
-            autoRun: autoRunDefault,
+            ephemeralParentId: ephemeralParentID,
+            autoRun: isEphemeral ? false : autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
         persistedRows[id] = row
-        recent.removeAll { $0.id == id }
-        recent.insert(row, at: 0)
+        if !isEphemeral {
+            recent.removeAll { $0.id == id }
+            recent.insert(row, at: 0)
+        }
         enqueuePersistence { persistence in
             try await persistence.upsertSession(row)
         }
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
-            title: row.title, owner: owner, titleSource: .placeholder, origin: row.origin,
+            title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
             hydrationState: .ready)
-        session.autoRunEnabled = autoRunDefault
+        session.autoRunEnabled = row.autoRun
         sessions[id] = session
         return session
     }
 
+    /// A non-nil `ephemeralTitle` creates the hidden `/btw` side session of
+    /// the source instead of a regular fork: kept out of `recent`, auto-run
+    /// off, and tolerant of the source's unpersisted streaming tail.
     func createFork(
         sourceSessionID: ACPSession.ID,
         boundary: ACPForkMessageBoundary,
         targetAgentID: String,
-        autoRunDefault: Bool
+        autoRunDefault: Bool,
+        ephemeralTitle: String? = nil
     ) async throws -> ACPSession {
+        let isEphemeral = ephemeralTitle != nil
         guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
             throw ACPSessionForkCreationError.sourceUnavailable
         }
@@ -1650,7 +1669,8 @@ final class ACPSessionManager: ObservableObject {
             let snapshot = try ACPSessionForkSnapshotResolver.resolve(
                 boundary: boundary,
                 liveMessages: source.transcript.messages,
-                storedMessages: storedMessages
+                storedMessages: storedMessages,
+                allowsUnpersistedTail: isEphemeral
             )
             let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
             let sourceContextDeliveryPending = source.forkRecord?.mechanism == .transcriptTransfer
@@ -1668,14 +1688,14 @@ final class ACPSessionManager: ObservableObject {
             let targetID = UUID().uuidString
             let now = Int64(Date().timeIntervalSince1970)
             let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
-            let targetTitle = source.title == "New session"
+            let targetTitle = ephemeralTitle ?? (source.title == "New session"
                 ? "New session (fork)"
-                : "\(source.title) (fork)"
+                : "\(source.title) (fork)")
             let targetRow = ACPSessionRow(
                 id: targetID,
                 agentId: targetAgentID,
                 title: targetTitle,
-                titleSource: .generated,
+                titleSource: isEphemeral ? .manual : .generated,
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
@@ -1688,7 +1708,8 @@ final class ACPSessionManager: ObservableObject {
                 promptSuggestions: targetAgentID == source.agentId && !source.promptSuggestions.isEmpty
                     ? source.promptSuggestions
                     : nil,
-                autoRun: autoRunDefault,
+                ephemeralParentId: isEphemeral ? sourceSessionID : nil,
+                autoRun: isEphemeral ? false : autoRunDefault,
                 createdAt: now,
                 updatedAt: now,
                 lastOpenedAt: now,
@@ -1702,7 +1723,8 @@ final class ACPSessionManager: ObservableObject {
                 inheritedMessageCount: copiedMessages.count,
                 phase: candidate == .native ? .negotiatingNative : .ready,
                 mechanism: candidate == .native ? nil : .transcriptTransfer,
-                contextDeliveryPending: candidate == .transcript
+                contextDeliveryPending: candidate == .transcript,
+                via: isEphemeral ? .btw : nil
             )
 
             try await persistence.createFork(
@@ -1739,8 +1761,10 @@ final class ACPSessionManager: ObservableObject {
             }
             sessions[targetID] = target
             persistedRows[targetID] = targetRow
-            recent.removeAll { $0.id == targetID }
-            recent.insert(targetRow, at: 0)
+            if !isEphemeral {
+                recent.removeAll { $0.id == targetID }
+                recent.insert(targetRow, at: 0)
+            }
             result = .success(target)
         } catch {
             result = .failure(error)
@@ -1749,6 +1773,129 @@ final class ACPSessionManager: ObservableObject {
             await releaseWriterLease(sessionId: sourceSessionID)
         }
         return try result.get()
+    }
+
+    /// Asks `question` in a hidden side session forked from `parentID` at its
+    /// last answer, replacing the parent's current side question. The entry
+    /// is registered before any await, so a dismissal or a newer question
+    /// during creation makes this call discard its side session.
+    @discardableResult
+    func startSideQuestion(parentID: ACPSession.ID, question: String) async throws -> ACPSession {
+        let entry = ACPSideQuestion(question: question)
+        await replaceSideQuestion(parentID: parentID, with: entry)
+        let side: ACPSession
+        do {
+            guard let parent = sessions[parentID], parent.hydrationState == .ready else {
+                throw ACPSessionForkCreationError.sourceUnavailable
+            }
+            let title = ACPSideQuestionBoundaryPolicy.title(for: question)
+            if let boundary = ACPSideQuestionBoundaryPolicy.boundary(
+                messages: parent.transcript.messages,
+                isTurnActive: parent.transcript.streamingState != .idle
+            ) {
+                side = try await createFork(
+                    sourceSessionID: parentID,
+                    boundary: boundary,
+                    targetAgentID: parent.agentId,
+                    autoRunDefault: false,
+                    ephemeralTitle: title
+                )
+            } else {
+                side = createSession(
+                    id: UUID().uuidString,
+                    agentId: parent.agentId,
+                    ephemeralParentID: parentID,
+                    ephemeralTitle: title
+                )
+            }
+        } catch {
+            failSideQuestion(entry, parentID: parentID, error: error)
+            throw error
+        }
+        guard sideQuestions[parentID]?.id == entry.id else {
+            await discardSideSession(id: side.id)
+            return side
+        }
+        sideQuestions[parentID]?.sessionID = side.id
+        await attach(to: side.id, freshlyCreated: true)
+        guard sideQuestions[parentID]?.id == entry.id else { return side }
+        guard submit(sessionId: side.id, text: question, attachments: [], intent: .auto, onCompleted: { _ in }) else {
+            await discardSideSession(id: side.id)
+            failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.notAccepted)
+            throw ACPSideQuestionError.notAccepted
+        }
+        sideQuestions[parentID]?.isSubmitted = true
+        return side
+    }
+
+    /// Installs `entry` as the parent's side question, then discards the one
+    /// it replaces. Installing first lets the latest command win even while
+    /// the old session's teardown is still awaited.
+    func replaceSideQuestion(parentID: ACPSession.ID, with entry: ACPSideQuestion) async {
+        if let previous = sideQuestions.updateValue(entry, forKey: parentID)?.sessionID {
+            await discardSideSession(id: previous)
+        }
+    }
+
+    /// Keeps a failed question's entry, with its error and without a session.
+    private func failSideQuestion(_ entry: ACPSideQuestion, parentID: ACPSession.ID, error: Error) {
+        guard sideQuestions[parentID]?.id == entry.id else { return }
+        sideQuestions[parentID]?.sessionID = nil
+        sideQuestions[parentID]?.error = error.localizedDescription
+    }
+
+    /// Closes the parent's side session and deletes it with its transcript.
+    func dismissSideQuestion(parentID: ACPSession.ID) async {
+        guard let entry = sideQuestions.removeValue(forKey: parentID),
+              let sideID = entry.sessionID
+        else { return }
+        await discardSideSession(id: sideID)
+    }
+
+    /// Deletes a side session. When the remote close or teardown fails, it
+    /// still drops the local runner and row: nothing else could reach a
+    /// hidden session to retry, and the launch purge skips fresh rows.
+    private func discardSideSession(id: ACPSession.ID) async {
+        do {
+            try await deletePersistedSession(id: id)
+        } catch {
+            await detach(sessionId: id)
+            try? await persistence.deleteSession(id: id)
+            forgetSession(id: id)
+        }
+    }
+
+    /// Keeps the parent's side session as a regular forked session, listed in
+    /// history. Returns nil unless its question was sent and the side
+    /// question is still current once the promotion is stored, so a second
+    /// Keep, a dismissal, or a newer question in the meantime wins.
+    func promoteSideQuestion(parentID: ACPSession.ID) async throws -> ACPSession? {
+        guard let entry = sideQuestions[parentID], entry.isSubmitted, !entry.isPromoting,
+              let sideID = entry.sessionID, let side = sessions[sideID]
+        else { return nil }
+        sideQuestions[parentID]?.isPromoting = true
+        await flushPersistence()
+        let promoted: Bool
+        do {
+            promoted = try await persistence.promoteEphemeralSession(id: sideID)
+        } catch {
+            // Let the user retry Keep.
+            if sideQuestions[parentID]?.id == entry.id {
+                sideQuestions[parentID]?.isPromoting = false
+            }
+            throw error
+        }
+        guard promoted, sideQuestions[parentID]?.id == entry.id, sessions[sideID] === side else {
+            return nil
+        }
+        sideQuestions[parentID] = nil
+        if var row = persistedRows[sideID] {
+            row.ephemeralParentId = nil
+            persistedRows[sideID] = row
+            recent.removeAll { $0.id == sideID }
+            recent.insert(row, at: 0)
+        }
+        return side
     }
 
     /// Returns a cached session or a `.loading` placeholder. Cache hits
@@ -2159,6 +2306,8 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deletePersistedSession(id: ACPSession.ID) async throws {
+        // A side session can't outlive its parent; nothing could reach it.
+        await dismissSideQuestion(parentID: id)
         try await disposeSession(id: id)
         let previous = persistenceTail
         let persistence = persistence
@@ -2905,7 +3054,8 @@ final class ACPSessionManager: ObservableObject {
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
-        guard !row.archived else { return }
+        // Hidden `/btw` side sessions join history only once promoted.
+        guard !row.archived, row.ephemeralParentId == nil else { return }
         let insertionIndex = recent.firstIndex { $0.lastOpenedAt < row.lastOpenedAt } ?? recent.endIndex
         recent.insert(row, at: insertionIndex)
     }
@@ -7859,6 +8009,11 @@ extension ACPSessionManager {
     }
 
     func disposeAllLiveSessions() async {
+        // Side sessions are deleted rather than left for the next launch's
+        // purge, which spares fresh lease-free rows.
+        for parentID in Array(sideQuestions.keys) {
+            await dismissSideQuestion(parentID: parentID)
+        }
         let ids = Set(runners.keys)
             .union(attachingSessions.keys)
             .union(attachmentAttempts.keys)

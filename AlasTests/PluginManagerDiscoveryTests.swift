@@ -14,6 +14,8 @@ struct PluginManagerDiscoveryTests {
             if script { try Data([0]).write(to: dir.appending(path: "plugin.js")) }
         }
         try install("good", id: "io.x.good")
+        // A dot-folder is a plugin like any other.
+        try install(".dotted", id: "io.x.dotted")
         // Refused by its size, before it is read.
         try install("too-big", id: "io.x.toobig", script: false)
         try Data(count: PluginLimits().maxSourceBytes + 1).write(to: root.appending(path: "too-big/plugin.js"))
@@ -40,7 +42,7 @@ struct PluginManagerDiscoveryTests {
 
         let result = PluginManager.discover(in: root)
 
-        #expect(result.plugins.map(\.folder.lastPathComponent) == ["good", "my-build"])
+        #expect(result.plugins.map(\.folder.lastPathComponent) == [".dotted", "good", "my-build"])
         #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-script", "dup-a", "dup-b", "linked-out", "linked-dir", "io.x.shadowed", "too-big"])
     }
 

@@ -90,6 +90,116 @@ struct ACPSessionManagerDisposalTests {
         #expect(client.shutdownCount == 1)
     }
 
+    @Test("dismissing a side question whose close fails still discards it")
+    func failedSideQuestionCloseStillDiscards() async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/close") { _ in throw TestError.closeFailed }
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        #expect(manager.runners[side.id] != nil)
+
+        await manager.dismissSideQuestion(parentID: parent.id)
+        await manager.flushPersistence()
+
+        #expect(manager.runners[side.id] == nil)
+        #expect(manager.liveSession(for: side.id) == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+        #expect(manager.runners[parent.id] != nil)
+        await manager.detach(sessionId: parent.id)
+    }
+
+    @Test("dismissing a side question while its fork is created discards the fork")
+    func dismissDuringSideQuestionCreation() async throws {
+        let client = ACPMockClient()
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let answer: ACPMessage = .agent(id: UUID(), StreamingText("answer"))
+        parent.transcript.appendMessage(answer)
+        try store.appendMessage(
+            sessionId: parent.id, id: "msg-\(parent.id)-0", kind: answer.kind, seq: 0,
+            payload: try ACPMessageCodec.encode(answer), createdAt: 0
+        )
+        let start = Task { @MainActor in
+            try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while manager.sideQuestions[parent.id] == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+
+        await manager.dismissSideQuestion(parentID: parent.id)
+        let side = try await start.value
+        await manager.flushPersistence()
+
+        #expect(manager.sideQuestions[parent.id] == nil)
+        #expect(manager.liveSession(for: side.id) == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+        await manager.detach(sessionId: parent.id)
+    }
+
+    @Test("a newer side question is current while the one it replaces is still closing")
+    func newerSideQuestionWinsDuringTeardown() async throws {
+        let client = ACPMockClient()
+        let closeStarted = AsyncStream<Void>.makeStream()
+        let releaseClose = AsyncStream<Void>.makeStream()
+        client.scriptAsync(method: "session/close") { _ in
+            closeStarted.continuation.yield()
+            for await _ in releaseClose.stream { break }
+            return Data("{}".utf8)
+        }
+        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        _ = try await manager.startSideQuestion(parentID: parent.id, question: "first")
+
+        let second = Task { @MainActor in
+            try await manager.startSideQuestion(parentID: parent.id, question: "second")
+        }
+        for await _ in closeStarted.stream { break }
+
+        #expect(manager.sideQuestions[parent.id]?.question == "second")
+        releaseClose.continuation.yield()
+        let side = try await second.value
+        #expect(manager.sideQuestions[parent.id]?.sessionID == side.id)
+        await manager.detach(sessionId: side.id)
+        await manager.detach(sessionId: parent.id)
+    }
+
+    @Test(
+        "deleting the parent or disposing every session also deletes its side session",
+        arguments: [true, false]
+    )
+    func sideSessionEndsWithParent(deletingParent: Bool) async throws {
+        let client = ACPMockClient()
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let (manager, store, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+
+        if deletingParent {
+            try await manager.deleteSession(id: parent.id)
+        } else {
+            await manager.disposeAllLiveSessions()
+        }
+        await manager.flushPersistence()
+
+        #expect(manager.sideQuestions[parent.id] == nil)
+        #expect(manager.runners[side.id] == nil)
+        #expect(try store.loadSession(id: side.id) == nil)
+    }
+
+    @Test("keeping a side question twice promotes it once")
+    func sideQuestionPromotesOnce() async throws {
+        let client = ACPMockClient()
+        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+
+        async let first = manager.promoteSideQuestion(parentID: parent.id)
+        async let second = manager.promoteSideQuestion(parentID: parent.id)
+        let promoted = try await [first, second].compactMap { $0?.id }
+
+        #expect(promoted == [side.id])
+        #expect(manager.recent.filter { $0.id == side.id }.count == 1)
+        await manager.detach(sessionId: side.id)
+        await manager.detach(sessionId: parent.id)
+    }
+
     @Test("unresponsive close times out and still tears down")
     func unresponsiveCloseTimesOutAndTearsDown() async throws {
         let client = ACPMockClient()

@@ -51,7 +51,12 @@ struct PluginsPane: View {
             AlasButton(title: "Reveal Plugins Folder", icon: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([manager.directory])
             }
-            AlasButton(title: "Rescan", icon: "arrow.clockwise") { Task { await manager.reload() } }
+            AlasButton(title: "Rescan", icon: "arrow.clockwise") {
+                Task {
+                    await manager.reload()
+                    await manager.catalog.refresh(force: true)
+                }
+            }
         }
         .padding(.bottom, 12)
         if manager.plugins.isEmpty {
@@ -102,7 +107,10 @@ struct PluginsPane: View {
                 }
             case .loaded(let index):
                 ForEach(index.plugins) { entry in
-                    catalogRow(manager, entry, PluginCatalogRow(entry: entry, installed: manager.plugin(id: entry.id)))
+                    catalogRow(manager, entry, PluginCatalogRow(
+                        entry: entry, installed: manager.plugin(id: entry.id),
+                        // Duplicates of this plugin, or anything else at the path install would use.
+                        quarantined: manager.invalid.contains { $0.pluginID == entry.id } || manager.catalogPathIsTaken(id: entry.id)))
                 }
             }
         }
@@ -134,7 +142,7 @@ struct PluginsPane: View {
             guard let plugin = manager.plugin(id: id) else { return }
             Task {
                 busy.insert(id)
-                await manager.uninstall(plugin)
+                installFailures[id] = await manager.uninstall(plugin)
                 busy.remove(id)
             }
         }

@@ -161,7 +161,8 @@ enum ACPSessionForkSnapshotResolver {
     static func resolve(
         boundary: ACPForkMessageBoundary,
         liveMessages: [ACPMessage],
-        storedMessages: [ACPStoredMessage]
+        storedMessages: [ACPStoredMessage],
+        allowsUnpersistedTail: Bool = false
     ) throws -> ACPSessionForkSnapshot {
         guard let boundaryIndex = liveMessages.firstIndex(where: { message in
             message.stableId == boundary.stableID && message.forkBoundaryKind == boundary.kind
@@ -169,7 +170,12 @@ enum ACPSessionForkSnapshotResolver {
             throw ACPSessionForkSnapshotError.boundaryNotFound
         }
 
-        guard storedMessages.count == liveMessages.count else {
+        // A side question forks a parent mid-turn, whose streaming tail may
+        // not be persisted yet; only the prefix through the boundary must be.
+        let storedCoversSnapshot = allowsUnpersistedTail
+            ? storedMessages.count > boundaryIndex
+            : storedMessages.count == liveMessages.count
+        guard storedCoversSnapshot else {
             throw ACPSessionForkSnapshotError.transcriptMismatch
         }
 
@@ -220,7 +226,7 @@ enum ACPSessionForkSnapshotResolver {
     }
 }
 
-private extension ACPMessage {
+extension ACPMessage {
     var forkBoundaryKind: ACPForkMessageBoundary.Kind? {
         switch self {
         case .user:

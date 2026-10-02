@@ -3,10 +3,12 @@ import Testing
 @testable import Alas
 
 struct PluginCatalogTests {
-    static func version(_ version: String, api: Int = 4, hash: String = "h", entry: Bool = true) -> PluginCatalogIndex.Version {
+    static func version(
+        _ version: String, api: Int = 4, hash: String = "h", entry: Bool = true, manifest: String = "plugin"
+    ) -> PluginCatalogIndex.Version {
         let base = URL(string: "https://example.com/\(version)/")!
         return PluginCatalogIndex.Version(
-            version: version, api: api, capabilities: [], manifest: base.appending(path: "plugin.json"),
+            version: version, api: api, capabilities: [], manifest: base.appending(path: "\(manifest).json"),
             entry: entry ? base.appending(path: "plugin.js") : nil, hash: hash)
     }
 
@@ -33,6 +35,7 @@ struct PluginCatalogTests {
         let installed: (folder: String, version: String, hash: String)?
         let expected: PluginCatalogRow
         var linked = false
+        var quarantined = false
         var testDescription: String { name }
     }
 
@@ -44,67 +47,181 @@ struct PluginCatalogTests {
         RowCase(name: "edited in place", installed: ("io.x.p", "0.2.0", "edited"), expected: .installedLocally),
         // Removing it would delete the symlink's target, perhaps someone's checkout.
         RowCase(name: "symlinked in under the id", installed: ("io.x.p", "0.3.0", "new"), expected: .installedLocally, linked: true),
+        RowCase(name: "local copies quarantined as duplicates", installed: nil, expected: .installedLocally, quarantined: true),
+        RowCase(name: "release with files added", installed: ("io.x.p", "0.2.0", "old"), expected: .installedLocally, quarantined: true),
     ])
     func rowStateFollowsWhatIsInstalled(_ c: RowCase) throws {
         let entry = Self.entry([Self.version("0.3.0", hash: "new"), Self.version("0.2.0", hash: "old")])
         let installed = try c.installed.map { try Self.installed(folder: $0.folder, version: $0.version, hash: $0.hash, linked: c.linked) }
-        #expect(PluginCatalogRow(entry: entry, installed: installed) == c.expected)
+        #expect(PluginCatalogRow(entry: entry, installed: installed, quarantined: c.quarantined) == c.expected)
+    }
+
+    /// A plugins folder and a manager whose catalog serves one valid 0.3.0 release of `io.x.p`.
+    @MainActor
+    final class Fixture {
+        let root = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)")
+        let suite = "PluginCatalogTests.\(UUID().uuidString)"
+        let release: PluginCatalogIndex.Version
+        let manager: PluginManager
+        let script = Data("globalThis.handle = () => {};".utf8)
+
+        init(projects: [ProjectConfig] = []) throws {
+            let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
+            let base = "https://example.com/0.3.0/"
+            let files = [
+                URL(string: base + "plugin.json")!: manifest, URL(string: base + "plugin.js")!: self.script,
+                URL(string: base + "bad.json")!: Data("{".utf8),
+            ]
+            release = PluginCatalogTests.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
+            manager = PluginManager(
+                directory: root, approvals: PluginApprovalStore(defaults: try #require(UserDefaults(suiteName: suite))),
+                projects: { projects }, actions: { _ in .inert }, catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
+        }
+
+        func install(_ version: PluginCatalogIndex.Version? = nil) async -> String? {
+            let version = version ?? release
+            return await manager.install(PluginCatalogTests.entry([version]), version)
+        }
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: manager.stagingDirectory)
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        }
     }
 
     @MainActor
-    @Test func installVerifiesTheHashBeforeReplacingTheFolder() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
-        let script = Data("globalThis.handle = () => {};".utf8)
-        let files = [URL(string: "https://example.com/0.3.0/plugin.json")!: manifest, URL(string: "https://example.com/0.3.0/plugin.js")!: script]
-        let catalog = PluginCatalog(fetch: { url in try #require(files[url]) })
-        let suite = "PluginCatalogTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let manager = PluginManager(
-            directory: root, approvals: PluginApprovalStore(defaults: defaults),
-            projects: { [] }, actions: { _ in .inert }, catalog: catalog)
-        await manager.reload()
+    @Test func installVerifiesTheHashThenInstallsUnapproved() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        await f.manager.reload()
 
-        let failure = await manager.install(Self.entry([Self.version("0.3.0", hash: "wrong")]), Self.version("0.3.0", hash: "wrong"))
-        #expect(failure == PluginCatalogError.hashMismatch.description)
-        #expect(manager.plugins.isEmpty)
+        #expect(await f.install(Self.version("0.3.0", hash: "wrong")) == PluginCatalogError.hashMismatch.description)
+        #expect(f.manager.plugins.isEmpty)
+        // A release whose files match its hash but whose manifest is invalid says why.
+        let failure = await f.install(Self.version("0.3.0", hash: PluginTrust.hash(manifest: Data("{".utf8), entry: f.script), manifest: "bad"))
+        #expect(failure == PluginCatalogError.invalidDownload(PluginManifestError.malformed.description).description)
 
-        let hash = PluginTrust.hash(manifest: manifest, entry: script)
-        #expect(await manager.install(Self.entry([Self.version("0.3.0", hash: hash)]), Self.version("0.3.0", hash: hash)) == nil)
-        let plugin = try #require(manager.plugin(id: "io.x.p"))
-        #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == hash)
-        #expect(!manager.isApproved(plugin))
-        #expect(!FileManager.default.fileExists(atPath: root.appending(path: ".staging/io.x.p").path))
+        #expect(await f.install() == nil)
+        let plugin = try #require(f.manager.plugin(id: "io.x.p"))
+        #expect(plugin.folder.lastPathComponent == "io.x.p" && plugin.hash == f.release.hash)
+        #expect(!f.manager.isApproved(plugin))
+        #expect(!FileManager.default.fileExists(atPath: f.manager.stagingDirectory.appending(path: "io.x.p").path))
+        #expect(!f.manager.catalogPathIsTaken(id: "io.x.p"))
+    }
 
-        // Edited after the scan the row came from: no longer the catalog's files, so Remove keeps them.
+    /// An entry written as `./plugin.js` or in a subfolder is still exactly the release.
+    @Test(arguments: ["plugin.js", "./plugin.js", "dist/plugin.js"])
+    func aReleaseFolderIsCatalogOwnedWhateverTheEntryPath(entry: String) throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)/io.x.p")
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        let file = folder.appending(path: entry)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: file)
+        try Data().write(to: folder.appending(path: "plugin.json"))
+        let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"1","api":4,"entry":"\#(entry)"}"#.utf8))
+        let plugin = PluginManager.Plugin(folder: folder, manifest: manifest, source: Data(), hash: "h")
+        #expect(PluginManager.isCatalogOwned(plugin))
+        try Data().write(to: folder.appending(path: "extra.txt"))
+        #expect(!PluginManager.isCatalogOwned(plugin))
+    }
+
+    /// Installing one plugin leaves every other running plugin, and its state, alone.
+    @MainActor
+    @Test func installKeepsOtherPluginsRunning() async throws {
+        let project = ProjectConfig(id: "proj", name: "Project", path: "/tmp/proj", color: "blue", addedAt: Date())
+        let f = try Fixture(projects: [project])
+        defer { f.cleanUp() }
+        let other = f.root.appending(path: "other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data(#"{"id":"io.x.other","name":"O","version":"1","api":4,"entry":"plugin.js"}"#.utf8).write(to: other.appending(path: "plugin.json"))
+        try PluginJSFixture.source([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]]).write(to: other.appending(path: "plugin.js"))
+        await f.manager.reload()
+        await f.manager.approve(try #require(f.manager.plugin(id: "io.x.other")))
+        let running = try #require(f.manager.host(pluginID: "io.x.other", projectID: "proj"))
+
+        #expect(await f.install() == nil)
+        #expect(f.manager.host(pluginID: "io.x.other", projectID: "proj") === running)
+        await f.manager.shutdown()
+    }
+
+    /// A symlinked staging folder must not lead install to clean up inside its target.
+    @MainActor
+    @Test func installNeverCleansUpThroughASymlinkedStagingFolder() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        let elsewhere = f.root.appending(path: "elsewhere")
+        try FileManager.default.createDirectory(at: elsewhere.appending(path: "io.x.p"), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: elsewhere.appending(path: "io.x.p/keep"))
+        try FileManager.default.createSymbolicLink(at: f.manager.stagingDirectory, withDestinationURL: elsewhere)
+        await f.manager.reload()
+
+        #expect(await f.install() == nil)
+        #expect(FileManager.default.fileExists(atPath: elsewhere.appending(path: "io.x.p/keep").path))
+    }
+
+    /// Edited after the scan the row came from: no longer the catalog's files, so Remove keeps them and says so.
+    @MainActor
+    @Test func removeKeepsFilesChangedSinceTheScan() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        await f.manager.reload()
+        #expect(await f.install() == nil)
+        let plugin = try #require(f.manager.plugin(id: "io.x.p"))
+
         try Data("globalThis.handle = () => { /* mine */ };".utf8).write(to: plugin.folder.appending(path: "plugin.js"))
-        await manager.uninstall(plugin)
+        #expect(await f.manager.uninstall(plugin) == PluginCatalogError.installedLocally.description)
         #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "plugin.js").path))
+    }
+
+    /// A file someone added next to the release makes the folder theirs: Remove keeps it.
+    @MainActor
+    @Test func removeKeepsAFolderWithAddedFiles() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        await f.manager.reload()
+        #expect(await f.install() == nil)
+        let plugin = try #require(f.manager.plugin(id: "io.x.p"))
+
+        try Data("notes".utf8).write(to: plugin.folder.appending(path: "notes.txt"))
+        #expect(await f.manager.uninstall(plugin) == PluginCatalogError.installedLocally.description)
+        #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "notes.txt").path))
+        // Once rescanned, the row offers neither Remove nor Update for it.
+        await f.manager.reload()
+        #expect(f.manager.catalogPathIsTaken(id: "io.x.p"))
     }
 
     /// A folder at `Plugins/<id>` the catalog did not put there, even a broken one, is the user's.
     @MainActor
     @Test func installNeverReplacesAFolderTheCatalogDoesNotOwn() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let mine = root.appending(path: "io.x.p")
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        let mine = f.root.appending(path: "io.x.p")
         try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
         try Data("{ not json".utf8).write(to: mine.appending(path: "plugin.json"))
-        let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
-        let script = Data("globalThis.handle = () => {};".utf8)
-        let files = [URL(string: "https://example.com/0.3.0/plugin.json")!: manifest, URL(string: "https://example.com/0.3.0/plugin.js")!: script]
-        let suite = "PluginCatalogTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let manager = PluginManager(
-            directory: root, approvals: PluginApprovalStore(defaults: defaults), projects: { [] }, actions: { _ in .inert },
-            catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
-        await manager.reload()
+        await f.manager.reload()
 
-        let version = Self.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
-        #expect(await manager.install(Self.entry([version]), version) == PluginCatalogError.installedLocally.description)
+        #expect(await f.install() == PluginCatalogError.installedLocally.description)
         #expect(try Data(contentsOf: mine.appending(path: "plugin.json")) == Data("{ not json".utf8))
+    }
+
+    /// A hand-built copy in another folder wins, so the catalog does not install a shadowed duplicate; nor does it
+    /// add a third copy next to two local ones quarantined as duplicates.
+    @MainActor
+    /// A half-built one, with a manifest but no script yet, counts too.
+    @Test(arguments: [(["my-build"], true), (["build-a", "build-b"], true), (["half-built"], false)])
+    func installStepsAsideForLocalCopiesElsewhere(folders: [String], withScript: Bool) async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        for folder in folders {
+            let local = f.root.appending(path: folder)
+            try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+            try Data(#"{"id":"io.x.p","name":"P","version":"9","api":4,"entry":"plugin.js"}"#.utf8).write(to: local.appending(path: "plugin.json"))
+            if withScript { try f.script.write(to: local.appending(path: "plugin.js")) }
+        }
+        await f.manager.reload()
+
+        #expect(await f.install() == PluginCatalogError.installedLocally.description)
+        #expect(!FileManager.default.fileExists(atPath: f.root.appending(path: "io.x.p").path))
     }
 }
