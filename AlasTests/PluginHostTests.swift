@@ -1303,6 +1303,18 @@ struct PluginHostTests {
         #expect(run.output == shown)
     }
 
+    @Test func processOutputKeepsTheOrderItArrivedIn() async {
+        let output = PluginProcessOutput(keep: .tail, limit: 4, interval: .zero)
+        output.append(Data("e1".utf8), stream: 1)
+        output.append(Data("o1".utf8), stream: 0)
+        output.append(Data("e2345".utf8), stream: 1)
+        output.finish(exit: 0)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        // stderr's oldest bytes go first to keep its latest four; the order across streams holds.
+        #expect(events == [.stdout(Data("o1".utf8)), .stderr(Data("2345".utf8)), .truncated, .exit(0)])
+    }
+
     /// Stopping reaches a child that left the process group, which a group signal alone would miss.
     @Test func stoppingAProcessStopsWhatItStarted() async throws {
         let handle = try PluginFoundationLauncher().launch(
@@ -1418,8 +1430,9 @@ struct PluginHostTests {
         let host = try makeHost(
             [[.send(activateOK), .send(c.request)]], grants: c.grants, limits: c.limits ?? Self.limits, manifest: Self.processManifest, worktreeRoot: root)
         await host.activate()
-        #expect(await awaitCondition { replies(host).count == 2 })
-        let reply = try #require(lastReply(host))
+        // Counted by direction: the trace keeps only the start of a long reply, which may not reach its id.
+        #expect(await awaitCondition { host.trace.filter { $0.direction == .toPlugin }.count == 2 })
+        let reply = try #require(host.trace.last { $0.direction == .toPlugin }?.text)
         #expect(reply.contains(c.reply))
         if let absent = c.absent { #expect(!reply.contains(absent)) }
         if let (path, content) = c.written {

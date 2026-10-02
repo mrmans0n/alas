@@ -244,10 +244,12 @@ or `process.exec` without `processes`, is refused.
 - Alas resolves the executable: an absolute path as it is, a path with a slash
   (`./bin/x`) relative to the worktree, and a bare name on the `PATH` of your
   login shell. A command it cannot find answers `-32003`.
-- The environment is Alas's own, with your login shell's `PATH`. A plugin
-  cannot set variables: ones like `PATH` or `NODE_OPTIONS` would change what
-  the approved command runs. Secrets are never passed to processes; commands
-  that need credentials use their own login (`op signin`, `gh auth login`).
+- The environment is Alas's own, with your login shell's `PATH`, so a command
+  sees what your other tools see, as it can read your files. A plugin cannot
+  set variables: ones like `PATH` or `NODE_OPTIONS` would change what the
+  approved command runs. The plugin's own secrets are never passed to
+  processes; commands that need credentials use their own login
+  (`op signin`, `gh auth login`).
 - `stdin`, up to 256 KiB of text, is written to `process/run`'s input, which is
   then closed. Long-running processes get no input.
 - `process/run` keeps the first 512 KiB of output, stdout and stderr together,

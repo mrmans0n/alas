@@ -49,7 +49,9 @@ final class PluginProcessOutput: @unchecked Sendable {
     private let keep: Keep
     private let interval: Duration
     private let lock = NSLock()
-    private var pending = [Data(), Data()]
+    /// In arrival order, a chunk per run of one stream, so stderr that came first is shown first.
+    private var pending: [(stream: Int, data: Data)] = []
+    private var pendingBytes = [0, 0]
     private var accepted = [0, 0]
     private var truncated = false
     private var reportedTruncation = false
@@ -57,6 +59,8 @@ final class PluginProcessOutput: @unchecked Sendable {
     private var done = false
     private let wake: AsyncStream<Void>.Continuation
     private var emitted = false
+    /// What the reader took last and has not handed out yet. Only the reader touches it.
+    private var batch: [PluginProcessEvent] = []
     /// Only the reader touches it.
     private var waiter: AsyncStream<Void>.Iterator
 
@@ -73,18 +77,30 @@ final class PluginProcessOutput: @unchecked Sendable {
     /// `stream` 0 is stdout, 1 is stderr.
     func append(_ data: Data, stream: Int) {
         lock.withLock {
-            switch keep {
-            case .head:
+            var data = data
+            if keep == .head {
                 let room = max(0, limit - accepted[stream])
                 if data.count > room { truncated = true }
-                pending[stream].append(data.prefix(room))
-                accepted[stream] += min(room, data.count)
-            case .tail:
-                pending[stream].append(data)
-                if pending[stream].count > limit {
-                    pending[stream] = Data(pending[stream].suffix(limit))
-                    truncated = true
+                data = data.prefix(room)
+                accepted[stream] += data.count
+            }
+            guard !data.isEmpty else { return }
+            if pending.last?.stream == stream { pending[pending.count - 1].data.append(data) } else { pending.append((stream, data)) }
+            pendingBytes[stream] += data.count
+            // The tail keeps the latest `limit` bytes of each stream, dropping its oldest first.
+            var excess = keep == .tail ? pendingBytes[stream] - limit : 0
+            if excess > 0 { truncated = true }
+            var index = 0
+            while excess > 0, index < pending.count {
+                guard pending[index].stream == stream else {
+                    index += 1
+                    continue
                 }
+                let cut = min(excess, pending[index].data.count)
+                pending[index].data = Data(pending[index].data.dropFirst(cut))
+                pendingBytes[stream] -= cut
+                excess -= cut
+                if pending[index].data.isEmpty { pending.remove(at: index) } else { index += 1 }
             }
         }
         wake.yield()
@@ -95,34 +111,37 @@ final class PluginProcessOutput: @unchecked Sendable {
         wake.yield()
     }
 
-    /// Waits `interval` after each batch, however much is pending, so output that arrives meanwhile joins the next.
+    /// Hands out one batch's events back to back, then waits `interval` before taking the next, however much is
+    /// pending, so output that arrives meanwhile joins it.
     private func next() async -> PluginProcessEvent? {
-        if emitted, interval > .zero { try? await Task.sleep(for: interval) }
-        while true {
-            if let event = take() {
-                emitted = true
-                return event
+        if batch.isEmpty {
+            if emitted, interval > .zero { try? await Task.sleep(for: interval) }
+            while true {
+                batch = takeAll()
+                if !batch.isEmpty { break }
+                guard await waiter.next() != nil else { return nil }
             }
-            guard await waiter.next() != nil else { return nil }
+            emitted = true
         }
+        return batch.removeFirst()
     }
 
-    private func take() -> PluginProcessEvent? {
+    private func takeAll() -> [PluginProcessEvent] {
         lock.withLock {
-            for (stream, wrap) in [(0, PluginProcessEvent.stdout), (1, PluginProcessEvent.stderr)] where !pending[stream].isEmpty {
-                defer { pending[stream] = Data() }
-                return wrap(pending[stream])
-            }
+            var events: [PluginProcessEvent] = pending.map { $0.stream == 0 ? .stdout($0.data) : .stderr($0.data) }
+            pending = []
+            pendingBytes = [0, 0]
             if truncated, !reportedTruncation {
                 reportedTruncation = true
-                return .truncated
+                events.append(.truncated)
             }
             if let exit, !done {
                 done = true
-                return .exit(exit)
+                events.append(.exit(exit))
+            } else if done, events.isEmpty {
+                wake.finish()
             }
-            if done { wake.finish() }
-            return nil
+            return events
         }
     }
 }
@@ -222,6 +241,8 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
         try process.run()
         // Its own process group, so one signal reaches what it started. Foundation cannot spawn into one, so this
         // races the exec; the tracked descendants cover a lost race and children that leave the group.
+        // ponytail: a child forked and orphaned before the first sample, after a lost race, escapes; a posix_spawn
+        // launcher with POSIX_SPAWN_SETPGROUP, shared with ACPTerminal, LSPTransport and JSONRPCStdioTransport, closes it.
         let pid = process.processIdentifier
         _ = setpgid(pid, pid)
         tracker = Task.detached(priority: .utility) { [weak self] in
