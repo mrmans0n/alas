@@ -583,8 +583,8 @@ struct PluginHostTests {
         await host.viewEvent(tab: 0, id: "nope", kind: "click", value: nil)
         await host.viewEvent(tab: 0, id: "go", kind: "click", value: nil)
         // Each tree answers only for its own nodes.
-        await host.viewEvent(panel: "p", id: "go", kind: "click", value: nil)
-        await host.viewEvent(panel: "p", id: "side", kind: "click", value: nil)
+        await host.viewEvent(place: PluginPanelPlace(panel: "p"), id: "go", kind: "click", value: nil)
+        await host.viewEvent(place: PluginPanelPlace(panel: "p"), id: "side", kind: "click", value: nil)
         let events = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("view/event") }.map(\.text)
         try #require(events.count == 2)
         #expect(events[0].contains(#""id":"go""#) && events[0].contains(#""tab":0"#) && !events[0].contains("panel"))
@@ -1059,6 +1059,11 @@ struct PluginHostTests {
         await host.activate()
         #expect(host.panelTree(for: checks)?.id == "root")
         #expect(host.panelTree(for: PluginPanelPlace(panel: "checks", worktree: "other")) == nil)
+        // A click from a tree rendered for another worktree is dropped, not credited to this one.
+        await host.viewEvent(place: PluginPanelPlace(panel: "checks", worktree: "other"), id: "go", kind: "click", value: nil)
+        await host.viewEvent(place: checks, id: "go", kind: "click", value: nil)
+        let clicks = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("view/event") }.map(\.text)
+        #expect(clicks.count == 1 && clicks[0].contains(#""worktree":"wt""#))
         // Shown for a run: the plugin hears which one, and re-renders the section empty.
         await host.setPanelVisible(PluginPanelPlace(panel: "explain", run: "r1"), true)?.value
         #expect(host.trace.contains { $0.text.contains("panel/visible") && $0.text.contains(#""run":"r1""#) })

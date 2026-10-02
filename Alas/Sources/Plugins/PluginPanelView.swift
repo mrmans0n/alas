@@ -120,7 +120,7 @@ struct PluginPanelSectionView: View {
                 Text(target.title)
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
-                PluginViewNodeView(node: root, events: PluginViewEvents(host: target.host, tabIndex: 0, panel: target.place.panel))
+                PluginViewNodeView(node: root, events: PluginViewEvents(host: target.host, tabIndex: 0, panel: target.place))
                     .id(root.id)
             }
             .padding(.horizontal, 12)

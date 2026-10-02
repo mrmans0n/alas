@@ -401,14 +401,16 @@ final class PluginHost {
             id: nil, method: "view/event", params: PluginViewEventParams(tab: tab, id: id, kind: kind, value: value))))
     }
 
-    /// Only nodes in the panel's current tree can send events.
-    func viewEvent(panel: String, id: String, kind: String, value: String?) async {
-        guard state == .active, let root = panelViews[panel], Self.contains(root, id: id) else { return }
-        let place = panelPlaces[panel]
+    /// Only nodes in the panel's current tree, rendered for the place the event came from, can send events: a click
+    /// on a tree the plugin has since rendered for another run or worktree is dropped.
+    func viewEvent(place: PluginPanelPlace, id: String, kind: String, value: String?) async {
+        guard state == .active, panelPlaces[place.panel] == place, let root = panelViews[place.panel],
+              Self.contains(root, id: id)
+        else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "view/event",
             params: PluginViewEventParams(
-                panel: panel, worktree: place?.worktree, run: place?.run, id: id, kind: kind, value: value))))
+                panel: place.panel, worktree: place.worktree, run: place.run, id: id, kind: kind, value: value))))
     }
 
     private static func contains(_ node: PluginViewNode, id: String) -> Bool {

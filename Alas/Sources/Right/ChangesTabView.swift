@@ -319,9 +319,9 @@ struct ChangesTabView: View {
             appState.pluginDecorations(.changesFile, projectID: worktree.projectId, worktree: worktree.id, target: path)
         }
         rowActions.onRunPluginDecoration = { [appState] in appState.runPluginDecoration($0) }
-        // Rows are reused while their token holds, so the plugin commands in their menus are part of it.
-        let pluginToken = rowActions.pluginCommands.map(\.id).joined(separator: ",")
-            + commits.pluginCommands.map(\.id).joined(separator: ",")
+        // Rows are reused while their token holds, so the plugin commands in their menus, titles and icons
+        // included, are part of it.
+        let pluginToken = String(reflecting: rowActions.pluginCommands) + String(reflecting: commits.pluginCommands)
         var rows: [AppKitDiffRowSpec] = []
 
         if let error = rps.sidebarError {
