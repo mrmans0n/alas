@@ -238,77 +238,11 @@ extension NSAttributedString.Key {
     static let acpMarkdownInlineRemoteImage = NSAttributedString.Key("ACPMarkdownInlineRemoteImage")
 }
 
-struct ACPMarkdownScrollRoutingState {
-    private(set) var forwarding: Bool?
-    private var pendingEvents: [NSEvent] = []
-    private var resetsAfterCurrentEvent = false
-    var hasPendingEvents: Bool { !pendingEvents.isEmpty }
-
-    mutating func shouldForward(
-        deltaX: CGFloat,
-        deltaY: CGFloat,
-        phase: NSEvent.Phase,
-        momentumPhase: NSEvent.Phase,
-        pendingEvent: NSEvent? = nil
-    ) -> Bool {
-        let isVertical = Self.isVerticalDominant(deltaX: deltaX, deltaY: deltaY)
-        let hasDominantAxis = abs(deltaY) != abs(deltaX)
-        let hasGesturePhase = !phase.isEmpty || !momentumPhase.isEmpty
-        let resetsAfterEvent = phase.contains(.cancelled)
-            || momentumPhase.contains(.cancelled)
-            || momentumPhase.contains(.ended)
-        resetsAfterCurrentEvent = resetsAfterEvent
-
-        if phase.contains(.began) {
-            forwarding = nil
-            pendingEvents.removeAll(keepingCapacity: true)
-        }
-        if forwarding == nil && hasGesturePhase && !hasDominantAxis && !phase.contains(.ended), let pendingEvent {
-            pendingEvents.append(pendingEvent)
-        }
-        if forwarding == nil && hasGesturePhase && hasDominantAxis {
-            forwarding = isVertical
-        }
-        if forwarding == nil && phase.contains(.ended) && hasPendingEvents {
-            forwarding = false
-        }
-        if forwarding == nil && resetsAfterEvent && hasPendingEvents {
-            forwarding = false
-        }
-        if forwarding == nil && !hasGesturePhase && hasPendingEvents {
-            forwarding = isVertical
-        }
-
-        let shouldForward = hasGesturePhase
-            ? forwarding ?? false
-            : isVertical
-
-        return shouldForward
-    }
-
-    mutating func completeCurrentEventRouting() {
-        guard resetsAfterCurrentEvent else { return }
-        resetsAfterCurrentEvent = false
-        forwarding = nil
-        pendingEvents.removeAll(keepingCapacity: true)
-    }
-
-    mutating func consumePendingEvents() -> [NSEvent] {
-        let events = pendingEvents
-        pendingEvents.removeAll(keepingCapacity: true)
-        return events
-    }
-
-    static func isVerticalDominant(deltaX: CGFloat, deltaY: CGFloat) -> Bool {
-        abs(deltaY) > abs(deltaX)
-    }
-}
-
 final class ACPMarkdownInlineNSTextView: NSTextView {
-    private var scrollRoutingState = ACPMarkdownScrollRoutingState()
-
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
+    var isShowingUpstreamReferenceCard: Bool { upstreamReferenceHover.isShowingCard }
     private var upstreamRevisionObservation: AnyCancellable?
+    private var scrollObservers: [any NSObjectProtocol] = []
     private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
 
     /// Set on user-message paragraphs that render reference chips. A lookup
@@ -323,8 +257,47 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                     MainActor.assumeIsolated { self?.invalidateUpstreamReferenceChips() }
                 }
             if upstreamReferences == nil { upstreamReferenceHover.hide() }
+            updateScrollObservation()
             updateTrackingAreas()
         }
+    }
+
+    /// Markdown text no longer overrides `scrollWheel` (that would opt prose out
+    /// of AppKit responsive scrolling), so a hover card left open at its old
+    /// screen position is closed when any enclosing clip view scrolls instead.
+    /// Every ancestor scroll view counts: a chip inside a table cell sits in a
+    /// nested horizontal scroll view while the transcript scrolls vertically.
+    /// Only views that render chips observe.
+    private func updateScrollObservation() {
+        removeScrollObservers()
+        guard upstreamReferences != nil else { return }
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? NSScrollView {
+                let clipView = scrollView.contentView
+                clipView.postsBoundsChangedNotifications = true
+                // Block-based observer: Combine's NotificationCenter publisher
+                // retains `object`, which would form a text view -> clip view ->
+                // document view cycle that only detaching from the window breaks.
+                scrollObservers.append(NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+                })
+            }
+            ancestor = view.superview
+        }
+    }
+
+    private func removeScrollObservers() {
+        for observer in scrollObservers { NotificationCenter.default.removeObserver(observer) }
+        scrollObservers.removeAll()
+    }
+
+    isolated deinit {
+        removeScrollObservers()
     }
 
     /// Marks every reference-chip attachment range as attribute-edited.
@@ -368,6 +341,12 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { upstreamReferenceHover.hide() }
+        updateScrollObservation()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        updateScrollObservation()
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -413,7 +392,6 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// (i.e. a cache miss). Lets tests assert that repeated `sizeThatFits`
     /// probes at a known width hit the memo instead of re-laying out.
     private(set) var fittingComputationCountForTests = 0
-    private(set) var superScrollEventsForTests: [NSEvent] = []
     #endif
     /// Cap on distinct cached widths. SwiftUI's `StackLayout` probes a small,
     /// bounded set of widths per placement pass (min / ideal / actual), so a
@@ -469,82 +447,6 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         )
         cachedNaturalFittingSize = size
         return size
-    }
-
-    /// Forward vertical scrolling to the transcript's AppKit scroller.
-    /// Markdown cells are NSTextViews, so without this override they consume
-    /// wheel events even though they cannot scroll vertically themselves.
-    /// Also hides a hover card left open at its old screen position: the
-    /// card only updates on `mouseMoved`/`mouseExited`, so scrolling with
-    /// the trackpad while the pointer stays still would otherwise leave it
-    /// floating over content it's no longer anchored to.
-    override func scrollWheel(with event: NSEvent) {
-        if upstreamReferences != nil { upstreamReferenceHover.hide() }
-        if let transcriptScroller {
-            var routingState = transcriptScroller.markdownScrollRoutingState
-            routeScrollWheel(
-                with: event,
-                routingState: &routingState,
-                forward: { transcriptScroller.scrollMarkdownWheel(with: $0) }
-            )
-            transcriptScroller.markdownScrollRoutingState = routingState
-        } else {
-            routeScrollWheel(
-                with: event,
-                routingState: &scrollRoutingState,
-                forward: { [weak self] in self?.nextResponder?.scrollWheel(with: $0) }
-            )
-        }
-    }
-
-    private var transcriptScroller: ACPTranscriptScrollerView? {
-        var responder = nextResponder
-        while let current = responder {
-            if let scroller = current as? ACPTranscriptScrollerView {
-                return scroller
-            }
-            responder = current.nextResponder
-        }
-        return nil
-    }
-
-    private func routeScrollWheel(
-        with event: NSEvent,
-        routingState: inout ACPMarkdownScrollRoutingState,
-        forward: (NSEvent) -> Void
-    ) {
-        let shouldForward = routingState.shouldForward(
-            deltaX: event.scrollingDeltaX,
-            deltaY: event.scrollingDeltaY,
-            phase: event.phase,
-            momentumPhase: event.momentumPhase,
-            pendingEvent: event
-        )
-        defer { routingState.completeCurrentEventRouting() }
-
-        if shouldForward {
-            for pendingEvent in routingState.consumePendingEvents() {
-                forward(pendingEvent)
-            }
-            forward(event)
-            return
-        }
-
-        if routingState.forwarding == nil, routingState.hasPendingEvents {
-            return
-        }
-
-        for pendingEvent in routingState.consumePendingEvents() {
-            scrollTextView(with: pendingEvent)
-        }
-        scrollTextView(with: event)
-    }
-
-    private func scrollTextView(with event: NSEvent) {
-        #if DEBUG
-        superScrollEventsForTests.append(event)
-        #endif
-        super.scrollWheel(with: event)
     }
 
     /// Measure the current text wrapped at `width`, as a pure function of the

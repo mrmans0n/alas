@@ -64,7 +64,7 @@ struct PluginHostActions {
     }
 }
 
-/// Runs the protocol version the manifest declares (1, 2 or 3) for one plugin in one project.
+/// Runs one plugin in one project.
 @MainActor
 @Observable
 final class PluginHost {
@@ -81,7 +81,6 @@ final class PluginHost {
         "storage/set": nil,
         "storage/keys": nil,
     ]
-    private static let apiThreeReads: Set<String> = ["session/last_message", "agent/list"]
     static let maxPromptBytes = 32 * 1024
     private static let traceLimit = 100
     private static let logLimit = 200
@@ -109,7 +108,7 @@ final class PluginHost {
     @ObservationIgnored private var taskGeneration = 0
     @ObservationIgnored private var pendingTaskSession: String?
 
-    @ObservationIgnored private let wasm: [UInt8]
+    @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
     @ObservationIgnored private let storage: PluginStorage
     @ObservationIgnored private let limits: PluginLimits
@@ -117,7 +116,7 @@ final class PluginHost {
 
     init(
         manifest: PluginManifest,
-        wasm: [UInt8],
+        source: Data,
         project: PluginProjectRef,
         grants: Set<PluginCapability>,
         actions: PluginHostActions,
@@ -125,7 +124,7 @@ final class PluginHost {
         limits: PluginLimits = PluginLimits()
     ) {
         self.manifest = manifest
-        self.wasm = wasm
+        self.source = source
         self.project = project
         self.grants = grants
         self.actions = actions
@@ -146,8 +145,8 @@ final class PluginHost {
         taskGeneration += 1
         do {
             let loaded = try await PluginRuntime.load(
-                wasm: wasm, limits: limits, tabCount: manifest.api >= 2 ? manifest.tabs.count : nil)
-            guard state == .activating else { return }  // deactivated while the module loaded
+                source: source, limits: limits, tabCount: manifest.tabs.count)
+            guard state == .activating else { return }  // deactivated while the script loaded
             runtime = loaded
         } catch {
             guard state == .activating else { return }
@@ -171,7 +170,7 @@ final class PluginHost {
     /// Sends `alas/deactivate`, then drops the instance whatever the plugin does.
     /// Anything the plugin sends back is ignored.
     func deactivate() async {
-        if state == .activating, runtime == nil {  // still loading the module
+        if state == .activating, runtime == nil {  // still loading the script
             state = .stopped
             return
         }
@@ -242,7 +241,7 @@ final class PluginHost {
     }
 
     /// Delivers `first`, then any replies to requests the plugin made, each in
-    /// its own `alas_handle` call. Stops as soon as the host leaves the running
+    /// its own `handle` call. Stops as soon as the host leaves the running
     /// states, which drops everything still queued.
     /// The activation response must come from the first call, so an activation
     /// delivery fails as soon as that call's messages are processed without one.
@@ -326,7 +325,7 @@ final class PluginHost {
 
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
-        guard let capability = Self.methods[method], manifest.api >= 3 || !(method.hasPrefix("storage/") || Self.apiThreeReads.contains(method)) else {
+        guard let capability = Self.methods[method] else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
         if let capability, !grants.contains(capability) {

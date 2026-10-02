@@ -3412,7 +3412,7 @@ extension ACPSessionRunner {
                         } else if queuedItemId != nil, authReason != nil {
                             self.session.restoreQueue(self.session.queue)
                             self.persistQueue()
-                        } else if queuedItemId == nil, !wasCancelled {
+                        } else if queuedItemId == nil, !wasCancelled, authReason == nil {
                             self.session.lastError = "prompt failed: \(errorMessage)"
                         }
                         if let authReason {
