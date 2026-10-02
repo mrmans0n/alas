@@ -226,13 +226,13 @@ struct DelegatedPromptRow: View {
                         .clipped()
                         .contentShape(Rectangle())
                         .mask(foldMask(isFolded: isFolded))
-                        // Clipping only hides pixels: the hidden lines' links,
-                        // Copy buttons and text would stay clickable, focusable
-                        // and readable by VoiceOver. Folded, nothing in here
-                        // takes input; the toggle below is the way in.
+                        // Clipping only hides pixels: the hidden lines' links
+                        // and Copy buttons would stay clickable and focusable.
+                        // Folded, nothing in here takes input; the toggle below
+                        // is the way in. The text itself stays readable to
+                        // VoiceOver, like a line-limited `Text`.
                         .allowsHitTesting(!isFolded)
                         .disabled(isFolded)
-                        .accessibilityHidden(isFolded)
                     if let foldedLineCount {
                         foldToggle(lineCount: foldedLineCount)
                     }
