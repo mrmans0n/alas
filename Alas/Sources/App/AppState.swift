@@ -2533,9 +2533,10 @@ final class AppState {
         }
     }
 
-    func completeStartupRecovery() {
-        AlasTerminationCoordinator.shared.finish?()
+    func completeStartupRecovery(rightPaneReady: Bool = true) {
         suppressesRestoredRightPaneAfterAbandonedStartup = false
+        guard rightPaneReady else { return }
+        AlasTerminationCoordinator.shared.finish?()
     }
 
     func completeStartupRecoveryIfCenterPaneWillNotAppear() {

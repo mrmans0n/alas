@@ -845,14 +845,14 @@ struct CenterPaneView: View {
             readyKey: startupRecoveryReadyKey,
             currentKey: startupRecoveryActiveKey
         ) else { return }
-        guard rightPaneStartupRecoveryReady else { return }
-        state.completeStartupRecovery()
+        state.completeStartupRecovery(rightPaneReady: rightPaneStartupRecoveryReady)
     }
 
     private var rightPaneStartupRecoveryReady: Bool {
+        guard !rightPaneStartupSuppressed else { return false }
         let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         return Self.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: effectiveRightPaneVisible,
+            isRightPaneMounted: hasRightPaneRail || effectiveRightPaneVisible,
             hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
             isLoading: rightPaneState?.loading ?? false,
             ggStackLoadState: rightPaneState?.ggStackLoadState ?? .inactive,
@@ -861,13 +861,13 @@ struct CenterPaneView: View {
     }
 
     static func shouldCompleteStartupRecoveryForRightPane(
-        isRightPaneVisible: Bool,
+        isRightPaneMounted: Bool,
         hasLoadedSnapshot: Bool,
         isLoading: Bool,
         ggStackLoadState: GGStackLoadState,
         ggAvailabilityHasProbed: Bool
     ) -> Bool {
-        !isRightPaneVisible || (hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
+        !isRightPaneMounted || (hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
     }
 
     static func shouldCompleteStartupRecoveryForCenterPane(
@@ -894,8 +894,7 @@ struct CenterPaneView: View {
         )
         guard composition.activeId == tabID else { return }
         startupRecoveryReadyKey = startupRecoveryActiveKey
-        guard rightPaneStartupRecoveryReady else { return }
-        state.completeStartupRecovery()
+        state.completeStartupRecovery(rightPaneReady: rightPaneStartupRecoveryReady)
     }
 
     private var startupRecoveryActiveKey: String? {
