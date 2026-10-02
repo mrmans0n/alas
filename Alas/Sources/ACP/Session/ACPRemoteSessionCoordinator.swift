@@ -134,7 +134,7 @@ final class ACPRemoteSessionCoordinator {
         if let lease = result.lease {
             if lease.owner?.serverId == owner.serverId, lease.owner?.instanceId != owner.instanceId {
                 locallySharedRecords.insert(lease.recordId)
-            } else if let server = lease.owner?.serverId, server != owner.serverId { locallySharedRecords.remove(lease.recordId) }
+            } else if lease.owner?.serverId != owner.serverId { locallySharedRecords.remove(lease.recordId) }
             if var authority = authorities[sessionId], authority.lease.recordId == lease.recordId {
                 authority.lease = lease
                 if lease.owner != owner || !lease.isFresh { authority.confirmed = false }

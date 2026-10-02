@@ -280,6 +280,41 @@ struct ACPRemoteSessionCoordinatorTests {
         #expect(!reader.isForeignMachine(sessionId: "mirror"))
     }
 
+    @Test("a mirror imports a released foreign writer even when it missed the takeover")
+    func missedForeignTakeoverInvalidatesSameMachineShortcut() async throws {
+        let endpoint = ReplicaEndpoint()
+        let writer = coordinator(endpoint, server: "mac-a", instance: "writer")
+        let reader = coordinator(endpoint, server: "mac-a", instance: "reader")
+        let foreign = coordinator(endpoint, server: "mac-b")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            writer.shutdown()
+            reader.shutdown()
+            foreign.shutdown()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let shared = ACPSessionPersistence(path: folder.appendingPathComponent("shared.sqlite").path)
+        let independent = ACPSessionPersistence(path: folder.appendingPathComponent("foreign.sqlite").path)
+        try await shared.upsertSession(row("shared"))
+        try await independent.upsertSession(row("foreign"))
+        _ = try await writer.claim(sessionId: "shared", key: key, proposedProcId: "writer", requestedToken: "writer")
+        try await writer.startPublishing(sessionId: "shared", persistence: shared, status: { "idle" }, onLeaseLost: {})
+        _ = try await shared.persistMessages([message("shared", text: "same Mac transcript")], fence: nil)
+        await writer.flush(sessionId: "shared")
+        writer.stopPublishing(sessionId: "shared")
+        _ = try await reader.observe(sessionId: "shared", key: key)
+
+        let takeover = try await foreign.claim(sessionId: "foreign", key: key, proposedProcId: "foreign", requestedToken: "foreign", seize: true)
+        let fence = try #require(takeover.fence)
+        try await foreign.startPublishing(sessionId: "foreign", persistence: independent, status: { "idle" }, onLeaseLost: {})
+        _ = try await independent.persistMessages([message("foreign", text: "foreign final transcript")], fence: nil)
+        await foreign.flush(sessionId: "foreign")
+        await foreign.release(sessionId: "foreign", expectedFence: fence)
+        let released = try #require(try await reader.observe(sessionId: "shared", key: key))
+        try await reader.syncMirror(sessionId: "shared", lease: released, persistence: shared, isCurrent: { true })
+        #expect(try await shared.mirrorSnapshot(sessionId: "shared").wireMessages == [wire("foreign final transcript")])
+    }
+
     private var key: RemoteSessionKey { .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation") }
     private func coordinator(_ endpoint: ReplicaEndpoint, server: String, instance: String = "instance") -> ACPRemoteSessionCoordinator {
         .init(owner: .init(serverId: server, instanceId: instance)) { method, data in try await endpoint.request(method, data) }

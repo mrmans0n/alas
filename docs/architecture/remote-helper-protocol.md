@@ -247,8 +247,10 @@ Readers transactionally import complete pages into their own local SQLite
 store. Portable relationships are mapped to local IDs; user text and tool
 payload bytes are not path-rewritten. Composer drafts, process offsets, MCP
 registrations, and broker credentials remain local. Same-Mac mirrors keep the
-existing shared-SQLite fast path. Release, helper restart, and local Forget
-retain the remote replica; an authorized agent-history deletion removes it.
+existing shared-SQLite fast path. Observing a foreign or ownerless lease clears
+that shortcut, so a takeover and release between polls cannot hide a newer
+remote transcript. Release, helper restart, and local Forget retain the remote
+replica; an authorized agent-history deletion removes it.
 
 Replicated recovery state is authoritative on both initial and subsequent
 imports. A mirror remains recovery-pending until the writer publishes completion;
