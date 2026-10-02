@@ -166,16 +166,25 @@ final class PluginManager {
     }
 
     /// Deletes a plugin the catalog installed. Its approval and stored data stay, so reinstalling keeps them.
-    func uninstall(_ plugin: Plugin) async {
+    /// Returns the failure to show, or nil.
+    func uninstall(_ plugin: Plugin) async -> String? {
+        var failure: String?
         await serialized {
             await self.stopHosts { $0.pluginID == plugin.id }
             // Checked on disk after the last suspension, right before deleting: files changed since the scan the
             // row came from, or while the hosts stopped, are not the catalog's.
             if let current = self.catalogInstall(id: plugin.id), current.hash == plugin.hash {
-                try? FileManager.default.removeItem(at: current.folder)
+                do {
+                    try FileManager.default.removeItem(at: current.folder)
+                } catch {
+                    failure = "Could not remove the plugin: \(error.localizedDescription)"
+                }
+            } else {
+                failure = PluginCatalogError.installedLocally.description
             }
             await self.performReload()
         }
+        return failure
     }
 
     /// The catalog's own install of `id` as it is on disk right now: a real `Plugins/<id>` folder, not linked.

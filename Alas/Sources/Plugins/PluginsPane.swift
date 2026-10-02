@@ -134,7 +134,7 @@ struct PluginsPane: View {
             guard let plugin = manager.plugin(id: id) else { return }
             Task {
                 busy.insert(id)
-                await manager.uninstall(plugin)
+                installFailures[id] = await manager.uninstall(plugin)
                 busy.remove(id)
             }
         }
