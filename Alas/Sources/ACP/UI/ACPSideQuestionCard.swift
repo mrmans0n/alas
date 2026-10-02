@@ -15,7 +15,9 @@ struct ACPSideQuestionCard: View {
     let entry: ACPSideQuestion
     /// Nil until the side session exists.
     let side: ACPSession?
-    let policy: ACPPermissionPolicy?
+    /// Looked up when a permission request shows, so a reconnect's new
+    /// runner answers it rather than the stopped one.
+    let policy: () -> ACPPermissionPolicy?
     let typography: ACPChatTypography
     let onAsk: ACPSideQuestionAsk
     let onDismiss: () -> Void
@@ -71,7 +73,7 @@ struct ACPSideQuestionCard: View {
         let entry: ACPSideQuestion
         @ObservedObject var side: ACPSession
         @ObservedObject var transcript: ACPTranscript
-        let policy: ACPPermissionPolicy?
+        let policy: () -> ACPPermissionPolicy?
         let typography: ACPChatTypography
         let onAsk: ACPSideQuestionAsk
         let onDismiss: () -> Void
@@ -185,7 +187,7 @@ struct ACPSideQuestionCard: View {
                     ForEach(side.queue.filter { $0.status == .pending || $0.lastError != nil }) { item in
                         queuedFollowUp(item)
                     }
-                    if transcript.pendingPermission != nil, let policy {
+                    if transcript.pendingPermission != nil, let policy = policy() {
                         ACPPermissionPrompt(
                             session: side,
                             policy: policy,

@@ -15,7 +15,7 @@ struct ACPSessionManagerDisposalTests {
         let (manager, store, session) = try await attachedManager(
             client: client,
             supportsClose: true,
-            resumeClient: resumeClient
+            laterClients: [resumeClient]
         )
 
         try await manager.disposeSession(id: session.id)
@@ -138,15 +138,21 @@ struct ACPSessionManagerDisposalTests {
 
     @Test("a newer side question is current while the one it replaces is still closing")
     func newerSideQuestionWinsDuringTeardown() async throws {
-        let client = ACPMockClient()
+        // One adapter per session, as in the app: tearing down the first
+        // side session must not drop the connection the second attaches on.
+        let firstSideClient = ACPMockClient()
         let closeStarted = AsyncStream<Void>.makeStream()
         let releaseClose = AsyncStream<Void>.makeStream()
-        client.scriptAsync(method: "session/close") { _ in
+        firstSideClient.scriptAsync(method: "session/close") { _ in
             closeStarted.continuation.yield()
             for await _ in releaseClose.stream { break }
             return Data("{}".utf8)
         }
-        let (manager, _, parent) = try await attachedManager(client: client, supportsClose: true)
+        let (manager, _, parent) = try await attachedManager(
+            client: ACPMockClient(),
+            supportsClose: true,
+            laterClients: [firstSideClient, ACPMockClient()]
+        )
         _ = try await manager.startSideQuestion(parentID: parent.id, question: "first")
 
         let second = Task { @MainActor in
@@ -587,7 +593,7 @@ struct ACPSessionManagerDisposalTests {
         let (manager, _, session) = try await attachedManager(
             client: retiringClient,
             supportsClose: true,
-            resumeClient: replacementClient
+            laterClients: [replacementClient]
         )
         retiringClient.script(method: "session/close") { _ in Data("{}".utf8) }
         replacementClient.script(method: "session/close") { _ in Data("{}".utf8) }
@@ -635,7 +641,7 @@ struct ACPSessionManagerDisposalTests {
         let (manager, _, session) = try await attachedManager(
             client: retiringClient,
             supportsClose: true,
-            resumeClient: replacementClient
+            laterClients: [replacementClient]
         )
         retiringClient.script(method: "session/close") { _ in Data("{}".utf8) }
         replacementClient.script(method: "session/close") { _ in Data("{}".utf8) }
@@ -664,15 +670,17 @@ struct ACPSessionManagerDisposalTests {
         #expect(replacementClient.requestsAfterShutdownCount == 0)
     }
 
+    /// `client` serves the first connection and `laterClients` the following
+    /// ones in order; the last client serves any beyond them.
     private func attachedManager(
         client: ACPMockClient,
         supportsClose: Bool,
-        resumeClient: ACPMockClient? = nil
+        laterClients: [ACPMockClient] = []
     ) async throws -> (ACPSessionManager, ACPSessionStore, ACPSession) {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-disposal-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: path.path)
-        let clients = resumeClient.map { [client, $0] } ?? [client]
+        let clients = [client] + laterClients
         for client in clients {
             client.script(method: "initialize") { _ in
                 try JSONEncoder().encode(ACPInitializeResult(

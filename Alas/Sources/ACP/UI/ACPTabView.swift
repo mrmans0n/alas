@@ -1313,7 +1313,7 @@ private struct ACPSideQuestionSlot: View {
             ACPSideQuestionCard(
                 entry: entry,
                 side: side,
-                policy: side.flatMap { manager.permissionPolicy(for: $0.id) },
+                policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
                 typography: typography,
                 onAsk: { text, completion in
                     if let side {
