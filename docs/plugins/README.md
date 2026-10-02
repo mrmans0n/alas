@@ -30,8 +30,9 @@ JSON messages with Alas, and Alas answers only the requests the user approved.
 ```
 
 Alas calls into the plugin with one message at a time. The plugin answers by
-sending messages back. That is the whole interface: there is no file, process,
-or environment access, and the network only through `http/fetch`.
+sending messages back. That is the whole interface: the network only through
+`http/fetch`, and files and processes only through the full-access capabilities
+you approve separately.
 
 ## What a plugin can do today
 
@@ -50,11 +51,10 @@ or environment access, and the network only through `http/fetch`.
   **act** on them: send to an agent, start a run, add a review comment (API 6).
 - **Make web requests** to listed hosts, keep **settings and secrets**, and run
   on **timers** (API 5).
+- With **full access**, approved on its own: **run the commands** its manifest
+  declares and **read and write files** inside a worktree (API 6).
 
-## What it cannot do yet
-
-Run processes or read and write files. These are planned; see the roadmap in
-[#1560](https://github.com/mrmans0n/alas/issues/1560).
+The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
 ## Where to go next
 
@@ -64,7 +64,7 @@ Run processes or read and write files. These are planned; see the roadmap in
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
 | Look up the runtime, limits, and every method | [API v4 reference](api-v4.md) |
 | Add commands, notifications and session events | [API v5](api-v5.md) |
-| Add badges, Changes and Run commands and panels, git/run/review events, and act on sessions and runs | [API v6](api-v6.md) |
+| Add badges, Changes and Run commands and panels, git/run/review events, act on sessions and runs, run commands and use files | [API v6](api-v6.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
