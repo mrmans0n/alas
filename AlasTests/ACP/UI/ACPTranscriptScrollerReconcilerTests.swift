@@ -1556,3 +1556,113 @@ struct ACPTranscriptScrollerReconcilerWindowLayoutTests {
         }
     }
 }
+
+@MainActor
+@Suite("ACPTranscriptRowHostingPool parking")
+struct ACPTranscriptRowHostingPoolParkingTests {
+    private func spec(_ id: String, token: Int = 0) -> ACPTranscriptRowSpec {
+        ACPTranscriptRowSpec(
+            id: id,
+            equalityToken: ACPRowEqualityToken(token),
+            build: { AnyView(Color.clear.frame(height: 100)) }
+        )
+    }
+
+    @Test("a released row with unchanged content comes back as the same view, flagged for re-measure")
+    func revivesSameInstance() {
+        let pool = ACPTranscriptRowHostingPool()
+        let (first, _) = pool.view(for: spec("a"))
+        _ = first.measuredHeight(forWidth: 400)
+        pool.release(id: "a")
+        #expect(pool.mountedView(id: "a") == nil)
+
+        let (again, contentChanged) = pool.view(for: spec("a"))
+
+        #expect(again === first)
+        #expect(contentChanged)
+        #expect(again.needsRemeasure)
+        #expect(pool.mountedView(id: "a") === first)
+    }
+
+    @Test("a released row whose content changed is rebuilt")
+    func changedTokenBuildsFresh() {
+        let pool = ACPTranscriptRowHostingPool()
+        let (first, _) = pool.view(for: spec("a", token: 1))
+        pool.release(id: "a")
+
+        let (again, _) = pool.view(for: spec("a", token: 2))
+
+        #expect(again !== first)
+        #expect(!again.needsRemeasure)
+    }
+
+    @Test("parking evicts the least recently released view beyond capacity and never touches mounted views")
+    func evictsLeastRecentlyReleased() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 2)
+        let mounted = pool.view(for: spec("m")).view
+        let a = pool.view(for: spec("a")).view
+        let b = pool.view(for: spec("b")).view
+        let c = pool.view(for: spec("c")).view
+        pool.release(id: "a")
+        pool.release(id: "b")
+        pool.release(id: "c")    // capacity 2: "a" is evicted
+
+        #expect(pool.parkedIdsForTesting == ["b", "c"])
+        #expect(pool.mountedView(id: "m") === mounted)
+        #expect(pool.view(for: spec("a")).view !== a)
+        #expect(pool.view(for: spec("b")).view === b)
+        #expect(pool.view(for: spec("c")).view === c)
+    }
+
+    @Test("purging parked views makes every remount build fresh")
+    func purgeBuildsFresh() {
+        let pool = ACPTranscriptRowHostingPool()
+        let first = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        pool.purgeParked()
+
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== first)
+    }
+
+    @Test("capacity zero keeps today's behavior: every remount builds fresh")
+    func zeroCapacityNeverParks() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 0)
+        let first = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== first)
+    }
+
+    @Test("a parked view cannot report size changes to the transcript")
+    func parkedViewIsSilent() {
+        let pool = ACPTranscriptRowHostingPool()
+        var invalidated: [String] = []
+        pool.onRowIntrinsicSizeInvalidated = { invalidated.append($0) }
+        let view = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        view.invalidateIntrinsicContentSize()
+
+        #expect(invalidated.isEmpty)
+        _ = pool.view(for: spec("a"))
+        view.invalidateIntrinsicContentSize()
+        #expect(invalidated == ["a"])
+    }
+
+    @Test("measuring clears the re-measure flag")
+    func measuringClearsFlag() {
+        let pool = ACPTranscriptRowHostingPool()
+        let view = pool.view(for: spec("a")).view
+        _ = view.measuredHeight(forWidth: 400)
+        pool.release(id: "a")
+        _ = pool.view(for: spec("a"))
+        #expect(view.needsRemeasure)
+
+        _ = view.measuredHeight(forWidth: 400)
+
+        #expect(!view.needsRemeasure)
+    }
+}
