@@ -269,7 +269,10 @@ final class PluginManager {
         }
         try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
         let staging = stagingRoot.appending(path: id)
-        try? fileManager.removeItem(at: staging)
+        // Leftovers from an earlier attempt must go entirely, or they would be moved in with the release.
+        if (try? staging.checkResourceIsReachable()) == true || (try? staging.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            try fileManager.removeItem(at: staging)
+        }
         try fileManager.createDirectory(
             at: staging.appending(path: manifest.entry).deletingLastPathComponent(), withIntermediateDirectories: true)
         try manifestData.write(to: staging.appending(path: "plugin.json"))
