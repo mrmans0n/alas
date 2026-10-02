@@ -155,6 +155,21 @@ struct PluginCatalogTests {
         #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "plugin.js").path))
     }
 
+    /// A file someone added next to the release makes the folder theirs: Remove keeps it.
+    @MainActor
+    @Test func removeKeepsAFolderWithAddedFiles() async throws {
+        let f = try Fixture()
+        defer { f.cleanUp() }
+        await f.manager.reload()
+        #expect(await f.install() == nil)
+        let plugin = try #require(f.manager.plugin(id: "io.x.p"))
+
+        try Data("notes".utf8).write(to: plugin.folder.appending(path: "notes.txt"))
+        #expect(await f.manager.uninstall(plugin) == PluginCatalogError.installedLocally.description)
+        #expect(FileManager.default.fileExists(atPath: plugin.folder.appending(path: "notes.txt").path))
+        #expect(f.manager.catalogPathIsTaken(id: "io.x.p") == false)
+    }
+
     /// A folder at `Plugins/<id>` the catalog did not put there, even a broken one, is the user's.
     @MainActor
     @Test func installNeverReplacesAFolderTheCatalogDoesNotOwn() async throws {

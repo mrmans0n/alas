@@ -190,8 +190,26 @@ final class PluginManager {
     }
 
     /// The catalog's own install of `id` as it is on disk right now: a real `Plugins/<id>` folder, not linked.
+    /// Also requires the folder to hold nothing but the release's two files, so files someone added are never
+    /// deleted by Remove or replaced by Update.
     private func catalogInstall(id: String) -> Plugin? {
-        Self.discover(in: directory).plugins.first { $0.id == id && $0.isCatalogFolder }
+        guard let plugin = Self.discover(in: directory).plugins.first(where: { $0.id == id && $0.isCatalogFolder }) else { return nil }
+        let folder = plugin.folder.standardizedFileURL.path + "/"
+        let files = (FileManager.default.enumerator(at: plugin.folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .map { String($0.standardizedFileURL.path.dropFirst(folder.count)) }
+        let release = Set(["plugin.json", plugin.manifest.entry])
+        // The entry may sit in a subfolder, which the enumerator lists too.
+        let folders = Set(release.flatMap { path in
+            path.split(separator: "/").dropLast().indices.map { path.split(separator: "/")[...$0].joined(separator: "/") }
+        })
+        return Set(files).subtracting(folders) == release ? plugin : nil
+    }
+
+    /// Whether something the catalog did not install sits at `Plugins/<id>`, symlinks included, without following one.
+    func catalogPathIsTaken(id: String) -> Bool {
+        let path = directory.appending(path: id).path
+        guard (try? FileManager.default.attributesOfItem(atPath: path)) != nil else { return false }
+        return !(plugin(id: id)?.isCatalogFolder ?? false)
     }
 
     /// The release's two files, checked against the record before anything is written.
