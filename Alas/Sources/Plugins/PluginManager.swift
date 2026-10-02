@@ -250,11 +250,11 @@ final class PluginManager {
             throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
         }
         let target = directory.appending(path: id)
-        // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded, and
-        // so do local copies quarantined as duplicates of each other: adding a catalog copy would only add a third.
+        // A hand-built copy of this plugin elsewhere wins, even one that appeared while the files downloaded. Any copy
+        // quarantined as a duplicate means a local one exists too, so adding a catalog copy would only add another.
         let found = Self.discover(in: directory)
         if found.plugins.contains(where: { $0.id == id && !$0.isCatalogFolder })
-            || found.invalid.contains(where: { $0.pluginID == id && $0.folder.lastPathComponent != id }) {
+            || found.invalid.contains(where: { $0.pluginID == id }) {
             throw PluginCatalogError.installedLocally
         }
         await stopHosts { $0.pluginID == id }
