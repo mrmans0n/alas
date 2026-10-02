@@ -50,9 +50,8 @@ enum DiffFeedbackLaneResolver {
 enum DiffPaneLineNumberGutterGeometry {
     static let minimumThickness: CGFloat = 42
     static let horizontalPadding: CGFloat = 8
-    static var labelFont: NSFont {
-        NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-    }
+    /// Shared instance; see `ACPMentionChipMetrics.labelFont`.
+    static let labelFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
 
     static func thickness(labels: [String]) -> CGFloat {
         let maxDigits = labels
