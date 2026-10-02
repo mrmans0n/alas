@@ -556,16 +556,25 @@ struct PluginHostTests {
                 .map { $0.text.contains(#""visible":true"#) }
         }
         await host.activate()
-        await host.setPanelVisible("p", true)
-        await host.setPanelVisible("p", true)
-        await host.setPanelVisible("nope", true)
-        await host.setPanelVisible("p", false)
-        await host.setPanelVisible("p", false)
-        await host.setPanelVisible("p", true)
+        await host.setPanelVisible("p", true)?.value
+        await host.setPanelVisible("p", true)?.value
+        await host.setPanelVisible("nope", true)?.value
+        await host.setPanelVisible("p", false)?.value
+        await host.setPanelVisible("p", false)?.value
+        await host.setPanelVisible("p", true)?.value
         #expect(sent() == [true, false, true])
         await host.deactivate()
         await host.activate()
         #expect(sent() == [true])
+
+        // Shown and hidden at once, without waiting: the count is settled before either delivery runs, so a
+        // restart afterwards does not think the panel is on screen.
+        host.setPanelVisible("p", false)
+        host.setPanelVisible("p", true)
+        await host.setPanelVisible("p", false)?.value
+        await host.deactivate()
+        await host.activate()
+        #expect(sent().isEmpty)
     }
 
     @Test func taskStartNeedsTheGrant() async throws {

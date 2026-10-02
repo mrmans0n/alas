@@ -134,6 +134,7 @@ final class PluginHost {
     /// Running fetches by token, so ending the instance can cancel them rather than let them finish unheard.
     @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var nextFetchToken = 0
+    @ObservationIgnored private var panelDelivery: Task<Void, Never>?
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored private let source: Data
@@ -209,13 +210,22 @@ final class PluginHost {
     }
 
     /// Each place that shows the panel holds one count; `panel/visible` is sent when the first appears or the last goes.
-    func setPanelVisible(_ panel: String, _ visible: Bool) async {
-        guard manifest.panels.contains(where: { $0.id == panel }) else { return }
+    /// Counts synchronously, so rapid show and hide calls can never leave a stale count, and delivers each
+    /// transition after the previous one, so the plugin sees them in order. Returns the delivery, if any.
+    @discardableResult
+    func setPanelVisible(_ panel: String, _ visible: Bool) -> Task<Void, Never>? {
+        guard manifest.panels.contains(where: { $0.id == panel }) else { return nil }
         let before = visiblePanels[panel, default: 0]
         let after = max(0, before + (visible ? 1 : -1))
         visiblePanels[panel] = after
-        guard (before == 0) != (after == 0), state == .active else { return }
-        await sendPanelVisible(panel, visible)
+        guard (before == 0) != (after == 0), state == .active else { return nil }
+        let previous = panelDelivery
+        let delivery = Task { [weak self] in
+            await previous?.value
+            await self?.sendPanelVisible(panel, visible)
+        }
+        panelDelivery = delivery
+        return delivery
     }
 
     private func sendPanelVisible(_ panel: String, _ visible: Bool) async {

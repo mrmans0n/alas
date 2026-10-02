@@ -72,17 +72,17 @@ struct PluginPanelView: View {
         // ponytail: shown means selected in a mounted pane; window occlusion is not tracked as it is for canvases.
         .onAppear {
             reported = host
-            if let host { Task { await host.setPanelVisible(panel, true) } }
+            if let host { host.setPanelVisible(panel, true) }
         }
         .onDisappear {
-            if let reported { Task { await reported.setPanelVisible(panel, false) } }
+            if let reported { reported.setPanelVisible(panel, false) }
             reported = nil
         }
         // A reload or update replaces the host while the panel stays on screen: the report moves to the new one.
         .onChange(of: host.map(ObjectIdentifier.init)) { _, _ in
-            if let reported, reported !== host { Task { await reported.setPanelVisible(panel, false) } }
+            if let reported, reported !== host { reported.setPanelVisible(panel, false) }
             reported = host
-            if let host { Task { await host.setPanelVisible(panel, true) } }
+            if let host { host.setPanelVisible(panel, true) }
         }
     }
 }
