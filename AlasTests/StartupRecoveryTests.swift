@@ -176,15 +176,27 @@ struct StartupRecoveryTests {
         var didFinish = false
         coordinator.finish = { didFinish = true }
         let state = AppState(restoreActiveTabsOnStartup: false)
+        state.selectedWorktreeId = "restored"
 
         #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
 
-        state.completeStartupRecovery(rightPaneReady: false)
+        state.completeStartupRecovery(
+            rightPaneReady: state.hasCompletedStartupRightPaneRefresh(for: "restored")
+        )
 
         #expect(!state.suppressesRestoredRightPaneAfterAbandonedStartup)
         #expect(!didFinish)
 
-        state.completeStartupRecovery(rightPaneReady: true)
+        state.completeStartupRightPaneRefresh(for: "other")
+        #expect(!state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.completeStartupRightPaneRefresh(for: "restored")
+        #expect(state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.beginStartupRightPaneRefresh()
+        #expect(!state.hasCompletedStartupRightPaneRefresh(for: "restored"))
+        state.completeStartupRightPaneRefresh(for: "restored")
+        state.completeStartupRecovery(
+            rightPaneReady: state.hasCompletedStartupRightPaneRefresh(for: "restored")
+        )
 
         #expect(didFinish)
     }
@@ -434,6 +446,14 @@ struct StartupRecoveryTests {
     }
 
     @Test func startupRecoveryWaitsForMountedRightPaneSnapshot() {
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneMounted: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .loaded,
+            ggAvailabilityHasProbed: true,
+            hasCompletedMountRefresh: false
+        ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneMounted: false,
             hasLoadedSnapshot: false,

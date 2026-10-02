@@ -856,7 +856,8 @@ struct CenterPaneView: View {
             hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
             isLoading: rightPaneState?.loading ?? false,
             ggStackLoadState: rightPaneState?.ggStackLoadState ?? .inactive,
-            ggAvailabilityHasProbed: GGAvailability.shared.hasProbed
+            ggAvailabilityHasProbed: GGAvailability.shared.hasProbed,
+            hasCompletedMountRefresh: state.hasCompletedStartupRightPaneRefresh(for: worktree.id)
         )
     }
 
@@ -865,9 +866,10 @@ struct CenterPaneView: View {
         hasLoadedSnapshot: Bool,
         isLoading: Bool,
         ggStackLoadState: GGStackLoadState,
-        ggAvailabilityHasProbed: Bool
+        ggAvailabilityHasProbed: Bool,
+        hasCompletedMountRefresh: Bool = true
     ) -> Bool {
-        !isRightPaneMounted || (hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
+        !isRightPaneMounted || (hasCompletedMountRefresh && hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
     }
 
     static func shouldCompleteStartupRecoveryForCenterPane(
