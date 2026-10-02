@@ -640,6 +640,15 @@ final class ACPSessionRunner {
                             result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
                         break
                     }
+                    // Agents may write without asking first, so the read-only
+                    // permission gate alone can't stop a side session.
+                    if self.session.readOnlyRestricted {
+                        self.session.recordReadOnlyBlock("write \(params.path)")
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
+                        break
+                    }
                     // Guard the actual disk write: if this runner has lost
                     // the session lease (takeover), deny the request rather
                     // than modifying the working tree on behalf of a session
@@ -1627,6 +1636,13 @@ final class ACPSessionRunner {
         let host = self.session.terminalHost
         switch req {
         case .create(let id, let p):
+            // Same as file writes: never rely on a permission request alone.
+            if session.readOnlyRestricted {
+                session.recordReadOnlyBlock("run \(p.command)")
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32002, message: "read-only side session", data: nil)))
+                break
+            }
             // Gate terminal creation on the lease: a runner that has lost
             // the writer lease must not start new terminal side effects in
             // the brief window before stand-down tears it down. This is

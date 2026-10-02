@@ -131,7 +131,7 @@ struct WorkspaceACPSessionTests {
                 capturedHost = host
                 return ACPConnection(client: client)
             },
-            launchSpecTransformer: { spec in
+            launchSpecTransformer: { spec, _ in
                 spec.agentID == "claude" ? spec.prependingArguments(["--dangerously-bypass-approvals-and-sandbox"]) : spec
             }
         )
@@ -166,7 +166,7 @@ struct WorkspaceACPSessionTests {
                 launchedSpec = spec
                 return ACPConnection(client: client)
             },
-            launchSpecTransformer: { spec in
+            launchSpecTransformer: { spec, _ in
                 spec.agentID == "gemini"
                     ? spec.overridingCommandAndSetupCheck("/opt/tools/gemini-acp")
                     : spec

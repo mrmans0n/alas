@@ -63,6 +63,22 @@ struct ACPHarnessBridgeTests {
         #expect(acknowledged.first?.1 == "s1")
     }
 
+    @Test("a hidden side session reports activity only once promoted")
+    func sideSessionReportsAfterPromotion() async {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "side", agentId: "claude", worktreeId: "wt", title: "/btw: why?")
+        session.readOnlyRestricted = true
+        bridge.observe(session: session)
+        session.transcript.streamingState = .streaming
+        await Task.yield()
+        #expect(harness.activityBySession["side"] == nil)
+
+        session.readOnlyRestricted = false
+        await Task.yield()
+        #expect(harness.activityBySession["side"]?.state == .busy)
+    }
+
     @Test("streamingState .streaming writes .busy")
     func streamingMapsToBusy() async {
         let harness = makeHarness()

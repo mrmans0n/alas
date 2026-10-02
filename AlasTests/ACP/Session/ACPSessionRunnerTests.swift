@@ -3170,6 +3170,32 @@ struct ACPSessionRunnerTests {
         #expect(permission?["title"]?.value as? String == "Run command?")
     }
 
+    @Test("read-only side sessions refuse direct file writes and terminals")
+    func readOnlySessionRefusesDirectSideEffects() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.readOnlyRestricted = true
+        runner.start()
+        defer { runner.stop() }
+        let path = "btw-\(UUID()).txt"
+
+        mock.emitFile(.write(id: .number(1), params: .init(sessionId: "s", path: path, content: "no")))
+        mock.emitTerminal(.create(id: .number(2), params: ACPTerminalCreateParams(
+            sessionId: "s", command: "/bin/echo", args: ["no"], env: nil, cwd: nil, outputByteLimit: nil)))
+
+        try await waitUntil { mock.fileResponses[.number(1)] != nil && mock.terminalResponses[.number(2)] != nil }
+        guard case .failure(let writeError) = mock.fileResponses[.number(1)],
+              case .failure(let terminalError) = mock.terminalResponses[.number(2)]
+        else {
+            Issue.record("expected both side effects to be refused")
+            return
+        }
+        #expect(writeError.code == -32002)
+        #expect(terminalError.code == -32002)
+        let target = URL(fileURLWithPath: FileManager.default.temporaryDirectory.path).appendingPathComponent(path)
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+        #expect(runner.session.readOnlyBlockedTools.count == 2)
+    }
+
     @Test("inbound $/cancel_request cancels a pending fs/write_text_file instead of writing")
     func cancelRequestCancelsPendingFileWrite() async throws {
         let (runner, mock) = try makeRunner()

@@ -15,11 +15,17 @@ struct ACPSideQuestion: Equatable, Sendable {
 
 enum ACPSideQuestionError: LocalizedError, Equatable {
     case notAccepted
+    case unsafeMode
+    case unenforceable
 
     var errorDescription: String? {
         switch self {
         case .notAccepted:
             "The side session couldn't accept the question."
+        case .unsafeMode:
+            "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
+        case .unenforceable:
+            "This agent runs its tools without asking for permission, so a side question can't be kept read-only."
         }
     }
 }
@@ -48,6 +54,83 @@ enum ACPSideQuestionBoundaryPolicy {
         let firstLine = question.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         return "/btw: \(firstLine.trimmingCharacters(in: .whitespaces))"
     }
+}
+
+/// Agents whose read-only state Alas can actually enforce. The permission
+/// gate only sees calls an agent asks about, and agents run tools that the
+/// user's own rules allow without asking. Claude's plan mode and Codex's
+/// read-only sandbox hold regardless of those rules; other agents (OpenCode,
+/// Pi, Copilot, …) offer no such mode, so side questions refuse them.
+enum ACPSideQuestionSupportPolicy {
+    static func canEnforceReadOnly(agentId: String) -> Bool {
+        ["claude", "codex"].contains(agentId)
+    }
+}
+
+/// What a read-only `/btw` side session may run. Reads are allowed so the
+/// side agent can look things up; `fetch` asks because it sends data off the
+/// machine; anything else, including unknown kinds, is rejected.
+enum ACPSideQuestionPermissionRule {
+    enum Decision: Equatable { case allow, ask, reject }
+
+    static func decide(kind: String?) -> Decision {
+        switch kind {
+        case "read", "search", "think": .allow
+        case "fetch": .ask
+        default: .reject
+        }
+    }
+}
+
+/// The mode a side session switches to: plan when the agent has one,
+/// otherwise away from modes that approve tool calls on their own. Works on
+/// the mode chip's options, whether the agent backs them with
+/// `session/set_mode` or a config option. Adapters that don't send
+/// `_meta.kind` fall back to well-known mode ids; a current mode that stays
+/// unclassified is not trusted.
+enum ACPSideQuestionModePolicy {
+    /// Nil when the current mode can stay.
+    static func preferredModeID(options: [ChipSpec.Item], currentID: String?) -> String? {
+        if let plan = options.first(where: { kind(of: $0) == .plan }) {
+            return plan.id == currentID ? nil : plan.id
+        }
+        guard !allows(options: options, currentID: currentID) else { return nil }
+        return options.first { kind(of: $0) == .standard }?.id
+    }
+
+    /// Whether a config-option mode change took effect. An empty echo comes
+    /// from adapters that don't return the refreshed options, and stands; a
+    /// full one must show the target selected.
+    static func acceptsEcho(_ echoed: [ACPConfigOption], configID: String, target: String) -> Bool {
+        guard !echoed.isEmpty else { return true }
+        return echoed.first { $0.id == configID }?.currentValue == .string(target)
+    }
+
+    /// Whether a side session may ask its question in `currentID`.
+    static func allows(options: [ChipSpec.Item], currentID: String?) -> Bool {
+        guard !options.isEmpty else { return true }
+        guard let current = options.first(where: { $0.id == currentID }),
+              let kind = kind(of: current)
+        else { return false }
+        // These run tool calls without asking, so the read-only permission
+        // gate would never see them.
+        return kind != .fullAccess && kind != .autoReview
+    }
+
+    private static func kind(of item: ChipSpec.Item) -> ACPModeKind? {
+        item.kind ?? knownKinds[item.id]
+    }
+
+    /// Mode ids of Claude and Codex adapters that predate `_meta.kind`.
+    private static let knownKinds: [String: ACPModeKind] = [
+        "default": .standard,
+        "read-only": .standard,
+        "plan": .plan,
+        "auto": .autoReview,
+        "agent": .autoReview,
+        "bypassPermissions": .fullAccess,
+        "agent-full-access": .fullAccess,
+    ]
 }
 
 private extension ACPMessage {
