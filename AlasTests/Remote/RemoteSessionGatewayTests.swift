@@ -1595,6 +1595,130 @@ struct RemoteSessionGatewayTests {
         return s
     }
 
+    private func largeFileEdits() -> [ACPMessage] {
+        // Repeated full before/after copies reproduce the peer session that
+        // failed despite having fewer than the 90-row snapshot limit.
+        let text = String(repeating: "let value = \"source/path\"\n", count: 30_000)
+        return (0..<7).map { index in
+            .fileEdit(id: UUID(), .init(
+                path: "Source.swift", added: 1, removed: 1,
+                oldText: text, newText: text + "// edit \(index)\n"))
+        }
+    }
+
+    private func expectFileEditContents(
+        _ rows: ArraySlice<RemoteWireMessage>, originals: [ACPMessage], firstIndex: Int
+    ) throws {
+        #expect(rows.map(\.index) == Array(firstIndex..<(firstIndex + originals.count)))
+        for (row, original) in zip(rows, originals) {
+            guard case .fileEdit(_, let expected) = original else {
+                Issue.record("Expected file-edit fixture")
+                return
+            }
+            #expect(row.kind == "fileEdit")
+            let json = try #require(row.json)
+            let edit = try JSONDecoder().decode(ACPMessage.FileEdit.self, from: Data(json.utf8))
+            #expect(edit == expected)
+        }
+    }
+
+    @Test func byteBoundedHistoryRetainsLargeEditsAcrossPages() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithUserMessages(0)
+        let originals = largeFileEdits()
+        session.transcript.messages = originals
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        defer { gateway.close() }
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        let snapshot = try #require(sent.first)
+        guard case .transcriptSnapshot(_, _, _, _, let first, let total, _, _) = snapshot else {
+            Issue.record("Expected initial snapshot")
+            return
+        }
+        #expect(try JSONEncoder().encode(snapshot).count <= 8 * 1024 * 1024)
+        #expect(first > 0, "Large rows must reduce the initial window")
+        #expect(total == originals.count)
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        mirror.apply(snapshot)
+        while let before = mirror.olderPageBeforeIndex {
+            sent.removeAll()
+            await gateway.handle(.fetchOlder(sessionId: "s1", beforeIndex: before, limit: 200))
+            let page = try #require(sent.first)
+            #expect(try JSONEncoder().encode(page).count <= 8 * 1024 * 1024)
+            mirror.apply(page)
+            try #require(mirror.firstIndex < before, "Every page must advance without gaps")
+        }
+        try expectFileEditContents(mirror.messages[...], originals: originals, firstIndex: 0)
+        #expect(session.transcript.messages == originals)
+    }
+
+    @Test func oversizedRowDoesNotPreventPagingPastIt() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithUserMessages(90)
+        let original = ACPMessage.fileEdit(id: UUID(), .init(
+            path: "Large.swift", added: 1, removed: 0,
+            newText: String(repeating: "x", count: 5 * 1024 * 1024)))
+        session.transcript.messages.insert(original, at: 0)
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        defer { gateway.close() }
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        await gateway.handle(.fetchOlder(sessionId: "s1", beforeIndex: 1, limit: 90))
+        let frame = try #require(sent.first)
+        guard case .transcriptPage(_, _, let first, let rows) = frame else {
+            Issue.record("Expected older page")
+            return
+        }
+        #expect(first == 0)
+        #expect(rows.count == 1)
+        #expect(rows.first?.index == 0)
+        #expect(rows.first?.kind == "systemNotice")
+        #expect(try JSONEncoder().encode(frame).count <= 8 * 1024 * 1024)
+        #expect(session.transcript.messages[0] == original)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func largeLiveUpdatesArriveInBoundedOrderedBatches() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithUserMessages(1)
+        provider.sessions["s1"] = session
+        let (stream, continuation) = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(provider: provider) { continuation.yield($0) }
+        defer {
+            gateway.close()
+            continuation.finish()
+        }
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        let edits = largeFileEdits()
+        session.transcript.messages.append(contentsOf: edits)
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        var revisions: [Int] = []
+        for await frame in stream {
+            switch frame {
+            case .transcriptSnapshot:
+                mirror.apply(frame)
+            case .transcriptDelta(_, _, _, let rows, _, let revision):
+                #expect(try JSONEncoder().encode(frame).count <= 8 * 1024 * 1024)
+                let needsResubscribe = mirror.apply(frame)
+                #expect(!needsResubscribe, "Splitting must not trigger a resubscription")
+                revisions.append(revision)
+                if rows.last?.index == edits.count {
+                    continuation.finish()
+                }
+            default:
+                break
+            }
+        }
+        #expect(revisions.count > 1)
+        #expect(revisions == Array(1..<(revisions.count + 1)))
+        #expect(mirror.messages.first?.text == "msg 0")
+        try expectFileEditContents(mirror.messages.dropFirst(), originals: edits, firstIndex: 1)
+    }
+
     @Test func snapshotOfLongTranscriptIsTailWindowed() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithUserMessages(200)

@@ -10,10 +10,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
 
+### Performance
+
+- Compress remote WebSocket traffic with negotiated permessage-deflate for compatible native peers and browsers. Each message uses a fresh compression dictionary, and incoming messages still have a 16 MB decoded-size limit. Clients without compression support keep the existing transport.
+
 ### 🐛 Fixes
 
 - Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
 - Stop warning that the agent harness didn't start the Alas MCP server when a session on the HTTP transport re-attaches or reconnects to its still-running agent. The agent keeps its connection to the same server and never re-announces it. The warning also waits 35 seconds instead of 12, past Claude Code's MCP connect timeout, so a harness that is only slow to connect no longer flashes it (#1701).
+- Keep native peer sessions connected when older peers send transcript snapshots larger than 1 MiB.
+- Bound transcript snapshots, history pages, and live-update batches to 8 MiB. Individual rows exceeding the 4 MiB remote-display budget show an explicit notice; their full content remains on the owning Mac.
+
+### Internal
+
+- Build each release app only for its named architecture and verify bundled binaries before signing.
+- Save Swift compiler caches only from `main`, avoiding PR-scoped duplicates that compete with release dependency caches.
 
 ## [0.19.22] - 2026-10-02
 

@@ -236,6 +236,74 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(snap) == snap)
     }
 
+    @Test(arguments: [
+        nil,
+        "",
+        "Plain transcript content.",
+        String(repeating: "\"\\/", count: 128),
+        String(repeating: (0..<32).map { String(UnicodeScalar($0)!) }.joined(), count: 16),
+        String(repeating: "é漢字e\u{301}\u{1d11e}\u{2028}\u{2029}", count: 64),
+    ] as [String?], [Int.min, 0, Int.max])
+    func wireMessageTransportByteCountBoundsEncoding(content: String?, index: Int) throws {
+        let row = RemoteWireMessage(
+            stableId: content ?? "m0",
+            kind: content ?? "agent",
+            text: content,
+            json: content,
+            index: index
+        )
+        let encoded = try JSONEncoder().encode(row)
+        #expect(row.transportByteCount >= encoded.count)
+    }
+
+    @Test(arguments: [
+        RemoteWireMessage(stableId: "m3", kind: "agent", text: "A complete reply.", json: nil, index: 3),
+        RemoteWireMessage(stableId: "m4", kind: "toolCall", text: nil, json: #"{"name":"bash","output":"done"}"#, index: 4),
+        RemoteWireMessage(stableId: "m5", kind: "plan", text: "A plan.", json: #"{"entries":[]}"#, index: 5),
+    ])
+    func wireMessageAtTransportBudgetRetainsAllContent(row: RemoteWireMessage) throws {
+        let budget = row.transportByteCount
+        let bounded = row.boundedForTransport(maximumBytes: budget)
+        #expect(bounded.message == row)
+        #expect(bounded.byteCount >= (try JSONEncoder().encode(bounded.message)).count)
+        #expect(bounded.byteCount <= budget)
+    }
+
+    @Test(arguments: [
+        RemoteWireMessage(
+            stableId: "large-text", kind: "agent",
+            text: String(repeating: "x", count: 8192), json: nil, index: 42
+        ),
+        RemoteWireMessage(
+            stableId: "escaped-text", kind: "user",
+            text: String(repeating: "\u{0}", count: 512), json: nil, index: 43
+        ),
+        RemoteWireMessage(
+            stableId: "large-tool", kind: "toolCall", text: nil,
+            json: #"{"output":""# + String(repeating: "x", count: 8192) + #""}"#, index: 44
+        ),
+        RemoteWireMessage(
+            stableId: "large-edit", kind: "fileEdit", text: "A file edit.",
+            json: #"{"diff":""# + String(repeating: "x", count: 8192) + #""}"#, index: 45
+        ),
+    ])
+    func oversizedWireMessageBecomesVisibleNoticeAtSamePosition(row: RemoteWireMessage) throws {
+        let budget = 1024
+        #expect(try JSONEncoder().encode(row).count > budget)
+
+        let bounded = row.boundedForTransport(maximumBytes: budget)
+        let encoded = try JSONEncoder().encode(bounded.message)
+        let decoded = try JSONDecoder().decode(RemoteWireMessage.self, from: encoded)
+        #expect(encoded.count <= bounded.byteCount)
+        #expect(bounded.byteCount <= budget)
+        #expect(decoded.stableId == row.stableId)
+        #expect(decoded.index == row.index)
+        #expect(decoded.kind == "systemNotice")
+        #expect(decoded.json == nil)
+        let notice = try #require(decoded.text)
+        #expect(notice.contains(row.kind))
+    }
+
     @Test func sessionListRoundTrips() throws {
         let list = RemoteServerMessage.sessionList(sessions: [
             RemoteSessionSummary(id: "s1", title: "Build feature", agentId: "claude", status: "streaming", canDrive: false)

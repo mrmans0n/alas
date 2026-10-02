@@ -60,6 +60,7 @@ struct ACPQueueItemRow: View {
         .onHover { inside in
             if inside { hover.enter() } else { hover.leave() }
         }
+        .onDisappear { hover.reset() }
         .contextMenu { contextMenuItems }
         .modifier(PendingDraggableModifier(
             enabled: item.status == .pending && item.scheduledAt == nil,

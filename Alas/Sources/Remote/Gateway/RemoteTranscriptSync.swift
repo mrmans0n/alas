@@ -12,6 +12,16 @@ final class RemoteTranscriptSync {
     /// Above this many dirty messages, a tail re-snapshot is cheaper than a delta.
     static let dirtyResnapshotThreshold = 200
     static let toolContentCacheLimit = 128
+    /// Leave headroom below the native receiver's 16 MB cap. These budgets
+    /// apply to JSON bytes, including escaping of structured message content.
+    static let maxFrameBytes = 8 * 1024 * 1024
+    static let maxMessageBytes = 4 * 1024 * 1024
+
+    static func payloadBudget(sessionId: String) -> Int {
+        // Reserve envelope keys, integer fields, array separators and a
+        // federation prefix. Session IDs may require JSON escaping too.
+        maxFrameBytes - 1024 - 6 * sessionId.utf8.count
+    }
 
     var sentVersion = 0     // change-log version covered by the last send
     var epoch = 0           // transcript epoch the client knows

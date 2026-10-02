@@ -9,6 +9,58 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
     let text: String?
     let json: String?         // JSON string for structured kinds; nil otherwise
     let index: Int            // transcript position; the client orders and windows by this
+
+    /// A conservative bound for compact JSONEncoder output, without serializing
+    /// or copying the bodies. The fixed overhead covers keys, punctuation,
+    /// string quotes and a signed 64-bit index. Absent bodies add no bytes.
+    var transportByteCount: Int {
+        var count = 64
+            + Self.escapedTransportByteCount(stableId)
+            + Self.escapedTransportByteCount(kind)
+        if let text {
+            count += 10 + Self.escapedTransportByteCount(text)
+        }
+        if let json {
+            count += 10 + Self.escapedTransportByteCount(json)
+        }
+        return count
+    }
+
+    /// The budget must fit the row's identity and a short omission notice.
+    /// Returning the count lets callers batch rows without rescanning the body.
+    func boundedForTransport(maximumBytes: Int) -> (message: RemoteWireMessage, byteCount: Int) {
+        let byteCount = transportByteCount
+        guard byteCount > maximumBytes else { return (self, byteCount) }
+
+        let notice = RemoteWireMessage(
+            stableId: stableId,
+            kind: "systemNotice",
+            text: "This \(kind) content is too large for remote display. The full content is available on the owning Mac.",
+            json: nil,
+            index: index
+        )
+        let noticeByteCount = notice.transportByteCount
+        precondition(
+            noticeByteCount <= maximumBytes,
+            "The transport budget must fit the row identity and oversized-content notice."
+        )
+        return (notice, noticeByteCount)
+    }
+
+    private static func escapedTransportByteCount(_ value: String) -> Int {
+        var count = 0
+        for byte in value.utf8 {
+            switch byte {
+            case 0x00...0x1f:
+                count += 6 // \u00xx also bounds the shorter escapes such as \n.
+            case 0x22, 0x2f, 0x5c:
+                count += 2 // Quote, slash and backslash.
+            default:
+                count += 1
+            }
+        }
+        return count
+    }
 }
 
 /// One queued prompt as sent to the web client. Deliberately carries an image

@@ -152,6 +152,9 @@ final class RemotePeerConnection: RemotePeerConnecting {
             if Task.isCancelled { return }
             guard let url = Self.socketURL(for: origin) else { continue }
             let candidate = session.webSocketTask(with: url, protocols: [token])
+            // Older peers send entire transcripts in one frame. Match our
+            // server's frame cap rather than URLSession's default 1 MiB.
+            candidate.maximumMessageSize = WebSocketFrame.maxPayloadLength
             candidate.resume()
             let first: RemoteServerMessage
             switch await receive(from: candidate, timeout: config.handshakeTimeout) {

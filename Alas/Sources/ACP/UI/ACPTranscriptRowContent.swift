@@ -45,9 +45,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     //   only fires on messages that are, at that same moment, leaving the
     //   render window (`ACPTranscript.trimHiddenMessage`) — so the flag never
     //   flips on a message that remains part of an already-rendered,
-    //   gate-compared row. When a row re-enters the window later it is
-    //   constructed fresh (no prior instance to gate against), so the current
-    //   `isContentTruncated` value is always picked up correctly.
+    //   gate-compared row. Leaving the transcript spec window drops its parked
+    //   view too, so re-entering that window builds with the current
+    //   `isContentTruncated` value. Scrolling within the window can reuse it.
     // - `session.terminalHost` is itself a `let` (stable reference) on
     //   `ACPSession`; the terminal card's own live output flows through a
     //   nested `@ObservedObject var terminal: ACPTerminal` inside
