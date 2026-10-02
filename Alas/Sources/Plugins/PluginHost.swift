@@ -127,7 +127,9 @@ final class PluginHost {
     @ObservationIgnored private var warnedNotifyNotGranted = false
     /// Bumped whenever an instance starts or ends, so a fetch reply or timer from an earlier one is dropped.
     @ObservationIgnored private var instance = 0
-    @ObservationIgnored private var fetchesInFlight = 0
+    /// Running fetches by token, so ending the instance can cancel them rather than let them finish unheard.
+    @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
+    @ObservationIgnored private var nextFetchToken = 0
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored private let source: Data
@@ -532,7 +534,7 @@ final class PluginHost {
         guard (params.body?.utf8.count ?? 0) <= PluginHTTP.maxBodyBytes else {
             return errorReply(id, code: -32602, "the request body is larger than 512 KiB")
         }
-        guard fetchesInFlight < Self.maxFetchesInFlight else { return errorReply(id, code: -32003, "too many requests in flight") }
+        guard fetches.count < Self.maxFetchesInFlight else { return errorReply(id, code: -32003, "too many requests in flight") }
         var request = URLRequest(url: url, timeoutInterval: PluginHTTP.timeout)
         request.httpMethod = params.method.uppercased()
         request.httpShouldHandleCookies = false
@@ -570,24 +572,27 @@ final class PluginHost {
             resolved += rest
             request.setValue(resolved, forHTTPHeaderField: name)
         }
-        fetchesInFlight += 1
+        let token = nextFetchToken
+        nextFetchToken += 1
         let instance = instance
         let transport = transport
-        Task { [weak self, request, redirectHosts] in
+        fetches[token] = Task { [weak self, request, redirectHosts] in
             let outcome: Result<(Data, HTTPURLResponse), any Error>
             do {
                 outcome = .success(try await transport.data(for: request, redirectHosts: redirectHosts))
             } catch {
                 outcome = .failure(error)
             }
-            await self?.fetchSettled(id: id, instance: instance, outcome)
+            await self?.fetchSettled(id: id, token: token, instance: instance, outcome)
         }
         return nil
     }
 
-    private func fetchSettled(id: JSONRPCID, instance: Int, _ outcome: Result<(Data, HTTPURLResponse), any Error>) async {
+    private func fetchSettled(
+        id: JSONRPCID, token: Int, instance: Int, _ outcome: Result<(Data, HTTPURLResponse), any Error>
+    ) async {
         guard instance == self.instance else { return }
-        fetchesInFlight -= 1
+        fetches[token] = nil
         guard state == .active else { return }
         let tooLarge = "the response is too large for one message"
         var reply: Data
@@ -640,10 +645,11 @@ final class PluginHost {
         return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
     }
 
-    /// Drops what belongs to the instance that is ending: its timers, and the replies to its fetches.
+    /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled.
     private func endInstance() {
         instance += 1
-        fetchesInFlight = 0
+        for fetch in fetches.values { fetch.cancel() }
+        fetches = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]
     }
