@@ -1249,7 +1249,13 @@ final class RemoteSessionGateway {
                 index: index
             )
         case .fileEdit(_, let edit):
-            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit), index: index)
+            return .init(
+                stableId: sid,
+                kind: "fileEdit",
+                text: "\(edit.path)  +\(edit.added) -\(edit.removed)",
+                json: Self.encodeJSON(edit),
+                index: index
+            )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
         }

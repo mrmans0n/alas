@@ -3017,8 +3017,7 @@ function renderMessage(m, sid, open) {
   } else if (m.kind === "toolCall") {
     node = toolCard(jparse(m.json) || {});
   } else if (m.kind === "fileEdit") {
-    const o = jparse(m.json) || {};
-    node = structCard("Edit", o.path || o.title || "file", o.diff || o.content || m.json || "");
+    node = structCard("Edit", m.text || "file", "");
   } else if (m.kind === "plan") {
     node = structCard("Plan", "", planText(jparse(m.json)) || m.json || "");
   } else {

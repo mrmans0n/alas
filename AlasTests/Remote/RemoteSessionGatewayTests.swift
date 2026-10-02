@@ -1622,6 +1622,31 @@ struct RemoteSessionGatewayTests {
         }
     }
 
+    @Test func fileEditSnapshotCarriesCompactSummary() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithUserMessages(0)
+        session.transcript.messages = [
+            .fileEdit(id: UUID(), .init(
+                path: "Sources/Large.swift", added: 12, removed: 3,
+                oldText: String(repeating: "old\n", count: 100_000),
+                newText: String(repeating: "new\n", count: 100_000)))
+        ]
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        defer { gateway.close() }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+
+        guard case .transcriptSnapshot(_, _, _, let rows, _, _, _, _) = try #require(sent.first) else {
+            Issue.record("Expected initial snapshot")
+            return
+        }
+        let row = try #require(rows.first)
+        #expect(row.text == "Sources/Large.swift  +12 -3")
+        #expect(row.json != nil, "Native peers still need the full file edit payload")
+    }
+
     @Test func byteBoundedHistoryRetainsLargeEditsAcrossPages() async throws {
         let provider = FakeSessionsProvider()
         let session = try makeSessionWithUserMessages(0)
