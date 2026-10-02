@@ -67,7 +67,7 @@ final class PluginSettings {
     }
 
     /// Settings are configuration, not data: a value this size always fits the messages that carry them.
-    static let maxStringBytes = 4096
+    nonisolated static let maxStringBytes = 4096
 
     func set(_ key: String, _ value: PluginSettingValue) {
         if case .string(let text) = value, text.utf8.count > Self.maxStringBytes { return }
