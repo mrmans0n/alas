@@ -58,7 +58,8 @@ struct TabBarView: View {
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     /// Plugin commands for an agent session tab's context menu, run with its session id.
-    var sessionPluginCommands: [PluginCommandItem] = []
+    /// Per tab: a session a shared workspace checkout owns gets none, since it is not the project's.
+    var sessionPluginCommands: (TabID) -> [PluginCommandItem] = { _ in [] }
     var onRunSessionPluginCommand: (PluginCommandItem, String) -> Void = { _, _ in }
     @State private var tabStripWidth: CGFloat = 0
     @Environment(\.theme) var theme
@@ -188,8 +189,9 @@ struct TabBarView: View {
                 Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
                 Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
                 Divider()
-                if !sessionPluginCommands.isEmpty {
-                    PluginCommandButtons(items: sessionPluginCommands) { onRunSessionPluginCommand($0, session.sessionId) }
+                let commands = sessionPluginCommands(tab.id)
+                if !commands.isEmpty {
+                    PluginCommandButtons(items: commands) { onRunSessionPluginCommand($0, session.sessionId) }
                     Divider()
                 }
             }

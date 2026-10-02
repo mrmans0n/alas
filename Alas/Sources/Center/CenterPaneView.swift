@@ -409,7 +409,9 @@ struct CenterPaneView: View {
                 },
                 pluginCommands: state.pluginCommands(.toolbar, projectID: worktree.projectId),
                 onRunPluginCommand: { state.runPluginCommand($0, slot: .toolbar, worktreeID: worktree.id) },
-                sessionPluginCommands: state.pluginCommands(.sessionMenu, projectID: worktree.projectId),
+                sessionPluginCommands: { [sessionCommands = state.pluginCommands(.sessionMenu, projectID: worktree.projectId)] id in
+                    sharedOwnerForTab(id) == nil ? sessionCommands : []
+                },
                 onRunSessionPluginCommand: { item, session in
                     state.runPluginCommand(item, slot: .sessionMenu, worktreeID: worktree.id, detail: session)
                 }

@@ -140,6 +140,9 @@ struct PluginEventState: Equatable, Sendable {
     var workspace: PluginWorkspaceSnapshot
     var runs: [PluginRunState] = []
     var reviews: [PluginReviewState] = []
+    /// Every run id seen so far, so a run that comes back (a failed launch rolling the record back to it) is not
+    /// reported again. ponytail: grows by one id per run for the life of the host.
+    var seenRuns: Set<String> = []
 
     /// What changed since `old`. Polls are half a second apart, so that is how often a worktree's `git.changed`
     /// can fire; a dirty count that is first learned (the scan finishing) is not a change.
@@ -176,6 +179,7 @@ struct PluginEventState: Equatable, Sendable {
         }
         for run in runs {
             let previous = runsBefore[run.run]
+            if previous == nil, old.seenRuns.contains(run.run) { continue }
             let params = PluginEventParams(worktree: run.worktree, script: run.script, run: run.run)
             if previous == nil { events.append(PluginEventMessage(event: .runStarted, params: params)) }
             // A run that started and finished between two polls gets both.

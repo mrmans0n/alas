@@ -5,7 +5,8 @@ import Testing
 private func state(
     _ worktrees: [(String, Int?, Bool)] = [("w", 1, false)],
     runs: [PluginRunState] = [],
-    reviews: [PluginReviewState] = []
+    reviews: [PluginReviewState] = [],
+    seenRuns: Set<String> = []
 ) -> PluginEventState {
     PluginEventState(
         workspace: PluginWorkspaceSnapshot(worktrees: worktrees.map { id, files, current in
@@ -13,7 +14,7 @@ private func state(
                 id: id, branch: id, current: current,
                 dirty: files.map { PluginWorkspaceSnapshot.Dirty(files: $0, conflicts: 0) }, sessions: [])
         }),
-        runs: runs, reviews: reviews)
+        runs: runs, reviews: reviews, seenRuns: seenRuns)
 }
 
 private func run(_ id: String, _ outcome: RunOutcome?) -> PluginRunState {
@@ -88,6 +89,10 @@ struct PluginWorkspaceSnapshotTests {
         StateCase(before: state(), after: state([("w", 1, true)]), events: ["focus.changed:w"]),
         StateCase(before: state([("w", 1, true)]), after: state(), events: []),
         StateCase(before: state(), after: state(runs: [run("r1", nil)]), events: ["run.started:w:r1::"]),
+        // A failed launch rolled the record back to a run already reported: only the abandoned one ends.
+        StateCase(
+            before: state(runs: [run("r2", nil)], seenRuns: ["r1", "r2"]), after: state(runs: [run("r1", .succeeded)]),
+            events: ["run.finished:w:r2:unknown:"]),
         // Still going at the last poll, then restarted before this one: the old run ends as unknown.
         StateCase(
             before: state(runs: [run("r1", nil)]), after: state(runs: [run("r2", nil)]),

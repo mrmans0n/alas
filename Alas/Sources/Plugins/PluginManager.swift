@@ -457,11 +457,12 @@ final class PluginManager {
             guard let project = projectsByID[key.projectID] else { continue }
             let scoped = actions(project)
             let subscribed = Set(host.manifest.events)
-            let state = PluginEventState(
+            let previous = lastSnapshots[key]
+            var state = PluginEventState(
                 workspace: scoped.snapshot(),
                 runs: subscribed.isDisjoint(with: [.runStarted, .runFinished]) ? [] : scoped.runs(),
                 reviews: subscribed.contains(.reviewChanged) ? scoped.reviews() : [])
-            let previous = lastSnapshots[key]
+            state.seenRuns = (previous?.seenRuns ?? []).union(state.runs.map(\.run))
             guard state != previous else { continue }
             // The first state after a start is the baseline, so a restart does not replay every session or run.
             if let previous { await host.events(state.events(since: previous)) }
