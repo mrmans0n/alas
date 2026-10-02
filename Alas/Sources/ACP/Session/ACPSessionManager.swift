@@ -1368,7 +1368,7 @@ final class ACPSessionManager: ObservableObject {
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         cancelAutoReconnect(sessionId: sessionId)
-        await coordinator.flush(sessionId: sessionId)
+        guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
         coordinator.stopPublishing(sessionId: sessionId)
         coordinator.markUnavailable(sessionId: sessionId)
@@ -3341,7 +3341,7 @@ final class ACPSessionManager: ObservableObject {
             guard case .ready = setup else { throw ACPSessionDiscoveryError.setupRequired(setup.reasonText) }
             let launch = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
-            await coordinator.flush(sessionId: sessionId)
+            guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             coordinator.stopPublishing(sessionId: sessionId)
             if let localToken {
@@ -4374,9 +4374,10 @@ extension ACPSessionManager {
         await flushAllPersistence()
         if ownedLeaseTokens[sessionId] == leaseToken, let coordinator = remoteCoordinator,
            let fence = coordinator.fence(sessionId: sessionId), fence.token == leaseToken {
-            await coordinator.flush(sessionId: sessionId)
-            try? await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
-            await coordinator.release(sessionId: sessionId, expectedFence: fence)
+            if await coordinator.flush(sessionId: sessionId) {
+                try? await coordinator.killProc(sessionId: sessionId, expectedFence: fence)
+                await coordinator.release(sessionId: sessionId, expectedFence: fence)
+            }
         }
         if ownedLeaseTokens[sessionId] == leaseToken, effectiveRemoteHost() != nil {
             try? await persistence.disableReplicaExport(sessionId: sessionId,

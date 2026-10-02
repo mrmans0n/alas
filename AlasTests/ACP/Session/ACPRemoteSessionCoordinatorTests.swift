@@ -16,6 +16,7 @@ actor ReplicaEndpoint {
     private var failContinuation = false
     private var coordinationSupported = true
     private var leaseFresh = true
+    private var publicationUnavailable = false
     private let recordId: String
 
     init(recordId: String = "record") { self.recordId = recordId }
@@ -23,6 +24,7 @@ actor ReplicaEndpoint {
     func disconnectDuringRead(_ value: Bool) { failContinuation = value }
     func setCoordinationSupported(_ value: Bool) { coordinationSupported = value }
     func expireLease() { leaseFresh = false }
+    func setPublicationUnavailable(_ value: Bool) { publicationUnavailable = value }
     private func encoded<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
     private var lease: RemoteSessionLease {
@@ -63,6 +65,9 @@ actor ReplicaEndpoint {
             status = params.status
             return try encoded(lease)
         case "replica/publish":
+            if publicationUnavailable {
+                throw NSError(domain: "TransientPublicationFailure", code: 1)
+            }
             let params = try decode(RemoteSessionPublishParams.self, data)
             try validate(params.fence)
             revision += 1

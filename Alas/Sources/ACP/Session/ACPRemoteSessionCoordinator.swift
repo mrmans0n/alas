@@ -247,9 +247,32 @@ final class ACPRemoteSessionCoordinator {
         }
     }
 
-    func flush(sessionId: String) async {
-        wake(sessionId: sessionId)
+    /// A destructive lifecycle transition requires a confirmed, fully drained fence.
+    @discardableResult
+    func flush(sessionId: String) async -> Bool {
+        guard let expectedFence = fence(sessionId: sessionId) else { return false }
         await drains[sessionId]?.value
+        guard fence(sessionId: sessionId) == expectedFence else { return false }
+        guard let publication = publications[sessionId] else { return hasAuthority(sessionId: sessionId) }
+        if !hasAuthority(sessionId: sessionId) {
+            do {
+                guard try await heartbeat(sessionId: sessionId, status: publication.status()) else { return false }
+            } catch {
+                if fence(sessionId: sessionId) == expectedFence, error.isRemoteSessionLeaseLoss {
+                    stopPublishing(sessionId: sessionId)
+                    Task { await publication.onLeaseLost() }
+                }
+                return false
+            }
+        }
+        guard fence(sessionId: sessionId) == expectedFence else { return false }
+        wake(sessionId: sessionId)
+        while let drain = drains[sessionId] {
+            await drain.value
+            guard fence(sessionId: sessionId) == expectedFence, hasAuthority(sessionId: sessionId) else { return false }
+        }
+        return fence(sessionId: sessionId) == expectedFence && hasAuthority(sessionId: sessionId)
+            && pending[sessionId] == nil && !dirty.contains(sessionId)
     }
 
     func stopPublishing(sessionId: String) {

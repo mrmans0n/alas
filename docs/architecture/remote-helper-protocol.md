@@ -226,6 +226,10 @@ require `leaseFence`, and the authority check and process mutation share that
 transaction. `expectedStdinOffset` still deduplicates retries but does not grant
 authority. Reading or attaching to output does not grant stdin authority.
 
+Explicit takeover seizes first and imports the last committed remote replica.
+It does not wait for predecessor acknowledgement; Mac-local writes whose
+publication is unacknowledged are outside that shared cutoff.
+
 Mirrors report remote activity only while the observed foreign lease is fresh;
 an expired owner cannot keep a stale busy indicator alive.
 
@@ -256,6 +260,11 @@ fence. During manager disposal, remote publication stays alive until stopped
 runners have flushed and their final replica changes have drained before lease
 release. The coordinator shuts down once the disposed manager has no owned
 leases, including after an in-flight attachment releases its lease.
+
+After a publication failure, final flush reconfirms the same fence and drains
+pending batches before any fenced kill or release. If synchronization remains
+unavailable, Alas retains the local outbox and leaves remote ownership to expire
+instead of claiming a clean release.
 
 ## Security
 

@@ -42,15 +42,21 @@ import Foundation
         #expect(manager.isMirror(sessionId: session.id))
     }
 
-    @Test("manager disposal publishes the final queued transcript before releasing remote ownership")
-    func disposalPublishesPendingTranscriptBeforeRemoteLeaseRelease() async throws {
+    @Test("disposal releases remote ownership only after final transcript publication succeeds", arguments: [Optional<Bool>.none, true, false])
+    func disposalPublishesPendingTranscriptBeforeRemoteLeaseRelease(publicationRecovers: Bool?) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let (manager, session, _, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        let (manager, session, store, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
         defer { coordinator.shutdown() }
+        await endpoint.setPublicationUnavailable(publicationRecovers != nil)
         let message = ACPMessage.user(id: UUID(), text: "Final transcript before disposal", attachments: [])
         session.transcript.messages.append(message)
         #expect(runner.persistIndices([0]))
+        if let publicationRecovers {
+            await runner.flushPersistence()
+            await coordinator.flush(sessionId: session.id)
+            await endpoint.setPublicationUnavailable(!publicationRecovers)
+        }
         runner.stop()
         manager.shutdownBackgroundTasks()
         await manager.flushAllPersistence()
@@ -63,14 +69,17 @@ import Foundation
         defer { reader.shutdown() }
         let lease = try #require(try await reader.observe(sessionId: "mirror",
             key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")))
-        #expect(lease.owner == nil)
+        #expect(lease.owner == (publicationRecovers == false ? coordinator.owner : nil))
         let mirrorStore = try ACPSessionStore(path: folder.appendingPathComponent("mirror.sqlite").path)
         try mirrorStore.upsertSession(.init(id: "mirror", agentId: "claude", title: "Mirror",
             remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         try await reader.syncMirror(sessionId: "mirror", lease: lease,
             persistence: ACPSessionPersistence(path: mirrorStore.path)) { true }
-        #expect(try mirrorStore.loadMessages(sessionId: "mirror").map(\.payload) == [ACPMessageCodec.encode(message)])
+        let payload = try ACPMessageCodec.encode(message)
+        let expected = publicationRecovers == false ? [] : [payload]
+        #expect(try mirrorStore.loadMessages(sessionId: "mirror").map(\.payload) == expected)
+        #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [payload])
     }
 
     private func remoteWriter(in folder: URL) async throws -> (
