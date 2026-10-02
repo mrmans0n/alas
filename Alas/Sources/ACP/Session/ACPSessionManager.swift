@@ -1798,9 +1798,6 @@ final class ACPSessionManager: ObservableObject {
             guard let parent = sessions[parentID], parent.hydrationState == .ready else {
                 throw ACPSessionForkCreationError.sourceUnavailable
             }
-            guard ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: parent.agentId) else {
-                throw ACPSideQuestionError.unenforceable
-            }
             let title = ACPSideQuestionBoundaryPolicy.title(for: question)
             if let boundary = ACPSideQuestionBoundaryPolicy.boundary(
                 messages: parent.transcript.messages,
@@ -1834,7 +1831,7 @@ final class ACPSessionManager: ObservableObject {
         guard sideQuestions[parentID]?.id == entry.id else { return side }
         // Attach enters the read-only mode before it marks the session ready;
         // a failed attach would otherwise queue the question for a later one.
-        guard side.agentState == .ready, await enterReadOnlyMode(side) else {
+        guard side.agentState == .ready, await enterSideSessionMode(side) else {
             await discardSideSession(id: side.id)
             failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
             throw ACPSideQuestionError.unsafeMode
@@ -1847,6 +1844,13 @@ final class ACPSessionManager: ObservableObject {
         }
         sideQuestions[parentID]?.isSubmitted = true
         return side
+    }
+
+    /// Enters a read-only mode where the agent offers one. Only agents whose
+    /// read-only mode Alas relies on fail without it; the rest ask anyway,
+    /// and the card says read-only isn't guaranteed.
+    private func enterSideSessionMode(_ side: ACPSession) async -> Bool {
+        await enterReadOnlyMode(side) || !ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: side.agentId)
     }
 
     /// Moves a side session out of modes that run tool calls without asking,
@@ -6770,12 +6774,12 @@ extension ACPSessionManager {
             modelModeRestorationGates[sessionId] = nil
             // Every connection starts in the agent's default mode. A side
             // session re-enters a read-only one before its queue can drain,
-            // and stays unready if it can't.
+            // and stays unready if it relies on one and can't.
             if session.readOnlyRestricted {
-                let isReadOnly = await enterReadOnlyMode(session)
+                let modeAccepted = await enterSideSessionMode(session)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                       session.agentState == .spawning else { return }
-                guard isReadOnly else {
+                guard modeAccepted else {
                     session.agentState = .failed(ACPSideQuestionError.unsafeMode.localizedDescription)
                     stderrTask.cancel()
                     return
