@@ -784,7 +784,11 @@ private struct ACPSessionView: View {
             // time the completion fires, the conditional checks in
             // purge/reinstate skip and the new draft survives.
             // `/btw` never reaches the main session: it opens a side question.
-            if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror {
+            // Only where `/btw` is offered; elsewhere an agent's own `/btw`
+            // goes through untouched.
+            if case .btw(let question)? = ACPAlasSlashCommand.parse(text), !isMirror,
+               !session.readOnlyRestricted,
+               ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId) {
                 // Side questions don't take attachments yet; keep the draft
                 // rather than drop them.
                 guard attachments.isEmpty else {

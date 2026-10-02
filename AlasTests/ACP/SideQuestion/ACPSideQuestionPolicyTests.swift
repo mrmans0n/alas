@@ -74,7 +74,7 @@ struct ACPSideQuestionPolicyTests {
     }
 
     @Test(
-        "card phase follows creation, session errors, and the answer",
+        "card phase follows creation, session errors, and the turn's output",
         arguments: [
             ("", nil, false, nil, false, false, ACPSideQuestionPhase.composing),
             ("q", nil, false, nil, false, false, .starting),
@@ -87,12 +87,12 @@ struct ACPSideQuestionPolicyTests {
     )
     func phase(
         question: String, creationError: String?, hasSession: Bool,
-        sessionError: String?, isTurnActive: Bool, hasAnswer: Bool,
+        sessionError: String?, isTurnActive: Bool, hasOutput: Bool,
         expected: ACPSideQuestionPhase
     ) {
         #expect(ACPSideQuestionPhase.resolve(
             question: question, creationError: creationError, hasSession: hasSession,
-            sessionError: sessionError, isTurnActive: isTurnActive, hasAnswer: hasAnswer
+            sessionError: sessionError, isTurnActive: isTurnActive, hasOutput: hasOutput
         ) == expected)
     }
 

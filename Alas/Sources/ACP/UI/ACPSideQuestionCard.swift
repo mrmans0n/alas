@@ -49,7 +49,7 @@ struct ACPSideQuestionCard: View {
                     hasSession: false,
                     sessionError: nil,
                     isTurnActive: false,
-                    hasAnswer: false
+                    hasOutput: false
                 ),
                 modelName: nil,
                 answer: nil,
@@ -116,7 +116,9 @@ struct ACPSideQuestionCard: View {
                 hasSession: true,
                 sessionError: side.lastError ?? failureReason,
                 isTurnActive: transcript.streamingState != .idle,
-                hasAnswer: !latestAnswer.isEmpty
+                hasOutput: latestTurn.dropFirst().contains {
+                    if case .user = $0 { false } else { true }
+                }
             )
             ACPSideQuestionCardChrome(
                 question: entry.question,

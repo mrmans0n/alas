@@ -77,12 +77,15 @@ enum ACPSideQuestionPhase: Equatable {
         hasSession: Bool,
         sessionError: String?,
         isTurnActive: Bool,
-        hasAnswer: Bool
+        hasOutput: Bool
     ) -> ACPSideQuestionPhase {
         if let error = creationError ?? sessionError { return .failed(error) }
         guard hasSession else { return question.isEmpty ? .composing : .starting }
-        if isTurnActive { return hasAnswer ? .streaming : .starting }
-        return hasAnswer ? .answered : .starting
+        // Output is anything the latest turn produced after its question:
+        // text, tool calls, or blocked calls. A finished turn with only tool
+        // calls is done, not still starting.
+        if isTurnActive { return hasOutput ? .streaming : .starting }
+        return hasOutput ? .answered : .starting
     }
 }
 
