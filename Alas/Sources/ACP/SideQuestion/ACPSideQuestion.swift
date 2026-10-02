@@ -96,6 +96,14 @@ enum ACPSideQuestionModePolicy {
         return options.first { kind(of: $0) == .standard }?.id
     }
 
+    /// Whether a config-option mode change took effect. An empty echo comes
+    /// from adapters that don't return the refreshed options, and stands; a
+    /// full one must show the target selected.
+    static func acceptsEcho(_ echoed: [ACPConfigOption], configID: String, target: String) -> Bool {
+        guard !echoed.isEmpty else { return true }
+        return echoed.first { $0.id == configID }?.currentValue == .string(target)
+    }
+
     /// Whether a side session may ask its question in `currentID`.
     static func allows(options: [ChipSpec.Item], currentID: String?) -> Bool {
         guard !options.isEmpty else { return true }

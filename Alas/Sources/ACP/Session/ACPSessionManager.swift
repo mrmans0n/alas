@@ -1858,6 +1858,7 @@ final class ACPSessionManager: ObservableObject {
             switch mode.source {
             case .mode:
                 try await runner.connection.setMode(sessionId: remoteID, modeId: target)
+                guard runners[side.id] === runner, sessions[side.id] === side else { return false }
                 side.currentMode = target
             case .configOption(let configID):
                 let echoed = try await runner.connection.setConfigOption(
@@ -1865,6 +1866,10 @@ final class ACPSessionManager: ObservableObject {
                     configId: configID,
                     value: .string(target)
                 )
+                guard runners[side.id] === runner, sessions[side.id] === side else { return false }
+                guard ACPSideQuestionModePolicy.acceptsEcho(echoed, configID: configID, target: target) else {
+                    return false
+                }
                 if !echoed.isEmpty {
                     side.availableConfigOptions = echoed
                 } else if let index = side.availableConfigOptions.firstIndex(where: { $0.id == configID }) {
