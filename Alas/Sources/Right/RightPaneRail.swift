@@ -6,13 +6,17 @@ import SwiftUI
 struct RightPaneRail: View {
     static let width: CGFloat = 36
 
-    let activeTab: RightPaneTab
+    /// Nil while a plugin panel is selected.
+    let activeTab: RightPaneTab?
     let collapsed: Bool
     let changesCount: Int
     var activeAgentCount: Int = 0
     var activeRunCount: Int = 0
     var activeScheduleCount: Int = 0
     var tabs: [RightPaneTab] = RightPaneTab.available()
+    var panels: [PluginPanelItem] = []
+    var activePanel: PluginPanelRef?
+    var onPanel: (PluginPanelRef) -> Void = { _ in }
     let onAction: (RightPaneRailAction) -> Void
 
     @Environment(\.theme) private var theme
@@ -21,7 +25,6 @@ struct RightPaneRail: View {
         VStack(spacing: 3) {
             ForEach(tabs, id: \.rawValue) { tab in
                 RightPaneRailButton(
-                    tab: tab,
                     label: Self.label(for: tab),
                     icon: Self.icon(for: tab),
                     state: RightPaneRailModel.tabState(for: tab, active: activeTab, collapsed: collapsed),
@@ -38,6 +41,22 @@ struct RightPaneRail: View {
                     }
                 )
             }
+            // Plugins can add any number of panels, so their part of the rail scrolls rather than overflowing.
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 3) {
+                    ForEach(panels) { panel in
+                        RightPaneRailButton(
+                            label: panel.title,
+                            icon: panel.icon,
+                            state: panel.ref != activePanel ? .inactive : collapsed ? .activeCollapsed : .active,
+                            badge: .none,
+                            collapsed: collapsed,
+                            onTap: { onPanel(panel.ref) }
+                        )
+                    }
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
@@ -72,7 +91,6 @@ struct RightPaneRail: View {
 }
 
 private struct RightPaneRailButton: View {
-    let tab: RightPaneTab
     let label: String
     let icon: String
     let state: RightPaneRailTabState

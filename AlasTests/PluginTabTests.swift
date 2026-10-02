@@ -76,4 +76,19 @@ struct PluginTabTests {
         #expect(name == expected)
         #expect(GitNameValidator.validateBranchName(name) == .valid)
     }
+
+    /// A selected panel survives only while its plugin has a host in the project; otherwise the pane shows its tab.
+    @Test func rightPanePanelsComeFromHostedPluginsAndASelectionFallsBack() throws {
+        func plugin(_ id: String, panels: String) throws -> PluginManifest {
+            try PluginManifest.parse(Data(#"{"id":"\#(id)","name":"P","version":"1","api":5,"entry":"p.js","contributes":{"panels":\#(panels)}}"#.utf8))
+        }
+        let a = try plugin("io.x.a", panels: #"[{"id":"issues","title":"Issues","icon":"checklist"},{"id":"b","title":"B"}]"#)
+        let b = try plugin("io.x.b", panels: #"[{"id":"issues","title":"Other"}]"#)
+        let items = PluginPanelItem.items([(a, true), (b, false)])
+        #expect(items.map(\.ref) == [PluginPanelRef(pluginID: "io.x.a", panelID: "issues"), PluginPanelRef(pluginID: "io.x.a", panelID: "b")])
+        #expect(items.map(\.icon) == ["checklist", PluginPanelContribution.defaultIcon])
+        #expect(PluginPanelItem.selected(PluginPanelRef(pluginID: "io.x.a", panelID: "b"), in: items)?.title == "B")
+        #expect(PluginPanelItem.selected(PluginPanelRef(pluginID: "io.x.b", panelID: "issues"), in: items) == nil)
+        #expect(PluginPanelItem.selected(nil, in: items) == nil)
+    }
 }

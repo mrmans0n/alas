@@ -1536,6 +1536,7 @@
 		B54B0BFA87B2566DB59C3D59 /* ConflictMarkerParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */; };
 		B574D2D5DF3129E326DCFCCF /* ShellEnvResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09246CDA0F77D86F05727407 /* ShellEnvResolverTests.swift */; };
 		B58874B0A135564BD2CD41B9 /* RepoMCPTrustBannerPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB428BCB1036DEEFCDC0694 /* RepoMCPTrustBannerPolicy.swift */; };
+		B5C122DBF5DD6D6C1266C955 /* PluginPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4B064183B1D357EF4E187E /* PluginPanelView.swift */; };
 		B5E38A6134CDE9F8D5EA76D1 /* CompletionWindowControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C4AE9D01CA02A9689AAE8B /* CompletionWindowControllerTests.swift */; };
 		B5EBF0EB9D4347CDF7EF4C33 /* InAppNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44FD44B95FB312A6A49BA500 /* InAppNotificationStore.swift */; };
 		B614CD7F894DD6908C903254 /* InstallNudgeBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */; };
@@ -2340,6 +2341,7 @@
 		0EE8745F3A4C6F0645D1D44A /* RemoteHelperInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHelperInstaller.swift; sourceTree = "<group>"; };
 		0EE97D2D6875CD6A1DBF4DE9 /* GitService+ReviewRequestDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+ReviewRequestDraft.swift"; sourceTree = "<group>"; };
 		0F2A5B37528AD21CAD5ED051 /* ACPSessionAgentStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionAgentStateTests.swift; sourceTree = "<group>"; };
+		0F4B064183B1D357EF4E187E /* PluginPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginPanelView.swift; sourceTree = "<group>"; };
 		0F68A9692F85197ED9E16262 /* WorktreesPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesPane.swift; sourceTree = "<group>"; };
 		0F6C56877C39525B529A251B /* MarkdownCodeBlockStyle+Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MarkdownCodeBlockStyle+Theme.swift"; sourceTree = "<group>"; };
 		0FA3C5D49DC1B6AB83479412 /* SSHHostPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHHostPicker.swift; sourceTree = "<group>"; };
@@ -7706,6 +7708,7 @@
 				B7C91A5C7EA37E4FF35F48E0 /* PluginManifest.swift */,
 				EB010CF79FE48FFF809044D4 /* PluginMessages.swift */,
 				512B1885624D4E69D7906ABA /* PluginNetwork.swift */,
+				0F4B064183B1D357EF4E187E /* PluginPanelView.swift */,
 				63DA8954B5EC0B75956C63F9 /* PluginRuntime.swift */,
 				335B2B000025A83F204A0524 /* PluginSettings.swift */,
 				017121A8305C387DF9EE82EE /* PluginsPane.swift */,
@@ -8974,6 +8977,7 @@
 				1FE191F15E75A5038B26EAF4 /* PluginManifest.swift in Sources */,
 				C5ADF774CCAB9DF5E6F64974 /* PluginMessages.swift in Sources */,
 				DE5A3757086CCBDB47DD4081 /* PluginNetwork.swift in Sources */,
+				B5C122DBF5DD6D6C1266C955 /* PluginPanelView.swift in Sources */,
 				19B7DAB42D0005FE63730ABF /* PluginRuntime.swift in Sources */,
 				3F6D38A1836E44BA242ED792 /* PluginSettings.swift in Sources */,
 				339717029FEA33AA03DC7016 /* PluginStorage.swift in Sources */,

@@ -230,8 +230,12 @@ final class RightPaneState: GGSplitCommitServicing {
     var activeTab: RightPaneTab = .changes {
         didSet {
             if oldValue != activeTab { endAttentionReveal() }
+            // Choosing a built-in tab, by the user or by a reveal, always shows it.
+            activePluginPanel = nil
         }
     }
+    /// A plugin panel shown instead of `activeTab` while it is set and still offered.
+    var activePluginPanel: PluginPanelRef?
     var attentionScrollRequest: AppKitDiffScrollRequest?
     private(set) var attentionRevealedTarget: AttentionJumpTarget?
     private var attentionRevealGeneration = 0
@@ -1613,7 +1617,7 @@ final class RightPaneState: GGSplitCommitServicing {
             if !didInitDefaultTab {
                 // The tab bar is live before this first refresh lands, so only
                 // claim the default when the user hasn't already picked a tab.
-                if activeTab == .changes, entries.isEmpty, commits.isEmpty, !tree.isEmpty {
+                if activeTab == .changes, activePluginPanel == nil, entries.isEmpty, commits.isEmpty, !tree.isEmpty {
                     activeTab = .files
                 }
                 didInitDefaultTab = true

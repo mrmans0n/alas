@@ -115,7 +115,11 @@ final class PluginHost {
     private(set) var frames: [Int: PluginFrame] = [:]
     private(set) var regions: [Int: [PluginRegion]] = [:]
     private(set) var views: [Int: PluginViewNode] = [:]
+    /// Panel trees, by the manifest's panel id.
+    private(set) var panelViews: [String: PluginViewNode] = [:]
     @ObservationIgnored private var visibleViews = 0
+    /// How many places show each panel. Owned by the UI, so it outlives a restart.
+    @ObservationIgnored private var visiblePanels: [String: Int] = [:]
     @ObservationIgnored private var lastTick: ContinuousClock.Instant?
     @ObservationIgnored private var deliveriesInFlight = 0
     /// One `task/start` at a time. The generation ties a completion to its own start, so a late,
@@ -130,6 +134,7 @@ final class PluginHost {
     /// Running fetches by token, so ending the instance can cancel them rather than let them finish unheard.
     @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var nextFetchToken = 0
+    @ObservationIgnored private var panelDelivery: Task<Void, Never>?
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored private let source: Data
@@ -197,6 +202,38 @@ final class PluginHost {
         await deliver(
             encode(JSONRPCEnvelope(id: Self.activateID, method: "alas/activate", params: params)),
             isActivation: true)
+        // A fresh instance learns which of its panels are already on screen.
+        for panel in manifest.panels where visiblePanels[panel.id, default: 0] > 0 {
+            guard state == .active else { return }
+            await sendPanelVisible(panel.id, true)
+        }
+    }
+
+    /// Each place that shows the panel holds one count; `panel/visible` is sent when the first appears or the last goes.
+    /// Counts synchronously, so rapid show and hide calls can never leave a stale count, and delivers each
+    /// transition after the previous one, so the plugin sees them in order. Returns the delivery, if any.
+    @discardableResult
+    func setPanelVisible(_ panel: String, _ visible: Bool) -> Task<Void, Never>? {
+        guard manifest.panels.contains(where: { $0.id == panel }) else { return nil }
+        let before = visiblePanels[panel, default: 0]
+        let after = max(0, before + (visible ? 1 : -1))
+        visiblePanels[panel] = after
+        guard (before == 0) != (after == 0), state == .active else { return nil }
+        let previous = panelDelivery
+        let instance = instance
+        let delivery = Task { [weak self] in
+            await previous?.value
+            // Meant for this instance only: a restart in between gets its own report after activating.
+            guard let self, self.instance == instance, !Task.isCancelled else { return }
+            await self.sendPanelVisible(panel, visible)
+        }
+        panelDelivery = delivery
+        return delivery
+    }
+
+    private func sendPanelVisible(_ panel: String, _ visible: Bool) async {
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "panel/visible", params: PluginPanelVisibleParams(panel: panel, visible: visible))))
     }
 
     func workspaceChanged(_ snapshot: PluginWorkspaceSnapshot) async {
@@ -254,6 +291,7 @@ final class PluginHost {
         frames = [:]
         regions = [:]
         views = [:]
+        panelViews = [:]
         lastTick = nil
     }
 
@@ -285,6 +323,13 @@ final class PluginHost {
         guard state == .active, let root = views[tab], Self.contains(root, id: id) else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "view/event", params: PluginViewEventParams(tab: tab, id: id, kind: kind, value: value))))
+    }
+
+    /// Only nodes in the panel's current tree can send events.
+    func viewEvent(panel: String, id: String, kind: String, value: String?) async {
+        guard state == .active, let root = panelViews[panel], Self.contains(root, id: id) else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "view/event", params: PluginViewEventParams(panel: panel, id: id, kind: kind, value: value))))
     }
 
     private static func contains(_ node: PluginViewNode, id: String) -> Bool {
@@ -652,6 +697,8 @@ final class PluginHost {
         fetches = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]
+        panelDelivery?.cancel()
+        panelDelivery = nil
     }
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
@@ -671,8 +718,17 @@ final class PluginHost {
             guard let header = try? JSONDecoder().decode(PluginParams<PluginViewRenderHeader>.self, from: data).params else {
                 return .violation("plugin sent a malformed view/render")
             }
-            guard tabIs(header.tab, .view) else {
-                return .violation("plugin sent view/render to tab \(header.tab), which is not a view tab")
+            switch (header.tab, header.panel) {
+            case (let tab?, nil):
+                guard tabIs(tab, .view) else {
+                    return .violation("plugin sent view/render to tab \(tab), which is not a view tab")
+                }
+            case (nil, let panel?):
+                guard manifest.panels.contains(where: { $0.id == panel }) else {
+                    return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which it does not declare"))
+                }
+            default:
+                return .violation("plugin sent a malformed view/render: needs exactly one of tab and panel")
             }
             // Re-serialised, so the tree decoder always gets UTF-8 whatever encoding the plugin used.
             guard let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
@@ -681,7 +737,7 @@ final class PluginHost {
             else { return .violation("plugin sent a malformed view/render") }
             switch PluginViewTree.decode(rootData) {
             case .success(let node):
-                views[header.tab] = node
+                if let panel = header.panel { panelViews[panel] = node } else if let tab = header.tab { views[tab] = node }
                 return .none
             case .failure(let error):
                 return .violation(Self.bounded("plugin sent a malformed view/render: \(error.reason)"))

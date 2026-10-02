@@ -4,14 +4,14 @@
 > [api-v4.md](api-v4.md); everything there still applies.
 
 API 5 adds commands, notifications, session events, settings and secrets, web
-requests and timers. It is being built in steps, so this page lists only what
+requests, timers and panels. It is being built in steps, so this page lists only what
 Alas already does.
 
 ## The `api` field
 
 Alas loads plugins with `"api": 4` or `"api": 5`. A plugin keeps working at
-API 4 until it uses something below: `contributes.commands`, `events`,
-`settings`, `network` and the `notify`, `network` and `timers` capabilities need
+API 4 until it uses something below: `contributes.commands`, `contributes.panels`,
+`events`, `settings`, `network` and the `notify`, `network` and `timers` capabilities need
 `"api": 5`. An API 4 manifest that uses them is
 refused, and so is an API 5 plugin on an Alas that only knows API 4, so a
 plugin never half-works.
@@ -199,3 +199,54 @@ At most 8 timers per instance (`-32003`). When one is due Alas sends the
 notification `timer/fired {id}` as a normal delivery, with the normal time
 limit. Timers belong to the instance: stopping, failing or restarting the plugin
 clears them, so set them again on `alas/activate`.
+
+## Panels
+
+A panel is a [view tree](api-v3.md#viewrender) shown outside the center tabs.
+For now the only place is the right pane, as a button in its rail after
+Changes, Files, Agent, Run and Schedules.
+
+```json
+{
+  "api": 5,
+  "contributes": {
+    "panels": [
+      { "id": "issues", "title": "Linear", "icon": "checklist", "location": "right" }
+    ]
+  }
+}
+```
+
+| Field | Rule |
+|---|---|
+| `id` | `[a-z0-9-]+(\.[a-z0-9-]+)*`, unique within the plugin and not also one of its tab ids. |
+| `title` | 1 to 40 characters after trimming. The rail button's tooltip and the pane's header. |
+| `icon` | Optional SF Symbol name; `puzzlepiece.extension` when omitted. |
+| `location` | Optional; `right` is the only one so far. A panel with a location this Alas does not know is skipped, not refused. |
+
+Up to 2 panels. The rail shows them while the plugin runs in the selected
+worktree's project, and keeps them while it has stopped with an error, so the
+panel can say so and offer Restart. Until the first render the panel reads
+"Loading…".
+
+Panels use the same messages as view tabs, with `"panel": "<id>"` in place of
+`"tab": <index>`:
+
+```json
+{ "jsonrpc": "2.0", "method": "view/render",
+  "params": { "panel": "issues", "root": { "id": "root", "kind": "vstack", "children": [] } } }
+{ "jsonrpc": "2.0", "method": "view/event",
+  "params": { "panel": "issues", "id": "refresh", "kind": "click" } }
+```
+
+The tree rules, limits and events are those of view tabs. A `view/render` must
+carry exactly one of `tab` and `panel`; one for a panel the manifest does not
+declare stops the plugin, as for an undeclared tab. Each panel keeps its own
+tree, and only nodes in that tree send events.
+
+Alas sends the notification `panel/visible {panel, visible}` when the panel is
+shown in the project and when it is no longer shown, so a plugin can fetch
+only while someone is looking. A panel counts as shown while it is the selected
+rail button of an open right pane. A plugin that starts or restarts while its
+panel is shown gets `panel/visible` with `visible: true` right after
+activation.

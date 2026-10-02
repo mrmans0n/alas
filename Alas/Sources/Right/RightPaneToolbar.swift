@@ -4,6 +4,8 @@ import SwiftUI
 /// panel, so this row carries per-tab context instead of a title.
 struct RightPaneToolbar: View {
     let tab: RightPaneTab
+    /// Set while a plugin panel is shown: the row names it and drops the tab's controls.
+    var panelTitle: String?
     var branch: String = ""
     var totalAdd: Int = 0
     var totalDel: Int = 0
@@ -37,15 +39,17 @@ struct RightPaneToolbar: View {
             // collapse to nothing when the branch name needs the whole row.
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            trailing
-                .layoutPriority(2)
-            if tab == .run {
-                runControls
+            if panelTitle == nil {
+                trailing
                     .layoutPriority(2)
-            }
-            if RightPaneToolbarModel.showsOverflowMenu(for: tab) {
-                overflowMenu
-                    .layoutPriority(2)
+                if tab == .run {
+                    runControls
+                        .layoutPriority(2)
+                }
+                if RightPaneToolbarModel.showsOverflowMenu(for: tab) {
+                    overflowMenu
+                        .layoutPriority(2)
+                }
             }
         }
         .padding(.leading, 10)
@@ -62,10 +66,10 @@ struct RightPaneToolbar: View {
     /// the other tabs' leading text is a summary, not a ref.
     private var leading: some View {
         HStack(spacing: 4) {
-            if tab == .changes {
+            if tab == .changes, panelTitle == nil {
                 Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
             }
-            Text(RightPaneToolbarModel.leading(
+            Text(panelTitle ?? RightPaneToolbarModel.leading(
                 for: tab,
                 branch: branch,
                 activeAgentCount: activeAgentCount,
