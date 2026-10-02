@@ -1746,7 +1746,10 @@ struct ACPTranscriptRowHostingPoolParkingTests {
         #expect(pool.parkedIdsForTesting.isEmpty)
 
         let mounted = pool.view(for: spec("a")).view
-        if changesToken { liveSpec = spec("a", token: 1); liveSpec.parksWhenReleased = false }
+        if changesToken {
+            liveSpec = spec("a", token: 1)
+            liveSpec.parksWhenReleased = false
+        }
         #expect(pool.view(for: liveSpec).view === mounted)
         pool.release(id: "a")
         #expect(pool.parkedIdsForTesting.isEmpty)
