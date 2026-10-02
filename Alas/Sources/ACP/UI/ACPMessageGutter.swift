@@ -78,6 +78,7 @@ struct ACPMessageGutter<Content: View>: View {
             .onHover { inside in
                 if inside { hover.enter() } else { hover.leave() }
             }
+            .onDisappear { hover.reset() }
     }
 
     @ViewBuilder private var actions: some View {

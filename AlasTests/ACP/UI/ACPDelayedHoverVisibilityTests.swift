@@ -3,6 +3,19 @@ import Testing
 
 @MainActor
 struct ACPDelayedHoverVisibilityTests {
+    @Test("reset clears retained hover immediately", arguments: [false, true])
+    func resetClearsImmediately(withPendingHide: Bool) {
+        let visibility = ACPDelayedHoverVisibility(hideDelayNanoseconds: 10_000_000_000)
+        visibility.enter()
+        if withPendingHide { visibility.leave() }
+
+        visibility.reset()
+
+        #expect(!visibility.isVisible)
+        visibility.enter()
+        #expect(visibility.isVisible)
+    }
+
     @Test func enterShowsImmediately() {
         let visibility = ACPDelayedHoverVisibility(hideDelayNanoseconds: 1_000_000)
 

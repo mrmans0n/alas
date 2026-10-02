@@ -559,6 +559,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         lastIndex = .min
                     }
                 }
+                let isActiveTurnRow = transcript.streamingState != .idle
+                    && Self.firstIndex(of: renderRow) >= (transcript.latestUserMessageIndex ?? 0)
+                if isActiveTurnRow || Self.hasLiveTool(in: renderRow, host: host) {
+                    specs[specs.count - 1].parksWhenReleased = false
+                }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
                 // a bundle can end exactly there but never straddle it.
@@ -576,6 +581,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             switch renderRow {
             case .message(let row), .toolCallGroupMember(let row, _): row.index
             case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members[0].index
+            }
+        }
+
+        private static func hasLiveTool(in renderRow: ACPTranscriptRenderRow, host: ACPTranscriptScroller) -> Bool {
+            let indices: [Int] = switch renderRow {
+            case .message(let row), .toolCallGroupMember(let row, _): [row.index]
+            case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members.map(\.index)
+            }
+            return indices.contains { index in
+                guard case .toolCall(let call) = host.transcript.messages[index] else { return false }
+                return call.status == "pending" || call.status == "in_progress" || call.terminalIds.contains { id in
+                    guard let terminal = host.session.terminalHost.terminal(id: id) else { return false }
+                    return !terminal.released && terminal.exitStatus == nil
+                }
             }
         }
 
@@ -1012,7 +1031,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         wrapRow(host: host) {
                             StreamingCaret().frame(width: 8, height: 14)
                         }
-                    }
+                    },
+                    parksWhenReleased: false
                 ))
             }
 
