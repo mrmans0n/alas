@@ -220,9 +220,12 @@ final class PluginHost {
         visiblePanels[panel] = after
         guard (before == 0) != (after == 0), state == .active else { return nil }
         let previous = panelDelivery
+        let instance = instance
         let delivery = Task { [weak self] in
             await previous?.value
-            await self?.sendPanelVisible(panel, visible)
+            // Meant for this instance only: a restart in between gets its own report after activating.
+            guard let self, self.instance == instance, !Task.isCancelled else { return }
+            await self.sendPanelVisible(panel, visible)
         }
         panelDelivery = delivery
         return delivery
@@ -694,6 +697,8 @@ final class PluginHost {
         fetches = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]
+        panelDelivery?.cancel()
+        panelDelivery = nil
     }
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
