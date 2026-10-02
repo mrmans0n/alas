@@ -717,3 +717,27 @@ reported zero of 2,127 files requiring formatting. The initial CI coverage audit
 failed only because the formatter-stopped builder never published a Swift test
 plan; that run did not execute Swift shards.
 
+The next CI builder compiled successfully, then failed Swift discovery because
+the execution policy still selected
+`freshInstallEnablesRuntimeWhenReadyArrivesDuringStateRead()`. Its replacement,
+`freshDownloadEnablesRequestedFeaturesAfterVerification()`, keeps the same
+verification/readiness gate, so the existing single-method isolation was
+migrated rather than discarded.
+
+Actual compiled-inventory discovery passed after that correction:
+12,505 definitions discovered, 22 excluded, 12,483 scheduled. The generated
+four-shard plan assigns the replacement to its own subprocess invocation.
+The exact discovery command was:
+
+```sh
+SWIFT_TEST_XCTESTRUN=/Users/nacho.lopez/Library/Developer/Xcode/DerivedData/Alas-azobvreaqnsrxzbrdxicpkwckfbr/Build/Products/Alas_macosx26.5-arm64.xctestrun \
+  python3 scripts/ci_swift_tests.py plan --shard-count 4 \
+  --directory /private/tmp/alas-ai-policy-verification-20261002
+```
+
+The replacement then passed as one test in one suite with `test-without-building`
+and the exact canonical `-only-testing` selector, in
+`/private/tmp/alas-ai-policy-isolated-green-20261002.xcresult`.
+No new test or isolation rule was added. Both arm64 and x86_64 Release builds
+also passed on the cancellation-fix head `fb11473e`. Release launch and the
+interactive acceptance checks above remain required before merge.
