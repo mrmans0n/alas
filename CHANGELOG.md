@@ -6,13 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.22] - 2026-10-02
+
+### ✨ Features
+
+- Turn the Kanban plugin into a ticket tracker with `KAN-<n>` tickets, assignment to installed agents, worktree-backed execution, and agent replies captured as comments (#1666).
+- Add native ACP goal controls and the `/btw` flow for read-only side questions, backed by hidden forked sessions and a dedicated side-question card (#1674, #1682, #1683, #1684, #1686).
+- Move plugins to the `alas-plugins` catalog, run them as JavaScript in JavaScriptCore, and support catalog installation (#1678, #1680, #1688).
+- Add plugin API 5 commands, notifications, session events, settings, secrets, web requests, timers, and right-pane panels (#1689, #1690, #1691).
+
+### 🐛 Fixes
+
+- Align inline ACP chips with the surrounding text baseline and avoid duplicate setup warnings (#1676, #1685).
+
+### ⚡ Performance
+
+- Keep diff panes, ACP transcripts, and the sidebar responsive by avoiding repeated re-tiling and whole-tree rendering during scrolling (#1679, #1687, #1692).
+
+### 🏗️ Internal
+
+- Update Rust to 1.99.0 and `tree-sitter-graphql` to 0.3.0 (#1675, #1694).
+- Replace fixed waits in editor and repository-hook tests with deadline-based synchronization (#1693, #1695).
+- Document macro validation, silent test-suite skips, and local submodule behavior (#1696).
+
 ## [0.19.21] - 2026-10-01
 
 ### ✨ Features
 
-- Turn the Kanban plugin into a ticket tracker: `KAN-<n>` tickets with statuses, priorities, descriptions and comments, a ticket screen, assignment to an installed agent, and Start, which runs the assignee in a new worktree and adds the agent's final reply as a comment. Boards saved by the card version are converted on first load and left in place. Adds the `session/last_message` and `agent/list` plugin requests, and an API 3 `session.read` capability for reading an agent's last reply.
-- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
-- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
 - Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull (#1672).
 - Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version (#1670).
 
