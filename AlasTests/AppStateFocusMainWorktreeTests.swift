@@ -38,6 +38,22 @@ struct AppStateFocusMainWorktreeTests {
         )
     }
 
+    /// A real clone resolves a lineage marker inside its `.git`, which the
+    /// right pane needs for checkpoint gate clearance before a pull runs.
+    private func gitWorktree(path: String, branch: String) -> Worktree {
+        let url = URL(fileURLWithPath: path)
+        return Worktree(
+            id: Worktree.makeId(path: url),
+            projectId: "p1",
+            name: branch,
+            branch: branch,
+            path: url,
+            status: .clean,
+            lastActivity: Date(),
+            lineageID: WorktreeService.localLineageID(forWorktreeAt: url)
+        )
+    }
+
     @Test func focusesVisibleMainWorktreeForCurrentProject() {
         let project = ProjectConfig(
             id: "p1",
@@ -123,5 +139,140 @@ struct AppStateFocusMainWorktreeTests {
         // The in-flight pull is untouched: the second click routes to
         // selection only.
         #expect(state.worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: mainID))
+    }
+
+    // MARK: - Sidebar pull outcome notifications name the repository
+
+    /// A clone on `main` tracking `origin/main`. Same minimal shape as
+    /// `GitServicePullTests.makeCloneOnMain`; git stays real per AGENTS.md.
+    private static func makeCloneOnMain() async throws -> (clone: URL, remote: URL) {
+        let remote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pullnotif-rmt-\(UUID().uuidString)")
+        let seed = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pullnotif-seed-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: seed) }
+        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
+        _ = try await Process.git(["clone", "-q", remote.path, seed.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "s@e"], cwd: seed)
+        _ = try await Process.git(["config", "user.name", "s"], cwd: seed)
+        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: seed)
+        _ = try await Process.git(["checkout", "-q", "-b", "main"], cwd: seed)
+        try "base\n".write(to: seed.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: seed)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: seed)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: seed)
+        _ = try await Process.git(["--git-dir", remote.path, "symbolic-ref", "HEAD", "refs/heads/main"], cwd: nil)
+
+        let clone = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pullnotif-clone-\(UUID().uuidString)")
+        _ = try await Process.git(["clone", "-q", remote.path, clone.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "c@e"], cwd: clone)
+        _ = try await Process.git(["config", "user.name", "c"], cwd: clone)
+        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: clone)
+        return (clone, remote)
+    }
+
+    private static func pushToRemoteMain(_ remote: URL, file: String, contents: String) async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pullnotif-push-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["clone", "-q", remote.path, tmp.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "x@e"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "x"], cwd: tmp)
+        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: tmp)
+        try contents.write(to: tmp.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", file], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "-m", "remote edit"], cwd: tmp)
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: tmp)
+    }
+
+    private func makeGitFixtureState(clone: URL) -> AppState {
+        // A project name distinct from the branch and from the clone's last
+        // path component, so a regression to either fails.
+        let project = ProjectConfig(
+            id: "p1",
+            name: "Fixture Repo",
+            path: clone.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let main = gitWorktree(path: clone.path, branch: "main")
+        state.projectsManager.insertOptimisticWorktree(main)
+        // Selecting the pulled worktree is the sidebar flow being exercised —
+        // the banner surface posts under it.
+        state.selectedWorktreeId = main.id
+        return state
+    }
+
+    /// Polls `condition` up to ~5s. The sidebar pull posts asynchronously on
+    /// the main actor after a real git round trip, so the test waits on the
+    /// event instead of a fixed sleep.
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    @Test func sidebarPullSuccessNotificationNamesRepo() async throws {
+        let (clone, remote) = try await Self.makeCloneOnMain()
+        defer {
+            try? FileManager.default.removeItem(at: clone)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        try await Self.pushToRemoteMain(remote, file: "b.txt", contents: "new\n")
+        let state = makeGitFixtureState(clone: clone)
+
+        state.pullWorktreeFromSidebar(id: Worktree.makeId(path: clone))
+        try await waitUntil { !state.inAppNotifications.entries.isEmpty }
+
+        #expect(state.inAppNotifications.entries.map(\.message) == ["Pulled main from Fixture Repo"])
+        #expect(state.inAppNotifications.entries.map(\.severity) == [.success])
+    }
+
+    @Test func sidebarPullConflictNotificationNamesRepo() async throws {
+        let (clone, remote) = try await Self.makeCloneOnMain()
+        defer {
+            try? FileManager.default.removeItem(at: clone)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        // Local edit of a.txt conflicts with the pushed remote edit of a.txt.
+        try "local change\n".write(to: clone.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "local edit"], cwd: clone)
+        try await Self.pushToRemoteMain(remote, file: "a.txt", contents: "remote change\n")
+        let state = makeGitFixtureState(clone: clone)
+
+        state.pullWorktreeFromSidebar(id: Worktree.makeId(path: clone))
+        try await waitUntil { !state.inAppNotifications.entries.isEmpty }
+
+        #expect(state.inAppNotifications.entries.map(\.message) == ["Pull of main in Fixture Repo hit conflicts"])
+        #expect(state.inAppNotifications.entries.map(\.severity) == [.error])
+        // The conflict leaves the clone mid-rebase; abort before cleanup.
+        _ = try? await Process.git(["rebase", "--abort"], cwd: clone)
+    }
+
+    @Test func sidebarPullErrorNotificationNamesRepo() async throws {
+        let (clone, remote) = try await Self.makeCloneOnMain()
+        defer {
+            try? FileManager.default.removeItem(at: clone)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        try await Self.pushToRemoteMain(remote, file: "b.txt", contents: "new\n")
+        // An unstaged tracked-file modification blocks the rebase step of the
+        // pull with a non-conflict exit, deterministically reaching .error.
+        try "dirty\n".write(to: clone.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let state = makeGitFixtureState(clone: clone)
+
+        state.pullWorktreeFromSidebar(id: Worktree.makeId(path: clone))
+        try await waitUntil { !state.inAppNotifications.entries.isEmpty }
+
+        guard let entry = state.inAppNotifications.entries.first else {
+            Issue.record("no notification was posted")
+            return
+        }
+        #expect(entry.severity == .error)
+        // Only the prefix is pinned: the tail is git's stderr text.
+        #expect(entry.message.hasPrefix("Pull of main in Fixture Repo failed:"))
     }
 }

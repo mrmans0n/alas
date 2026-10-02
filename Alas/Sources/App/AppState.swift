@@ -2990,6 +2990,11 @@ final class AppState {
             return
         }
         worktreeUpstreamStatusStore.markPullingUpstream(worktreeID: id)
+        // Captured before the async pull starts: the project row can be
+        // removed while it runs, and a linked worktree's path component is
+        // its branch (the template ends in `{branch}`), not the repo name.
+        let repoName = projectsManager.projects.first(where: { $0.id == worktree.projectId })?.name
+            ?? worktree.path.lastPathComponent
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
@@ -3025,11 +3030,6 @@ final class AppState {
                 await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
                 return
             }
-            // Name the repo so notifications from multiple projects stay
-            // distinguishable; falls back to the directory name if the
-            // project row disappeared mid-pull.
-            let repoName = self.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.name
-                ?? worktree.path.lastPathComponent
             if let bannerWorktreeID = self.inAppBannerWorktreeID {
                 switch result {
                 case .clean:
