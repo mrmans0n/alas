@@ -104,6 +104,16 @@ struct ACPTranscriptScrollerReconcilerDiffTests {
     }
 }
 
+@MainActor
+private final class GrowingRowModel: ObservableObject {
+    @Published var height: CGFloat = 100
+}
+
+private struct GrowingRow: View {
+    @ObservedObject var model: GrowingRowModel
+    var body: some View { Color.clear.frame(height: model.height) }
+}
+
 /// Counts how many times each row's SwiftUI content was actually built, so a
 /// test can prove a code path did NOT construct (and therefore did not
 /// measure) a hosting view for a row it already knew the height of.
@@ -274,6 +284,158 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         let pool = ACPTranscriptRowHostingPool()
         let reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
         return (reconciler, scroller, tiling)
+    }
+
+    @Test("scrolling a row away and back reattaches its view instead of rebuilding it")
+    func scrollBackReattachesView() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        let original = pool.mountedView(id: "r0")
+        let frameBefore = tiling.row(withId: "r0").map { ($0.minY, $0.height) }
+        #expect(original != nil)
+
+        scroller.setScrollY(6_000)                 // r0 leaves the band
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "r0") == nil)
+        scroller.setScrollY(0)                     // and comes back
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(pool.mountedView(id: "r0") === original)
+        #expect(counter.count("r0") == 1)
+        let frameAfter = tiling.row(withId: "r0").map { ($0.minY, $0.height) }
+        #expect(frameAfter?.0 == frameBefore?.0)
+        #expect(frameAfter?.1 == frameBefore?.1)
+    }
+
+    @Test("a revived row whose content grew while parked is re-measured on remount")
+    func revivedRowIsRemeasured() throws {
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let model = GrowingRowModel()
+        var specs = (0..<100).map { spec("r\($0)") }
+        specs[0] = ACPTranscriptRowSpec(
+            id: "r0", equalityToken: ACPRowEqualityToken(0),
+            build: { AnyView(GrowingRow(model: model)) }
+        )
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        #expect(tiling.row(withId: "r0")?.height == 100)
+        let parkedView = try #require(pool.mountedView(id: "r0"))
+
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "r0") == nil)
+        model.height = 260                          // grows while parked, same token
+        // SwiftUI applies the model change to the detached view on a later
+        // run-loop turn; wait for it rather than sleeping.
+        let deadline = Date().addingTimeInterval(5)
+        while parkedView.intrinsicContentSize.height != 260, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+        }
+        #expect(parkedView.intrinsicContentSize.height == 260)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(tiling.row(withId: "r0")?.height == 260)
+        #expect(scroller.contentHeight == tiling.documentHeight)
+    }
+
+    @Test("a width-changed reset drops parked views so remounts build fresh")
+    func widthResetPurgesParked() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        // A new width together with a changed id set (a middle row dropped) is a
+        // reset at the new width; an append alone would only be coalesced.
+        reconciler.apply(
+            specs: specs.filter { $0.id != "r50" } + [countingSpec("r100", counter: counter)],
+            contentWidth: 500, followsTail: false
+        )
+
+        // The reset measures every unmounted row through the pool. Without the
+        // purge it would revive r0's parked view (count stays 1); with it,
+        // r0 is built fresh.
+        #expect(counter.count("r0") == 2)
+    }
+
+    @Test("rows removed from the specs are dropped from the parked cache")
+    func removedRowsAreDroppedFromParkedCache() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        reconciler.apply(specs: Array(specs.dropFirst()), contentWidth: 600, followsTail: false)
+
+        #expect(!pool.parkedIdsForTesting.contains("r0"))
+    }
+
+    @Test("an apply disables parking for off-band rows without changing their content tokens")
+    func applyUpdatesOffBandParkingPolicy() {
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        var specs = (0..<100).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+        #expect(pool.mountedView(id: "r60") != nil)
+
+        specs[0].parksWhenReleased = false
+        specs[60].parksWhenReleased = false
+        scroller.setScrollY(0)
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+
+        #expect(!pool.parkedIdsForTesting.contains("r60"))
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(!pool.parkedIdsForTesting.contains("r0"))
+    }
+
+    @Test("an unchanged-width reset keeps parked views")
+    func unchangedWidthResetKeepsParked() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        // Observe during reset measurement, before the layout pass releases
+        // other rows in dictionary order and can evict r0 from the LRU cache.
+        var retainedBeforeLayout: Bool?
+        let appended = ACPTranscriptRowSpec(
+            id: "r100", equalityToken: ACPRowEqualityToken(0),
+            build: {
+                retainedBeforeLayout = pool.parkedIdsForTesting.contains("r0")
+                return AnyView(Color.clear.frame(height: 100))
+            }
+        )
+        let resetSpecs = specs.filter { $0.id != "r50" } + [appended]
+        #expect(ACPTranscriptScrollerReconciler.diff(
+            oldIds: specs.map(\.id), newIds: resetSpecs.map(\.id)
+        ) == .reset)
+        reconciler.apply(specs: resetSpecs, contentWidth: 600, followsTail: false)
+
+        #expect(retainedBeforeLayout == true)
     }
 
     private func spec(
@@ -1554,5 +1716,173 @@ struct ACPTranscriptScrollerReconcilerWindowLayoutTests {
             #expect(view?.frame.height == layout.height)
             #expect(view?.frame.width == 600)
         }
+    }
+}
+
+@MainActor
+@Suite("ACPTranscriptRowHostingPool parking")
+struct ACPTranscriptRowHostingPoolParkingTests {
+    private func spec(_ id: String, token: Int = 0) -> ACPTranscriptRowSpec {
+        ACPTranscriptRowSpec(
+            id: id,
+            equalityToken: ACPRowEqualityToken(token),
+            build: { AnyView(Color.clear.frame(height: 100)) }
+        )
+    }
+
+    @Test("release uses the latest parking policy on fresh, mounted and revived rows", arguments: [false, true])
+    func releaseUsesLatestParkingPolicy(changesToken: Bool) {
+        let pool = ACPTranscriptRowHostingPool()
+        var liveSpec = spec("a")
+        liveSpec.parksWhenReleased = false
+        let initial = pool.view(for: liveSpec).view
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== initial)
+
+        pool.release(id: "a")
+        let revived = pool.view(for: liveSpec).view
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+
+        let mounted = pool.view(for: spec("a")).view
+        if changesToken {
+            liveSpec = spec("a", token: 1)
+            liveSpec.parksWhenReleased = false
+        }
+        #expect(pool.view(for: liveSpec).view === mounted)
+        pool.release(id: "a")
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== revived)
+    }
+
+    @Test("removed mounted rows cannot evict reusable parked rows")
+    func removedRowsDoNotEvictReusableViews() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 2)
+        let kept = pool.view(for: spec("kept")).view
+        pool.release(id: "kept")
+        _ = pool.view(for: spec("obsolete"))
+        pool.release(id: "obsolete")
+        for id in ["removed-a", "removed-b"] { _ = pool.view(for: spec(id)) }
+
+        pool.updateParkingPolicies(["kept": spec("kept")])
+        pool.releaseAll()
+
+        #expect(pool.parkedIdsForTesting == ["kept"])
+        #expect(pool.view(for: spec("kept")).view === kept)
+    }
+
+    @Test("a released row with unchanged content comes back as the same view, flagged for re-measure")
+    func revivesSameInstance() {
+        let pool = ACPTranscriptRowHostingPool()
+        let (first, _) = pool.view(for: spec("a"))
+        _ = first.measuredHeight(forWidth: 400)
+        pool.release(id: "a")
+        #expect(pool.mountedView(id: "a") == nil)
+
+        let (again, contentChanged) = pool.view(for: spec("a"))
+
+        #expect(again === first)
+        #expect(contentChanged)
+        #expect(again.needsRemeasure)
+        #expect(pool.mountedView(id: "a") === first)
+    }
+
+    @Test("dropParked keeps only the listed ids")
+    func dropParkedKeepsListedIds() {
+        let pool = ACPTranscriptRowHostingPool()
+        var views: [String: ACPTranscriptRowHostingView] = [:]
+        for id in ["a", "b", "c"] {
+            views[id] = pool.view(for: spec(id)).view
+            pool.release(id: id)
+        }
+
+        pool.dropParked(where: { !["a", "c", "zzz"].contains($0) })
+
+        #expect(pool.parkedIdsForTesting == ["a", "c"])
+        #expect(pool.view(for: spec("a")).view === views["a"])
+        #expect(pool.view(for: spec("b")).view !== views["b"])
+    }
+
+    @Test("a released row whose content changed is rebuilt")
+    func changedTokenBuildsFresh() {
+        let pool = ACPTranscriptRowHostingPool()
+        let (first, _) = pool.view(for: spec("a", token: 1))
+        pool.release(id: "a")
+
+        let (again, _) = pool.view(for: spec("a", token: 2))
+
+        #expect(again !== first)
+        #expect(!again.needsRemeasure)
+    }
+
+    @Test("parking evicts the least recently released view beyond capacity and never touches mounted views")
+    func evictsLeastRecentlyReleased() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 2)
+        let mounted = pool.view(for: spec("m")).view
+        let a = pool.view(for: spec("a")).view
+        let b = pool.view(for: spec("b")).view
+        let c = pool.view(for: spec("c")).view
+        pool.release(id: "a")
+        pool.release(id: "b")
+        pool.release(id: "c")    // capacity 2: "a" is evicted
+
+        #expect(pool.parkedIdsForTesting == ["b", "c"])
+        #expect(pool.mountedView(id: "m") === mounted)
+        #expect(pool.view(for: spec("a")).view !== a)
+        #expect(pool.view(for: spec("b")).view === b)
+        #expect(pool.view(for: spec("c")).view === c)
+    }
+
+    @Test("purging parked views makes every remount build fresh")
+    func purgeBuildsFresh() {
+        let pool = ACPTranscriptRowHostingPool()
+        let first = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        pool.purgeParked()
+
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== first)
+    }
+
+    @Test("capacity zero keeps today's behavior: every remount builds fresh")
+    func zeroCapacityNeverParks() {
+        let pool = ACPTranscriptRowHostingPool(parkedCapacity: 0)
+        let first = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        #expect(pool.parkedIdsForTesting.isEmpty)
+        #expect(pool.view(for: spec("a")).view !== first)
+    }
+
+    @Test("a parked view cannot report size changes to the transcript")
+    func parkedViewIsSilent() {
+        let pool = ACPTranscriptRowHostingPool()
+        var invalidated: [String] = []
+        pool.onRowIntrinsicSizeInvalidated = { invalidated.append($0) }
+        let view = pool.view(for: spec("a")).view
+        pool.release(id: "a")
+
+        view.invalidateIntrinsicContentSize()
+
+        #expect(invalidated.isEmpty)
+        _ = pool.view(for: spec("a"))
+        view.invalidateIntrinsicContentSize()
+        #expect(invalidated == ["a"])
+    }
+
+    @Test("measuring clears the re-measure flag")
+    func measuringClearsFlag() {
+        let pool = ACPTranscriptRowHostingPool()
+        let view = pool.view(for: spec("a")).view
+        _ = view.measuredHeight(forWidth: 400)
+        pool.release(id: "a")
+        _ = pool.view(for: spec("a"))
+        #expect(view.needsRemeasure)
+
+        _ = view.measuredHeight(forWidth: 400)
+
+        #expect(!view.needsRemeasure)
     }
 }

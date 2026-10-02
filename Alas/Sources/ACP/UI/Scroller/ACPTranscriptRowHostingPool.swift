@@ -3,17 +3,33 @@ import SwiftUI
 
 /// Owns the live `ACPTranscriptRowHostingView`s, keyed by row id. Views are
 /// reused across layout passes; rootView is only replaced when the row's
-/// equality token changes, mirroring the legacy `.equatable()` gating.
+/// equality token changes, mirroring the legacy `.equatable()` gating. Released
+/// views are parked in an LRU cache for reuse when rows return with unchanged content.
+/// Build-captured inputs must stay stable or be represented in the equality token.
 @MainActor
 final class ACPTranscriptRowHostingPool {
+    /// How many released rows keep their built hosting view, so scrolling back
+    /// to them reattaches the view instead of rebuilding its SwiftUI graph.
+    /// Zero disables parking entirely.
+    static let parkedCapacity = 48
+
     var onRowIntrinsicSizeInvalidated: ((String) -> Void)?
 
     private struct Entry {
         let view: ACPTranscriptRowHostingView
         var token: ACPRowEqualityToken
+        var parksWhenReleased: Bool
     }
 
+    private let parkedCapacity: Int
     private var entries: [String: Entry] = [:]
+    /// Released rows, detached and silenced, most recently released last.
+    private var parked: [String: Entry] = [:]
+    private var parkedOrder: [String] = []
+
+    init(parkedCapacity: Int = ACPTranscriptRowHostingPool.parkedCapacity) {
+        self.parkedCapacity = max(0, parkedCapacity)
+    }
 
     var mountedIds: Set<String> { Set(entries.keys) }
 
@@ -27,6 +43,8 @@ final class ACPTranscriptRowHostingPool {
 
     func view(for spec: ACPTranscriptRowSpec) -> (view: ACPTranscriptRowHostingView, contentChanged: Bool) {
         if var entry = entries[spec.id] {
+            entry.parksWhenReleased = spec.parksWhenReleased
+            entries[spec.id] = entry
             if entry.token.isEqual(to: spec.equalityToken) {
                 return (entry.view, false)
             }
@@ -35,12 +53,19 @@ final class ACPTranscriptRowHostingPool {
             entries[spec.id] = entry
             return (entry.view, true)
         }
-        let view = ACPTranscriptRowHostingView(rootView: spec.build())
-        let id = spec.id
-        view.onIntrinsicSizeInvalidated = { [weak self] in
-            self?.onRowIntrinsicSizeInvalidated?(id)
+        if var parkedEntry = unpark(id: spec.id) {
+            if parkedEntry.token.isEqual(to: spec.equalityToken) {
+                parkedEntry.parksWhenReleased = spec.parksWhenReleased
+                attachCallback(to: parkedEntry.view, id: spec.id)
+                parkedEntry.view.markNeedsRemeasure()
+                entries[spec.id] = parkedEntry
+                return (parkedEntry.view, true)
+            }
+            // Different content under the same id: drop the stale view.
         }
-        entries[id] = Entry(view: view, token: spec.equalityToken)
+        let view = ACPTranscriptRowHostingView(rootView: spec.build())
+        attachCallback(to: view, id: spec.id)
+        entries[spec.id] = Entry(view: view, token: spec.equalityToken, parksWhenReleased: spec.parksWhenReleased)
         return (view, true)
     }
 
@@ -50,11 +75,63 @@ final class ACPTranscriptRowHostingPool {
         // Retiring a row must end its ability to change transcript geometry.
         entry.view.onIntrinsicSizeInvalidated = nil
         entry.view.removeFromSuperview()
+        if entry.parksWhenReleased { park(entry, id: id) }
+    }
+
+    /// Refresh every retained row before layout, including equal-token and
+    /// off-band rows. Obsolete or newly live views must not occupy cache slots.
+    func updateParkingPolicies(_ specsById: [String: ACPTranscriptRowSpec]) {
+        for id in entries.keys {
+            guard var entry = entries[id] else { continue }
+            entry.parksWhenReleased = specsById[id]?.parksWhenReleased ?? false
+            entries[id] = entry
+        }
+        dropParked(where: { specsById[$0]?.parksWhenReleased != true })
     }
 
     func releaseAll(except keep: Set<String> = []) {
         for id in entries.keys where !keep.contains(id) {
             release(id: id)
         }
+    }
+
+    /// Drops every parked view, so the next mount of each row builds fresh.
+    func purgeParked() {
+        parked.removeAll()
+        parkedOrder.removeAll()
+    }
+
+    /// Drops parked views whose rows are no longer in the transcript: they can
+    /// never be revived, so keeping them alive is pure waste.
+    func dropParked(where shouldDrop: (String) -> Bool) {
+        guard parked.keys.contains(where: shouldDrop) else { return }
+        parked = parked.filter { !shouldDrop($0.key) }
+        parkedOrder.removeAll(where: shouldDrop)
+    }
+
+    #if DEBUG
+    var parkedIdsForTesting: Set<String> { Set(parked.keys) }
+    #endif
+
+    private func attachCallback(to view: ACPTranscriptRowHostingView, id: String) {
+        view.onIntrinsicSizeInvalidated = { [weak self] in
+            self?.onRowIntrinsicSizeInvalidated?(id)
+        }
+    }
+
+    private func park(_ entry: Entry, id: String) {
+        guard parkedCapacity > 0 else { return }
+        parked[id] = entry
+        parkedOrder.removeAll { $0 == id }
+        parkedOrder.append(id)
+        while parkedOrder.count > parkedCapacity {
+            parked.removeValue(forKey: parkedOrder.removeFirst())
+        }
+    }
+
+    private func unpark(id: String) -> Entry? {
+        guard let entry = parked.removeValue(forKey: id) else { return nil }
+        parkedOrder.removeAll { $0 == id }
+        return entry
     }
 }

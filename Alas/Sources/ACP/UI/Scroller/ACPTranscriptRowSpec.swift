@@ -25,6 +25,10 @@ struct ACPTranscriptRowSpec {
     let equalityToken: ACPRowEqualityToken
     let build: () -> AnyView
 
+    /// Live rows may observe streaming models even while detached. Release
+    /// their graph instead of retaining offscreen work in the parked cache.
+    var parksWhenReleased: Bool = true
+
     /// Whether this row's hosting view must stay mounted even while entirely
     /// outside the reconciler's mount band. Message rows are stateless
     /// renderings of transcript data — releasing their hosting view and

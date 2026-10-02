@@ -38,10 +38,12 @@ struct MCPRegistrationDecisionTests {
         let builtIn: MCPTransportKind
         let adopted: Bool
         let recordedHello: MCPTransportKind?
+        var reusedHTTP = false
         var previouslyNotRegistered = false
         let expected: Bool
         var testDescription: String {
             "\(builtIn), \(adopted ? "adopted" : "spawned"), hello \(recordedHello.map { "\($0)" } ?? "none")"
+                + (reusedHTTP ? ", reused HTTP server" : "")
                 + (previouslyNotRegistered ? ", previously not registered" : "")
         }
     }
@@ -54,15 +56,25 @@ struct MCPRegistrationDecisionTests {
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .http, expected: false),
         // A reconnect after this app run already warned: nothing survived.
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: nil, previouslyNotRegistered: true, expected: false),
-        // A freshly spawned agent, or an app-supervised HTTP server.
+        // A freshly spawned agent.
         ReattachCase(builtIn: .stdio, adopted: false, recordedHello: nil, expected: false),
-        ReattachCase(builtIn: .http, adopted: true, recordedHello: nil, expected: false),
+        ReattachCase(builtIn: .http, adopted: false, recordedHello: .http, reusedHTTP: true, expected: false),
+        // The supervisor reused the HTTP process that said hello: the adapter
+        // keeps its connection and sends no new `initialize`, so no new hello.
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: .http, reusedHTTP: true, expected: true),
+        // A respawned HTTP process (e.g. after a failed attach ended the old
+        // one) must say hello itself; the old process's hello proves nothing.
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: .http, expected: false),
+        // No HTTP hello in this app run (restarted, or switched from stdio).
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: nil, reusedHTTP: true, expected: false),
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: .stdio, reusedHTTP: true, expected: false),
     ])
     func reattachesRunningServer(_ c: ReattachCase) {
         #expect(MCPRegistrationDecision.reattachesRunningServer(
             builtInTransport: c.builtIn,
             adoptedRunningAgent: c.adopted,
             recordedHelloTransport: c.recordedHello,
+            reusedHTTPServer: c.reusedHTTP,
             previousAttachFoundNoServer: c.previouslyNotRegistered
         ) == c.expected)
     }

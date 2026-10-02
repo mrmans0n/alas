@@ -73,7 +73,7 @@ targets:
         AlasGitSHA: ""
         AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en
-        CFBundleShortVersionString: "0.19.21"
+        CFBundleShortVersionString: "0.19.23"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"

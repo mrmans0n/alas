@@ -33,6 +33,16 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     /// view actually ends up placed at.
     private(set) var lastMeasuredWidth: CGFloat?
 
+    /// Set when the pool revives this view from its parked cache. Its content
+    /// may have changed size while it was detached, and its callbacks were cut
+    /// while it was parked, so the next mount must measure it even though
+    /// `lastMeasuredWidth` still matches. `measuredHeight(forWidth:)` clears it.
+    private(set) var needsRemeasure = false
+
+    func markNeedsRemeasure() {
+        needsRemeasure = true
+    }
+
     /// `translatesAutoresizingMaskIntoConstraints = false` alongside
     /// `sizingOptions = [.intrinsicContentSize]` is NSHostingView's
     /// "the container decides my frame, I only report a size" configuration,
@@ -103,6 +113,7 @@ final class ACPTranscriptRowHostingView: NSHostingView<AnyView> {
     /// zero/negative-width frame.
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         guard width > 0 else { return 0 }
+        needsRemeasure = false
         if lastMeasuredWidth != width {
             lastMeasuredWidth = width
             rootView = AnyView(baseRootView.frame(width: width, alignment: .topLeading))

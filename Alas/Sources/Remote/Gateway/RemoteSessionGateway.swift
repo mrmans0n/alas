@@ -269,14 +269,14 @@ final class RemoteSessionGateway {
                 // the await would make it look current and be wrongly
                 // accepted instead of dropped.
                 let capturedGeneration = state.generation
-                let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
+                let wire = await wireTail(id: id, session: session, indices: lo..<hi)
                 attempt += 1
                 guard state.generation == capturedGeneration || attempt > Self.maxFetchOlderAttempts else {
                     continue
                 }
                 send(.transcriptPage(sessionId: id,
                                      epoch: state.epoch,
-                                     firstIndex: lo,
+                                     firstIndex: wire.first?.index ?? hi,
                                      messages: wire))
                 break
             }
@@ -569,7 +569,7 @@ final class RemoteSessionGateway {
         // another full resync happens. Reset it atomically with the send.
         state.generation += 1
         let capturedGeneration = state.generation
-        let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
+        let wire = await wireTail(id: id, session: session, indices: first..<count)
         // If another send (a concurrent snapshot or dirty delta) claimed a
         // later generation while this one was suspended fetching truncated
         // tool-call content, THIS snapshot's payload is now stale relative
@@ -585,7 +585,7 @@ final class RemoteSessionGateway {
                                      streamingState: Self.stateString(session.transcript.streamingState),
                                      canDrive: provider.isWriter(for: id),
                                      messages: wire,
-                                     firstIndex: first,
+                                     firstIndex: wire.first?.index ?? count,
                                      totalCount: count,
                                      epoch: state.epoch,
                                      revision: 0))
@@ -708,16 +708,20 @@ final class RemoteSessionGateway {
                     state.invalidateToolContent(tc.toolCallId)
                 }
             }
-            let wire = await wireMessages(id: id, session: session, indices: indices)
+            let batches = await wireBatches(id: id, session: session, indices: indices)
             guard state.generation == capturedGeneration else { return }
             state.sentVersion = newSentVersion
-            state.revision += 1
-            send(.transcriptDelta(sessionId: id,
-                                  streamingState: Self.stateString(session.transcript.streamingState),
-                                  canDrive: provider.isWriter(for: id),
-                                  upserts: wire,
-                                  epoch: state.epoch,
-                                  revision: state.revision))
+            // Send all batches without suspension, preserving the generation
+            // check and giving each frame the next revision clients expect.
+            for wire in batches {
+                state.revision += 1
+                send(.transcriptDelta(sessionId: id,
+                                      streamingState: Self.stateString(session.transcript.streamingState),
+                                      canDrive: provider.isWriter(for: id),
+                                      upserts: wire,
+                                      epoch: state.epoch,
+                                      revision: state.revision))
+            }
         }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
@@ -746,20 +750,51 @@ final class RemoteSessionGateway {
         await body(uuid)
     }
 
-    private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {
+    /// Build the newest contiguous suffix that fits. Older rows remain
+    /// reachable through fetchOlder instead of disappearing from history.
+    private func wireTail(id: String, session: ACPSession, indices: Range<Int>) async -> [RemoteWireMessage] {
         var wire: [RemoteWireMessage] = []
-        wire.reserveCapacity(indices.count)
-        for index in indices {
-            // Re-check across awaits: a structural mutation mid-serialize can
-            // shrink the array; the epoch bump will resync the client.
-            guard session.transcript.messages.indices.contains(index) else { continue }
-            let message = session.transcript.messages[index]
-            wire.append(Self.toWire(
-                message,
-                index: index,
-                fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)))
+        var remaining = RemoteTranscriptSync.payloadBudget(sessionId: id)
+        for index in indices.reversed() {
+            guard let row = await wireMessage(id: id, session: session, index: index) else { continue }
+            guard row.byteCount + 1 <= remaining else { break }
+            remaining -= row.byteCount + 1
+            wire.append(row.message)
         }
+        wire.reverse()
         return wire
+    }
+
+    private func wireBatches(id: String, session: ACPSession, indices: [Int]) async -> [[RemoteWireMessage]] {
+        let budget = RemoteTranscriptSync.payloadBudget(sessionId: id)
+        var batches: [[RemoteWireMessage]] = []
+        var batch: [RemoteWireMessage] = []
+        var remaining = budget
+        for index in indices {
+            guard let row = await wireMessage(id: id, session: session, index: index) else { continue }
+            if row.byteCount + 1 > remaining {
+                batches.append(batch)
+                batch = []
+                remaining = budget
+            }
+            batch.append(row.message)
+            remaining -= row.byteCount + 1
+        }
+        if !batch.isEmpty { batches.append(batch) }
+        return batches
+    }
+
+    private func wireMessage(
+        id: String, session: ACPSession, index: Int
+    ) async -> (message: RemoteWireMessage, byteCount: Int)? {
+        // Re-check across awaits: a structural mutation can shrink the array;
+        // the caller's generation check will discard the stale serialization.
+        guard session.transcript.messages.indices.contains(index) else { return nil }
+        let message = session.transcript.messages[index]
+        return Self.toWire(
+            message, index: index,
+            fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)
+        ).boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
     }
 
     private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
@@ -1214,7 +1249,13 @@ final class RemoteSessionGateway {
                 index: index
             )
         case .fileEdit(_, let edit):
-            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit), index: index)
+            return .init(
+                stableId: sid,
+                kind: "fileEdit",
+                text: "\(edit.path)  +\(edit.added) -\(edit.removed)",
+                json: Self.encodeJSON(edit),
+                index: index
+            )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
         }

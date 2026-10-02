@@ -55,6 +55,38 @@ struct ACPTranscriptScrollerRowSpecsTests {
         .systemNotice(id: UUID(), text: "hello")
     }
 
+    @Test("active-turn rows do not park while static history remains reusable", arguments: [false, true])
+    func activeTurnParkingPolicy(isActive: Bool) {
+        let host = makeHost()
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "previous", attachments: []),
+            .agent(id: UUID(), StreamingText("history")),
+            .user(id: UUID(), text: "current", attachments: []),
+            .agent(id: UUID(), StreamingText("live answer"))
+        ]
+        host.transcript.messages = messages
+        host.transcript.streamingState = isActive ? .streaming : .idle
+        let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+        for (index, message) in messages.enumerated() {
+            #expect(specs.first { $0.id == message.stableId }?.parksWhenReleased == (!isActive || index < 2))
+        }
+        if isActive {
+            #expect(specs.first { $0.id == "__streaming_caret__" }?.parksWhenReleased == false)
+        }
+    }
+
+    @Test("idle tool rows park only after both tool and terminal finish", arguments: ["pending", "in_progress", "completed", "failed"])
+    func idleToolParkingPolicy(status: String) {
+        let host = makeHost()
+        let call = ACPMessage.ToolCall(toolCallId: "tool", title: "Tool", status: status, terminalIds: ["terminal"])
+        host.transcript.messages = [.toolCall(call)]
+        host.session.terminalHost.recordMetadataTerminalInfo(terminalId: "terminal", cwd: nil)
+        #expect(ACPTranscriptScroller.Coordinator.rowSpecs(host: host).first { $0.id == ACPMessage.toolCall(call).stableId }?.parksWhenReleased == false)
+
+        host.session.terminalHost.recordMetadataExit(terminalId: "terminal", exitStatus: ACPTerminalExitStatus(exitCode: 0, signal: nil))
+        #expect(ACPTranscriptScroller.Coordinator.rowSpecs(host: host).first { $0.id == ACPMessage.toolCall(call).stableId }?.parksWhenReleased == (status == "completed" || status == "failed"))
+    }
+
     @Test("timestamp policy uses row width and trailing gutter")
     func timestampPolicyUsesRowWidthAndTrailingGutter() {
         #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(

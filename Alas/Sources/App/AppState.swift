@@ -197,12 +197,17 @@ final class AppState {
             scheduleCancellation: { action in _ = Task { await action() } }
         )
     }
-    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
-        self?.nextPromptSnapshot()
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] turn in
+        self?.nextPromptSnapshot(for: turn)
     }
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
+    @ObservationIgnored lazy var worktreeExplainerStore = WorktreeExplainerStore { [weak self] evidence in
+        guard let self else { return nil }
+        return await self.makeWorktreeExplainerSuggester().suggest(for: evidence)
+    }
+
     @ObservationIgnored var localTextInstallation: Task<Void, Never>?
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
@@ -225,12 +230,11 @@ final class AppState {
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
     var localTextRemovalInProgress = false
-    @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
+    @ObservationIgnored var nextPromptComposerEpochs: [UUID: UInt64] = [:]
     @ObservationIgnored var nextPromptShuttingDown = false
     @ObservationIgnored var nextPromptOwner: SessionOwnerID?
     @ObservationIgnored var nextPromptSessionID: String?
     @ObservationIgnored var nextPromptActiveIncarnation: UUID?
-    @ObservationIgnored var nextPromptCompletedTurn: NextPromptCompletedTurn?
     @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
@@ -368,12 +372,17 @@ final class AppState {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
             attentionNavigationGeneration += 1
+            if startupRecoveryNeedsMountedRightPaneRefresh {
+                startupRecoveryReadyRightPaneID = nil
+            }
             worktreeSelectionFollowUpGeneration += 1
             attentionPendingReviewReveal = nil
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
     }
-    let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
+    private(set) var suppressesRestoredRightPaneAfterAbandonedStartup: Bool
+    private var startupRecoveryNeedsMountedRightPaneRefresh: Bool
+    private var startupRecoveryReadyRightPaneID: String?
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -552,7 +561,9 @@ final class AppState {
     }
 #endif
     @ObservationIgnored
-    private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
+    private var acpAuthTerminalExitHandlers: [
+        String: (acpSessionId: ACPSession.ID, onExit: () -> Void)
+    ] = [:]
     @ObservationIgnored
     private var attemptedRemoteHelperHosts: Set<String> = []
     @ObservationIgnored
@@ -1457,6 +1468,7 @@ final class AppState {
         self.harnessAttentionSettleInterval = harnessAttentionSettleInterval
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
+        startupRecoveryNeedsMountedRightPaneRefresh = !restoreActiveTabsOnStartup
         _tabs = tabsManager
         self.lspManager = lspManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
@@ -1715,6 +1727,8 @@ final class AppState {
         let engine = localTextInference
         Task {
             await engine.cancel(caller: .worktreeName)
+            await engine.cancel(caller: .worktreeExplainer)
+
             await engine.cancel(caller: .mergeConflictExplanation)
             await engine.cancel(caller: .runFailureBrief)
         }
@@ -1741,6 +1755,39 @@ final class AppState {
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
         IssueWorktreeNameSuggester(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { [weak self] in
+                self?.issueWorktreeNameAppleSuggestionsAvailable ?? false
+            },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.issueWorktreeNameSuggestionsAvailable ?? false
+            }
+        )
+    }
+
+    func worktreeExplainerEvidence(
+        for worktree: Worktree,
+        in project: ProjectConfig
+    ) -> WorktreeExplainerEvidence? {
+        guard issueWorktreeNameSuggestionAvailable,
+              !projectsManager.isMain(worktree, in: project),
+              !worktree.path.isRemoteAlasPath
+        else { return nil }
+        let title = projectsManager.issueAttachment(
+            projectId: project.id,
+            worktreeId: worktree.id
+        )?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WorktreeExplainerEvidence(
+            branch: worktree.branch,
+            issueTitle: title.flatMap { $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    func makeWorktreeExplainerSuggester() -> WorktreeExplainerSuggester {
+        WorktreeExplainerSuggester(
             engine: localTextInference,
             isAppleIntelligenceAvailable: { [weak self] in
                 self?.issueWorktreeNameAppleSuggestionsAvailable ?? false
@@ -2492,8 +2539,25 @@ final class AppState {
         }
     }
 
-    func completeStartupRecovery() {
+    func completeStartupRecovery(rightPaneReady: Bool = true) {
+        suppressesRestoredRightPaneAfterAbandonedStartup = false
+        guard rightPaneReady else { return }
+        startupRecoveryNeedsMountedRightPaneRefresh = false
         AlasTerminationCoordinator.shared.finish?()
+    }
+
+    func hasCompletedStartupRightPaneRefresh(for worktreeID: String) -> Bool {
+        !startupRecoveryNeedsMountedRightPaneRefresh || startupRecoveryReadyRightPaneID == worktreeID
+    }
+
+    func beginStartupRightPaneRefresh() {
+        guard startupRecoveryNeedsMountedRightPaneRefresh else { return }
+        startupRecoveryReadyRightPaneID = nil
+    }
+
+    func completeStartupRightPaneRefresh(for worktreeID: String) {
+        guard startupRecoveryNeedsMountedRightPaneRefresh else { return }
+        startupRecoveryReadyRightPaneID = worktreeID
     }
 
     func completeStartupRecoveryIfCenterPaneWillNotAppear() {
@@ -2990,6 +3054,11 @@ final class AppState {
             return
         }
         worktreeUpstreamStatusStore.markPullingUpstream(worktreeID: id)
+        // Captured before the async pull starts: the project row can be
+        // removed while it runs, and a linked worktree's path component is
+        // its branch (the template ends in `{branch}`), not the repo name.
+        let repoName = projectsManager.projects.first(where: { $0.id == worktree.projectId })?.name
+            ?? worktree.path.lastPathComponent
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
@@ -3029,19 +3098,19 @@ final class AppState {
                 switch result {
                 case .clean:
                     self.inAppNotifications.post(
-                        "Pulled \(worktree.branch)",
+                        "Pulled \(worktree.branch) from \(repoName)",
                         severity: .success,
                         worktreeID: bannerWorktreeID
                     )
                 case .conflict:
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) hit conflicts",
+                        "Pull of \(worktree.branch) in \(repoName) hit conflicts",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
                 case .error(let message):
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) failed: \(message)",
+                        "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
@@ -3050,19 +3119,19 @@ final class AppState {
                 switch result {
                 case .clean:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pulled \(worktree.branch)",
+                        body: "Pulled \(worktree.branch) from \(repoName)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .conflict:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) hit conflicts — click to resolve.",
+                        body: "Pull of \(worktree.branch) in \(repoName) hit conflicts — click to resolve.",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .error(let message):
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) failed: \(message)",
+                        body: "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
@@ -5199,6 +5268,7 @@ final class AppState {
     @discardableResult
     func openACPAuthTerminalTab(
         for worktree: Worktree,
+        acpSessionId: ACPSession.ID,
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) throws -> Tab {
@@ -5217,7 +5287,7 @@ final class AppState {
             environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
         if case .terminal(let terminal) = tab {
-            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = (acpSessionId, onExit)
         }
         return tab
     }
@@ -5225,6 +5295,7 @@ final class AppState {
     @discardableResult
     func openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(
         for worktree: Worktree,
+        acpSessionId: ACPSession.ID,
         command: ACPAuthTerminalCommand,
         onExit: @escaping () -> Void
     ) async throws -> Tab {
@@ -5243,7 +5314,7 @@ final class AppState {
             environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
         )
         if case .terminal(let terminal) = tab {
-            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = (acpSessionId, onExit)
         }
         return tab
     }
@@ -7903,9 +7974,22 @@ final class AppState {
     /// ahead), returns without side effects.
     func handleTerminalProcessExited(owner: SessionOwnerID, leafId: String, processAlive: Bool) {
         guard !processAlive else { return }
-        let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
+        let authExitHandler = takeACPAuthTerminalExitHandler(terminalId: leafId, owner: owner)
         closePaneForProcessExit(owner: owner, leafId: leafId)
         authExitHandler?()
+    }
+
+    private func takeACPAuthTerminalExitHandler(
+        terminalId: String,
+        owner: SessionOwnerID
+    ) -> (() -> Void)? {
+        guard let handler = acpAuthTerminalExitHandlers.removeValue(forKey: terminalId),
+              tabs.tabs(for: owner).contains(where: {
+                  guard case .acpSession(let tab) = $0 else { return false }
+                  return tab.sessionId == handler.acpSessionId
+              })
+        else { return nil }
+        return handler.onExit
     }
 
     /// Legacy worktree compatibility route. Existing terminal callers retain
@@ -7978,12 +8062,17 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
+            let authExitHandler = takeACPAuthTerminalExitHandler(
+                terminalId: closedLeafId,
+                owner: .worktree(worktreeId)
+            )
             scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
                 projectPath: projectPath(forWorktreeId: worktreeId)
             )
+            authExitHandler?()
         }
     }
 
@@ -9117,10 +9206,15 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = takeACPAuthTerminalExitHandler(
+                        terminalId: leaf.id,
+                        owner: .worktree(worktreeId)
+                    )
                     if cancelRunScriptMonitors {
                         scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
             if case .editor = tab {
@@ -9170,8 +9264,13 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    let authExitHandler = takeACPAuthTerminalExitHandler(
+                        terminalId: leaf.id,
+                        owner: .worktree(worktreeId)
+                    )
                     scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    authExitHandler?()
                 }
             }
         }
@@ -12262,7 +12361,7 @@ final class AppState {
     /// has to invalidate the view.
     private(set) var delegatedSessionParents: [String: String] = [:] {
         willSet {
-            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidate() }
+            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidateAll() }
         }
     }
 

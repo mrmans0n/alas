@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import Alas
 
@@ -147,5 +148,269 @@ struct WorktreeRowStatusTests {
                 #expect(note?.localizedCaseInsensitiveContains("clean") != true)
             }
         }
+    }
+    @Test(arguments: [
+        (#"{"explanation":"Fix sidebar shadow text"}"#, "Fix sidebar shadow text"),
+        ("""
+        ```json
+        {"explanation":"Generate short worktree explanations"}
+        ```
+        """, "Generate short worktree explanations"),
+    ])
+    func acceptsBoundedWorktreeExplanation(output: String, expected: String) {
+        #expect(WorktreeExplainerPolicy.parse(output) == .explanation(expected))
+    }
+
+    @Test(arguments: [
+        "null",
+        #"{"explanation":"null"}"#,
+        #"{"explanation":"..."}"#,
+        #"{"explanation":"Worktree for development"}"#,
+        #"{"explanation":"one two"}"#,
+        #"{"explanation":"one two three four five six seven eight nine"}"#,
+        #"{"explanation":"This explanation is deliberately made much longer than sixty characters"}"#,
+        #"{"explanation":"Fix sidebar text","extra":true}"#,
+    ])
+    func rejectsWorktreeExplanationPlaceholdersAndInvalidOutput(output: String) {
+        #expect(WorktreeExplainerPolicy.parse(output) == nil)
+    }
+
+    @Test func acceptsExplicitWorktreeExplanationAbstention() {
+        #expect(WorktreeExplainerPolicy.parse(#"{"explanation":null}"#) == .abstained)
+    }
+
+    @Test @MainActor
+    func worktreeExplanationsAreDeduplicatedAndGeneratedSerially() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let firstEvidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let secondEvidence = WorktreeExplainerEvidence(branch: "fix-shadow", issueTitle: "Shadow text is unreadable")
+
+        let first = Task { await store.prepare(worktreeID: "first", evidence: firstEvidence) }
+        let duplicate = Task { await store.prepare(worktreeID: "first", evidence: firstEvidence) }
+        let second = Task { await store.prepare(worktreeID: "second", evidence: secondEvidence) }
+
+        await probe.waitForCallCount(1)
+        #expect(await probe.maximumConcurrentCalls == 1)
+        await probe.finishNext(with: "Explain first worktree")
+        await probe.waitForCallCount(2)
+        #expect(await probe.maximumConcurrentCalls == 1)
+        await probe.finishNext(with: "Explain second worktree")
+        await first.value
+        await duplicate.value
+        await second.value
+
+        #expect(await probe.receivedEvidence == [firstEvidence, secondEvidence])
+        #expect(store.explanation(for: "first", evidence: firstEvidence) == "Explain first worktree")
+        #expect(store.explanation(for: "first", evidence: secondEvidence) == nil)
+        #expect(store.explanation(for: "second", evidence: secondEvidence) == "Explain second worktree")
+    }
+
+    @Test @MainActor
+    func failedWorktreeExplanationCanRetry() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: nil)
+        await first.value
+
+        let retry = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(2)
+        await probe.finishNext(with: "Explain retried worktree")
+        await retry.value
+
+        #expect(await probe.receivedEvidence == [evidence, evidence])
+        #expect(store.explanation(for: "worktree", evidence: evidence) == "Explain retried worktree")
+    }
+
+    @Test @MainActor
+    func worktreeExplanationAbstentionIsCached() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "wip", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(withResult: .abstained)
+        #expect(await first.value)
+        #expect(await store.prepare(worktreeID: "worktree", evidence: evidence))
+
+        #expect(await probe.receivedEvidence == [evidence])
+        #expect(store.explanation(for: "worktree", evidence: evidence) == nil)
+    }
+
+    @Test @MainActor
+    func cachedWorktreeExplanationIsRestoredWhenEvidenceReverts() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let firstEvidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let secondEvidence = WorktreeExplainerEvidence(branch: "fix-shadow", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: firstEvidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: "Explain first worktree")
+        #expect(await first.value)
+        let second = Task { await store.prepare(worktreeID: "worktree", evidence: secondEvidence) }
+        await probe.waitForCallCount(2)
+        await probe.finishNext(with: "Explain second worktree")
+        #expect(await second.value)
+
+        #expect(await store.prepare(worktreeID: "worktree", evidence: firstEvidence))
+        #expect(store.explanation(for: "worktree", evidence: firstEvidence) == "Explain first worktree")
+        #expect(await probe.receivedEvidence == [firstEvidence, secondEvidence])
+    }
+
+    @Test @MainActor
+    func worktreeExplanationRetriesUntilPreparationCompletes() async {
+        var attempts = 0
+
+        await WorktreeExplanationRetry.run(delay: .zero) {
+            attempts += 1
+            return attempts == 3
+        }
+
+        #expect(attempts == 3)
+    }
+
+    @Test @MainActor
+    func worktreeExplanationStopsAfterMaximumRetryAttempts() async {
+        var attempts = 0
+
+        await WorktreeExplanationRetry.run(delay: .zero, maximumAttempts: 3) {
+            attempts += 1
+            return false
+        }
+
+        #expect(attempts == 3)
+    }
+
+    @Test @MainActor
+    func generatedExplanationInvalidatesObservation() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        await confirmation { invalidated in
+            withObservationTracking {
+                _ = store.explanation(for: "worktree", evidence: evidence)
+            } onChange: {
+                invalidated()
+            }
+            let preparation = Task {
+                await store.prepare(worktreeID: "worktree", evidence: evidence)
+            }
+            await probe.waitForCallCount(1)
+            await probe.finishNext(withResult: .explanation("Explain observed worktree"))
+            #expect(await preparation.value)
+        }
+    }
+
+    @Test @MainActor
+    func cancellingPreparationCancelsActiveGeneration() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        let preparation = Task {
+            await store.prepare(worktreeID: "worktree", evidence: evidence)
+        }
+        await probe.waitForCallCount(1)
+        preparation.cancel()
+        await probe.finishNext(with: nil)
+        _ = await preparation.value
+
+        #expect(await probe.cancelledCallCount == 1)
+    }
+
+    @Test func explanationUsesOnlyAResolvedEmptyMetadataSlot() {
+        let available = WorktreeRowView.showsExplanation(
+            isMain: false,
+            hasOperation: false,
+            hasWorkspaceCheckout: false,
+            worktreeStatus: .clean,
+            hasStatus: false,
+            hasVisibleCommits: false,
+            commitQueryResolved: true,
+            hasDiff: false,
+            hasStackStatus: false
+        )
+        #expect(available)
+        #expect(!WorktreeRowView.showsExplanation(
+            isMain: false,
+            hasOperation: false,
+            hasWorkspaceCheckout: false,
+            worktreeStatus: .unknown,
+            hasStatus: false,
+            hasVisibleCommits: false,
+            commitQueryResolved: true,
+            hasDiff: false,
+            hasStackStatus: false
+        ))
+
+        let blockers: [(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)] = [
+            (true, false, false, false, false, true, false, false),
+            (false, true, false, false, false, true, false, false),
+            (false, false, true, false, false, true, false, false),
+            (false, false, false, true, false, true, false, false),
+            (false, false, false, false, true, true, false, false),
+            (false, false, false, false, false, false, false, false),
+            (false, false, false, false, false, true, true, false),
+            (false, false, false, false, false, true, false, true),
+        ]
+        for blocker in blockers {
+            #expect(!WorktreeRowView.showsExplanation(
+                isMain: blocker.0,
+                hasOperation: blocker.1,
+                hasWorkspaceCheckout: blocker.2,
+                worktreeStatus: .clean,
+                hasStatus: blocker.3,
+                hasVisibleCommits: blocker.4,
+                commitQueryResolved: blocker.5,
+                hasDiff: blocker.6,
+                hasStackStatus: blocker.7
+            ))
+        }
+    }
+}
+
+private actor WorktreeExplainerGenerationProbe {
+    private(set) var receivedEvidence: [WorktreeExplainerEvidence] = []
+    private(set) var cancelledCallCount = 0
+    private(set) var maximumConcurrentCalls = 0
+    private var activeCalls = 0
+    private var completions: [CheckedContinuation<WorktreeExplanationResult?, Never>] = []
+    private var callCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func generate(_ evidence: WorktreeExplainerEvidence) async -> WorktreeExplanationResult? {
+        receivedEvidence.append(evidence)
+        activeCalls += 1
+        maximumConcurrentCalls = max(maximumConcurrentCalls, activeCalls)
+        resumeCallCountWaiters()
+        let result = await withCheckedContinuation { completions.append($0) }
+        activeCalls -= 1
+        if Task.isCancelled { cancelledCallCount += 1 }
+        return result
+    }
+
+    func waitForCallCount(_ count: Int) async {
+        if receivedEvidence.count >= count { return }
+        await withCheckedContinuation { callCountWaiters.append((count, $0)) }
+    }
+
+    func finishNext(with result: String?) {
+        completions.removeFirst().resume(returning: result.map(WorktreeExplanationResult.explanation))
+    }
+
+    func finishNext(withResult result: WorktreeExplanationResult?) {
+        completions.removeFirst().resume(returning: result)
+    }
+
+    private func resumeCallCountWaiters() {
+        let ready = callCountWaiters.filter { receivedEvidence.count >= $0.0 }
+        callCountWaiters.removeAll { receivedEvidence.count >= $0.0 }
+        ready.forEach { $0.1.resume() }
     }
 }

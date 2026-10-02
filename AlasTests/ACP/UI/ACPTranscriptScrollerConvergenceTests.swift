@@ -156,12 +156,15 @@ struct ACPTranscriptScrollerConvergenceTests {
             try await settle(fixture.window)
             tracked.observe(fixture.scroller.flippedDocumentView)
             try await waitForRetiredViews(tracked, fixture: fixture)
-            #expect(tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) == 0,
-                    "retired hosts and markdown views must release after settling")
-            #expect(tracked.liveHostCount == fixture.pool.mountedIds.count)
-            // Each fixture row has one paragraph and twelve table cells.
-            #expect(tracked.liveTextViewCount <= fixture.pool.mountedIds.count * 13,
-                    "live text views must stay bounded by mounted content, not scroll cycles")
+            let parkedCount = fixture.pool.parkedIdsForTesting.count
+            #expect(parkedCount <= ACPTranscriptRowHostingPool.parkedCapacity)
+            #expect(tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= parkedCount * 14,
+                    "retired hosts and markdown views must release after settling, beyond the bounded parked cache")
+            #expect(tracked.liveHostCount <= fixture.pool.mountedIds.count + parkedCount,
+                    "live hosts must be mounted plus the bounded parked cache")
+            // Each fixture row has one host, one paragraph and twelve table cells.
+            #expect(tracked.liveTextViewCount <= (fixture.pool.mountedIds.count + parkedCount) * 13,
+                    "live text views must stay bounded by mounted content, beyond the bounded parked cache, not scroll cycles")
 
             let height = fixture.scroller.contentHeight
             let y = fixture.scroller.scrollY
@@ -242,7 +245,7 @@ struct ACPTranscriptScrollerConvergenceTests {
 
     private func waitForRetiredViews(_ tracked: ConvergenceWeakViews, fixture: ConvergenceScrollerFixture) async throws {
         for _ in 0..<40 {
-            if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) == 0 { return }
+            if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= fixture.pool.parkedIdsForTesting.count * 14 { return }
             try await Task.sleep(for: .milliseconds(25))
             autoreleasepool { fixture.window.layoutIfNeeded() }
         }

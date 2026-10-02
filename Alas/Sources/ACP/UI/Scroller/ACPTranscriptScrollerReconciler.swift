@@ -235,6 +235,7 @@ final class ACPTranscriptScrollerReconciler {
         var newSpecs: [String: ACPTranscriptRowSpec] = [:]
         newSpecs.reserveCapacity(specs.count)
         for spec in specs { newSpecs[spec.id] = spec }
+        pool.updateParkingPolicies(newSpecs)
 
         let idDiff = Self.diff(oldIds: orderedIds, newIds: newIds)
         let widthChanged = width != contentWidth
@@ -296,6 +297,12 @@ final class ACPTranscriptScrollerReconciler {
         lastAppliedSpecs = specs
         lastFollowsTail = followsTail
         layoutMountedRows(pinToTail: repins)
+        // Rows that left the transcript can never be revived from the parked
+        // cache. Dropped after the layout pass, which is what parks the views
+        // of rows this update just removed. A deferred non-positive width
+        // returned early and touched nothing; the next real-width call drops
+        // against its own id set.
+        pool.dropParked(where: { newSpecs[$0] == nil })
     }
 
     /// Drops any remembered vanished anchor. Called by the coordinator on
@@ -480,6 +487,8 @@ final class ACPTranscriptScrollerReconciler {
     ///     synchronously measured a hosting view per row in the whole render
     ///     window.
     private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, anchor: ScrollAnchor?) {
+        // Views parked at the old width would only be re-measured anyway; free them.
+        if widthChanged { pool.purgeParked() }
         tiling.replaceAll(rows: resetHeights(specs: specs, widthChanged: widthChanged))
         scroller.setDocumentHeight(tiling.documentHeight)
         restoreScrollAnchor(anchor)
@@ -971,11 +980,14 @@ final class ACPTranscriptScrollerReconciler {
             }
             // A freshly mounted (or previously-released-and-now-remounted)
             // view has never been measured at the current width, or was
-            // last measured at a since-superseded one. Make the invariant
-            // below true by construction rather than relying on AppKit
-            // happening to invalidate the view's intrinsic size as a side
-            // effect of `addSubview` — that isn't contractual behavior.
-            if view.lastMeasuredWidth != contentWidth {
+            // last measured at a since-superseded one (or revived from the
+            // parked cache). Make the invariant below true by construction
+            // rather than relying on AppKit happening to invalidate the
+            // view's intrinsic size as a side effect of `addSubview` — that
+            // isn't contractual behavior.
+            // A revived view still has its old width on record, but its
+            // content may have changed size while it was parked and silenced.
+            if view.lastMeasuredWidth != contentWidth || view.needsRemeasure {
                 let height = view.measuredHeight(forWidth: contentWidth)
                 // A changed height supersedes the `band`/`keep` computed at
                 // the top of this pass: rows that shrank pull later rows up

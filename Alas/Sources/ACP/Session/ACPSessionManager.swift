@@ -1798,9 +1798,6 @@ final class ACPSessionManager: ObservableObject {
             guard let parent = sessions[parentID], parent.hydrationState == .ready else {
                 throw ACPSessionForkCreationError.sourceUnavailable
             }
-            guard ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: parent.agentId) else {
-                throw ACPSideQuestionError.unenforceable
-            }
             let title = ACPSideQuestionBoundaryPolicy.title(for: question)
             if let boundary = ACPSideQuestionBoundaryPolicy.boundary(
                 messages: parent.transcript.messages,
@@ -1834,7 +1831,7 @@ final class ACPSessionManager: ObservableObject {
         guard sideQuestions[parentID]?.id == entry.id else { return side }
         // Attach enters the read-only mode before it marks the session ready;
         // a failed attach would otherwise queue the question for a later one.
-        guard side.agentState == .ready, await enterReadOnlyMode(side) else {
+        guard side.agentState == .ready, await enterSideSessionMode(side) else {
             await discardSideSession(id: side.id)
             failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
             throw ACPSideQuestionError.unsafeMode
@@ -1847,6 +1844,13 @@ final class ACPSessionManager: ObservableObject {
         }
         sideQuestions[parentID]?.isSubmitted = true
         return side
+    }
+
+    /// Enters a read-only mode where the agent offers one. Only agents whose
+    /// read-only mode Alas relies on fail without it; the rest ask anyway,
+    /// and the card says read-only isn't guaranteed.
+    private func enterSideSessionMode(_ side: ACPSession) async -> Bool {
+        await enterReadOnlyMode(side) || !ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: side.agentId)
     }
 
     /// Moves a side session out of modes that run tool calls without asking,
@@ -2462,6 +2466,7 @@ final class ACPSessionManager: ObservableObject {
         let wasHidden = (visibleSessionCounts[id] ?? 0) == 0
         visibleSessionCounts[id, default: 0] += 1
         if wasHidden {
+            sessions[id]?.nextPromptVisibilityChanged.send(true)
             wakeVisibleMirror(sessionId: id)
         }
     }
@@ -2470,8 +2475,8 @@ final class ACPSessionManager: ObservableObject {
         guard let current = visibleSessionCounts[id], current > 0 else { return }
         let next = current - 1
         if next == 0 {
-            sessions[id]?.nextPromptActivity.send()
             visibleSessionCounts.removeValue(forKey: id)
+            sessions[id]?.nextPromptVisibilityChanged.send(false)
         } else {
             visibleSessionCounts[id] = next
         }
@@ -5658,17 +5663,19 @@ extension ACPSessionManager {
                 return true
             }()
             let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
-            // A broker-adopted agent that was already running keeps the stdio
-            // `alas mcp` it spawned for an earlier attach (possibly before an
-            // app restart). That server said its one hello back then and won't
-            // again, so this attach must not demand a fresh one. An HTTP server
-            // is supervised by the app and respawned per attach, so it does.
+            // A broker-adopted agent that was already running keeps the
+            // built-in server it connected to for an earlier attach: the stdio
+            // `alas mcp` it spawned (possibly before an app restart), or the
+            // app-supervised HTTP process the supervisor reused. That server
+            // said its one hello back then and won't again, so this attach
+            // must not demand a fresh one (see `MCPRegistrationDecision`).
             let helloBeforeAttach = builtInMCPHello?(sessionId)
             var reattachedToRunningServer = shouldTrackBuiltInRegistration
                 && MCPRegistrationDecision.reattachesRunningServer(
                     builtInTransport: builtInMCP?.status.transport,
                     adoptedRunningAgent: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true,
                     recordedHelloTransport: helloBeforeAttach?.transport,
+                    reusedHTTPServer: builtInMCP?.reusesRunningServer == true,
                     previousAttachFoundNoServer: session.builtInMCPRegistration == .notRegistered
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
@@ -6401,7 +6408,7 @@ extension ACPSessionManager {
             // creation/restoration above has succeeded, which is when the
             // adapter actually received `wireMCPServers` and could spawn or
             // connect the built-in server. Arming it at composition time risks a
-            // slow auth or a >12s restore marking a healthy session
+            // slow auth or a long restore marking a healthy session
             // `.notRegistered` before the harness ever saw the config. Guarded
             // by the attach epoch so a stale timer cannot clobber a newer row; a
             // late hello (or, for a reattached server, its first request) still
@@ -6429,7 +6436,7 @@ extension ACPSessionManager {
             if shouldTrackBuiltInRegistration {
                 let reattachedToRunningServer = reattachedToRunningServer
                 Task { @MainActor [weak self, weak session] in
-                    try? await Task.sleep(for: .seconds(12))
+                    try? await Task.sleep(for: MCPRegistrationDecision.helloGrace)
                     guard let self, let session,
                           self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch
                     else { return }
@@ -6770,12 +6777,12 @@ extension ACPSessionManager {
             modelModeRestorationGates[sessionId] = nil
             // Every connection starts in the agent's default mode. A side
             // session re-enters a read-only one before its queue can drain,
-            // and stays unready if it can't.
+            // and stays unready if it relies on one and can't.
             if session.readOnlyRestricted {
-                let isReadOnly = await enterReadOnlyMode(session)
+                let modeAccepted = await enterSideSessionMode(session)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                       session.agentState == .spawning else { return }
-                guard isReadOnly else {
+                guard modeAccepted else {
                     session.agentState = .failed(ACPSideQuestionError.unsafeMode.localizedDescription)
                     stderrTask.cancel()
                     return

@@ -13,6 +13,9 @@ enum BuiltInAlasMCP {
         let server: ACPMCPServer
         let status: MCPAttachmentServerStatus
         let isDelegated: Bool
+        /// The HTTP server is the process an earlier attach in this app run
+        /// already got, not a fresh spawn. See `MCPRegistrationDecision`.
+        let reusesRunningServer: Bool
     }
 
     /// An HTTP endpoint for the built-in server. When provided, `injection`
@@ -21,6 +24,9 @@ enum BuiltInAlasMCP {
     struct HTTPEndpoint: Equatable {
         let url: String
         let token: String
+        /// The supervisor handed back its running process rather than
+        /// spawning one.
+        var reused = false
     }
 
     /// The only Workspace data given to the built-in MCP process. Its Codable
@@ -113,7 +119,8 @@ enum BuiltInAlasMCP {
                 transport: transport,
                 disposition: .requested
             ),
-            isDelegated: parentSessionId != nil
+            isDelegated: parentSessionId != nil,
+            reusesRunningServer: httpEndpoint?.reused == true
         )
     }
 }

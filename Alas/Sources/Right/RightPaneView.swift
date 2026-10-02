@@ -81,6 +81,7 @@ struct RightPaneView: View {
         // state. Activation happens inside the task, not during body evaluation,
         // so `RightPaneStore` mutations don't run inside a view update.
         .task(id: "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)") {
+            state.beginStartupRightPaneRefresh()
             if rps?.worktree.id != worktree.id {
                 rps = nil
             }
@@ -91,6 +92,8 @@ struct RightPaneView: View {
             )
             rps = activated
             await activated.refresh(forceReviewLoopRemote: true)
+            guard !Task.isCancelled else { return }
+            state.completeStartupRightPaneRefresh(for: worktree.id)
         }
         .onAppear {
             state.rightPaneStore.prepareForVisiblePane(worktreeId: worktree.id)

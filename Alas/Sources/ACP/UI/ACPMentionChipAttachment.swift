@@ -85,9 +85,10 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
 enum ACPMentionChipMetrics {
     static let height: CGFloat = 18
 
-    static var labelFont: NSFont {
-        NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
-    }
+    /// Kept for the process lifetime: string drawing with a fresh font per
+    /// call can leave UIFoundation's cached attributes holding a nil font
+    /// after an appearance change, which aborts in CoreText.
+    nonisolated(unsafe) static let labelFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
 
     static func cellSize(for label: String) -> NSSize {
         let attrs: [NSAttributedString.Key: Any] = [.font: labelFont]

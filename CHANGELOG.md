@@ -6,13 +6,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
+- Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill, and existing or undo-restored chips refresh when session ownership changes.
+
+### Performance
+
+- Compress remote WebSocket traffic with negotiated permessage-deflate for compatible native peers and browsers. Each message uses a fresh compression dictionary, and incoming messages still have a 16 MB decoded-size limit. Clients without compression support keep the existing transport.
+
+### 🐛 Fixes
+
+- Keep Remote Web responsive when opening transcripts containing large file edits.
+- Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
+- Stop warning that the agent harness didn't start the Alas MCP server when a session on the HTTP transport re-attaches or reconnects to its still-running agent. The agent keeps its connection to the same server and never re-announces it. The warning also waits 35 seconds instead of 12, past Claude Code's MCP connect timeout, so a harness that is only slow to connect no longer flashes it (#1701).
+- Keep native peer sessions connected when older peers send transcript snapshots larger than 1 MiB.
+- Bound transcript snapshots, history pages, and live-update batches to 8 MiB. Individual rows exceeding the 4 MiB remote-display budget show an explicit notice; their full content remains on the owning Mac.
+
+### Internal
+
+- Build each release app only for its named architecture and verify bundled binaries before signing.
+- Save Swift compiler caches only from `main`, avoiding PR-scoped duplicates that compete with release dependency caches.
+
+## [0.19.22] - 2026-10-02
+
+### ✨ Features
+
+- Turn the Kanban plugin into a ticket tracker with `KAN-<n>` tickets, assignment to installed agents, worktree-backed execution, and agent replies captured as comments (#1666).
+- Add native ACP goal controls and the `/btw` flow for read-only side questions, backed by hidden forked sessions and a dedicated side-question card (#1674, #1682, #1683, #1684, #1686).
+- Move plugins to the `alas-plugins` catalog, run them as JavaScript in JavaScriptCore, and support catalog installation (#1678, #1680, #1688).
+- Add plugin API 5 commands, notifications, session events, settings, secrets, web requests, timers, and right-pane panels (#1689, #1690, #1691).
+
+### 🐛 Fixes
+
+- Align inline ACP chips with the surrounding text baseline and avoid duplicate setup warnings (#1676, #1685).
+
+### ⚡ Performance
+
+- Keep diff panes, ACP transcripts, and the sidebar responsive by avoiding repeated re-tiling and whole-tree rendering during scrolling (#1679, #1687, #1692).
+
+### 🏗️ Internal
+
+- Update Rust to 1.99.0 and `tree-sitter-graphql` to 0.3.0 (#1675, #1694).
+- Replace fixed waits in editor and repository-hook tests with deadline-based synchronization (#1693, #1695).
+- Document macro validation, silent test-suite skips, and local submodule behavior (#1696).
+
 ## [0.19.21] - 2026-10-01
 
 ### ✨ Features
 
-- Turn the Kanban plugin into a ticket tracker: `KAN-<n>` tickets with statuses, priorities, descriptions and comments, a ticket screen, assignment to an installed agent, and Start, which runs the assignee in a new worktree and adds the agent's final reply as a comment. Boards saved by the card version are converted on first load and left in place. Adds the `session/last_message` and `agent/list` plugin requests, and an API 3 `session.read` capability for reading an agent's last reply.
-- Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull.
-- Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version.
 - Spin the sidebar's `↓N` badge while its pull runs, keep the current worktree selected on the first click, and only switch to that worktree when the badge is clicked again mid-pull (#1672).
 - Show changelogs for skipped stable versions in the update dialog, newest first, down to the installed version (#1670).
 

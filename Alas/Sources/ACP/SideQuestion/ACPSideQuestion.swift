@@ -16,7 +16,6 @@ struct ACPSideQuestion: Equatable, Sendable {
 enum ACPSideQuestionError: LocalizedError, Equatable {
     case notAccepted
     case unsafeMode
-    case unenforceable
 
     var errorDescription: String? {
         switch self {
@@ -24,8 +23,6 @@ enum ACPSideQuestionError: LocalizedError, Equatable {
             "The side session couldn't accept the question."
         case .unsafeMode:
             "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
-        case .unenforceable:
-            "This agent runs its tools without asking for permission, so a side question can't be kept read-only."
         }
     }
 }
@@ -146,13 +143,14 @@ enum ACPSideQuestionBoundaryPolicy {
     }
 }
 
-/// Agents whose read-only state Alas can actually enforce. The permission
-/// gate only sees calls an agent asks about, and agents run tools that the
-/// user's own rules allow without asking. Claude's plan mode and Codex's
-/// read-only sandbox hold regardless of those rules; other agents (OpenCode,
-/// Pi, Copilot, …) offer no such mode, so side questions refuse them.
+/// Whether a side session's read-only mode holds. The permission gate only
+/// sees calls an agent asks about, and agents run tools that the user's own
+/// rules allow without asking. Claude's plan mode and Codex's read-only
+/// sandbox hold regardless of those rules. Other agents (OpenCode, Pi,
+/// Copilot, …) still get side questions, with the mode switch and the gate
+/// applied where they can be, but the card says read-only isn't guaranteed.
 enum ACPSideQuestionSupportPolicy {
-    static func canEnforceReadOnly(agentId: String) -> Bool {
+    static func enforcesReadOnly(agentId: String) -> Bool {
         ["claude", "codex"].contains(agentId)
     }
 }
