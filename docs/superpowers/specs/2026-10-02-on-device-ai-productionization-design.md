@@ -1,6 +1,6 @@
 # Production on-device AI settings
 
-Status: provider split and visual direction approved. Written specification awaiting user review before implementation planning.
+Status: provider split, visual direction, and written specification approved. Implementation plan written and self-reviewed; product-code changes await plan review and execution-method selection.
 
 ## Intent
 
