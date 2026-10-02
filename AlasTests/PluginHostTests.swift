@@ -842,6 +842,7 @@ struct PluginHostTests {
             refusal: "secret token is not allowed for other.example.com"),
         FetchCase(request: fetch(auth: "Bearer {{secret:nope}}"), refusal: #""code":-32602"#),
         FetchCase(request: fetch(auth: "Bearer {{secret:token}}"), refusal: nil, authorization: "Bearer s3cret"),
+        FetchCase(request: fetch(auth: String(repeating: "{{secret:token}}", count: 9)), refusal: "more than 8 secret substitutions"),
     ])
     func fetchGoesOnlyToListedHostsAndSecretsOnlyToTheirs(_ c: FetchCase) async throws {
         let manifest = try PluginManifest.parse(Data(Self.integrationManifest.utf8))

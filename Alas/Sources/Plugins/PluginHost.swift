@@ -89,6 +89,7 @@ final class PluginHost {
         "timer/cancel": .timers,
     ]
     static let maxPromptBytes = 32 * 1024
+    static let maxSecretSubstitutions = 8
     private static let traceLimit = 100
     private static let logLimit = 200
     static let logMessageLimit = 2000
@@ -570,10 +571,18 @@ final class PluginHost {
         request.httpBody = params.body.map { Data($0.utf8) }
         // A redirect may only carry a secret to a host that secret allows.
         var redirectHosts = manifest.network
+        // Each secret is read from the Keychain once per request, and a request may substitute only a handful,
+        // so no header can turn into thousands of synchronous lookups on the main actor.
+        var secretValues: [String: String] = [:]
+        var substitutions = 0
         for (name, value) in params.headers ?? [:] {
             var resolved = ""
             var rest = value[...]
             while let match = rest.firstMatch(of: /\{\{secret:([^}]*)\}\}/) {
+                substitutions += 1
+                guard substitutions <= Self.maxSecretSubstitutions else {
+                    return errorReply(id, code: -32602, "more than \(Self.maxSecretSubstitutions) secret substitutions in one request")
+                }
                 let key = String(match.1)
                 guard let setting = settings.declaration(key), setting.kind == .secret else {
                     return errorReply(id, code: -32602, "unknown secret \(key)")
@@ -581,7 +590,10 @@ final class PluginHost {
                 guard setting.hosts.contains(host) else {
                     return errorReply(id, code: -32001, "secret \(key) is not allowed for \(host)")
                 }
-                guard let secret = settings.secret(key) else { return errorReply(id, code: -32602, "secret \(key) is not set") }
+                guard let secret = secretValues[key] ?? settings.secret(key) else {
+                    return errorReply(id, code: -32602, "secret \(key) is not set")
+                }
+                secretValues[key] = secret
                 resolved += rest[..<match.range.lowerBound]
                 resolved += secret
                 redirectHosts.removeAll { !setting.hosts.contains($0) }
