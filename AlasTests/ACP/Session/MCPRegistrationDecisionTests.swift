@@ -54,9 +54,16 @@ struct MCPRegistrationDecisionTests {
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: .http, expected: false),
         // A reconnect after this app run already warned: nothing survived.
         ReattachCase(builtIn: .stdio, adopted: true, recordedHello: nil, previouslyNotRegistered: true, expected: false),
-        // A freshly spawned agent, or an app-supervised HTTP server.
+        // A freshly spawned agent.
         ReattachCase(builtIn: .stdio, adopted: false, recordedHello: nil, expected: false),
+        ReattachCase(builtIn: .http, adopted: false, recordedHello: .http, expected: false),
+        // The supervised HTTP server this app run kept: the adapter keeps its
+        // connection and sends no new `initialize`, so no new hello.
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: .http, expected: true),
+        // No HTTP hello in this app run (restarted, or switched from stdio):
+        // the server is new and the adapter must connect to it.
         ReattachCase(builtIn: .http, adopted: true, recordedHello: nil, expected: false),
+        ReattachCase(builtIn: .http, adopted: true, recordedHello: .stdio, expected: false),
     ])
     func reattachesRunningServer(_ c: ReattachCase) {
         #expect(MCPRegistrationDecision.reattachesRunningServer(

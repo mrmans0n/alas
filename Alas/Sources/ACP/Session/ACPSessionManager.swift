@@ -5658,11 +5658,12 @@ extension ACPSessionManager {
                 return true
             }()
             let shouldTrackBuiltInRegistration = builtInMCP != nil && usesWireMCP
-            // A broker-adopted agent that was already running keeps the stdio
-            // `alas mcp` it spawned for an earlier attach (possibly before an
-            // app restart). That server said its one hello back then and won't
-            // again, so this attach must not demand a fresh one. An HTTP server
-            // is supervised by the app and respawned per attach, so it does.
+            // A broker-adopted agent that was already running keeps the
+            // built-in server it connected to for an earlier attach: the stdio
+            // `alas mcp` it spawned (possibly before an app restart), or the
+            // app-supervised HTTP server this app run still keeps. That server
+            // said its one hello back then and won't again, so this attach
+            // must not demand a fresh one (see `MCPRegistrationDecision`).
             let helloBeforeAttach = builtInMCPHello?(sessionId)
             var reattachedToRunningServer = shouldTrackBuiltInRegistration
                 && MCPRegistrationDecision.reattachesRunningServer(
@@ -6401,7 +6402,7 @@ extension ACPSessionManager {
             // creation/restoration above has succeeded, which is when the
             // adapter actually received `wireMCPServers` and could spawn or
             // connect the built-in server. Arming it at composition time risks a
-            // slow auth or a >12s restore marking a healthy session
+            // slow auth or a long restore marking a healthy session
             // `.notRegistered` before the harness ever saw the config. Guarded
             // by the attach epoch so a stale timer cannot clobber a newer row; a
             // late hello (or, for a reattached server, its first request) still
@@ -6429,7 +6430,7 @@ extension ACPSessionManager {
             if shouldTrackBuiltInRegistration {
                 let reattachedToRunningServer = reattachedToRunningServer
                 Task { @MainActor [weak self, weak session] in
-                    try? await Task.sleep(for: .seconds(12))
+                    try? await Task.sleep(for: MCPRegistrationDecision.helloGrace)
                     guard let self, let session,
                           self.mcpRegistrationAttachEpoch[sessionId] == mcpRegistrationEpoch
                     else { return }
