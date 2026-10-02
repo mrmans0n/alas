@@ -195,8 +195,7 @@ struct DelegatedPromptRow: View {
 
     nonisolated static let foldLineThreshold = 12
     nonisolated static let foldCharacterThreshold = 900
-    nonisolated static let foldedVisibleLines = 8
-    nonisolated static let foldPreviewCharacterLimit = 640
+    private static let foldedVisibleLines: CGFloat = 8
 
     /// The raw line count when `text` is long enough to fold, else nil.
     /// Decided from the text alone: measuring the rendered height would
@@ -206,17 +205,6 @@ struct DelegatedPromptRow: View {
         let lineCount = trimmed.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).count
         guard lineCount > foldLineThreshold || trimmed.count > foldCharacterThreshold else { return nil }
         return lineCount
-    }
-
-    /// What a folded prompt renders: the first `foldedVisibleLines` lines,
-    /// capped at `foldPreviewCharacterLimit`. Folding by clipping the full
-    /// text would leave its links and Copy buttons focusable and readable by
-    /// VoiceOver while invisible, so the hidden part is not mounted at all.
-    nonisolated static func foldedPreview(of text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lines = trimmed.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-            .prefix(foldedVisibleLines)
-        return String(lines.joined(separator: "\n").prefix(foldPreviewCharacterLimit))
     }
 
     var body: some View {
@@ -233,14 +221,18 @@ struct DelegatedPromptRow: View {
                 .foregroundStyle(theme.color("fg-faint"))
                 .padding(.leading, 4)
                 VStack(alignment: .leading, spacing: 6) {
-                    ACPMarkdownText(
-                        raw: isFolded ? Self.foldedPreview(of: text) : text,
-                        typography: typography.flatteningHeadings()
-                    )
+                    ACPMarkdownText(raw: text, typography: typography.flatteningHeadings())
                         .frame(maxHeight: isFolded ? foldedHeight : nil, alignment: .top)
                         .clipped()
                         .contentShape(Rectangle())
                         .mask(foldMask(isFolded: isFolded))
+                        // Clipping only hides pixels: the hidden lines' links,
+                        // Copy buttons and text would stay clickable, focusable
+                        // and readable by VoiceOver. Folded, nothing in here
+                        // takes input; the toggle below is the way in.
+                        .allowsHitTesting(!isFolded)
+                        .disabled(isFolded)
+                        .accessibilityHidden(isFolded)
                     if let foldedLineCount {
                         foldToggle(lineCount: foldedLineCount)
                     }
@@ -272,7 +264,7 @@ struct DelegatedPromptRow: View {
 
     private var foldedHeight: CGFloat {
         let font = typography.appKitFont(size: typography.paragraphSize)
-        return ceil((font.ascender - font.descender + font.leading) * CGFloat(Self.foldedVisibleLines))
+        return ceil((font.ascender - font.descender + font.leading) * Self.foldedVisibleLines)
     }
 
     /// Fades the last lines of a folded prompt; fully opaque otherwise.
