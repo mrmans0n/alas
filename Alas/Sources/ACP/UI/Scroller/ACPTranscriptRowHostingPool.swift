@@ -87,10 +87,10 @@ final class ACPTranscriptRowHostingPool {
 
     /// Drops parked views whose rows are no longer in the transcript: they can
     /// never be revived, so keeping them alive is pure waste.
-    func dropParked(notIn ids: Set<String>) {
-        guard parked.keys.contains(where: { !ids.contains($0) }) else { return }
-        parked = parked.filter { ids.contains($0.key) }
-        parkedOrder.removeAll { !ids.contains($0) }
+    func dropParked(where shouldDrop: (String) -> Bool) {
+        guard parked.keys.contains(where: shouldDrop) else { return }
+        parked = parked.filter { !shouldDrop($0.key) }
+        parkedOrder.removeAll(where: shouldDrop)
     }
 
     #if DEBUG

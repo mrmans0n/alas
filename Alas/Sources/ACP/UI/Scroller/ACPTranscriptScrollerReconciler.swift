@@ -301,7 +301,7 @@ final class ACPTranscriptScrollerReconciler {
         // of rows this update just removed. A deferred non-positive width
         // returned early and touched nothing; the next real-width call drops
         // against its own id set.
-        pool.dropParked(notIn: Set(newIds))
+        pool.dropParked(where: { newSpecs[$0] == nil })
     }
 
     /// Drops any remembered vanished anchor. Called by the coordinator on

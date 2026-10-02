@@ -363,11 +363,10 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
             contentWidth: 500, followsTail: false
         )
 
-        // Observable outcome: r0's old view is gone, so mounting r0 again
-        // builds it again instead of reviving the parked one.
-        scroller.setScrollY(0)
-        reconciler.layoutMountedRowsForScroll()
-        #expect(counter.count("r0") >= 2)
+        // The reset measures every unmounted row through the pool. Without the
+        // purge it would revive r0's parked view (count stays 1); with it,
+        // r0 is built fresh.
+        #expect(counter.count("r0") == 2)
     }
 
     @Test("rows removed from the specs are not parked")
@@ -1716,16 +1715,17 @@ struct ACPTranscriptRowHostingPoolParkingTests {
     @Test("dropParked keeps only the listed ids")
     func dropParkedKeepsListedIds() {
         let pool = ACPTranscriptRowHostingPool()
+        var views: [String: ACPTranscriptRowHostingView] = [:]
         for id in ["a", "b", "c"] {
-            _ = pool.view(for: spec(id))
+            views[id] = pool.view(for: spec(id)).view
             pool.release(id: id)
         }
 
-        pool.dropParked(notIn: ["a", "c", "zzz"])
+        pool.dropParked(where: { !["a", "c", "zzz"].contains($0) })
 
         #expect(pool.parkedIdsForTesting == ["a", "c"])
-        // The order slots went with the entries: the survivors still revive.
-        #expect(pool.view(for: spec("a")).contentChanged)
+        #expect(pool.view(for: spec("a")).view === views["a"])
+        #expect(pool.view(for: spec("b")).view !== views["b"])
     }
 
     @Test("a released row whose content changed is rebuilt")

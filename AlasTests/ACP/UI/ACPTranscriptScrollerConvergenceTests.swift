@@ -157,6 +157,7 @@ struct ACPTranscriptScrollerConvergenceTests {
             tracked.observe(fixture.scroller.flippedDocumentView)
             try await waitForRetiredViews(tracked, fixture: fixture)
             let parkedCount = fixture.pool.parkedIdsForTesting.count
+            #expect(parkedCount <= ACPTranscriptRowHostingPool.parkedCapacity)
             #expect(tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= parkedCount * 14,
                     "retired hosts and markdown views must release after settling, beyond the bounded parked cache")
             #expect(tracked.liveHostCount <= fixture.pool.mountedIds.count + parkedCount,
