@@ -104,6 +104,16 @@ struct ACPTranscriptScrollerReconcilerDiffTests {
     }
 }
 
+@MainActor
+private final class GrowingRowModel: ObservableObject {
+    @Published var height: CGFloat = 100
+}
+
+private struct GrowingRow: View {
+    @ObservedObject var model: GrowingRowModel
+    var body: some View { Color.clear.frame(height: model.height) }
+}
+
 /// Counts how many times each row's SwiftUI content was actually built, so a
 /// test can prove a code path did NOT construct (and therefore did not
 /// measure) a hosting view for a row it already knew the height of.
@@ -274,6 +284,106 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         let pool = ACPTranscriptRowHostingPool()
         let reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
         return (reconciler, scroller, tiling)
+    }
+
+    @Test("scrolling a row away and back reattaches its view instead of rebuilding it")
+    func scrollBackReattachesView() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        let original = pool.mountedView(id: "r0")
+        let frameBefore = tiling.row(withId: "r0").map { ($0.minY, $0.height) }
+        #expect(original != nil)
+
+        scroller.setScrollY(6_000)                 // r0 leaves the band
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "r0") == nil)
+        scroller.setScrollY(0)                     // and comes back
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(pool.mountedView(id: "r0") === original)
+        #expect(counter.count("r0") == 1)
+        let frameAfter = tiling.row(withId: "r0").map { ($0.minY, $0.height) }
+        #expect(frameAfter?.0 == frameBefore?.0)
+        #expect(frameAfter?.1 == frameBefore?.1)
+    }
+
+    @Test("a revived row whose content grew while parked is re-measured on remount")
+    func revivedRowIsRemeasured() throws {
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let model = GrowingRowModel()
+        var specs = (0..<100).map { spec("r\($0)") }
+        specs[0] = ACPTranscriptRowSpec(
+            id: "r0", equalityToken: ACPRowEqualityToken(0),
+            build: { AnyView(GrowingRow(model: model)) }
+        )
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        #expect(tiling.row(withId: "r0")?.height == 100)
+        let parkedView = try #require(pool.mountedView(id: "r0"))
+
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "r0") == nil)
+        model.height = 260                          // grows while parked, same token
+        // SwiftUI applies the model change to the detached view on a later
+        // run-loop turn; wait for it rather than sleeping.
+        let deadline = Date().addingTimeInterval(5)
+        while parkedView.intrinsicContentSize.height != 260, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+        }
+        #expect(parkedView.intrinsicContentSize.height == 260)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(tiling.row(withId: "r0")?.height == 260)
+        #expect(scroller.contentHeight == tiling.documentHeight)
+    }
+
+    @Test("a width-changed reset drops parked views so remounts build fresh")
+    func widthResetPurgesParked() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        // A new width together with a changed id set (a middle row dropped) is a
+        // reset at the new width; an append alone would only be coalesced.
+        reconciler.apply(
+            specs: specs.filter { $0.id != "r50" } + [countingSpec("r100", counter: counter)],
+            contentWidth: 500, followsTail: false
+        )
+
+        // The reset's own layout pass may park views it just unmounted; what
+        // matters is that the view parked at the old width is gone.
+        #expect(!pool.parkedIdsForTesting.contains("r0"))
+    }
+
+    @Test("an unchanged-width reset keeps parked views")
+    func unchangedWidthResetKeepsParked() {
+        let counter = RowBuildCounter()
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { countingSpec("r\($0)", counter: counter) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRows()
+        scroller.setScrollY(6_000)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.parkedIdsForTesting.contains("r0"))
+
+        // Same width, a different id set: the reconciler resets geometry.
+        reconciler.apply(specs: [countingSpec("new", counter: counter)] + specs, contentWidth: 600, followsTail: false)
+
+        #expect(pool.parkedIdsForTesting.contains("r0"))
     }
 
     private func spec(
