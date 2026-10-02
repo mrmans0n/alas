@@ -202,11 +202,32 @@ struct WorktreeRowStatusTests {
         #expect(store.explanation(for: "second", evidence: secondEvidence) == "Explain second worktree")
     }
 
+    @Test @MainActor
+    func failedWorktreeExplanationCanRetry() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+
+        let first = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: nil)
+        await first.value
+
+        let retry = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(2)
+        await probe.finishNext(with: "Explain retried worktree")
+        await retry.value
+
+        #expect(await probe.receivedEvidence == [evidence, evidence])
+        #expect(store.explanation(for: "worktree", evidence: evidence) == "Explain retried worktree")
+    }
+
     @Test func explanationUsesOnlyAResolvedEmptyMetadataSlot() {
         let available = WorktreeRowView.showsExplanation(
             isMain: false,
             hasOperation: false,
             hasWorkspaceCheckout: false,
+            worktreeStatus: .clean,
             hasStatus: false,
             hasVisibleCommits: false,
             commitQueryResolved: true,
@@ -214,6 +235,17 @@ struct WorktreeRowStatusTests {
             hasStackStatus: false
         )
         #expect(available)
+        #expect(!WorktreeRowView.showsExplanation(
+            isMain: false,
+            hasOperation: false,
+            hasWorkspaceCheckout: false,
+            worktreeStatus: .unknown,
+            hasStatus: false,
+            hasVisibleCommits: false,
+            commitQueryResolved: true,
+            hasDiff: false,
+            hasStackStatus: false
+        ))
 
         let blockers: [(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)] = [
             (true, false, false, false, false, true, false, false),
@@ -230,6 +262,7 @@ struct WorktreeRowStatusTests {
                 isMain: blocker.0,
                 hasOperation: blocker.1,
                 hasWorkspaceCheckout: blocker.2,
+                worktreeStatus: .clean,
                 hasStatus: blocker.3,
                 hasVisibleCommits: blocker.4,
                 commitQueryResolved: blocker.5,

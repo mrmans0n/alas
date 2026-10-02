@@ -155,7 +155,7 @@ final class WorktreeExplainerStore {
             _ = await previous?.value
             guard let self else { return }
             let explanation = await generate(evidence)
-            completed.insert(key)
+            if explanation != nil { completed.insert(key) }
             jobs[key] = nil
             if currentEvidenceByWorktreeID[worktreeID] == evidence {
                 explanations[worktreeID] = explanation

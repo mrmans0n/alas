@@ -247,6 +247,7 @@ struct WorktreeRowView: View {
         isMain: Bool,
         hasOperation: Bool,
         hasWorkspaceCheckout: Bool,
+        worktreeStatus: WorktreeDirtyState,
         hasStatus: Bool,
         hasVisibleCommits: Bool,
         commitQueryResolved: Bool,
@@ -256,6 +257,7 @@ struct WorktreeRowView: View {
         !isMain
             && !hasOperation
             && !hasWorkspaceCheckout
+            && worktreeStatus == .clean
             && !hasStatus
             && !hasVisibleCommits
             && commitQueryResolved
@@ -339,11 +341,15 @@ struct WorktreeRowView: View {
     }
 
     var body: some View {
+        let worktreeStatus = WorktreeStatusStore.shared.status(forPath: worktree.path.path)
         let status = Self.statusPresentation(
             harnessState: harnessSummary?.state,
-            worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path)
+            worktreeStatus: worktreeStatus
         )
-        let explanationEvidence = explanationEvidence(status: status)
+        let explanationEvidence = explanationEvidence(
+            status: status,
+            worktreeStatus: worktreeStatus
+        )
 
         ZStack(alignment: .leading) {
             if isSelected {
@@ -364,7 +370,10 @@ struct WorktreeRowView: View {
                 if operationState != nil {
                     operationLine
                 } else {
-                    secondLine(status: status)
+                    secondLine(
+                        status: status,
+                        showsExplanation: explanationEvidence != nil
+                    )
                 }
             }
             .padding(.horizontal, 8)
@@ -459,10 +468,10 @@ struct WorktreeRowView: View {
         isPending ? "fg-faint" : "fg"
     }
 
-    private func secondLine(status: StatusPresentation?) -> some View {
+    private func secondLine(status: StatusPresentation?, showsExplanation: Bool) -> some View {
         ViewThatFits(in: .horizontal) {
-            subtitleContents(status: status, showsDiffBar: true)
-            subtitleContents(status: status, showsDiffBar: false)
+            subtitleContents(status: status, showsDiffBar: true, showsExplanation: showsExplanation)
+            subtitleContents(status: status, showsDiffBar: false, showsExplanation: showsExplanation)
         }
         .font(.system(size: 10))
         .foregroundColor(theme.color("fg-dim"))
@@ -474,12 +483,16 @@ struct WorktreeRowView: View {
             ?? WorktreeDiffStats(added: worktree.addedLines, deleted: worktree.deletedLines)
     }
 
-    private func explanationEvidence(status: StatusPresentation?) -> WorktreeExplainerEvidence? {
+    private func explanationEvidence(
+        status: StatusPresentation?,
+        worktreeStatus: WorktreeDirtyState
+    ) -> WorktreeExplainerEvidence? {
         guard let worktreeExplainerEvidence,
               Self.showsExplanation(
                 isMain: isMain,
                 hasOperation: operationState != nil,
                 hasWorkspaceCheckout: workspaceCheckout != nil,
+                worktreeStatus: worktreeStatus,
                 hasStatus: status != nil,
                 hasVisibleCommits: visibleBranchCommits != nil,
                 commitQueryResolved: activeCommitQuery == nil
@@ -491,7 +504,11 @@ struct WorktreeRowView: View {
         return worktreeExplainerEvidence
     }
 
-    private func subtitleContents(status: StatusPresentation?, showsDiffBar: Bool) -> some View {
+    private func subtitleContents(
+        status: StatusPresentation?,
+        showsDiffBar: Bool,
+        showsExplanation: Bool
+    ) -> some View {
         HStack(spacing: 7) {
             if let workspaceCheckout {
                 HStack(spacing: 4) {
@@ -583,7 +600,7 @@ struct WorktreeRowView: View {
                 .accessibilityLabel("\(diffStats.added) lines added, \(diffStats.deleted) lines deleted")
             }
             stackSummaryView
-            if explanationEvidence(status: status) != nil, let worktreeExplanation {
+            if showsExplanation, let worktreeExplanation {
                 Text(worktreeExplanation)
                     .lineLimit(1)
                     .truncationMode(.tail)
