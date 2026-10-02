@@ -266,6 +266,11 @@ struct SidebarView: View {
                                     onRunPluginCommand: { item, slot, wt in
                                         state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
                                     },
+                                    pluginDecorations: { wt in
+                                        wt.map { state.pluginDecorations(.worktreeRow, projectID: project.id, target: $0.id) }
+                                            ?? state.pluginDecorations(.repoRow, projectID: project.id, target: project.id)
+                                    },
+                                    onRunPluginDecoration: { state.runPluginDecoration($0) },
                                     isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
                                     highlightedWorktreeId: highlightedWorktreeId
                                 )

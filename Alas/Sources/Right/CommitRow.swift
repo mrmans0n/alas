@@ -35,6 +35,8 @@ struct CommitRow: View {
     var stackEntry: GGStackEntry? = nil
     var currentPositionIndicator: GGCurrentPositionIndicator? = nil
     var codeHostKind: CodeHostKind? = nil
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -122,6 +124,10 @@ struct CommitRow: View {
             if onCherryPick != nil {
                 Divider()
                 Button("Cherry-pick…") { onCherryPick?() }
+            }
+            if !pluginCommands.isEmpty {
+                Divider()
+                PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
             }
             if onRevert != nil {
                 Divider()

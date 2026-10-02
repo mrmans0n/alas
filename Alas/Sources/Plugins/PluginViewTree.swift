@@ -25,6 +25,9 @@ struct PluginViewNode: Equatable, Sendable {
     var disabled = false
     var clickable = false
     var items: [MenuItem] = []
+
+    /// Nothing to show: stacks and scrolls that hold only such trees.
+    var isEmpty: Bool { [.vstack, .hstack, .scroll].contains(kind) && children.allSatisfy(\.isEmpty) }
 }
 
 struct PluginViewTreeError: Error, Equatable, CustomStringConvertible {

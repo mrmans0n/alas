@@ -166,6 +166,12 @@ struct WorkingTreeRowActions {
     let onSelect: (ChangedFile) -> Void
     let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
     var readOnly = false
+    /// Plugin commands for the `changes.file.menu` slot.
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem, ChangedFile) -> Void = { _, _ in }
+    /// Plugin badges for a file, by its path.
+    var pluginDecorations: (String) -> [PluginDecorationItem] = { _ in [] }
+    var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     var showsStageState = true
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
@@ -297,7 +303,11 @@ struct WorkingTreeFlatRowView: View {
             viewAtHEADEnabled: Self.hasHeadVersion(group),
             ignoreMenu: ignore,
             dragPayload: actions.dragPayload.map { fn in { fn(file) } },
-            readOnly: actions.readOnly
+            readOnly: actions.readOnly,
+            pluginCommands: actions.pluginCommands,
+            onRunPluginCommand: { actions.onRunPluginCommand($0, file) },
+            pluginDecorations: actions.pluginDecorations(file.path),
+            onRunPluginDecoration: actions.onRunPluginDecoration
         )
     }
 

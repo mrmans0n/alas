@@ -95,6 +95,10 @@ struct ChangesTabView: View {
         )
     }
 
+    private var pluginSections: [PluginPanelTarget] {
+        appState.pluginPanelTargets(.changesSection, projectID: rps.worktree.projectId, worktree: rps.worktree.id)
+    }
+
     var body: some View {
         let _ = appKitActionRelay.update(
             onSelectFile: onSelect,
@@ -136,6 +140,7 @@ struct ChangesTabView: View {
             }
         }
         .onDisappear { rps.endAttentionReveal() }
+        .pluginPanelsVisible(pluginSections)
         .task(id: agentAvailabilityTaskID) {
             await appState.loadAgentAvailability(for: rps.worktree)
         }
@@ -305,6 +310,18 @@ struct ChangesTabView: View {
         let workingGroupsSignature = String(reflecting: workingGroups).hashValue
         let groupsByPath = Dictionary(uniqueKeysWithValues: workingGroups.map { ($0.path, $0) })
         let commits = commitsSection
+        var rowActions = workingTree.rowActions
+        rowActions.pluginCommands = appState.pluginCommands(.changesFileMenu, projectID: rps.worktree.projectId)
+        rowActions.onRunPluginCommand = { [appState, worktreeID = rps.worktree.id] item, file in
+            appState.runPluginCommand(item, slot: .changesFileMenu, worktreeID: worktreeID, detail: file.path)
+        }
+        rowActions.pluginDecorations = { [appState, worktree = rps.worktree] path in
+            appState.pluginDecorations(.changesFile, projectID: worktree.projectId, worktree: worktree.id, target: path)
+        }
+        rowActions.onRunPluginDecoration = { [appState] in appState.runPluginDecoration($0) }
+        // Rows are reused while their token holds, so the plugin commands in their menus, titles and icons
+        // included, are part of it.
+        let pluginToken = String(reflecting: rowActions.pluginCommands) + String(reflecting: commits.pluginCommands)
         var rows: [AppKitDiffRowSpec] = []
 
         if let error = rps.sidebarError {
@@ -402,6 +419,16 @@ struct ChangesTabView: View {
             })
         }
 
+        // Plugin sections, each hidden until its plugin renders something for this worktree.
+        for target in pluginSections {
+            guard let tree = target.host.panelTree(for: target.place) else { continue }
+            rows.append(appKitRow(
+                id: "plugin-section-\(target.host.manifest.id)-\(target.place.panel)",
+                token: "\(ObjectIdentifier(target.host).hashValue)" + String(reflecting: tree),
+                estimatedHeight: 80
+            ) { PluginPanelSectionView(target: target) })
+        }
+
         rows.append(appKitRow(
             id: "working-tree-header",
             token: "\(workingGroupsSignature)-\(rps.workingTreeExpanded)-\(rps.mergeOp.current != nil)-\(rps.stashOperationInFlight)-\(rps.checkpointMutationsDisabled)-\(String(reflecting: rps.checkpointLoadError))",
@@ -424,7 +451,8 @@ struct ChangesTabView: View {
                         token: String(reflecting: row)
                             + (row.node.kind == .dir
                                 ? String(workingGroupsSignature)
-                                : String(reflecting: groupsByPath[row.node.path])),
+                                : String(reflecting: groupsByPath[row.node.path]) + pluginToken
+                                    + String(reflecting: rowActions.pluginDecorations(row.node.path))),
                         estimatedHeight: 28
                     ) {
                         WorkingTreeFlatRowView(
@@ -432,7 +460,7 @@ struct ChangesTabView: View {
                             groups: workingGroups,
                             groupsByPath: groupsByPath,
                             collapsedPaths: $collapsedChangePaths,
-                            actions: workingTree.rowActions
+                            actions: rowActions
                         )
                     })
                 }
@@ -444,7 +472,7 @@ struct ChangesTabView: View {
         rows.append(appKitRow(id: "changes-commit-divider", token: 0, estimatedHeight: 1) {
             Divider().opacity(0.4)
         })
-        appendCommitRows(commits, to: &rows)
+        appendCommitRows(commits, pluginToken: pluginToken, to: &rows)
         return AppKitDiffRowPlan(rows: rows)
     }
 
@@ -698,11 +726,12 @@ struct ChangesTabView: View {
 
     private func appendCommitRows(
         _ section: CommitsSectionView,
+        pluginToken: String,
         to rows: inout [AppKitDiffRowSpec]
     ) {
         let commits = rps.commitsForDisplay
         let older = rps.olderCommits
-        let rowStateToken = commitRowsStateToken
+        let rowStateToken = commitRowsStateToken + pluginToken
         rows.append(appKitRow(
             id: "commits-header",
             token: commitHeaderToken,
@@ -1001,7 +1030,11 @@ struct ChangesTabView: View {
                 rps.handleGGCommitAction(action, commit: commit, appState: appState)
             },
             reviewRequest: rps.reviewLoop.snapshot?.reviewRequest,
-            onOpenReviewRequest: { rps.openReviewLoopProviderPage() }
+            onOpenReviewRequest: { rps.openReviewLoopProviderPage() },
+            pluginCommands: appState.pluginCommands(.changesCommitMenu, projectID: rps.worktree.projectId),
+            onRunPluginCommand: { [appState, worktreeID = rps.worktree.id] item, commit in
+                appState.runPluginCommand(item, slot: .changesCommitMenu, worktreeID: worktreeID, detail: commit.sha)
+            }
         )
     }
 

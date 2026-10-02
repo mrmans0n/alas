@@ -201,6 +201,8 @@ struct WorktreeRowView: View {
 
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
+    var pluginDecorations: [PluginDecorationItem] = []
+    var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     /// Keyboard cursor from the sidebar filter; drawn like hover.
     var isHighlighted = false
     @Environment(\.theme) var theme
@@ -606,6 +608,7 @@ struct WorktreeRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            PluginDecorationBadges(items: pluginDecorations, run: onRunPluginDecoration)
             Spacer(minLength: 0)
             Text(relative(worktree.lastActivity))
                 .monospacedDigit()

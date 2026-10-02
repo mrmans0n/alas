@@ -51,7 +51,7 @@ final class PluginManager {
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var isShutDown = false
-    @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
+    @ObservationIgnored private var lastSnapshots: [HostKey: PluginEventState] = [:]
     @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
     @ObservationIgnored private var settingsByPlugin: [String: PluginSettings] = [:]
     @ObservationIgnored private let makeSettings: (PluginManifest) -> PluginSettings
@@ -453,15 +453,21 @@ final class PluginManager {
     private func pushChangedSnapshots() async {
         let projectsByID = Dictionary(projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (key, host) in hostsByKey where host.state == .active
-            && (host.grants.contains(.workspaceRead) || host.receivesSessionEvents) {
+            && (host.grants.contains(.workspaceRead) || host.receivesEvents) {
             guard let project = projectsByID[key.projectID] else { continue }
-            let snapshot = actions(project).snapshot()
+            let scoped = actions(project)
+            let subscribed = Set(host.manifest.events)
             let previous = lastSnapshots[key]
-            guard snapshot != previous else { continue }
-            // The first snapshot after a start is the baseline, so a restart does not replay every session.
-            if let previous { await host.sessionEvents(snapshot.sessionEvents(since: previous)) }
-            lastSnapshots[key] = snapshot
-            await host.workspaceChanged(snapshot)
+            var state = PluginEventState(
+                workspace: scoped.snapshot(),
+                runs: subscribed.isDisjoint(with: [.runStarted, .runFinished]) ? [] : scoped.runs(),
+                reviews: subscribed.contains(.reviewChanged) ? scoped.reviews() : [])
+            state.seenRuns = (previous?.seenRuns ?? []).union(state.runs.map(\.run))
+            guard state != previous else { continue }
+            // The first state after a start is the baseline, so a restart does not replay every session or run.
+            if let previous { await host.events(state.events(since: previous)) }
+            lastSnapshots[key] = state
+            if state.workspace != previous?.workspace { await host.workspaceChanged(state.workspace) }
         }
     }
 

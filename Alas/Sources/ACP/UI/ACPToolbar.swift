@@ -96,6 +96,17 @@ struct ACPToolbar: View {
                 .accessibilityLabel("Open checkout web preview")
                 .accessibilityIdentifier("checkout-open-preview")
             }
+            // Plugins run per project, so a workspace checkout's sessions have none.
+            if !isWorkspaceCheckoutOwner {
+                let pluginCommands = state.pluginCommands(.sessionMenu, projectID: worktree.projectId)
+                if !pluginCommands.isEmpty {
+                    ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
+                        PluginCommandButtons(items: pluginCommands) {
+                            state.runPluginCommand($0, slot: .sessionMenu, worktreeID: worktree.id, detail: session.id)
+                        }
+                    }
+                }
+            }
             ToolbarBtn(
                 icon: "rectangle.trailingthird.inset.filled",
                 tooltip: state.config.harness.acpShowMinimap ? "Hide minimap" : "Show minimap",
