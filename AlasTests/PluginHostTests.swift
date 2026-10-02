@@ -816,9 +816,11 @@ struct PluginHostTests {
         let reply = try #require(lastReply(host))
         #expect(reply.contains(#""team":"eng""#) && reply.contains(#""on":false"#))
         settings.set("team", .string("ops"))
-        // Oversized values are refused, so every settings message fits.
+        // Oversized values are refused, so every settings message fits and every header stays bounded.
         settings.set("team", .string(String(repeating: "x", count: PluginSettings.maxStringBytes + 1)))
         #expect(settings.string("team") == "ops")
+        #expect(!settings.setSecret("token", String(repeating: "x", count: PluginSettings.maxStringBytes + 1)))
+        #expect(settings.secret("token") == "s3cret")
         await host.settingsChanged()
         let changed = try #require(lastReply(host))
         #expect(changed.contains("settings/changed") && changed.contains(#""team":"ops""#))
