@@ -30,6 +30,96 @@ enum ACPSideQuestionError: LocalizedError, Equatable {
     }
 }
 
+/// Slash commands Alas handles itself instead of sending to the agent.
+enum ACPAlasSlashCommand: Equatable {
+    case btw(question: String)
+
+    static let btwSuggestion = ACPPromptSuggestion(
+        command: "/btw",
+        description: "Ask a side question in a read-only fork. The current turn keeps running.",
+        hint: "question"
+    )
+
+    static func parse(_ text: String) -> ACPAlasSlashCommand? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix(btwSuggestion.command) else { return nil }
+        let rest = trimmed.dropFirst(btwSuggestion.command.count)
+        guard rest.first.map({ $0.isWhitespace }) ?? true else { return nil }
+        return .btw(question: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func isAlasCommand(_ suggestion: ACPPromptSuggestion) -> Bool {
+        suggestion == btwSuggestion
+    }
+
+    /// Alas commands first; an agent command with the same name is hidden,
+    /// because Alas intercepts it before it could reach the agent.
+    static func suggestions(
+        alas: [ACPPromptSuggestion],
+        agent: [ACPPromptSuggestion]
+    ) -> [ACPPromptSuggestion] {
+        let alasCommands = Set(alas.map(\.command))
+        return alas + agent.filter { !alasCommands.contains($0.command) }
+    }
+}
+
+/// What the composer's submit does with a draft that may be `/btw`.
+enum ACPSideQuestionSubmitRoute: Equatable {
+    /// Not a side question here; the draft goes to the main session.
+    case passThrough
+    /// A side question that can't be asked as drafted; the draft stays.
+    case refuse(String)
+    case ask(question: String)
+
+    /// `isAvailable` is whether this tab offers `/btw` at all; elsewhere an
+    /// agent's own `/btw` goes through untouched.
+    static func resolve(
+        text: String,
+        hasAttachments: Bool,
+        intent: ACPSubmitIntent,
+        isAvailable: Bool
+    ) -> ACPSideQuestionSubmitRoute {
+        guard isAvailable, case .btw(let question)? = ACPAlasSlashCommand.parse(text) else {
+            return .passThrough
+        }
+        if hasAttachments {
+            return .refuse("/btw doesn't support attachments yet. Remove them to ask a side question.")
+        }
+        if case .schedule = intent {
+            return .refuse("/btw can't be scheduled. Send it now to ask a side question.")
+        }
+        return .ask(question: question)
+    }
+}
+
+/// What the side card shows, derived from the question and its session.
+enum ACPSideQuestionPhase: Equatable {
+    case composing
+    case starting
+    case streaming
+    case answered
+    case failed(String)
+
+    static func resolve(
+        question: String,
+        creationError: String?,
+        hasSession: Bool,
+        sessionError: String?,
+        isTurnActive: Bool,
+        hasPrompt: Bool,
+        hasOutput: Bool
+    ) -> ACPSideQuestionPhase {
+        if let error = creationError ?? sessionError { return .failed(error) }
+        guard hasSession else { return question.isEmpty ? .composing : .starting }
+        // Output is anything the latest turn produced after its question:
+        // text, tool calls, or blocked calls.
+        if isTurnActive { return hasOutput ? .streaming : .starting }
+        // Once its prompt is in the transcript, an idle turn has finished,
+        // even one that ended with only a stop reason.
+        return hasPrompt ? .answered : .starting
+    }
+}
+
 /// Where a `/btw` side question forks its parent: the last agent answer
 /// with text. A running turn is left out, and so is a prompt interrupted
 /// before any answer, so the side session never inherits a prompt without

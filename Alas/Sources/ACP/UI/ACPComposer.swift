@@ -53,6 +53,8 @@ struct ACPInputField: NSViewRepresentable {
     var nextPromptIsDictating: () -> Bool = { false }
     /// Reference-chip cache for this worktree. `nil` disables reference chips.
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    /// Slash commands Alas handles itself, offered ahead of the agent's.
+    var alasCommands: [ACPPromptSuggestion] = []
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -125,8 +127,9 @@ struct ACPInputField: NSViewRepresentable {
         // takeover re-attaches via session/load), or to replace/clear an
         // already-open panel's list. reconcileSlashPanel only runs on
         // keystrokes, so without this the panel would miss all of that.
-        let suggestionsChanged = context.coordinator.promptSuggestions != session.promptSuggestions
-        context.coordinator.promptSuggestions = session.promptSuggestions
+        let suggestions = ACPAlasSlashCommand.suggestions(alas: alasCommands, agent: session.promptSuggestions)
+        let suggestionsChanged = context.coordinator.promptSuggestions != suggestions
+        context.coordinator.promptSuggestions = suggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
         context.coordinator.typography = typography

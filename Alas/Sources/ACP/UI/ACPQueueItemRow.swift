@@ -267,7 +267,9 @@ private extension ACPQueueItemRow {
             return nil
         }
     }
+}
 
+extension ACPQueueItemRow {
     static func textPreview(of blocks: [ACPContentBlock]) -> String {
         blocks.compactMap { b -> String? in
             if case .text(let s) = b { return s }

@@ -47,6 +47,81 @@ struct ACPSideQuestionPolicyTests {
     }
 
     @Test(
+        "/btw is parsed only as its own command",
+        arguments: [
+            ("/btw why SQLite?", Optional(ACPAlasSlashCommand.btw(question: "why SQLite?"))),
+            ("  /btw   why?  ", .btw(question: "why?")),
+            ("/btw\nwhy\nnot?", .btw(question: "why\nnot?")),
+            ("/btw", .btw(question: "")),
+            ("/btwx", nil),
+            ("/BTW why?", nil),
+            ("please /btw", nil),
+        ] as [(String, ACPAlasSlashCommand?)]
+    )
+    func parse(text: String, expected: ACPAlasSlashCommand?) {
+        #expect(ACPAlasSlashCommand.parse(text) == expected)
+    }
+
+    @Test("Alas commands come first and hide an agent command of the same name")
+    func suggestionMerge() {
+        let agentBtw = ACPPromptSuggestion(command: "/btw", description: "Agent side question")
+        let review = ACPPromptSuggestion(command: "/review", description: "Review")
+        let btw = ACPAlasSlashCommand.btwSuggestion
+
+        #expect(ACPAlasSlashCommand.suggestions(alas: [btw], agent: [review, agentBtw]) == [btw, review])
+        #expect(ACPAlasSlashCommand.suggestions(alas: [btw], agent: []) == [btw])
+        #expect(ACPAlasSlashCommand.suggestions(alas: [], agent: [agentBtw]) == [agentBtw])
+    }
+
+    @Test(
+        "/btw opens a side question only when it can run as drafted",
+        arguments: [
+            ("/btw why?", false, ACPSubmitIntent.auto, true, ACPSideQuestionSubmitRoute.ask(question: "why?")),
+            ("/btw why?", false, .steer, true, .ask(question: "why?")),
+            ("/btw why?", false, .auto, false, .passThrough),
+            ("why?", false, .auto, true, .passThrough),
+            ("/btw why?", true, .auto, true,
+             .refuse("/btw doesn't support attachments yet. Remove them to ask a side question.")),
+            ("/btw why?", false, .schedule(.distantFuture), true,
+             .refuse("/btw can't be scheduled. Send it now to ask a side question.")),
+        ] as [(String, Bool, ACPSubmitIntent, Bool, ACPSideQuestionSubmitRoute)]
+    )
+    func submitRoute(
+        text: String, hasAttachments: Bool, intent: ACPSubmitIntent, isAvailable: Bool,
+        expected: ACPSideQuestionSubmitRoute
+    ) {
+        #expect(ACPSideQuestionSubmitRoute.resolve(
+            text: text, hasAttachments: hasAttachments, intent: intent, isAvailable: isAvailable
+        ) == expected)
+    }
+
+    @Test(
+        "card phase follows creation, session errors, and the turn's output",
+        arguments: [
+            ("", nil, false, nil, false, false, false, ACPSideQuestionPhase.composing),
+            ("q", nil, false, nil, false, false, false, .starting),
+            ("q", "fork failed", false, nil, false, false, false, .failed("fork failed")),
+            ("q", nil, true, "adapter crashed", true, true, true, .failed("adapter crashed")),
+            ("q", nil, true, nil, false, false, false, .starting),
+            ("q", nil, true, nil, true, true, false, .starting),
+            ("q", nil, true, nil, true, true, true, .streaming),
+            ("q", nil, true, nil, false, true, true, .answered),
+            ("q", nil, true, nil, false, true, false, .answered),
+        ] as [(String, String?, Bool, String?, Bool, Bool, Bool, ACPSideQuestionPhase)]
+    )
+    func phase(
+        question: String, creationError: String?, hasSession: Bool,
+        sessionError: String?, isTurnActive: Bool, hasPrompt: Bool, hasOutput: Bool,
+        expected: ACPSideQuestionPhase
+    ) {
+        #expect(ACPSideQuestionPhase.resolve(
+            question: question, creationError: creationError, hasSession: hasSession,
+            sessionError: sessionError, isTurnActive: isTurnActive,
+            hasPrompt: hasPrompt, hasOutput: hasOutput
+        ) == expected)
+    }
+
+    @Test(
         "side questions only run on agents with a mode that enforces read-only",
         arguments: [("claude", true), ("codex", true), ("opencode", false), ("pi", false), ("copilot", false), ("my-agent", false)]
     )

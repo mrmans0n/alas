@@ -293,6 +293,12 @@ private struct ACPSessionView: View {
     /// Esc cancels the in-flight request. Idempotent — safe to press
     /// when nothing's streaming.
     private func handleEscape() {
+        // An open side question goes first: Esc discards it, and only the
+        // next Esc cancels the main turn.
+        if manager.sideQuestions[sessionId] != nil {
+            Task { await manager.dismissSideQuestion(parentID: sessionId) }
+            return
+        }
         guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
               || session.transcript.streamingState == .awaitingPermission
               || session.transcript.streamingState == .awaitingInput
@@ -303,6 +309,28 @@ private struct ACPSessionView: View {
                 await runner.userCancel()
             }
         }
+    }
+
+    private func sideQuestionSlot(contentMaxWidth: CGFloat) -> some View {
+        ACPSideQuestionSlot(
+            manager: manager,
+            parentID: sessionId,
+            typography: chatTypography,
+            onInsert: insertSideAnswer,
+            onKeep: {
+                state.keepACPSideQuestion(worktree: worktree, owner: owner, parentID: sessionId)
+            }
+        )
+        .frame(maxWidth: contentMaxWidth)
+        .padding(.horizontal, 20)
+    }
+
+    private func insertSideAnswer(_ answer: String) {
+        var draft = session.composerDraft
+        let separator = draft.isEmpty ? "" : "\n\n"
+        draft.segments.append(.text(separator + answer))
+        manager.persistComposerDraft(draft, for: session)
+        composerFocusRequest += 1
     }
 
     private func insertStarterPrompt(_ starter: ACPStarterPrompt) {
@@ -469,11 +497,14 @@ private struct ACPSessionView: View {
                         .transition(.opacity)
                 }
 
-                composerView(
-                    placement: composerPlacement,
-                    contentMaxWidth: contentMaxWidth,
-                    typography: chatTypography
-                )
+                VStack(spacing: 8) {
+                    sideQuestionSlot(contentMaxWidth: contentMaxWidth)
+                    composerView(
+                        placement: composerPlacement,
+                        contentMaxWidth: contentMaxWidth,
+                        typography: chatTypography
+                    )
+                }
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
             }
         }
@@ -673,6 +704,9 @@ private struct ACPSessionView: View {
         VStack(spacing: 0) {
             intro()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // `/btw` can be the first thing asked in a new session.
+            sideQuestionSlot(contentMaxWidth: contentMaxWidth)
+                .padding(.bottom, 8)
             composerView(
                 placement: .inFlow,
                 contentMaxWidth: contentMaxWidth,
@@ -750,6 +784,34 @@ private struct ACPSessionView: View {
             // clear state - if the user has typed a new draft by the
             // time the completion fires, the conditional checks in
             // purge/reinstate skip and the new draft survives.
+            // `/btw` never reaches the main session: it opens a side question.
+            switch ACPSideQuestionSubmitRoute.resolve(
+                text: text,
+                hasAttachments: !attachments.isEmpty,
+                intent: intent,
+                isAvailable: !isMirror && !session.readOnlyRestricted
+                    && ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId)
+            ) {
+            case .passThrough:
+                break
+            case .refuse(let reason):
+                session.lastError = reason
+                return false
+            case .ask(let question):
+                // Complete the composer's submission like a sent prompt, so
+                // its persisted draft is cleared and `/btw …` doesn't come
+                // back. Deferred: the composer records the pending submit
+                // only after this handler returns.
+                Task { @MainActor in onPromptFinished(true) }
+                Task { @MainActor in
+                    if question.isEmpty {
+                        await manager.composeSideQuestion(parentID: sessionId)
+                    } else {
+                        _ = try? await manager.startSideQuestion(parentID: sessionId, question: question)
+                    }
+                }
+                return true
+            }
             let suspendedRevision = ACPSuspendedRevisionBox()
             let accepted = manager.submit(
                 sessionId: sessionId,
@@ -1234,4 +1296,63 @@ enum ACPSetupNudgeDismissal {
 @MainActor
 private final class ACPSuspendedRevisionBox {
     var value: Int = -1
+}
+
+/// Hosts the parent's `/btw` card, if any. Observes the manager so the card
+/// appears, updates, and goes away with the side question.
+private struct ACPSideQuestionSlot: View {
+    @ObservedObject var manager: ACPSessionManager
+    let parentID: ACPSession.ID
+    let typography: ACPChatTypography
+    let onInsert: (String) -> Void
+    let onKeep: () -> Void
+
+    var body: some View {
+        if let entry = manager.sideQuestions[parentID] {
+            let side = entry.sessionID.flatMap { manager.liveSession(for: $0) }
+            ACPSideQuestionCard(
+                entry: entry,
+                side: side,
+                policy: { side.flatMap { manager.permissionPolicy(for: $0.id) } },
+                typography: typography,
+                onAsk: { text, completion in
+                    if let side {
+                        let accepted = manager.submit(
+                            sessionId: side.id,
+                            text: text,
+                            attachments: [],
+                            intent: .auto,
+                            onCompleted: completion
+                        )
+                        // The card shows the session's last prompt error as a
+                        // failure; a new turn supersedes it.
+                        if accepted { side.lastError = nil }
+                        return accepted
+                    }
+                    Task { _ = try? await manager.startSideQuestion(parentID: parentID, question: text) }
+                    return true
+                },
+                onDismiss: {
+                    Task { await manager.dismissSideQuestion(parentID: parentID) }
+                },
+                onInsert: onInsert,
+                onKeep: onKeep,
+                onRetryQueued: { itemID in
+                    guard let side else { return }
+                    side.lastError = nil
+                    Task { await manager.queueRetry(for: side.id, itemId: itemID) }
+                },
+                onRemoveQueued: { itemID in
+                    guard let side else { return }
+                    Task { await manager.queueRemove(for: side.id, itemId: itemID) }
+                },
+                onCancelTurn: {
+                    guard let side, let runner = manager.runners[side.id] else { return }
+                    Task { await runner.userCancel() }
+                }
+            )
+            .id(entry.id)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
 }

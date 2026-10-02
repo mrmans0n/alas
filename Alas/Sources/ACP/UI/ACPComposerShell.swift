@@ -376,7 +376,11 @@ struct ACPComposer: View {
                 onNextPromptStateChange: onNextPromptStateChange,
                 nextPromptInputBlocked: nextPromptInputBlocked,
                 nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
-                upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot)
+                upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot),
+                alasCommands: manager.isMirror(sessionId: session.id) || session.readOnlyRestricted
+                    || !ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: session.agentId)
+                    ? []
+                    : [ACPAlasSlashCommand.btwSuggestion]
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {

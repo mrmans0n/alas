@@ -4,13 +4,14 @@ struct ACPSessionForkPresentation: Equatable {
     let title: String
     let notice: String?
 
-    init(sourceAgentName: String, mechanism: ACPSessionForkMechanism) {
+    init(sourceAgentName: String, mechanism: ACPSessionForkMechanism, via: ACPSessionForkVia? = nil) {
+        let suffix = via == .btw ? " via /btw" : ""
         switch mechanism {
         case .nativeACP:
-            title = "Forked from \(sourceAgentName)"
+            title = "Forked from \(sourceAgentName)\(suffix)"
             notice = nil
         case .transcriptTransfer:
-            title = "Conversation imported from \(sourceAgentName)"
+            title = "Conversation imported from \(sourceAgentName)\(suffix)"
             notice = "Provider-specific tool state, hidden context, and attachments were not transferred. This chat shares the source chat’s current worktree."
         }
     }
