@@ -144,18 +144,16 @@ final class PluginCatalog {
     }
 
     nonisolated static func download(_ url: URL) async throws -> Data {
-        // Never from the local URL cache: an index cached there would hide a release just published.
-        let (bytes, response) = try await URLSession.shared.bytes(for: URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw URLError(.badServerResponse)
+        // Never from the local URL cache: an index cached there would hide a release just published. The timeout is
+        // the whole transfer's budget, so a server trickling bytes cannot keep one going.
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
+        let data: Data, response: HTTPURLResponse
+        do {
+            (data, response) = try await boundedFetch(request, maxBytes: maxDownloadBytes)
+        } catch URLError.dataLengthExceedsMaximum {
+            throw PluginCatalogError.tooLarge
         }
-        guard response.expectedContentLength <= Int64(maxDownloadBytes) else { throw PluginCatalogError.tooLarge }
-        // Counted while receiving, so an oversized body is cut off instead of buffered; leaving the loop cancels it.
-        var data = Data()
-        for try await byte in bytes {
-            data.append(byte)
-            guard data.count <= maxDownloadBytes else { throw PluginCatalogError.tooLarge }
-        }
+        guard (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
         return data
     }
 }

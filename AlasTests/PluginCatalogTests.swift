@@ -190,15 +190,16 @@ struct PluginCatalogTests {
     /// A hand-built copy in another folder wins, so the catalog does not install a shadowed duplicate; nor does it
     /// add a third copy next to two local ones quarantined as duplicates.
     @MainActor
-    @Test(arguments: [["my-build"], ["build-a", "build-b"]])
-    func installStepsAsideForLocalCopiesElsewhere(folders: [String]) async throws {
+    /// A half-built one, with a manifest but no script yet, counts too.
+    @Test(arguments: [(["my-build"], true), (["build-a", "build-b"], true), (["half-built"], false)])
+    func installStepsAsideForLocalCopiesElsewhere(folders: [String], withScript: Bool) async throws {
         let f = try Fixture()
         defer { f.cleanUp() }
         for folder in folders {
             let local = f.root.appending(path: folder)
             try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
             try Data(#"{"id":"io.x.p","name":"P","version":"9","api":4,"entry":"plugin.js"}"#.utf8).write(to: local.appending(path: "plugin.json"))
-            try f.script.write(to: local.appending(path: "plugin.js"))
+            if withScript { try f.script.write(to: local.appending(path: "plugin.js")) }
         }
         await f.manager.reload()
 

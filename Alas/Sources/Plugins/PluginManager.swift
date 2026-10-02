@@ -442,9 +442,12 @@ final class PluginManager {
         var found: [Plugin] = []
         var invalid: [Invalid] = []
         for (folder, isLinked) in folders {
+            // Kept for failures after the manifest parsed, so a half-built copy still counts as this plugin.
+            var parsedID: String?
             do {
                 let manifestData = try Data(contentsOf: folder.appending(path: "plugin.json"))
                 let manifest = try PluginManifest.parse(manifestData)
+                parsedID = manifest.id
                 let entry = folder.appending(path: manifest.entry)
                 // `folder` is already resolved, so the resolved entry must stay beneath it. That catches a
                 // symlinked directory in the path; the regular-file check catches a symlink as the file.
@@ -463,7 +466,7 @@ final class PluginManager {
                     folder: folder, manifest: manifest, source: source,
                     hash: PluginTrust.hash(manifest: manifestData, entry: source), isLinked: isLinked))
             } catch {
-                invalid.append(Invalid(folder: folder, reason: String(describing: error)))
+                invalid.append(Invalid(folder: folder, reason: String(describing: error), pluginID: parsedID))
             }
         }
         var loaded: [Plugin] = []
