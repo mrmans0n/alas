@@ -201,6 +201,8 @@ struct ACPSideQuestionCard: View {
                         ACPPlanApprovalPrompt(plan: pendingPlan.params) { response in
                             inputActions.onPlan(pendingPlan.id, response)
                         }
+                        // A queued plan must not inherit the last one's rejection reason.
+                        .id(pendingPlan.id)
                     }
                     if let request = transcript.pendingUserInputs.first {
                         ACPUserInputPrompt(
