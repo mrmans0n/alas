@@ -10,6 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
 - Stop warning that the agent harness didn't start the Alas MCP server when a session on the HTTP transport re-attaches or reconnects to its still-running agent. The agent keeps its connection to the same server and never re-announces it. The warning also waits 35 seconds instead of 12, past Claude Code's MCP connect timeout, so a harness that is only slow to connect no longer flashes it (#1701).
+- Keep native peer sessions connected when older peers send transcript snapshots larger than 1 MiB.
+- Bound transcript snapshots, history pages, and live-update batches to 8 MiB. Individual rows exceeding the 4 MiB remote-display budget show an explicit notice; their full content remains on the owning Mac.
 
 ## [0.19.22] - 2026-10-02
 
