@@ -158,6 +158,9 @@ struct ACPInputField: NSViewRepresentable {
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {
+                if let storage = tv.textStorage {
+                    ACPSlashCommand.refreshChipOwnership(in: storage, suggestions: suggestions)
+                }
                 tv.reconcileSlashPanel()
                 // A draft restored before the agent listed its commands
                 // gets its pill once the list arrives.

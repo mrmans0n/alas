@@ -197,6 +197,18 @@ enum ACPSlashCommand {
         return chip
     }
 
+    /// Ownership can change during lease takeover without changing draft text.
+    @MainActor
+    static func refreshChipOwnership(in storage: NSAttributedString, suggestions: [ACPPromptSuggestion]) {
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            guard let attachment = value as? ACPCommandChipAttachment else { return }
+            let isAlas = suggestions.contains {
+                $0.command == attachment.command && ACPAlasSlashCommand.isAlasCommand($0)
+            }
+            attachment.updateOwnership(isAlas: isAlas)
+        }
+    }
+
     /// Ranges of known `/command` tokens that should become chips, in
     /// order. A token counts when it starts the text or follows whitespace,
     /// and only once whitespace follows it, so a command still being typed
@@ -288,11 +300,20 @@ enum ACPSlashCommand {
 
 final class ACPCommandChipAttachment: NSTextAttachment {
     let command: String
+    @MainActor private(set) var isAlas: Bool
 
     @MainActor
     init(command: String, isAlas: Bool) {
         self.command = command
+        self.isAlas = isAlas
         super.init(data: nil, ofType: nil)
+        attachmentCell = ACPCommandChipCell(command: command, isAlas: isAlas)
+    }
+
+    @MainActor
+    func updateOwnership(isAlas: Bool) {
+        guard self.isAlas != isAlas else { return }
+        self.isAlas = isAlas
         attachmentCell = ACPCommandChipCell(command: command, isAlas: isAlas)
     }
 
