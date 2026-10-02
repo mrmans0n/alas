@@ -2074,7 +2074,6 @@ struct ACPComposerDraftBridgeTests {
         withExtendedLifetime(observation) {}
     }
 
-
     @Test("accepted insertion does not dismiss the consumed offer a second time")
     func nextPromptAcceptanceDoesNotRepublishNil() async {
         let (textView, coordinator, window) = makeSlashTextView()

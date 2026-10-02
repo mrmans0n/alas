@@ -423,7 +423,6 @@ extension AppState {
         nextPromptCoordinator.reconsider(incarnation: incarnation)
     }
 
-
     func invalidateAllNextPromptContexts() {
         nextPromptCoordinator.invalidateAll()
         clearNextPromptPresentationContext()

@@ -174,7 +174,6 @@ final class NextPromptCoordinator: ObservableObject {
         if activeIncarnation == incarnation { deactivateActive() }
     }
 
-
     /// Permanently consumes a prompt even when its completion has not arrived yet.
     func invalidate(incarnation: UUID, throughPromptID promptID: Int) {
         invalidate(incarnation: incarnation)
