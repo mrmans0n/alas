@@ -16,6 +16,7 @@ struct ACPSideQuestion: Equatable, Sendable {
 enum ACPSideQuestionError: LocalizedError, Equatable {
     case notAccepted
     case unsafeMode
+    case unenforceable
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ enum ACPSideQuestionError: LocalizedError, Equatable {
             "The side session couldn't accept the question."
         case .unsafeMode:
             "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
+        case .unenforceable:
+            "This agent runs its tools without asking for permission, so a side question can't be kept read-only."
         }
     }
 }
@@ -50,6 +53,15 @@ enum ACPSideQuestionBoundaryPolicy {
     static func title(for question: String) -> String {
         let firstLine = question.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         return "/btw: \(firstLine.trimmingCharacters(in: .whitespaces))"
+    }
+}
+
+/// Side questions rely on the agent asking before each tool call: the
+/// read-only gate answers those requests. Agents that never ask (their own
+/// tools run inside the agent process) can't be kept read-only.
+enum ACPSideQuestionSupportPolicy {
+    static func canEnforceReadOnly(agentId: String) -> Bool {
+        ACPAgentProfiles.routing(for: agentId).autoRun == .supported
     }
 }
 

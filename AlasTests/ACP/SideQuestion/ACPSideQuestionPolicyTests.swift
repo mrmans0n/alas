@@ -45,4 +45,12 @@ struct ACPSideQuestionPolicyTests {
         #expect(ACPSideQuestionModePolicy.preferredModeID(options: options, currentID: current) == expected)
         #expect(ACPSideQuestionModePolicy.allows(options: options, currentID: current) == currentAllowed)
     }
+
+    @Test(
+        "side questions only run on agents that ask before each tool call",
+        arguments: [("claude", true), ("codex", true), ("opencode", true), ("pi", false), ("copilot", false)]
+    )
+    func readOnlySupport(agentId: String, supported: Bool) {
+        #expect(ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: agentId) == supported)
+    }
 }
