@@ -15,16 +15,18 @@ actor ReplicaEndpoint {
     private var nextPage: RemoteSessionReadResult?
     private var failContinuation = false
     private var coordinationSupported = true
+    private var leaseFresh = true
     private let recordId: String
 
     init(recordId: String = "record") { self.recordId = recordId }
 
     func disconnectDuringRead(_ value: Bool) { failContinuation = value }
     func setCoordinationSupported(_ value: Bool) { coordinationSupported = value }
+    func expireLease() { leaseFresh = false }
     private func encoded<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
     private var lease: RemoteSessionLease {
-        .init(recordId: recordId, key: key, procId: procId, owner: owner, status: status, isFresh: owner != nil, revision: revision)
+        .init(recordId: recordId, key: key, procId: procId, owner: owner, status: status, isFresh: owner != nil && leaseFresh, revision: revision)
     }
     private func validate(_ supplied: RemoteSessionFence) throws {
         guard supplied == fence else { throw RemoteHelperClientError.jsonrpc(.init(code: -32081, message: "lease lost", data: nil)) }
@@ -227,6 +229,50 @@ struct ACPRemoteSessionCoordinatorTests {
         let observed = try #require(try await reader.observe(sessionId: "mirror", key: key))
         try await reader.syncMirror(sessionId: "mirror", lease: observed, persistence: mirror, isCurrent: { true })
         #expect(try await mirror.mirrorSnapshot(sessionId: "mirror").wireMessages == [wire("committed while offline")])
+    }
+
+    @Test("replicated recovery state blocks a mirror until recovery completes")
+    func recoveryStateRoundTripsIntoAnExistingMirror() async throws {
+        let endpoint = ReplicaEndpoint()
+        let writer = coordinator(endpoint, server: "writer")
+        let reader = coordinator(endpoint, server: "reader")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            writer.shutdown()
+            reader.shutdown()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let local = ACPSessionPersistence(path: folder.appendingPathComponent("local.sqlite").path)
+        let mirror = ACPSessionPersistence(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try await local.upsertSession(row("writer"))
+        try await mirror.upsertSession(row("mirror"))
+        _ = try await writer.claim(sessionId: "writer", key: key, proposedProcId: "writer", requestedToken: "writer")
+        try await writer.startPublishing(sessionId: "writer", persistence: local, status: { "idle" }, onLeaseLost: {})
+        for pending in [true, false] {
+            try await local.setContextRecoveryPending(sessionId: "writer", pending: pending)
+            await writer.flush(sessionId: "writer")
+            let observed = try #require(try await reader.observe(sessionId: "mirror", key: key))
+            try await reader.syncMirror(sessionId: "mirror", lease: observed, persistence: mirror, isCurrent: { true })
+            #expect(try await mirror.loadSession(id: "mirror")?.contextRecoveryPending == pending)
+        }
+    }
+
+    @Test("foreign busy activity ends when the remote lease expires")
+    func expiredBusyLeaseDoesNotReportForeignActivity() async throws {
+        let endpoint = ReplicaEndpoint()
+        let writer = coordinator(endpoint, server: "writer")
+        let reader = coordinator(endpoint, server: "reader")
+        defer {
+            writer.shutdown()
+            reader.shutdown()
+        }
+        _ = try await writer.claim(sessionId: "writer", key: key, proposedProcId: "writer", requestedToken: "writer")
+        _ = try await writer.heartbeat(sessionId: "writer", status: "busy")
+        _ = try await reader.observe(sessionId: "mirror", key: key)
+        #expect(reader.isForeignMachine(sessionId: "mirror"))
+        await endpoint.expireLease()
+        _ = try await reader.observe(sessionId: "mirror", key: key)
+        #expect(!reader.isForeignMachine(sessionId: "mirror"))
     }
 
     private var key: RemoteSessionKey { .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation") }

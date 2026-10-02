@@ -392,7 +392,6 @@ extension ACPSessionStore {
             row.title = m.title
             row.titleSource = m.titleSource
             row.origin = m.origin
-            row.contextRecoveryPending = m.contextRecoveryPending
             row.currentModel = m.currentModel
             row.currentMode = m.currentMode
             row.configOptionValues = m.configOptionValues
@@ -400,7 +399,8 @@ extension ACPSessionStore {
             row.autoRun = m.autoRun
             row.updatedAt = m.updatedAt
             try upsertSession(row)
-            try db.exec("UPDATE sessions SET native_subagents_disabled=?,created_at=? WHERE id=?", bindings: [m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.createdAt, sessionId])
+            // Replica metadata is authoritative even for fields preserved by local upserts.
+            try db.exec("UPDATE sessions SET context_recovery_pending=?,native_subagents_disabled=?,created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.createdAt, sessionId])
         case "message", "subagent":
             let relationKey = kind + ":" + key
             guard let payload else {

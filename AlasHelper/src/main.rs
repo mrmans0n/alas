@@ -1353,9 +1353,8 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
     let child = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
-    write_proc_pid(&dir, child.id())?;
-    let exit_path = dir.join("exits").join(child.id().to_string());
-    run_supervised_proc_child(child, dir.join("stdin.log"), exit_path);
+    let exit_file = write_proc_pid(&dir, child.id())?;
+    run_supervised_proc_child(child, dir.join("stdin.log"), exit_file);
     Ok(())
 }
 
@@ -1373,10 +1372,10 @@ fn configure_proc_child_stdio(
 fn run_supervised_proc_child(
     mut child: std::process::Child,
     stdin_path: PathBuf,
-    exit_path: PathBuf,
+    exit_file: std::fs::File,
 ) {
     let child_stdin = Option::take(&mut child.stdin);
-    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
+    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_file);
 }
 
 fn proc_launch_script(
@@ -1635,7 +1634,7 @@ fn pump_proc_stdin_and_record_exit(
     mut child: std::process::Child,
     mut child_stdin: Option<std::process::ChildStdin>,
     stdin_path: PathBuf,
-    exit_path: PathBuf,
+    mut exit_file: std::fs::File,
 ) {
     let mut stdin_offset = 0_u64;
     let mut buffer = [0_u8; 8192];
@@ -1649,14 +1648,14 @@ fn pump_proc_stdin_and_record_exit(
             Ok(Some(status)) => {
                 drop(child_stdin.take());
                 let code = status.code().unwrap_or(2);
-                let _ = std::fs::write(&exit_path, format!("{code}\n"));
+                let _ = exit_file.write_all(format!("{code}\n").as_bytes());
                 break;
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(_) => {
                 drop(child_stdin.take());
                 let _ = child.kill();
-                let _ = std::fs::write(&exit_path, "2\n");
+                let _ = exit_file.write_all(b"2\n");
                 break;
             }
         }
@@ -1958,8 +1957,24 @@ fn read_pid(dir: &Path) -> Option<u32> {
         .and_then(|value| value.split_whitespace().next()?.parse::<u32>().ok())
 }
 
-fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
+fn write_proc_pid(dir: &Path, pid: u32) -> Result<std::fs::File, HelperError> {
     let pid_bytes = format!("{pid}\n");
+    let exit_path = dir.join("exits").join(pid_bytes.trim());
+    // A fresh inode prevents a late predecessor from writing into a reused PID.
+    match std::fs::remove_file(&exit_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(jsonrpc_error(-32050, format!("stale exit cleanup failed: {error}"))),
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let exit_file = options.open(&exit_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("exit open failed: {error}")))?;
     write_restrictive_bytes(&dir.join("generation"), pid_bytes.as_bytes(), "generation")?;
     let metadata = ProcPidMetadata {
         pid,
@@ -1974,7 +1989,8 @@ fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
     let pending = dir.join("pid.pending");
     write_restrictive_bytes(&pending, pid_bytes.as_bytes(), "pid")?;
     std::fs::rename(pending, dir.join("pid"))
-        .map_err(|error| jsonrpc_error(-32050, format!("pid publish failed: {error}")))
+        .map_err(|error| jsonrpc_error(-32050, format!("pid publish failed: {error}")))?;
+    Ok(exit_file)
 }
 
 fn read_proc_pid_metadata(dir: &Path) -> Option<ProcPidMetadata> {
@@ -3513,7 +3529,7 @@ mod tests {
             std::process::id(),
             system_time_seconds(SystemTime::now()).unwrap()
         ));
-        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
         let mut child = Command::new("/bin/sh");
         child
             .arg("-c")
@@ -3556,6 +3572,46 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn proc_pid_reuse_does_not_inherit_an_old_exit() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-reused-pid-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
+        let pid = std::process::id();
+        std::fs::write(root.join("exits").join(pid.to_string()), b"42\n").expect("old exit");
+        write_proc_pid(&root, pid).expect("new pid generation");
+        let status = proc_status_in_dir(&root);
+        let _ = std::fs::remove_dir_all(root);
+        assert!(status.running);
+        assert_eq!(status.exit_code, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retired_exit_record_cannot_stop_a_live_reused_pid() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-retired-exit-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
+        let old_exit = write_proc_pid(&root, std::process::id()).expect("old generation");
+        let _successor_exit = write_proc_pid(&root, std::process::id()).expect("live successor");
+        let old_child = Command::new("/bin/sh")
+            .args(["-c", "exit 42"])
+            .spawn()
+            .expect("old child");
+        pump_proc_stdin_and_record_exit(old_child, None, root.join("stdin.log"), old_exit);
+        let status = proc_status_in_dir(&root);
+        let _ = std::fs::remove_dir_all(root);
+        assert!(status.running);
+        assert_eq!(status.exit_code, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn proc_pid_metadata_uses_restrictive_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3564,7 +3620,7 @@ mod tests {
             std::process::id(),
             system_time_seconds(SystemTime::now()).unwrap()
         ));
-        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
 
         write_proc_pid(&root, std::process::id()).expect("pid write");
 

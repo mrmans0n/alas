@@ -64,7 +64,7 @@ final class ACPRemoteSessionCoordinator {
         return lease.isFresh && lease.owner != nil && lease.owner != owner
     }
     func isForeignMachine(sessionId: String) -> Bool {
-        guard let other = authorities[sessionId]?.lease.owner else { return false }
+        guard let lease = authorities[sessionId]?.lease, lease.isFresh, let other = lease.owner else { return false }
         return other.serverId != owner.serverId
     }
     func markUnavailable(sessionId: String) { authorities[sessionId]?.confirmed = false }

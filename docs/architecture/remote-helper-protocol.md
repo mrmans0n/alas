@@ -226,6 +226,13 @@ require `leaseFence`, and the authority check and process mutation share that
 transaction. `expectedStdinOffset` still deduplicates retries but does not grant
 authority. Reading or attaching to output does not grant stdin authority.
 
+Mirrors report remote activity only while the observed foreign lease is fresh;
+an expired owner cannot keep a stale busy indicator alive.
+
+Each supervised generation owns a fresh per-PID exit inode opened before PID
+publication. A late predecessor writes only its retired inode, never a reused
+PID's exit record or a path being removed by process cleanup.
+
 Replica entries are keyed by kind and item key. Their base64 payload is opaque
 to the helper; null payloads are tombstones. Pages use one pinned SQLite
 snapshot, so concurrent edits cannot change an in-progress cutoff. Page tokens
@@ -238,6 +245,10 @@ payload bytes are not path-rewritten. Composer drafts, process offsets, MCP
 registrations, and broker credentials remain local. Same-Mac mirrors keep the
 existing shared-SQLite fast path. Release, helper restart, and local Forget
 retain the remote replica; an authorized agent-history deletion removes it.
+
+Replicated recovery state is authoritative on both initial and subsequent
+imports. A mirror remains recovery-pending until the writer publishes completion;
+takeover must not release queued prompts while that state is pending.
 
 On writer stand-down, Alas stops the runner and flushes its queued writes
 before retiring the local lease fence. It cannot publish under a lost remote
