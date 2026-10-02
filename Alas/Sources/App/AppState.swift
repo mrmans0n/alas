@@ -203,9 +203,18 @@ final class AppState {
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
-    @ObservationIgnored lazy var worktreeExplainerStore = WorktreeExplainerStore { [weak self] evidence in
-        guard let self else { return nil }
-        return await self.makeWorktreeExplainerSuggester().suggest(for: evidence)
+    @ObservationIgnored private var worktreeExplainerStoreInstance: WorktreeExplainerStore?
+    var worktreeExplainerStore: WorktreeExplainerStore {
+        get {
+            if let worktreeExplainerStoreInstance { return worktreeExplainerStoreInstance }
+            let store = WorktreeExplainerStore { [weak self] evidence in
+                guard let self else { return nil }
+                return await self.makeWorktreeExplainerSuggester().suggest(for: evidence)
+            }
+            worktreeExplainerStoreInstance = store
+            return store
+        }
+        set { worktreeExplainerStoreInstance = newValue }
     }
 
     @ObservationIgnored let issueWorktreeNameRequests = IssueWorktreeNameRequests()
@@ -1704,7 +1713,6 @@ final class AppState {
         issueWorktreeNameAppleSuggestionsAvailable || issueWorktreeNameSuggestionsAvailable
     }
 
-
     /// A pending Qwen title would be discarded anyway once titles are off;
     /// cancelling frees the shared engine instead of running to its timeout.
     func setACPLocalTitlesEnabled(_ enabled: Bool) {
@@ -1731,7 +1739,10 @@ final class AppState {
             onDeviceAIHelperSettingsError =
                 "Could not save helper settings. Changes apply only to this session. Retry before quitting."
         }
-        if previous, !enabled { issueWorktreeNameRequests.cancelAll() }
+        if previous, !enabled {
+            issueWorktreeNameRequests.cancelAll()
+            worktreeExplainerStoreInstance?.cancelPending()
+        }
     }
 
     func makeQwenTitleFallback() -> ACPQwenTitleFallback {

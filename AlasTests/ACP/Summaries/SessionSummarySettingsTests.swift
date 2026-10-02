@@ -106,6 +106,37 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func disablingWorktreeHelpersCancelsExplanationWithoutDiscardingCache() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let state = makeState(fixture, SummarySettingsStore())
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        state.worktreeExplainerStore = store
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let cached = Task { await store.prepare(worktreeID: "cached", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: "Preserve cached explanation")
+        #expect(await cached.value)
+
+        let active = Task { await store.prepare(worktreeID: "active", evidence: evidence) }
+        await probe.waitForCallCount(2)
+        state.setIssueWorktreeNameSuggestionsEnabled(false)
+        await probe.finishNext(with: "Discard cancelled explanation")
+        try #require(!(await active.value))
+        #expect(await probe.cancelledCallCount == 1)
+        #expect(store.explanation(for: "active", evidence: evidence) == nil)
+        #expect(store.explanation(for: "cached", evidence: evidence) == "Preserve cached explanation")
+
+        state.setIssueWorktreeNameSuggestionsEnabled(true)
+        let retry = Task { await store.prepare(worktreeID: "active", evidence: evidence) }
+        await probe.waitForCallCount(3)
+        await probe.finishNext(with: "Keep fresh explanation")
+        #expect(await retry.value)
+        #expect(store.explanation(for: "active", evidence: evidence) == "Keep fresh explanation")
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func disablingSummaryLeavesSuggestionsEnabled() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -121,7 +152,6 @@ struct SessionSummarySettingsTests {
         #expect(state.config.nextPromptSuggestionsEnabled)
         await state.shutdownLocalTextFeatures()
     }
-
 
     @Test func disablingSummaryCancelsOnlySummaryWork() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
@@ -220,7 +250,6 @@ struct SessionSummarySettingsTests {
         }
         await state.shutdownLocalTextFeatures()
     }
-
 
     @Test(arguments: ["enable next", "enable summary", "retry disable", "enable model"])
     func removalExcludesConcurrentSettingChanges(_ action: String) async throws {

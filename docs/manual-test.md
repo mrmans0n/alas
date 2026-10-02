@@ -692,3 +692,28 @@ All 13 suites passed: 174 definitions, 266 expanded runs, zero failures or skips
 The rebase preserved the new mainline worktree-explanation helper; its existing
 fallback predicate now uses the shared permission/readiness boundary.
 
+Current-head review identified a cancellation gap in the new mainline sidebar
+explainer. Disabling Worktree names now cancels its owned jobs as well as naming
+requests, preserving cached explanations and fencing late completion after
+re-enable. The actual AppState regression failed before the fix because the old
+explanation completed successfully after disable.
+
+The five affected suites then passed 87 definitions and 139 expanded runs, with
+zero failures or skips, in
+`/private/tmp/alas-ai-sidebar-cancel-green-20261002.xcresult`:
+`SessionSummarySettingsTests`, `NextPromptSettingsTests`,
+`WorktreeRowStatusTests`, `IssueWorktreeNameSuggestionTests`, and
+`LocalTextInferenceEngineTests`.
+
+A standalone Swift CLI compiled the actual `WorktreeExplainerStore` source with
+the existing controlled provider. It observed one cancelled job, discarded late
+output, preserved cached text, and completed a re-enabled request. This proves
+store cancellation semantics, not an unlocked sidebar interaction or new native
+model evaluation. The disposable CLI was removed after the run.
+
+The CI formatter's three reported consecutive-blank-line violations were fixed
+surgically. `swiftformat Alas AlasTests --lint --reporter github-actions-log`
+reported zero of 2,127 files requiring formatting. The initial CI coverage audit
+failed only because the formatter-stopped builder never published a Swift test
+plan; that run did not execute Swift shards.
+
