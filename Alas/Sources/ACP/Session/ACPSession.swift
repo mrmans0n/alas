@@ -91,6 +91,8 @@ final class ACPSession: ObservableObject, Identifiable {
     let incarnation = UUID()
     /// Synchronous runtime invalidation, independent of persistence and UI observation.
     let nextPromptActivity = PassthroughSubject<Void, Never>()
+    /// Presentation-only visibility changes suspend suggestions without consuming their turn.
+    let nextPromptVisibilityChanged = PassthroughSubject<Bool, Never>()
     let nextPromptTeardown = PassthroughSubject<Void, Never>()
     /// Manager work may await before it reaches the runner or queue.
     var nextPromptWorkCount = 0 { willSet { nextPromptActivity.send() } }

@@ -1835,8 +1835,10 @@ struct ACPComposerDraftBridgeTests {
     private final class NextPromptGenerator: NextPromptGenerating {
         var pending: CheckedContinuation<String?, Never>?
         var started: CheckedContinuation<Void, Never>?
+        var generationCount = 0
         func generate(_ request: NextPromptRequest) async throws -> String? {
-            await withCheckedContinuation {
+            generationCount += 1
+            return await withCheckedContinuation {
                 pending = $0
                 started?.resume()
                 started = nil
@@ -1857,19 +1859,28 @@ struct ACPComposerDraftBridgeTests {
         let id = NextPromptRequestID(sessionID: "s", incarnation: UUID(), promptID: 1,
                                      transcriptRevision: 1, draftRevision: 0, composerEpoch: 0,
                                      settingsGeneration: 0, modelGeneration: 0)
-        lazy var suggestionCoordinator = NextPromptCoordinator(engine: generator) { [weak self] in
+        lazy var suggestionCoordinator = NextPromptCoordinator(engine: generator) { [weak self] _ in
             guard let self else { return nil }
             return .init(id: id, turns: [.init(user: "Compare", assistant: "A tradeoff")], isEligible: eligible)
         }
-        func offer(_ text: String, in textView: ACPNSTextView) async {
-            let coordinator = suggestionCoordinator
-            coordinator.completed(.init(sessionID: id.sessionID, incarnation: id.incarnation,
-                                        promptID: id.promptID, userMessageID: UUID(), transcriptRevision: 1))
-            await generator.waitForStart()
-            let task = coordinator.generationTask
+        var turn: NextPromptCompletedTurn {
+            .init(sessionID: id.sessionID, incarnation: id.incarnation,
+                  promptID: id.promptID, userMessageID: UUID(), transcriptRevision: 1)
+        }
+        func complete() {
+            suggestionCoordinator.completed(turn)
+        }
+        func finish(_ text: String?) async {
+            let task = suggestionCoordinator.generationTask
             generator.pending?.resume(returning: text)
             generator.pending = nil
             await task?.value
+        }
+        func offer(_ text: String, in textView: ACPNSTextView) async {
+            let coordinator = suggestionCoordinator
+            complete()
+            await generator.waitForStart()
+            await finish(text)
             textView.takeNextPromptOffer = { coordinator.takeOffer() }
             textView.dismissNextPromptOffer = { coordinator.invalidate() }
             textView.nextPromptOffer = coordinator.offer
@@ -1939,7 +1950,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(fixture.suggestionCoordinator.offer == nil)
     }
 
-    @Test(arguments: ["typing", "selection", "marked", "image", "slash", "mention", "focus", "dictation", "remount"])
+    @Test(arguments: ["typing", "selection", "marked", "image", "slash", "mention", "dictation"])
     func nextPromptActivitySuppressesSynchronously(_ activity: String) async throws {
         let (textView, coordinator, window) = makeSlashTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
@@ -1947,7 +1958,9 @@ struct ACPComposerDraftBridgeTests {
         await fixture.offer("Explain the tradeoff.", in: textView)
         switch activity {
         case "typing": textView.insertText("x", replacementRange: textView.selectedRange())
-        case "selection": textView.setSelectedRange(NSRange(location: 0, length: 0))
+        case "selection": textView.setSelectedRanges([NSValue(range: .init(location: 0, length: 0)),
+                                                      NSValue(range: .init(location: 0, length: 0))],
+                                                     affinity: .downstream, stillSelecting: false)
         case "marked": textView.setMarkedText("", selectedRange: .init(location: 0, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
         case "image": _ = coordinator.beginPendingImageFileInsertion()
         case "slash":
@@ -1956,14 +1969,75 @@ struct ACPComposerDraftBridgeTests {
             textView.reconcileSlashPanel()
             #expect(textView.isSlashPanelOpen)
         case "mention": textView.keyDown(with: try keyEvent(keyCode: 19, modifiers: [], characters: "@"))
-        case "focus": window.makeFirstResponder(nil)
         case "dictation": textView.replaceDictationRegion("", isFinal: false)
-        default: textView.removeFromSuperview()
+        default: Issue.record("Unhandled activity")
         }
         #expect(textView.nextPromptGhostText == nil)
         #expect(!textView.acceptNextPromptSuggestion())
         #expect(fixture.suggestionCoordinator.offer == nil)
         #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test(arguments: ["focus", "remount"])
+    func temporaryComposerAbsenceHidesWithoutDismissingNextPrompt(_ activity: String) async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+
+        if activity == "focus" {
+            window.makeFirstResponder(nil)
+        } else {
+            textView.removeFromSuperview()
+        }
+
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(fixture.suggestionCoordinator.offer == "Explain the tradeoff.")
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test("an unfocused completion reaches the native composer after focus returns")
+    func unfocusedCompletionReachesComposerAfterFocusReturns() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        textView.takeNextPromptOffer = { fixture.suggestionCoordinator.takeOffer() }
+        textView.dismissNextPromptOffer = { fixture.suggestionCoordinator.invalidate() }
+        let observation = fixture.suggestionCoordinator.$offer.sink { textView.nextPromptOffer = $0 }
+        textView.onNextPromptStateChange = { state in
+            fixture.eligible = state.hasComposerFocus && state.hasKeyWindow
+            if fixture.eligible {
+                fixture.suggestionCoordinator.reconsider(incarnation: fixture.id.incarnation)
+            } else {
+                fixture.suggestionCoordinator.suspend(incarnation: fixture.id.incarnation)
+            }
+        }
+
+        window.makeFirstResponder(nil)
+        fixture.complete()
+        #expect(fixture.suggestionCoordinator.generationTask == nil)
+        #expect(textView.nextPromptGhostText == nil)
+
+        window.makeFirstResponder(textView)
+        await fixture.generator.waitForStart()
+        await fixture.finish("Explain the tradeoff.")
+        #expect(textView.nextPromptGhostText == "Explain the tradeoff.")
+
+        window.makeFirstResponder(nil)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        window.makeFirstResponder(textView)
+        #expect(textView.nextPromptGhostText == "Explain the tradeoff.")
+        #expect(fixture.generator.generationCount == 1)
+
+        textView.insertText("x", replacementRange: textView.selectedRange())
+        textView.deleteBackward(nil)
+        window.makeFirstResponder(nil)
+        window.makeFirstResponder(textView)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(fixture.generator.generationCount == 1)
+        withExtendedLifetime(observation) {}
     }
 
     @Test("next prompt state reports native focus and pending image work synchronously")
@@ -1996,25 +2070,6 @@ struct ACPComposerDraftBridgeTests {
         }
         #expect(!textView.acceptNextPromptSuggestion())
         #expect(textView.string == "typed")
-        #expect(fixture.suggestionCoordinator.offer == nil)
-        withExtendedLifetime(observation) {}
-    }
-
-    @Test("offer consumption cannot accept after a synchronous empty-editor selection invalidates it")
-    func nextPromptConsumptionRechecksInvalidation() async {
-        let (textView, coordinator, window) = makeSlashTextView()
-        defer { withExtendedLifetime((coordinator, window)) {} }
-        let fixture = NextPromptFixture()
-        await fixture.offer("Explain the tradeoff.", in: textView)
-        var changedSelection = false
-        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
-            guard value == nil, !changedSelection else { return }
-            changedSelection = true
-            textView.setSelectedRange(NSRange(location: 0, length: 0))
-        }
-        #expect(!textView.acceptNextPromptSuggestion())
-        #expect(changedSelection)
-        #expect(textView.string.isEmpty)
         #expect(fixture.suggestionCoordinator.offer == nil)
         withExtendedLifetime(observation) {}
     }

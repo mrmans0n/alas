@@ -483,12 +483,13 @@ The live network check used HEAD requests against the exact pinned revision. The
 Run this with a verified model enabled in Advanced settings.
 
 1. Finish a native ACP turn with the empty composer focused. When a suggestion appears, verify that copying, the draft restored after a tab switch, and the transcript do not contain it.
-2. Narrow the window and increase the chat font size. The complete candidate wraps within the composer and reserves enough height. Check light and dark themes and Increase Contrast.
-3. Press Tab. The candidate becomes ordinary editable draft text with the caret at its end. Nothing is sent or queued. Undo removes the complete insertion; redo restores it. Undo must not bring the ghost back. Send only with the ordinary send action.
-4. Repeat with emoji and combined Unicode characters. Verify caret placement and one-step undo.
-5. Press Escape on a new suggestion. The draft stays empty. Shift-Tab retains ordinary backwards focus navigation and does not accept it.
-6. Start typing, select or move the caret, start IME composition or dictation, open slash/mention/image pickers, paste, or drop a file. The suggestion disappears immediately and cannot be accepted while work is pending. Switching tabs, windows, or writer ownership also removes it.
-7. With VoiceOver, inspect the empty composer. Its value stays empty; its separate help contains the full suggestion and its actions include Accept Suggestion. Invoke that action and verify the same insertion and undo behavior as Tab. After dismissal, the action and suggestion help disappear.
+2. Start a turn, switch to another tab or app before its reply completes, then return to its empty composer. Verify a suggestion can appear without sending another message.
+3. Narrow the window and increase the chat font size. The complete candidate wraps within the composer and reserves enough height. Check light and dark themes and Increase Contrast.
+4. Press Tab. The candidate becomes ordinary editable draft text with the caret at its end. Nothing is sent or queued. Undo removes the complete insertion; redo restores it. Undo must not bring the ghost back. Send only with the ordinary send action.
+5. Repeat with emoji and combined Unicode characters. Verify caret placement and one-step undo.
+6. Press Escape on a new suggestion. The draft stays empty. Switch away and back; the dismissed suggestion must not return. Shift-Tab retains ordinary backwards focus navigation and does not accept it.
+7. Start typing, delete back to empty, then switch away and back. The suggestion must not return. Repeat with selection, IME composition, dictation, slash/mention/image pickers, paste, and file drop. Writer ownership loss also invalidates the suggestion.
+8. With VoiceOver, inspect the empty composer. Its value stays empty; its separate help contains the full suggestion and its actions include Accept Suggestion. Invoke that action and verify the same insertion and undo behavior as Tab. After dismissal, the action and suggestion help disappear.
 
 
 ### Next-prompt settings and lifecycle
@@ -500,8 +501,9 @@ Use an injected temporary model root and config store; do not change the normal 
 3. Retry explicitly. Confirm verification ends at Model ready. Disable, then enable again; verified files should be reused without transfer.
 4. Hold the temporary root's `.lock` with a shared reader lease in a second process. Remove Model must turn suggestions off and show Model in use with Retry Removal while leaving files intact. Release the peer and retry; the pinned revision disappears, but `.lock`, other revisions and unrelated files remain.
 5. Relaunch with the enabled preference and no complete model. Confirm no download resumes and no earlier turn is replayed.
-6. While generation is active, switch tabs, deactivate the app, move focus to another window, or lose the writer lease. Confirm ghost text clears immediately and cannot be accepted from a non-key window. Quit during generation or download and confirm termination waits for the work to drain.
-7. Force a settings write failure. Enabling must restore the old preference without installing. Disabling must leave inference off and show the save error.
+6. While generation is active, switch tabs, deactivate the app, or move focus to another window. Confirm ghost text stays hidden and cannot be accepted while inactive, then verify returning to the same empty composer reconsiders the turn. Repeated focus notifications must not overlap generation.
+7. During another generation, lose the writer lease. Confirm the opportunity is permanently invalidated. Quit during generation or download and confirm termination waits for the work to drain.
+8. Force a settings write failure. Enabling must restore the old preference without installing. Disabling must leave inference off and show the save error.
 
 Memory-pressure handling cancels evaluation and releases this feature's container and reader lease after drain. It does not clear MLX's process-wide allocator cache or promise that process RSS returns to baseline.
 
@@ -546,3 +548,22 @@ failures or skips. No complete test plan or CI run was performed.
 Final local arm64 and x86_64 builds passed in both Debug and Release after the
 Debug-only correction. The local Release signing limitation above is separate
 from these compilation results.
+
+### Next-prompt focus-recovery verification record, 2026-10-02
+
+The Xcode app host ran against the isolated profile
+`/private/tmp/alas-nextprompt-focus-20261002`. A production
+`NextPromptCoordinator` with an injected generator drove a real
+`ACPNSTextView`: a completion delivered while the composer was unfocused
+generated after focus returned, ghost text was unavailable while unfocused,
+the same offer returned without a second generation, and typing then clearing
+permanently consumed it. The complete `ACPComposerDraftBridgeTests` suite
+passed 108 tests in that profile. This exercised the native composer window,
+not the complete workspace tab UI.
+
+A temporary probe then used the production model store, lease, MLX inference,
+policy, and parser against the installed verified model while the app host
+remained on the isolated profile. It produced
+`How does binary search work step by step?` in 4.184 seconds; all 18
+`NextPromptInferenceTests` passed. The probe was removed afterward. The
+focused coordinator and settings suites passed 26 and 14 tests respectively.

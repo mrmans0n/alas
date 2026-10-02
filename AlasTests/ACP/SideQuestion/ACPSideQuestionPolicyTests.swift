@@ -122,11 +122,11 @@ struct ACPSideQuestionPolicyTests {
     }
 
     @Test(
-        "side questions only run on agents with a mode that enforces read-only",
+        "read-only is enforced only on agents whose read-only mode holds",
         arguments: [("claude", true), ("codex", true), ("opencode", false), ("pi", false), ("copilot", false), ("my-agent", false)]
     )
-    func readOnlySupport(agentId: String, supported: Bool) {
-        #expect(ACPSideQuestionSupportPolicy.canEnforceReadOnly(agentId: agentId) == supported)
+    func readOnlyEnforcement(agentId: String, enforced: Bool) {
+        #expect(ACPSideQuestionSupportPolicy.enforcesReadOnly(agentId: agentId) == enforced)
     }
 
     @Test(

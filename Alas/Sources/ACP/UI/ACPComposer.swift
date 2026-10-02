@@ -76,7 +76,6 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
-        textView.invalidateNextPromptSuggestion()
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
@@ -165,7 +164,6 @@ struct ACPInputField: NSViewRepresentable {
                 tv.pillCommandsIfNeeded()
             }
             tv.nextPromptOffer = nextPromptOffer
-            if tv.nextPromptGhostText == nil, nextPromptOffer != nil { tv.invalidateNextPromptSuggestion() }
             tv.onNextPromptStateChange(tv.nextPromptInputState)
             tv.refreshNextPromptLayout()
         }
@@ -197,7 +195,7 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
-            tv.invalidateNextPromptSuggestion()
+            tv.clearNextPromptPresentation()
             tv.onNextPromptStateChange(.init())
             tv.onNextPromptStateChange = { _ in }
             coordinator.dropRouter.detach(tv)
@@ -1070,6 +1068,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         if !insertingAcceptedNextPrompt { dismissNextPromptOffer() }
     }
 
+    func clearNextPromptPresentation() {
+        nextPromptInvalidationGeneration &+= 1
+        nextPromptOffer = nil
+    }
+
     override func accessibilityHelp() -> String? {
         guard let text = nextPromptGhostText else { return super.accessibilityHelp() }
         return "Suggestion: \(text) Press Tab or use Accept Suggestion to insert it."
@@ -1100,7 +1103,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func resignFirstResponder() -> Bool {
-        invalidateNextPromptSuggestion()
         let result = super.resignFirstResponder()
         var state = nextPromptInputState
         state.hasComposerFocus = false
@@ -1280,8 +1282,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         affinity: NSSelectionAffinity,
         stillSelecting stillSelectingFlag: Bool
     ) {
-        invalidateNextPromptSuggestion()
+        let oldRanges = selectedRanges.map(\.rangeValue)
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if oldRanges != ranges.map(\.rangeValue) {
+            invalidateNextPromptSuggestion()
+        }
         onNextPromptStateChange(nextPromptInputState)
         needsDisplay = true
     }
@@ -1425,7 +1430,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// used by the image chip hover preview.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        invalidateNextPromptSuggestion()
         onNextPromptStateChange(nextPromptInputState)
         if window != nil {
             reconcileSlashPanel()
@@ -1528,7 +1532,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func mouseDown(with event: NSEvent) {
         if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
-        invalidateNextPromptSuggestion()
+        if nextPromptInputState.hasComposerFocus {
+            invalidateNextPromptSuggestion()
+        }
         super.mouseDown(with: event)
         reconcileSlashPanel()
     }
