@@ -482,7 +482,6 @@ final class ACPTranscriptScrollerReconciler {
     private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, anchor: ScrollAnchor?) {
         // Views parked at the old width would only be re-measured anyway; free them.
         if widthChanged { pool.purgeParked() }
-        // Views parked at the old width would only be re-measured anyway; free them.
         tiling.replaceAll(rows: resetHeights(specs: specs, widthChanged: widthChanged))
         scroller.setDocumentHeight(tiling.documentHeight)
         restoreScrollAnchor(anchor)
@@ -974,12 +973,13 @@ final class ACPTranscriptScrollerReconciler {
             }
             // A freshly mounted (or previously-released-and-now-remounted)
             // view has never been measured at the current width, or was
-            // last measured at a since-superseded one (or revived from the parked cache). Make the invariant
-            // below true by construction rather than relying on AppKit
-            // happening to invalidate the view's intrinsic size as a side
-            // effect of `addSubview` — that isn't contractual behavior.
-            // A revived view still has its old width on record, but its content
-            // may have changed size while it was parked and silenced.
+            // last measured at a since-superseded one (or revived from the
+            // parked cache). Make the invariant below true by construction
+            // rather than relying on AppKit happening to invalidate the
+            // view's intrinsic size as a side effect of `addSubview` — that
+            // isn't contractual behavior.
+            // A revived view still has its old width on record, but its
+            // content may have changed size while it was parked and silenced.
             if view.lastMeasuredWidth != contentWidth || view.needsRemeasure {
                 let height = view.measuredHeight(forWidth: contentWidth)
                 // A changed height supersedes the `band`/`keep` computed at
