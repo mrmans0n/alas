@@ -183,4 +183,9 @@ shell_steps = builder_steps.map { |step| step["run"] }
   raise "builder must run #{command}" unless shell_steps.include?(command)
 end
 
+# JavaScriptCore's watchdog never fires under the hardened runtime with the JIT on, so this entitlement
+# would silently remove the time limit on plugins. See docs/plugins/concepts.md.
+entitlements = File.read(File.expand_path("../../../Alas/Resources/Alas.entitlements", __dir__))
+raise "Alas.entitlements must not allow JIT: it disables the plugin time limit" if entitlements.include?("allow-jit")
+
 puts "ci workflow contract: ok"

@@ -1,22 +1,20 @@
 # Plugin API v2
 
-API 2 is API 1 plus canvas tabs: a plugin draws pixels into a tab and declares
-click regions. Everything in the [API v1 reference](api-v1.md) still applies.
+> Message reference. Plugins target API 4; see [api-v4.md](api-v4.md) for the runtime.
 
-## What's new in API 2
+API 2 added canvas tabs: a plugin draws pixels into a tab and declares click
+regions. Everything in the [API v1 reference](api-v1.md) still applies.
 
-Declare `"api": 2` in `plugin.json` to use anything on this page. An Alas that
-only supports API 1 refuses such a plugin with
-`requires plugin API 2; this Alas supports 1`. API 1 plugins are unchanged,
-including an inert `contributes`. The `alas.present` import is accepted only
-from API 2 plugins; an API 1 module importing it fails to instantiate. An
-API 1 plugin that sends `canvas/regions` is stopped, because it has no tabs.
+## Tabs and frames
+
+A plugin whose manifest declares no tabs has no `alas.present`, never receives
+`tick`, and is stopped if it sends `canvas/regions`.
 
 ## Manifest: `contributes.tabs`
 
 ```json
 {
-  "api": 2,
+  "api": 4,
   "capabilities": ["workspace.read", "worktree.switch", "session.focus"],
   "contributes": { "tabs": [{ "id": "office", "title": "Office" }] }
 }
@@ -34,22 +32,15 @@ index in `contributes.tabs`.
 ## Capability: `session.focus`
 
 Approval text: "Open agent sessions in this project". Required for
-`session/focus`. It is an API 2 capability: a manifest that requests it with
-`"api": 1` is rejected, so that an API 1 manifest always loads on an Alas that
-only supports API 1.
+`session/focus`.
 
-## `alas.present(tab, ptr, len, width)`
+## `alas.present(tab, pixels, width)`
 
-Import `alas.present(tab: i32, ptr: i32, len: i32, width: i32)` draws a frame.
-
-- Pixels are RGBA8, non-premultiplied, row-major, top-left origin.
-- `tab` is in range; `width` is 1 to 1024; `len` is a multiple of `width * 4`
-  and the height `len / (width * 4)` is 1 to 1024; `len` is at most 4 MiB;
-  `ptr..ptr+len` is inside linear memory.
-- Alas copies the pixels during the call. If a tab is presented more than once
-  in one call, the last frame wins.
-- Frames from a call that fails are discarded.
-- Any violation stops the plugin with a specific reason.
+Draws a frame: RGBA8 pixels in a `Uint8Array`, non-premultiplied, row-major,
+top-left origin. The argument rules and what happens when they are broken are in
+[API v4 → `alas.present`](api-v4.md#alaspresenttab-pixels-width). If a tab is
+presented more than once in one call, the last frame wins. Frames from a call
+that fails are discarded.
 
 Alas draws the latest frame at the largest whole-number scale that fits (at
 least 1x, clipped if the tab is smaller), nearest-neighbour, centred. Until the
@@ -60,7 +51,7 @@ first frame, the tab shows a spinner.
 Host to plugin notification. `dt` is whole milliseconds since the previous tick
 of this instance.
 
-- 15 fps in Release builds, 5 fps in Debug builds.
+- 15 fps.
 - Sent only while at least one of the plugin's tabs in that project is visible
   (selected, window not occluded).
 - If the previous delivery is still running, the tick is dropped, not queued.
@@ -103,10 +94,10 @@ snapshot; Alas switches to its worktree and focuses its session tab.
 | Limit | Value |
 |---|---|
 | Frame width and height | 1 to 1024 |
-| Frame `len` | at most 4 MiB, a multiple of `width * 4` |
+| Frame bytes | at most 4 MiB, a multiple of `width * 4` |
 | Tabs per manifest | 4 |
 | Tab title | 40 characters |
 | Regions per tab | 256 |
 | Region `id` | 64 bytes (truncated) |
 | Region `label` | 200 Unicode scalars (truncated) |
-| Tick rate | 15 fps Release, 5 fps Debug |
+| Tick rate | 15 fps |

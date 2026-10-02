@@ -2,15 +2,15 @@ import CryptoKit
 import Foundation
 
 /// Approval key for a plugin. Mirrors `RepoHookTrust`: any byte change to the
-/// manifest or the wasm yields a new hash, so the user must approve again.
+/// manifest or the entry script yields a new hash, so the user must approve again.
 enum PluginTrust {
     private static let version = "alas-plugin-trust-v1"
 
-    static func hash(manifest: Data, wasm: Data) -> String {
+    static func hash(manifest: Data, entry: Data) -> String {
         var payload = Data("\(version)\u{0}".utf8)
         payload.append(manifest)
         payload.append(0)
-        payload.append(wasm)
+        payload.append(entry)
         return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
 }

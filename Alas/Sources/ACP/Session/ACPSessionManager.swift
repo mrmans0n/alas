@@ -6837,7 +6837,7 @@ extension ACPSessionManager {
                 ? "ACP session attach failed: \(baseMessage)"
                 : baseMessage
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
-            session.lastError = full
+            session.lastError = downgradePersistenceError != nil || authReason == nil ? full : nil
             session.contextRecoveryStatus = nil
             if downgradePersistenceError != nil {
                 session.agentState = .failed(full)

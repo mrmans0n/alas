@@ -13,6 +13,15 @@ struct ACPAdapterUpdateBannerDeciderTests {
         #expect(decision == .showInstall)
     }
 
+    @Test("setup errors take precedence over cached updates")
+    func setupErrorTakesPrecedence() {
+        let decision = ACPAdapterUpdateBannerDecider.decide(
+            setupState: .setupError(reason: "broken"),
+            updateState: .available(current: "1", latest: "2"),
+            dismissedLatest: nil)
+        #expect(decision == .none)
+    }
+
     @Test("ready + available + no dismissal renders update")
     func readyShowsUpdate() {
         let decision = ACPAdapterUpdateBannerDecider.decide(
@@ -74,5 +83,24 @@ struct ACPAdapterUpdateBannerDeciderTests {
             updateState: nil,
             dismissedLatest: nil)
         #expect(decision == .none)
+    }
+
+    @Test("generic failure visibility follows specialized setup banners", arguments: [
+        (ACPSession.SetupState.checking, false, true),
+        (.ready, false, true),
+        (.needsSetup(reason: "missing"), false, false),
+        (.needsSetup(reason: "missing"), true, true),
+        (.setupError(reason: "broken"), false, false),
+        (.needsAuth(methods: [], reason: nil), false, false),
+    ])
+    func genericFailureVisibility(
+        setupState: ACPSession.SetupState,
+        setupNudgeDismissed: Bool,
+        expected: Bool
+    ) {
+        #expect(ACPAdapterUpdateBannerDecider.showsGenericFailure(
+            setupState: setupState,
+            setupNudgeDismissed: setupNudgeDismissed
+        ) == expected)
     }
 }

@@ -23,7 +23,7 @@ struct PluginsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Plugins").font(.system(size: 18, weight: .semibold))
-                Text("WebAssembly plugins run sandboxed, with only the capabilities you approve.")
+                Text("Plugins run sandboxed, with only the capabilities you approve.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
                 if let manager = state.pluginManager {

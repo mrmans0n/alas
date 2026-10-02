@@ -31,7 +31,7 @@ struct ACPSessionRunnerTests {
         }
     }
 
-    @Test("auth prompt failure enters needsAuth while preserving direct prompt error")
+    @Test("auth prompt failure enters needsAuth without duplicating the auth error")
     func authPromptFailureEntersNeedsAuth() async throws {
         let (runner, mock) = try makeRunner()
         let method = ACPInitializeResult.ACPAuthMethod(
@@ -60,7 +60,7 @@ struct ACPSessionRunnerTests {
             reason: "invalid authentication credentials"
         ))
         #expect(runner.session.agentState == .failed("invalid authentication credentials"))
-        #expect(runner.session.lastError?.contains("invalid authentication credentials") == true)
+        #expect(runner.session.lastError == nil)
         #expect(runner.session.transcript.streamingState == .idle)
     }
 

@@ -47,7 +47,7 @@ struct AdvancedPane: View {
                     }
                     SettingsRow(
                         name: "Plugins",
-                        desc: "Runs approved WebAssembly plugins from the Plugins folder in Alas's Application Support folder."
+                        desc: "Runs approved JavaScript plugins from the Plugins folder in Alas's Application Support folder."
                     ) {
                         AlasToggle(on: Binding(
                             get: { state.config.pluginsEnabled },
