@@ -115,7 +115,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
         idleTask = nil
         let previous = active
         if let previous {
-            guard !(priority == .automatic && previous.priority == .userInitiated) else {
+            guard priority.rawValue >= previous.priority.rawValue else {
                 throw LocalTextInferenceFailure.preempted
             }
             cancellationReasons[previous.id] = priority.rawValue > previous.priority.rawValue ? .preempted : .cancelled

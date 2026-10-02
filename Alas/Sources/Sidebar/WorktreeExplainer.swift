@@ -106,7 +106,7 @@ struct WorktreeExplainerSuggester {
             prefillStepSize: 512,
             timeout: WorktreeExplainerPolicy.timeout
         )
-        return await router.generate(request, caller: .worktreeExplainer, priority: .automatic) {
+        return await router.generate(request, caller: .worktreeExplainer, priority: .background) {
             WorktreeExplainerPolicy.parse($0)
         }
     }

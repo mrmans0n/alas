@@ -1,6 +1,7 @@
 import Foundation
 
 enum LocalTextJobPriority: Int, Sendable {
+    case background
     case automatic
     case userInitiated
 }
