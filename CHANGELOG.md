@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
+
 ### Performance
 
 - Compress remote WebSocket traffic with negotiated permessage-deflate for compatible native peers and browsers. Each message uses a fresh compression dictionary, and incoming messages still have a 16 MB decoded-size limit. Clients without compression support keep the existing transport.

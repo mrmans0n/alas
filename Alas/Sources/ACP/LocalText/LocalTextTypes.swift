@@ -1,6 +1,7 @@
 import Foundation
 
 enum LocalTextJobPriority: Int, Sendable {
+    case background
     case automatic
     case userInitiated
 }
@@ -9,6 +10,7 @@ enum LocalTextCaller: Hashable, Sendable {
     case nextPrompt
     case sessionSummary(UUID)
     case worktreeName
+    case worktreeExplainer
     case sessionTitle
     case mergeConflictExplanation
     case runFailureBrief
