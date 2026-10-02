@@ -203,6 +203,11 @@ final class AppState {
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
     @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
+    @ObservationIgnored lazy var worktreeExplainerStore = WorktreeExplainerStore { [weak self] evidence in
+        guard let self else { return nil }
+        return await self.makeWorktreeExplainerSuggester().suggest(for: evidence)
+    }
+
     @ObservationIgnored var localTextInstallation: Task<Void, Never>?
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
@@ -1716,6 +1721,8 @@ final class AppState {
         let engine = localTextInference
         Task {
             await engine.cancel(caller: .worktreeName)
+            await engine.cancel(caller: .worktreeExplainer)
+
             await engine.cancel(caller: .mergeConflictExplanation)
             await engine.cancel(caller: .runFailureBrief)
         }
@@ -1742,6 +1749,39 @@ final class AppState {
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
         IssueWorktreeNameSuggester(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { [weak self] in
+                self?.issueWorktreeNameAppleSuggestionsAvailable ?? false
+            },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.issueWorktreeNameSuggestionsAvailable ?? false
+            }
+        )
+    }
+
+    func worktreeExplainerEvidence(
+        for worktree: Worktree,
+        in project: ProjectConfig
+    ) -> WorktreeExplainerEvidence? {
+        guard issueWorktreeNameSuggestionAvailable,
+              !projectsManager.isMain(worktree, in: project),
+              !worktree.path.isRemoteAlasPath
+        else { return nil }
+        let title = projectsManager.issueAttachment(
+            projectId: project.id,
+            worktreeId: worktree.id
+        )?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WorktreeExplainerEvidence(
+            branch: worktree.branch,
+            issueTitle: title.flatMap { $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    func makeWorktreeExplainerSuggester() -> WorktreeExplainerSuggester {
+        WorktreeExplainerSuggester(
             engine: localTextInference,
             isAppleIntelligenceAvailable: { [weak self] in
                 self?.issueWorktreeNameAppleSuggestionsAvailable ?? false

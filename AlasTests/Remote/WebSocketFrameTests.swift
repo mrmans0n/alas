@@ -107,4 +107,86 @@ struct WebSocketFrameTests {
         var buffer = Data([0x82, 0x7F, 0, 0, 0, 0, 0x40, 0, 0, 0])
         #expect(throws: RemoteServerError.self) { _ = try WebSocketFrame.decode(from: &buffer) }
     }
+
+    @Test(arguments: [
+        "permessage-deflate",
+        "other-extension, permessage-deflate; client_max_window_bits",
+        "permessage-deflate; server_max_window_bits=\"15\"; client_max_window_bits=10"
+    ])
+    func negotiatesFreshDictionaries(offer: String) throws {
+        let response = try #require(WebSocketDeflate.negotiate(offer))
+        #expect(response.contains("server_no_context_takeover"))
+        #expect(response.contains("client_no_context_takeover"))
+    }
+
+    @Test(arguments: [
+        "", "unknown", "permessage-deflate; unknown",
+        "permessage-deflate; server_no_context_takeover=1",
+        "permessage-deflate; client_max_window_bits=7",
+        "permessage-deflate; client_max_window_bits=16",
+        "permessage-deflate; client_max_window_bits=015",
+        "permessage-deflate; server_max_window_bits=14",
+        "permessage-deflate; client_max_window_bits; client_max_window_bits",
+        "permessage-deflate;"
+    ])
+    func declinesUnsupportedOrMalformedOffers(offer: String) {
+        #expect(WebSocketDeflate.negotiate(offer) == nil)
+        #expect(WebSocketDeflate.negotiate(nil) == nil)
+    }
+
+    @Test(arguments: Array(0...7))
+    func inflatesRFC7692MessageAcrossFragments(split: Int) {
+        // RFC 7692 §7.2.3.1: raw DEFLATE "Hello", with the sync-flush trailer removed.
+        let wire = Data([0xF2, 0x48, 0xCD, 0xC9, 0xC9, 0x07, 0x00])
+        var r = WebSocketReassembler()
+        for _ in 0..<2 {
+            #expect(r.accept(.init(opcode: .text, payload: wire.prefix(split), fin: false,
+                                   compressed: true)) == .incomplete)
+            #expect(r.accept(.init(opcode: .continuation, payload: wire.dropFirst(split), fin: true))
+                    == .message(Data("Hello".utf8)))
+        }
+    }
+
+    @Test(arguments: [
+        Data([0xFF]), Data([0x03, 0x00]), Data([0xF2, 0x48]),
+        Data([0xF2, 0x48, 0xCD, 0xC9, 0xC9, 0x07, 0x00, 0xFF])
+    ])
+    func rejectsInvalidCompressedMessages(wire: Data) {
+        var r = WebSocketReassembler()
+        #expect(r.accept(.init(opcode: .text, payload: wire, fin: true, compressed: true)) == .violation)
+    }
+
+    @Test(arguments: [UInt8(0xC0), 0xC9, 0xA1, 0x91, 0x09])
+    func rejectsInvalidExtensionAndControlBits(first: UInt8) {
+        var wire = Data([first, 0])
+        #expect(throws: RemoteServerError.self) {
+            _ = try WebSocketFrame.decode(from: &wire, compressionEnabled: true)
+        }
+    }
+
+    @Test func compressedMessagesRespectDecodedLimitIncludingFinalFrame() throws {
+        let limit = WebSocketFrame.maxPayloadLength
+        let allowed = Data(repeating: 0x41, count: limit)
+        let tooLarge = Data(repeating: 0x41, count: limit + 1)
+        for (payload, expected) in [(allowed, WebSocketReassembler.Outcome.message(allowed)),
+                                    (tooLarge, .violation)] {
+            let wire = try #require(WebSocketDeflate.compress(payload))
+            var r = WebSocketReassembler()
+            #expect(r.accept(.init(opcode: .binary, payload: wire, fin: true, compressed: true)) == expected)
+            var plain = WebSocketReassembler()
+            #expect(plain.accept(.init(opcode: .binary, payload: payload, fin: true)) == expected)
+        }
+    }
+
+    @Test func outgoingCompressionIsOptionalAndNeverTouchesControlFrames() throws {
+        let payload = Data(String(repeating: "transcript text with repeated JSON fields\n", count: 200).utf8)
+        var wire = WebSocketFrame.encode(opcode: .text, payload: payload, compressionEnabled: true)
+        let frame = try #require(WebSocketFrame.decode(from: &wire, compressionEnabled: true))
+        #expect(frame.compressed)
+        #expect(frame.payload.count < payload.count / 2)
+        var r = WebSocketReassembler()
+        #expect(r.accept(frame) == .message(payload))
+        #expect(WebSocketFrame.encode(opcode: .text, payload: payload)[0] == 0x81)
+        #expect(WebSocketFrame.encode(opcode: .ping, payload: payload, compressionEnabled: true)[0] == 0x89)
+    }
 }

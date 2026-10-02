@@ -63,6 +63,22 @@ struct LocalTextInferenceEngineTests {
         #expect(try await user.value.text == "summary")
     }
 
+    @Test func backgroundRequestCannotPreemptAutomaticRequest() async throws {
+        let probe = try LocalTextEngineProbe()
+        let engine = probe.engine()
+        let automatic = Task {
+            try await engine.generate(request, caller: .nextPrompt, priority: .automatic)
+        }
+        await probe.waitUntilEvaluationStarts(0)
+
+        await #expect(throws: LocalTextInferenceFailure.preempted) {
+            try await engine.generate(request, caller: .worktreeExplainer, priority: .background)
+        }
+        #expect(probe.cancelledEvaluationCount == 0)
+        probe.finishEvaluation(0, with: "next")
+        #expect(try await automatic.value.text == "next")
+    }
+
     @Test func cancelledRequestDoesNotPreemptActiveWork() async throws {
         let probe = try LocalTextEngineProbe()
         let engine = probe.engine()

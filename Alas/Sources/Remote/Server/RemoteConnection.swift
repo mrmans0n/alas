@@ -78,6 +78,7 @@ final class RemoteConnection: @unchecked Sendable {
     private var identityProofsSent = 0
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
+    private var compressionEnabled = false
     /// The device this connection authenticated as, set on `queue` once the WS
     /// upgrade succeeds. Queue-confined; the server learns it via the
     /// `onAuthenticated` hop rather than reading this cross-queue.
@@ -309,6 +310,7 @@ final class RemoteConnection: @unchecked Sendable {
         let token = req.headers["sec-websocket-protocol"] ?? req.query["token"] ?? ""
         guard let key = req.headers["sec-websocket-key"] else { teardown()
         return }
+        let extensionResponse = WebSocketDeflate.negotiate(req.headers["sec-websocket-extensions"])
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -322,30 +324,31 @@ final class RemoteConnection: @unchecked Sendable {
                 }
                 self.deviceId = deviceId
                 self.onAuthenticated?(self, deviceId)
-                self.completeUpgrade(token: token, key: key)
+                self.completeUpgrade(token: token, key: key, extensionResponse: extensionResponse)
             }
         }
     }
 
     /// Runs on `queue` after a successful `authorize`. Builds the gateway (on
     /// MainActor), sends the 101 handshake, then begins the frame loop.
-    private func completeUpgrade(token: String, key: String) {
+    private func completeUpgrade(token: String, key: String, extensionResponse: String?) {
         let accept = Self.acceptKey(for: key)
         let proto = token.isEmpty ? "" : "Sec-WebSocket-Protocol: \(token)\r\n"
+        compressionEnabled = extensionResponse != nil
+        let extensions = extensionResponse.map { "Sec-WebSocket-Extensions: \($0)\r\n" } ?? ""
         // Built as an immutable `let` so it can be captured into the @MainActor
         // Task below without tripping strict-concurrency's "captured var" error.
         let head = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             + "Sec-WebSocket-Accept: \(accept)\r\n"
             + proto
+            + extensions
             + "\r\n"
         isWebSocket = true
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             let gateway = self.makeGateway { [weak self] msg in self?.sendServerMessage(msg) }
-            let helloFrame = self.makeHello()
-                .flatMap { try? JSONEncoder().encode($0) }
-                .map { WebSocketFrame.encode(opcode: .text, payload: $0) }
+            let helloData = self.makeHello().flatMap { try? JSONEncoder().encode($0) }
             self.onQueue { [weak self] in
                 guard let self else { return }
                 self.gateway = gateway
@@ -354,8 +357,9 @@ final class RemoteConnection: @unchecked Sendable {
                     // `hello` is the first frame on every socket: the gateway
                     // has not seen a client message yet, and its own sends hop
                     // through `onQueue` behind this one.
-                    if let helloFrame {
-                        self.send(helloFrame) { [weak self] in
+                    if let helloData {
+                        self.send(WebSocketFrame.encode(opcode: .text, payload: helloData,
+                                                        compressionEnabled: self.compressionEnabled)) { [weak self] in
                             self?.enableFramesAndFlushPendingHello()
                         }
                     } else {
@@ -386,7 +390,7 @@ final class RemoteConnection: @unchecked Sendable {
             var buffer = inbound
             let frame: WebSocketFrame?
             do {
-                frame = try WebSocketFrame.decode(from: &buffer)
+                frame = try WebSocketFrame.decode(from: &buffer, compressionEnabled: compressionEnabled)
             } catch {
                 // Protocol violation in a frame — close per RFC 6455.
                 teardown()
@@ -554,7 +558,8 @@ final class RemoteConnection: @unchecked Sendable {
         // with ACP state mutation for main-thread time.
         onQueue { [weak self] in
             guard let self, let data = try? JSONEncoder().encode(msg) else { return }
-            self.send(WebSocketFrame.encode(opcode: .text, payload: data)) {}
+            self.send(WebSocketFrame.encode(opcode: .text, payload: data,
+                                            compressionEnabled: self.compressionEnabled)) {}
         }
     }
 
