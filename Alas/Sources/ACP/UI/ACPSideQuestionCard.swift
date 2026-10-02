@@ -24,6 +24,7 @@ struct ACPSideQuestionCard: View {
     /// Retries or drops a follow-up whose send failed in the side queue.
     let onRetryQueued: (UUID) -> Void
     let onRemoveQueued: (UUID) -> Void
+    let onCancelTurn: () -> Void
 
     var body: some View {
         if let side {
@@ -38,7 +39,8 @@ struct ACPSideQuestionCard: View {
                 onInsert: onInsert,
                 onKeep: onKeep,
                 onRetryQueued: onRetryQueued,
-                onRemoveQueued: onRemoveQueued
+                onRemoveQueued: onRemoveQueued,
+                onCancelTurn: onCancelTurn
             )
         } else {
             ACPSideQuestionCardChrome(
@@ -76,6 +78,7 @@ struct ACPSideQuestionCard: View {
         let onKeep: () -> Void
         let onRetryQueued: (UUID) -> Void
         let onRemoveQueued: (UUID) -> Void
+        let onCancelTurn: () -> Void
 
         @Environment(\.theme) private var theme
 
@@ -100,6 +103,20 @@ struct ACPSideQuestionCard: View {
             }
         }
 
+        /// Calls the gate blocked since the latest question.
+        private var latestBlocked: [ACPBlockedToolCall] {
+            side.readOnlyBlockedTools.filter { $0.messageIndex > latestTurn.startIndex }
+        }
+
+        private var awaitingInputNotice: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("The side agent is asking for input that side questions can't answer.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color("fg-muted"))
+                Button("Cancel turn", action: onCancelTurn).controlSize(.small)
+            }
+        }
+
         private var failureReason: String? {
             if case .failed(let reason) = side.agentState { reason } else { nil }
         }
@@ -116,7 +133,7 @@ struct ACPSideQuestionCard: View {
                 hasSession: true,
                 sessionError: side.lastError ?? failureReason,
                 isTurnActive: transcript.streamingState != .idle,
-                hasOutput: latestTurn.dropFirst().contains {
+                hasOutput: !latestBlocked.isEmpty || latestTurn.dropFirst().contains {
                     if case .user = $0 { false } else { true }
                 }
             )
@@ -143,8 +160,13 @@ struct ACPSideQuestionCard: View {
                     ForEach(Array(latestTurn.enumerated()), id: \.offset) { index, message in
                         row(message, isFirstOfTurn: index == 0)
                     }
-                    ForEach(Array(side.readOnlyBlockedTools.enumerated()), id: \.offset) { _, title in
-                        blockedNotice(title)
+                    ForEach(Array(latestBlocked.enumerated()), id: \.offset) { _, blocked in
+                        blockedNotice(blocked.title)
+                    }
+                    // Plan approvals and input requests have no place in the
+                    // card; let the user end the turn instead of waiting.
+                    if transcript.streamingState == .awaitingInput, transcript.pendingPermission == nil {
+                        awaitingInputNotice
                     }
                     // A failed queued follow-up blocks the ones behind it.
                     ForEach(side.queue.filter { $0.lastError != nil }) { item in

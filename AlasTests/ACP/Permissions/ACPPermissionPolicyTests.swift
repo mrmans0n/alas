@@ -73,7 +73,7 @@ struct ACPPermissionPolicyTests {
         let resp = await policy.evaluate(scopeKey: "tool:x", options: opts, params: params, requestID: .number(1))
 
         #expect(resp.outcome == .selected(optionId: allowed ? "allow" : "deny"))
-        #expect(session.readOnlyBlockedTools == (allowed ? [] : ["Tool"]))
+        #expect(session.readOnlyBlockedTools.map(\.title) == (allowed ? [] : ["Tool"]))
     }
 
     @Test("a read-only rejection without a one-shot option cancels instead of persisting")

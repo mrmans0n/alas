@@ -1327,6 +1327,10 @@ private struct ACPSideQuestionSlot: View {
                 onRemoveQueued: { itemID in
                     guard let side else { return }
                     Task { await manager.queueRemove(for: side.id, itemId: itemID) }
+                },
+                onCancelTurn: {
+                    guard let side, let runner = manager.runners[side.id] else { return }
+                    Task { await runner.userCancel() }
                 }
             )
             .id(entry.id)

@@ -115,12 +115,14 @@ enum ACPSideQuestionBoundaryPolicy {
     }
 }
 
-/// Side questions rely on the agent asking before each tool call: the
-/// read-only gate answers those requests. Agents that never ask (their own
-/// tools run inside the agent process) can't be kept read-only.
+/// Agents whose read-only state Alas can actually enforce. The permission
+/// gate only sees calls an agent asks about, and agents run tools that the
+/// user's own rules allow without asking. Claude's plan mode and Codex's
+/// read-only sandbox hold regardless of those rules; other agents (OpenCode,
+/// Pi, Copilot, …) offer no such mode, so side questions refuse them.
 enum ACPSideQuestionSupportPolicy {
     static func canEnforceReadOnly(agentId: String) -> Bool {
-        ACPAgentProfiles.routing(for: agentId).autoRun == .supported
+        ["claude", "codex"].contains(agentId)
     }
 }
 
