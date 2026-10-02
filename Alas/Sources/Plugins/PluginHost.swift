@@ -51,6 +51,8 @@ struct PluginHostActions {
     var agents: () -> [PluginAgent]
     /// Returns synchronously; the completion is called once, later, with nil on success or the failure reason.
     var startTask: (PluginTaskRequest, @escaping @MainActor (String?) -> Void) -> PluginTaskStart
+    /// Shows `title` and `body`, already bounded and naming the plugin.
+    var notify: (_ title: String, _ body: String) -> Void
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
@@ -60,7 +62,8 @@ struct PluginHostActions {
             focusSession: { _ in false },
             lastMessage: { _ in .unknownSession },
             agents: { [] },
-            startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available") })
+            startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available") },
+            notify: { _, _ in })
     }
 }
 
@@ -89,6 +92,9 @@ final class PluginHost {
     static let regionIDByteLimit = 64
     static let regionLabelLimit = 200
     private static let logLevels: Set<String> = ["debug", "info", "warn", "error"]
+    static let notifyTitleLimit = 80
+    static let notifyBodyLimit = 500
+    static let notifyInterval: Duration = .seconds(2)
 
     let manifest: PluginManifest
     let project: PluginProjectRef
@@ -107,12 +113,15 @@ final class PluginHost {
     @ObservationIgnored private var taskInFlight = false
     @ObservationIgnored private var taskGeneration = 0
     @ObservationIgnored private var pendingTaskSession: String?
+    @ObservationIgnored private var lastNotify: ContinuousClock.Instant?
+    @ObservationIgnored private var warnedNotifyNotGranted = false
 
     @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
     @ObservationIgnored private let storage: PluginStorage
     @ObservationIgnored private let limits: PluginLimits
     @ObservationIgnored private var runtime: PluginRuntime?
+    @ObservationIgnored private let now: () -> ContinuousClock.Instant
 
     init(
         manifest: PluginManifest,
@@ -121,7 +130,8 @@ final class PluginHost {
         grants: Set<PluginCapability>,
         actions: PluginHostActions,
         storage: PluginStorage,
-        limits: PluginLimits = PluginLimits()
+        limits: PluginLimits = PluginLimits(),
+        now: @escaping () -> ContinuousClock.Instant = { .now }
     ) {
         self.manifest = manifest
         self.source = source
@@ -130,6 +140,7 @@ final class PluginHost {
         self.actions = actions
         self.storage = storage
         self.limits = limits
+        self.now = now
     }
 
     private var isRunning: Bool { state == .activating || state == .active }
@@ -143,6 +154,7 @@ final class PluginHost {
         clearCanvas()
         taskInFlight = false
         taskGeneration += 1
+        warnedNotifyNotGranted = false
         do {
             let loaded = try await PluginRuntime.load(
                 source: source, limits: limits, tabCount: manifest.tabs.count)
@@ -165,6 +177,24 @@ final class PluginHost {
         guard state == .active, grants.contains(.workspaceRead) else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "workspace/changed", params: PluginSnapshotPayload(snapshot: snapshot))))
+    }
+
+    /// Runs one of the manifest's commands. Alas builds `target` from the slot the user chose it in.
+    func runCommand(_ id: String, target: PluginCommandTarget) async {
+        guard state == .active, manifest.commands.contains(where: { $0.id == id }) else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "command/run", params: PluginCommandRunParams(command: id, target: target))))
+    }
+
+    var receivesSessionEvents: Bool { !manifest.events.isEmpty && grants.contains(.sessionRead) }
+
+    /// Sends the events the manifest subscribes to.
+    func sessionEvents(_ events: [PluginSessionEvent]) async {
+        guard receivesSessionEvents else { return }
+        for event in events where manifest.events.contains(event.event) {
+            guard state == .active else { return }
+            await deliver(encode(JSONRPCEnvelope(id: nil, method: event.event.method, params: event.params)))
+        }
     }
 
     /// Sends `alas/deactivate`, then drops the instance whatever the plugin does.
@@ -451,6 +481,9 @@ final class PluginHost {
                 appendLog(params.level, params.message)
             }
             return .none
+        case "notify":
+            notify(data)
+            return .none
         case "view/render":
             guard let header = try? JSONDecoder().decode(PluginParams<PluginViewRenderHeader>.self, from: data).params else {
                 return .violation("plugin sent a malformed view/render")
@@ -485,6 +518,25 @@ final class PluginHost {
         default:
             return .none
         }
+    }
+
+    /// A notification, not a request, so a refused one is dropped rather than answered.
+    private func notify(_ data: Data) {
+        guard grants.contains(.notify) else {
+            if !warnedNotifyNotGranted {
+                warnedNotifyNotGranted = true
+                appendLog("warn", "notify dropped: capability not granted: notify")
+            }
+            return
+        }
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginNotifyParams>.self, from: data).params else { return }
+        let time = now()
+        if let lastNotify, time - lastNotify < Self.notifyInterval { return }
+        lastNotify = time
+        let title = String(String.UnicodeScalarView(params.title.unicodeScalars.prefix(Self.notifyTitleLimit)))
+        actions.notify(
+            "\(manifest.name): \(title)",
+            String(String.UnicodeScalarView((params.body ?? "").unicodeScalars.prefix(Self.notifyBodyLimit))))
     }
 
     private static func prefix(_ text: String, utf8Bytes limit: Int) -> String {

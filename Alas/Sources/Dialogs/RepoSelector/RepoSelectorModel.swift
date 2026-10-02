@@ -107,6 +107,7 @@ final class RepoSelectorModel {
 
         rows.append(.actionsHeader)
         rows.append(.action(.newProject))
+        rows.append(contentsOf: env.pluginCommands().map { .action(.pluginCommand($0)) })
         return rows
     }
 
@@ -253,6 +254,9 @@ final class RepoSelectorModel {
                 }
             }
         }
+        let commands = env.pluginCommands()
+            .filter { FuzzyMatch.score(query: query, target: $0.command.title) != nil }
+            .map { RepoSelectorRow.action(.pluginCommand($0)) }
         return scored
             .sorted { a, b in
                 if a.score != b.score { return a.score > b.score }
@@ -260,6 +264,7 @@ final class RepoSelectorModel {
                     == .orderedAscending
             }
             .map { .worktree($0.worktree, indices: $0.indices, isCurrent: $0.worktree.id == currentId) }
+            + commands
     }
 
     // MARK: - Activation
@@ -268,6 +273,7 @@ final class RepoSelectorModel {
         case focused(worktreeId: String)
         case openedNewWorktree(projectId: String)
         case openedNewProject
+        case ranPluginCommand
         case noop
     }
 
@@ -286,6 +292,10 @@ final class RepoSelectorModel {
             env.openNewProject()
             close()
             return .openedNewProject
+        case .action(.pluginCommand(let item)):
+            env.runPluginCommand(item)
+            close()
+            return .ranPluginCommand
         case .emptyHint(.noProjects):
             env.openNewProject()
             close()

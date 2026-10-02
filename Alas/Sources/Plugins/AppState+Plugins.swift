@@ -81,6 +81,16 @@ extension AppState {
                     return .rejected(code: -32003, message: "\(project.name) is no longer in Alas")
                 }
                 return self.startPluginTask(request, project: current, completion: completion)
+            },
+            notify: { [weak self] title, body in
+                // In-app notifications live on a worktree: the selected one when it is in this project.
+                // ponytail: otherwise the project's first worktree, unseen until the user goes there;
+                // route through the attention inbox if plugins need to reach other projects.
+                guard let self else { return }
+                let worktrees = self.projectsManager.worktreesByProject[project.id] ?? []
+                guard let target = worktrees.first(where: { $0.id == self.selectedWorktreeId }) ?? worktrees.first else { return }
+                self.inAppNotifications.post(
+                    body.isEmpty ? title : "\(title)\n\(body)", severity: .information, worktreeID: target.id)
             })
     }
 
@@ -175,10 +185,7 @@ extension AppState {
 extension AppState {
     /// Tab contributions of plugins running for the selected worktree's project.
     func pluginTabContributions() -> [PluginTabState] {
-        guard let manager = pluginManager,
-              let worktreeId = selectedWorktreeId,
-              let projectId = worktree(withId: worktreeId)?.projectId
-        else { return [] }
+        guard let manager = pluginManager, let projectId = selectedPluginProjectID else { return [] }
         return manager.plugins
             .filter { manager.host(pluginID: $0.id, projectID: projectId)?.state == .active }
             .flatMap { plugin in
@@ -186,6 +193,28 @@ extension AppState {
                     PluginTabState(pluginID: plugin.id, contributionID: $0.id, title: $0.title)
                 }
             }
+    }
+
+    /// The commands `slot` shows for `projectID`, from plugins running there.
+    func pluginCommands(_ slot: PluginCommandSlot, projectID: String?) -> [PluginCommandItem] {
+        guard let manager = pluginManager, let projectID else { return [] }
+        return PluginCommandRouting.items(
+            in: slot, projectID: projectID,
+            plugins: manager.plugins.map {
+                ($0.manifest, manager.host(pluginID: $0.id, projectID: projectID)?.state == .active)
+            })
+    }
+
+    var selectedPluginProjectID: String? {
+        selectedWorktreeId.flatMap { worktree(withId: $0)?.projectId }
+    }
+
+    /// `worktreeID` is the worktree the slot acts on; slots that act on the project ignore it.
+    func runPluginCommand(_ item: PluginCommandItem, slot: PluginCommandSlot, worktreeID: String? = nil) {
+        guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
+              let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID)
+        else { return }
+        Task { await host.runCommand(item.command.id, target: target) }
     }
 
     func openPluginTab(_ tab: PluginTabState) {

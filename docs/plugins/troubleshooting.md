@@ -26,6 +26,7 @@ Anything under **Not loaded** shows the folder name and the reason.
 | `invalid tab contribution: …` | A tab in `contributes.tabs` breaks a rule. | See [API v2](api-v2.md#manifest-contributestabs) and [API v3](api-v3.md#manifest-tab-kind). |
 | `entry "…" must be a relative path inside the plugin folder` | `entry` is absolute, uses `..`, or **the file does not exist, is a symlink, or resolves outside the folder**. | Check the path, and that `build.sh` copied `plugin.js`. |
 | `duplicate plugin id …` | Two folders declare the same `id`. | Remove or change one. Neither loads until you do. |
+| `shadowed by …, which has the same id` | A catalog install of this plugin and your own copy in another folder. Yours wins. | Nothing to do, or delete the folder named after the id (**Reveal Plugins Folder**) to tidy up. |
 
 Nothing at all, not even under **Not loaded**? The folder is not in
 `~/Library/Application Support/Alas/Plugins/`, or you have not clicked **Rescan**

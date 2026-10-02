@@ -27,6 +27,7 @@ struct PluginHostTests {
         var completions: [@MainActor (String?) -> Void] = []
         /// How many upcoming starts are rejected before any is accepted.
         var rejections = 0
+        var notes: [String] = []
     }
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
@@ -39,7 +40,8 @@ struct PluginHostTests {
         recorder: Recorder = Recorder(),
         limits: PluginLimits = PluginHostTests.limits,
         manifest: String = PluginHostTests.plainManifest,
-        storage: PluginStorage? = nil
+        storage: PluginStorage? = nil,
+        now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
@@ -75,9 +77,11 @@ struct PluginHostTests {
                     recorder.tasks.append(request)
                     recorder.completions.append(completion)
                     return .started(sessionId: "s\(recorder.tasks.count)", branch: "task/x")
-                }),
+                },
+                notify: { title, body in recorder.notes.append("\(title)|\(body)") }),
             storage: storage,
-            limits: limits)
+            limits: limits,
+            now: now)
     }
 
     func ticks(_ host: PluginHost) -> [String] {
@@ -601,5 +605,71 @@ struct PluginHostTests {
         #expect(sent[5].contains(#""code":-32003"#) && sent[5].contains("storage full"))
         #expect(storage.get("k2") == nil)
         #expect(sent[6].contains(#""code":-32602"#) && sent[6].contains("invalid storage key"))
+    }
+
+    // MARK: - API 5
+
+    static let commandManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","contributes":{"commands":[{"id":"fix","title":"Fix","slots":["toolbar"]}]}}"#
+
+    @Test func onlyDeclaredCommandsRunAndCarryTheirTarget() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.commandManifest)
+        await host.activate()
+        await host.runCommand("nope", target: .project)
+        await host.runCommand("fix", target: .worktree("w1"))
+        let runs = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("command/run") }
+        #expect(runs.count == 1)
+        #expect(runs.first?.text.contains(#""command":"fix""#) == true)
+        // JSONEncoder does not fix key order, so check the target's fields one by one.
+        #expect(runs.first.map { $0.text.contains(#""kind":"worktree""#) && $0.text.contains(#""worktree":"w1""#) } == true)
+    }
+
+    private static func notify(_ title: String, body: String = "b") -> PluginFixtureStep {
+        .send(#"{"jsonrpc":"2.0","method":"notify","params":{"title":"\#(title)","body":"\#(body)"}}"#)
+    }
+
+    @Test func notifyWithoutTheGrantIsDroppedWithOneWarning() async throws {
+        let recorder = Recorder()
+        let host = try makeHost([[.send(activateOK), Self.notify("a"), Self.notify("b")]], recorder: recorder)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(recorder.notes.isEmpty)
+        #expect(host.log.map(\.level) == ["warn"])
+    }
+
+    /// One per two seconds, bounded and named after the plugin; the rest are dropped, not queued.
+    @Test func notifyIsBoundedAndRateLimited() async throws {
+        let recorder = Recorder()
+        var time = ContinuousClock.now
+        let host = try makeHost(
+            [
+                [.send(activateOK), Self.notify(String(repeating: "t", count: 100), body: String(repeating: "x", count: 600)), Self.notify("dropped")],
+                [Self.notify("too soon")],
+                [Self.notify("later")],
+            ],
+            grants: [.notify, .workspaceRead], recorder: recorder, now: { time })
+        await host.activate()
+        time += .seconds(1)
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        time += .milliseconds(1500)
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        #expect(recorder.notes == [
+            "Test: \(String(repeating: "t", count: 80))|\(String(repeating: "x", count: 500))",
+            "Test: later|b",
+        ])
+    }
+
+    /// Only the events the manifest lists, and only with the grant.
+    @Test(arguments: [(Set<PluginCapability>(), 0), (Set<PluginCapability>([.sessionRead]), 1)])
+    func sessionEventsNeedTheSubscriptionAndTheGrant(grants: Set<PluginCapability>, deliveries: Int) async throws {
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["session.read"],"events":["session.finished"]}"#
+        let host = try makeHost([[.send(activateOK)]], grants: grants, manifest: manifest)
+        await host.activate()
+        await host.sessionEvents([
+            PluginSessionEvent(event: .sessionState, session: "s1", worktree: "w", state: "idle"),
+            PluginSessionEvent(event: .sessionFinished, session: "s1", worktree: "w"),
+        ])
+        let sent = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("session/") }.map(\.text)
+        #expect(sent.count == deliveries)
+        #expect(sent.allSatisfy { $0.contains(#""method":"session/finished""#) && !$0.contains("state") })
     }
 }

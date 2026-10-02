@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import Alas
 
+/// A minimal manifest with `extra` spliced in after `entry`. File scope so `@Test(arguments:)` can call it.
+private func manifest(api: Int = 5, _ extra: String = "") -> String {
+    #"{"id":"io.x.h","name":"H","version":"1","api":\#(api),"entry":"p.js"\#(extra)}"#
+}
+
+private func commands(_ list: String) -> String { #","contributes":{"commands":[\#(list)]}"# }
+
 struct PluginManifestTests {
     @Test func parsesAValidManifestIgnoringUnknownFields() throws {
         let json = #"{"id":"io.nlopez.hello","name":"Hello","version":"0.1.0","api":4,"entry":"plugin.js","capabilities":["workspace.read"],"future":{"x":1}}"#
@@ -17,7 +24,17 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (#"{"id":"io.x.h","name":"H","version":"1","api":5,"entry":"p.js"}"#, .unsupportedAPI(5)),
+        (manifest(api: 6), .unsupportedAPI(6)),
+        (manifest(api: 4, commands(#"{"id":"a","title":"A","slots":["palette"]}"#)), .needsNewerAPI(#""contributes.commands""#)),
+        (manifest(api: 4, #","capabilities":["notify"]"#), .needsNewerAPI(#"capability "notify""#)),
+        (manifest(api: 4, #","capabilities":["session.read"],"events":["session.finished"]"#), .needsNewerAPI(#""events""#)),
+        (manifest(#","capabilities":["session.read"],"events":["git.changed"]"#), .unknownEvent("git.changed")),
+        (manifest(#","events":["session.state"]"#), .eventNeedsCapability("session.state")),
+        (manifest(commands(#"{"id":"A!","title":"A","slots":["palette"]}"#)), .invalidCommand(#"invalid command id "A!""#)),
+        (manifest(commands(#"{"id":"a","title":"A","slots":["palette"]},{"id":"a","title":"B","slots":["palette"]}"#)), .invalidCommand(#"duplicate command id "a""#)),
+        (manifest(commands(#"{"id":"a","title":"","slots":["palette"]}"#)), .invalidCommand(#"command "a" needs a title of 1 to 40 characters"#)),
+        (manifest(commands(#"{"id":"a","title":"A","slots":[]}"#)), .invalidCommand(#"command "a" needs at least one slot"#)),
+        (manifest(commands((0...16).map { #"{"id":"c\#($0)","title":"C","slots":["palette"]}"# }.joined(separator: ","))), .invalidCommand("at most 16 commands")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"A","kind":"table"}]}}"#, .invalidTab("tab \"a\" has unknown kind \"table\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"A"},{"id":"a","title":"B"}]}}"#, .invalidTab("duplicate tab id \"a\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":" "}]}}"#, .invalidTab("tab \"a\" needs a title of 1 to 40 characters")),
@@ -39,9 +56,17 @@ struct PluginManifestTests {
         #expect(manifest.capabilities == [.tasksStart])
     }
 
+    /// Unknown slots are skipped rather than refused, because slots keep growing.
+    @Test func commandsKeepKnownSlotsAndEventsNeedTheirCapability() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(
+            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar"]}]}"#).utf8))
+        #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: [.worktreeMenu])])
+        #expect(parsed.events == [.sessionFinished])
+    }
+
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 4"),
-        (5, "requires plugin API 5; this Alas supports 4"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 5"),
+        (6, "requires plugin API 6; this Alas supports up to 5"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

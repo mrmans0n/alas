@@ -179,7 +179,7 @@ struct RepoSelectorDialog: View {
         let env = environment()
         let result = appState.repoSelector.activate(rows: rows, environment: env)
         switch result {
-        case .focused, .openedNewWorktree, .openedNewProject:
+        case .focused, .openedNewWorktree, .openedNewProject, .ranPluginCommand:
             appState.isRepoSelectorOpen = false
         case .noop:
             break

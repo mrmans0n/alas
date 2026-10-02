@@ -58,6 +58,8 @@ struct RepoGroupView: View {
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
     var commitQuery: (Worktree) -> WorktreeRowView.CommitQuery? = { _ in nil }
+    var pluginCommands: (PluginCommandSlot) -> [PluginCommandItem] = { _ in [] }
+    var onRunPluginCommand: (PluginCommandItem, PluginCommandSlot, Worktree?) -> Void = { _, _, _ in }
     /// Set while the sidebar filter is active and `worktrees` holds only the
     /// matches. Rows then follow the matches rather than `collapsed`, which is
     /// left untouched so clearing the filter restores the tree exactly.
@@ -145,6 +147,11 @@ struct RepoGroupView: View {
                         .disabled(isMember && !canRemoveFromSpace(space.id))
                     }
                 }
+                let commands = pluginCommands(.repoMenu)
+                if !commands.isEmpty {
+                    Divider()
+                    PluginCommandButtons(items: commands) { onRunPluginCommand($0, .repoMenu, nil) }
+                }
                 Divider()
                 Button("Remove Project…", role: .destructive, action: onRemoveProject)
             }
@@ -187,6 +194,8 @@ struct RepoGroupView: View {
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
                             workspaceCheckout: workspaceCheckout(wt),
                             commitQuery: commitQuery(wt),
+                            pluginCommands: pluginCommands(.worktreeMenu),
+                            onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
                             isHighlighted: wt.id == highlightedWorktreeId
                         )
                         // Scroll target for the sidebar filter's highlight.

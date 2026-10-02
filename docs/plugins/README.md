@@ -8,7 +8,11 @@ JSON messages with Alas, and Alas answers only the requests the user approved.
 > **Settings → Advanced → Experimental → Plugins**; the Advanced section appears
 > as **Debug** in the settings sidebar and shows only when `~/.alas/.debug`
 > exists. **Settings → Plugins** then lists installed plugins, where you approve,
-> enable, revoke and restart them and read their logs. Canvas tabs open from
+> enable, revoke and restart them and read their logs. Its **Available** section
+> lists the plugins published in
+> [alas-plugins](https://github.com/mrmans0n/alas-plugins) and installs, updates
+> and removes them; a download is checked against the catalog's hash and still
+> needs your approval before it runs. Canvas tabs open from
 > **View → Plugins**. The API may still change: API 4 replaced the WebAssembly
 > runtime of API 1 to 3 with JavaScript, and older plugins no longer load (see
 > [Migrating](api-v4.md#6-migrating-from-api-1-to-3)). Progress is tracked in
@@ -54,6 +58,7 @@ files. These are planned; see the roadmap in
 | Run the sample plugin and see it work | [Getting started](getting-started.md) |
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
 | Look up the runtime, limits, and every method | [API v4 reference](api-v4.md) |
+| Add commands, notifications and session events | [API v5](api-v5.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
