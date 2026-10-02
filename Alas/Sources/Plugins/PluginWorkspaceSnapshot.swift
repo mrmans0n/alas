@@ -140,6 +140,9 @@ struct PluginEventState: Equatable, Sendable {
     var workspace: PluginWorkspaceSnapshot
     var runs: [PluginRunState] = []
     var reviews: [PluginReviewState] = []
+    /// Every run id seen so far, so a run that comes back (a failed launch rolling the record back to it) is not
+    /// reported again. ponytail: grows by one id per run for the life of the host.
+    var seenRuns: Set<String> = []
 
     /// What changed since `old`. Polls are half a second apart, so that is how often a worktree's `git.changed`
     /// can fire; a dirty count that is first learned (the scan finishing) is not a change.
@@ -153,6 +156,10 @@ struct PluginEventState: Equatable, Sendable {
         for worktree in workspace.worktrees {
             guard let previous = before[worktree.id] else {
                 events.append(PluginEventMessage(event: .worktreeCreated, params: PluginEventParams(worktree: worktree.id)))
+                // Created and selected between two polls: the move to it is still a focus change.
+                if worktree.current {
+                    events.append(PluginEventMessage(event: .focusChanged, params: PluginEventParams(worktree: worktree.id)))
+                }
                 continue
             }
             if previous.dirty != nil, worktree.dirty != nil, previous.dirty != worktree.dirty {
@@ -163,8 +170,16 @@ struct PluginEventState: Equatable, Sendable {
             }
         }
         let runsBefore = Dictionary(old.runs.map { ($0.run, $0) }, uniquingKeysWith: { first, _ in first })
+        // A run still going at the last poll that a restart replaced before this one: its end was never seen.
+        let runsNow = Set(runs.map(\.run))
+        for run in old.runs where run.outcome == nil && !runsNow.contains(run.run) {
+            var finished = PluginEventParams(worktree: run.worktree, script: run.script, run: run.run)
+            finished.outcome = "unknown"
+            events.append(PluginEventMessage(event: .runFinished, params: finished))
+        }
         for run in runs {
             let previous = runsBefore[run.run]
+            if previous == nil, old.seenRuns.contains(run.run) { continue }
             let params = PluginEventParams(worktree: run.worktree, script: run.script, run: run.run)
             if previous == nil { events.append(PluginEventMessage(event: .runStarted, params: params)) }
             // A run that started and finished between two polls gets both.

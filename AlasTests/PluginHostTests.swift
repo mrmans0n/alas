@@ -118,7 +118,7 @@ struct PluginHostTests {
                 notify: { title, body in recorder.notes.append("\(title)|\(body)") },
                 sendToSession: { session, text in
                     recorder.sent.append("\(session)|\(text)")
-                    return session == "s1"
+                    return session == "s1" ? nil : "the session did not accept the prompt"
                 },
                 startRun: { worktree, script in
                     recorder.runsStarted.append("\(worktree)|\(script)")

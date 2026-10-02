@@ -58,7 +58,8 @@ struct PluginHostActions {
     /// The pull request state of the project's worktrees whose review loop has loaded.
     var reviews: () -> [PluginReviewState] = { [] }
     /// Queues `text` as a prompt for a live agent session of this project; false when there is none with that id.
-    var sendToSession: (_ session: String, _ text: String) -> Bool = { _, _ in false }
+    /// Returns nil once the session accepted the prompt, or why it did not.
+    var sendToSession: (_ session: String, _ text: String) async -> String? = { _, _ in "unknown session" }
     /// Starts a run script, by its key, in a worktree of this project. Returns why not, or nil.
     var startRun: @MainActor (_ worktree: String, _ script: String) async -> String? = { _, _ in "runs are not available" }
     /// The output of a run of this project.
@@ -610,10 +611,14 @@ final class PluginHost {
             else {
                 return errorReply(id, code: -32602, "invalid params for \(method): text must be 1 byte to 32 KiB")
             }
-            guard actions.sendToSession(params.session, params.text) else {
-                return errorReply(id, code: -32003, "unknown session \(params.session)")
+            let actions = self.actions
+            return replyLater(id) { [weak self] in
+                guard let self else { return Data() }
+                if let failure = await actions.sendToSession(params.session, params.text) {
+                    return self.errorReply(id, code: -32003, failure)
+                }
+                return self.encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
             }
-            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         case "run/start":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRunStartParams>.self, from: data).params,
                   !params.script.isEmpty, params.script.utf8.count <= 1024

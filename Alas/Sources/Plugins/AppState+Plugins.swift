@@ -116,11 +116,19 @@ extension AppState {
                 // Only live agent sessions of this project's worktrees; terminal sessions take no prompts.
                 guard let self, let worktree = (self.projectsManager.worktreesByProject[project.id] ?? []).first(where: {
                     self.acpManager(forWorktreeId: $0.id)?.liveSession(for: id) != nil
-                }) else { return false }
-                Task { @MainActor in
-                    await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { _ in })
+                }) else { return "unknown session \(id)" }
+                // Answered once the session accepted or refused the prompt (no writer lease, signed out, …).
+                let accepted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    var resumed = false
+                    Task { @MainActor in
+                        await self.sendPrompt(for: id, worktreeID: worktree.id, text: text, attachments: [], onResult: { ok in
+                            guard !resumed else { return }
+                            resumed = true
+                            continuation.resume(returning: ok)
+                        })
+                    }
                 }
-                return true
+                return accepted ? nil : "the session did not accept the prompt"
             },
             startRun: { [weak self] worktreeID, key in
                 guard let self else { return "Alas is shutting down" }
@@ -151,8 +159,9 @@ extension AppState {
             })
     }
 
-    /// Starts a run script for a plugin the way the Run tab's start button does. Refuses one that is already running
-    /// rather than focusing its terminal, which would move the user's selection.
+    /// Starts a run script for a plugin the way the Run tab's start button does: a finished run, or one whose
+    /// terminal is still open after it ended, is restarted. Refuses one that is actively running rather than
+    /// focusing its terminal, which would move the user's selection.
     private func startPluginRun(worktreeID: String, scriptKey: String, projectID: String) async -> String? {
         guard let worktree = projectsManager.worktreesByProject[projectID]?.first(where: { $0.id == worktreeID }) else {
             return "unknown worktree \(worktreeID)"
@@ -163,12 +172,22 @@ extension AppState {
             return message
         case .scripts(let scripts):
             guard let script = scripts.first(where: { $0.key == scriptKey }) else { return "unknown run script \(scriptKey)" }
-            if runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true
-                || runningScriptTab(for: script, in: worktree) != nil {
-                return "\(script.key) is already running"
+            let record = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+            if record?.status.isActive == true { return "\(script.key) is already running" }
+            // A refusal goes back to the plugin rather than into an alert in front of the user.
+            let result: RunScriptLaunchStart
+            if case .finished? = record?.status {
+                result = restartScript(script, in: worktree, presentsLaunchFailure: false)
+            } else if scriptTab(for: script, in: worktree) != nil {
+                result = restartScript(script, in: worktree, presentsLaunchFailure: false)
+            } else {
+                result = launchScript(script, in: worktree, presentsLaunchFailure: false)
             }
-            runOrFocusScript(script, in: worktree)
-            return nil
+            switch result {
+            case .started, .alreadyStarting: return nil
+            case .projectUnavailable: return "the project is unavailable"
+            case let .refused(title, message): return "\(title): \(message)"
+            }
         }
     }
 
@@ -176,11 +195,13 @@ extension AppState {
     private func pluginRunOutput(_ runID: String, projectID: String) async -> PluginRunOutput {
         let worktreeIDs = Set((projectsManager.worktreesByProject[projectID] ?? []).map(\.id))
         for worktreeID in worktreeIDs {
-            guard let record = runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID }) else { continue }
-            if record.status.isActive { return .notFinished }
-            // A run that just finished may still be on its way to the history store.
-            await flushRunHistoryPersistence(worktreeID: worktreeID)
+            if runRecords.records(worktreeID: worktreeID).first(where: { $0.id == runID })?.status.isActive == true {
+                return .notFinished
+            }
         }
+        // A run that just finished may still be on its way to the history store, even one a newer run of the same
+        // script has since replaced in the records.
+        for worktreeID in worktreeIDs { await flushRunHistoryPersistence(worktreeID: worktreeID) }
         let entry: RunHistoryEntry?
         if let transient = worktreeIDs.lazy.compactMap({ self.transientRunReport(worktreeID: $0, runID: runID) }).first {
             entry = transient
