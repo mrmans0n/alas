@@ -1315,7 +1315,15 @@ private struct ACPSideQuestionSlot: View {
                     Task { await manager.dismissSideQuestion(parentID: parentID) }
                 },
                 onInsert: onInsert,
-                onKeep: onKeep
+                onKeep: onKeep,
+                onRetryQueued: { itemID in
+                    guard let side else { return }
+                    Task { await manager.queueRetry(for: side.id, itemId: itemID) }
+                },
+                onRemoveQueued: { itemID in
+                    guard let side else { return }
+                    Task { await manager.queueRemove(for: side.id, itemId: itemID) }
+                }
             )
             .id(entry.id)
             .transition(.move(edge: .bottom).combined(with: .opacity))

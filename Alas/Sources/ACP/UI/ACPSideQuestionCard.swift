@@ -21,6 +21,9 @@ struct ACPSideQuestionCard: View {
     let onDismiss: () -> Void
     let onInsert: (String) -> Void
     let onKeep: () -> Void
+    /// Retries or drops a follow-up whose send failed in the side queue.
+    let onRetryQueued: (UUID) -> Void
+    let onRemoveQueued: (UUID) -> Void
 
     var body: some View {
         if let side {
@@ -33,7 +36,9 @@ struct ACPSideQuestionCard: View {
                 onAsk: onAsk,
                 onDismiss: onDismiss,
                 onInsert: onInsert,
-                onKeep: onKeep
+                onKeep: onKeep,
+                onRetryQueued: onRetryQueued,
+                onRemoveQueued: onRemoveQueued
             )
         } else {
             ACPSideQuestionCardChrome(
@@ -69,6 +74,8 @@ struct ACPSideQuestionCard: View {
         let onDismiss: () -> Void
         let onInsert: (String) -> Void
         let onKeep: () -> Void
+        let onRetryQueued: (UUID) -> Void
+        let onRemoveQueued: (UUID) -> Void
 
         @Environment(\.theme) private var theme
 
@@ -137,6 +144,10 @@ struct ACPSideQuestionCard: View {
                     ForEach(Array(side.readOnlyBlockedTools.enumerated()), id: \.offset) { _, title in
                         blockedNotice(title)
                     }
+                    // A failed queued follow-up blocks the ones behind it.
+                    ForEach(side.queue.filter { $0.lastError != nil }) { item in
+                        failedFollowUp(item)
+                    }
                     if transcript.pendingPermission != nil, let policy {
                         ACPPermissionPrompt(
                             session: side,
@@ -173,6 +184,19 @@ struct ACPSideQuestionCard: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(2)
+        }
+
+        private func failedFollowUp(_ item: QueuedPrompt) -> some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Couldn't send “\(ACPQueueItemRow.textPreview(of: item.blocks))”: \(item.lastError ?? "")")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color("del"))
+                    .lineLimit(3)
+                HStack(spacing: 6) {
+                    Button("Retry") { onRetryQueued(item.id) }.controlSize(.small)
+                    Button("Remove") { onRemoveQueued(item.id) }.controlSize(.small)
+                }
+            }
         }
 
         private func blockedNotice(_ title: String) -> some View {
