@@ -159,7 +159,6 @@ struct WebSocketReassembler {
         return reset(.message(message))
     }
 
-
     private mutating func reset(_ outcome: Outcome) -> Outcome {
         fragmentOpcode = nil
         inflater = nil
@@ -184,7 +183,8 @@ enum WebSocketDeflate {
                 let pair = parameter.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                 let name = pair[0]
-                guard seen.insert(name).inserted else { valid = false; break }
+                guard seen.insert(name).inserted else { valid = false
+                break }
                 var value = pair.count == 2 ? pair[1] : nil
                 if let quoted = value, quoted.hasPrefix("\""), quoted.hasSuffix("\""), quoted.count >= 2 {
                     value = String(quoted.dropFirst().dropLast())
