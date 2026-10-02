@@ -96,6 +96,8 @@ final class PluginSettings {
         guard declaration(key)?.kind == .secret else { return false }
         let value = value?.isEmpty == false ? value : nil
         guard secrets.setSecret(value.map { Data($0.utf8) }, for: account(key)) else { return false }
+        // A store can report success on a failed delete, so a clear counts only once the secret is gone.
+        if value == nil, secret(key) != nil { return false }
         changed()
         return true
     }
