@@ -474,7 +474,9 @@ jobs:
         run: du -sk .build/xcode/CompilationCache.noindex
 
       - name: Save compilation cache
-        if: success() && steps.compilation-cache.outputs.cache-hit != 'true'
+        # PRs restore main's cache but do not duplicate multi-GB CAS archives
+        # in merge-ref scopes, where releases cannot reuse them.
+        if: success() && github.ref == 'refs/heads/main' && steps.compilation-cache.outputs.cache-hit != 'true'
         timeout-minutes: 5
         uses: actions/cache/save@v6
         with:

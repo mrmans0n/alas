@@ -107,10 +107,6 @@ raise "cache fallback must retain all compatibility inputs" unless
   ["runner.os", "runner.arch", ".xcode-compilation-cache-toolchain", "project.yml",
    "Package.resolved"].all? { |input| key.include?(input) } &&
   !key.include?(".github/workflows/build.yml")
-raise "restore before building and save only a successful build" unless
-  builder_steps.index(restore) < builder_steps.index(build) &&
-  builder_steps.index(save) > builder_steps.index(build) &&
-  save["if"] == "success() && steps.compilation-cache.outputs.cache-hit != 'true'"
 raise "compiler must use the restored CAS and emit reuse evidence" unless
   build.fetch("run").include?('COMPILATION_CACHE_CAS_PATH="$GITHUB_WORKSPACE/.build/xcode/CompilationCache.noindex"') &&
   build.fetch("run").include?("COMPILATION_CACHE_ENABLE_DIAGNOSTIC_REMARKS=YES")

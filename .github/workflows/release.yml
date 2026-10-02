@@ -33,6 +33,10 @@ jobs:
       SSH_ASKPASS: "/usr/bin/true"
       DISPLAY: ":0"
       GIT_PAGER: "cat"
+      ALAS_GHOSTTY_TARGET_ARCH: ${{ matrix.arch }}
+      ALAS_ZMX_TARGET_ARCH: ${{ matrix.arch }}
+      ALAS_FFF_TARGET_ARCH: ${{ matrix.arch }}
+      ALAS_TS_PACK_TARGET_ARCH: ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -121,8 +125,6 @@ jobs:
         run: rm -rf ~/Library/Caches/org.swift.swiftpm
 
       - name: Build Ghostty xcframework (${{ matrix.arch }})
-        env:
-          ALAS_GHOSTTY_TARGET_ARCH: ${{ matrix.arch }}
         run: ./scripts/build-ghostty.sh
 
       - name: Compute prebuilt tools cache key inputs
@@ -184,14 +186,9 @@ jobs:
         # where a cold run buries ~11 min of zig/cargo work inside the build
         # step and a later failure throws it away. Run them as their own
         # step so the artifacts can be cached the moment they exist; the
-        # in-xcodebuild phases then fast-path in seconds. The arch overrides
-        # mirror ALAS_GHOSTTY_TARGET_ARCH above so the x86_64 leg populates
-        # the same per-arch paths the in-build phases will look up via
-        # CURRENT_ARCH.
-        env:
-          ALAS_ZMX_TARGET_ARCH: ${{ matrix.arch }}
-          ALAS_FFF_TARGET_ARCH: ${{ matrix.arch }}
-          ALAS_TS_PACK_TARGET_ARCH: ${{ matrix.arch }}
+        # in-xcodebuild phases then fast-path in seconds. Job-level arch
+        # overrides keep prebuilds, Xcode phases, and embedding on the same
+        # matrix slice.
         run: |
           ./scripts/build-zmx.sh
           ./scripts/build-fff.sh
@@ -214,11 +211,32 @@ jobs:
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=${{ matrix.arch }}' \
             -skipMacroValidation -skipPackagePluginValidation \
+            ARCHS=${{ matrix.arch }} \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             -showBuildTimingSummary \
             build
+
+      - name: Verify release architecture (${{ matrix.arch }})
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          app=build/Build/Products/Release/Alas.app
+          verify_arch() {
+            actual="$(lipo -archs "$1")"
+            if [ "$actual" != "$EXPECTED_ARCH" ]; then
+              echo "::error::$1 has architectures '$actual'; expected '$EXPECTED_ARCH'"
+              return 1
+            fi
+          }
+          verify_arch "$app/Contents/MacOS/Alas"
+          verify_arch "$app/Contents/Resources/zmx/zmx"
+          verify_arch "$app/Contents/Frameworks/libfff_c.dylib"
+          while IFS= read -r -d '' library; do
+            verify_arch "$library"
+          done < <(find "$app/Contents/Frameworks" -type f -name '*.dylib' -print0)
 
       - name: Sign + notarize + staple .app (${{ matrix.arch }})
         env:
