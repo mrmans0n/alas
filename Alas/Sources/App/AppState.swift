@@ -3025,23 +3025,28 @@ final class AppState {
                 await self.refreshMainWorktreeUpstreamStatuses(projectId: worktree.projectId)
                 return
             }
+            // Name the repo so notifications from multiple projects stay
+            // distinguishable; falls back to the directory name if the
+            // project row disappeared mid-pull.
+            let repoName = self.projectsManager.projects.first(where: { $0.id == worktree.projectId })?.name
+                ?? worktree.path.lastPathComponent
             if let bannerWorktreeID = self.inAppBannerWorktreeID {
                 switch result {
                 case .clean:
                     self.inAppNotifications.post(
-                        "Pulled \(worktree.branch)",
+                        "Pulled \(worktree.branch) from \(repoName)",
                         severity: .success,
                         worktreeID: bannerWorktreeID
                     )
                 case .conflict:
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) hit conflicts",
+                        "Pull of \(worktree.branch) in \(repoName) hit conflicts",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
                 case .error(let message):
                     self.inAppNotifications.post(
-                        "Pull of \(worktree.branch) failed: \(message)",
+                        "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         severity: .error,
                         worktreeID: bannerWorktreeID
                     )
@@ -3050,19 +3055,19 @@ final class AppState {
                 switch result {
                 case .clean:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pulled \(worktree.branch)",
+                        body: "Pulled \(worktree.branch) from \(repoName)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .conflict:
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) hit conflicts — click to resolve.",
+                        body: "Pull of \(worktree.branch) in \(repoName) hit conflicts — click to resolve.",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
                 case .error(let message):
                     self.harness.notifications.notifyWorktreePull(
-                        body: "Pull of \(worktree.branch) failed: \(message)",
+                        body: "Pull of \(worktree.branch) in \(repoName) failed: \(message)",
                         projectId: worktree.projectId,
                         worktreeId: worktree.id
                     )
