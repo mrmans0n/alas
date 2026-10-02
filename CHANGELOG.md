@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Performance
+
+- Compress remote WebSocket traffic with negotiated permessage-deflate for compatible native peers and browsers. Each message uses a fresh compression dictionary, and incoming messages still have a 16 MB decoded-size limit. Clients without compression support keep the existing transport.
+
 ### 🐛 Fixes
 
 - Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
