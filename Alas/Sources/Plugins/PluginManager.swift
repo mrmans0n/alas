@@ -168,10 +168,12 @@ final class PluginManager {
     /// Deletes a plugin the catalog installed. Its approval and stored data stay, so reinstalling keeps them.
     func uninstall(_ plugin: Plugin) async {
         await serialized {
-            // Checked on disk now, not against the row: files changed since the last scan are not the catalog's.
-            guard let current = self.catalogInstall(id: plugin.id), current.hash == plugin.hash else { return }
             await self.stopHosts { $0.pluginID == plugin.id }
-            try? FileManager.default.removeItem(at: current.folder)
+            // Checked on disk after the last suspension, right before deleting: files changed since the scan the
+            // row came from, or while the hosts stopped, are not the catalog's.
+            if let current = self.catalogInstall(id: plugin.id), current.hash == plugin.hash {
+                try? FileManager.default.removeItem(at: current.folder)
+            }
             await self.performReload()
         }
     }
@@ -232,13 +234,16 @@ final class PluginManager {
             throw PluginCatalogError.invalidDownload(staged.invalid.first?.reason ?? "it did not load")
         }
         let target = directory.appending(path: id)
-        // Something already at `Plugins/<id>` is replaced only if it is the catalog's own install: a real folder
-        // holding a published version of this plugin. A symlink, a local build or a broken folder stays.
-        if FileManager.default.fileExists(atPath: target.path) || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
-            guard let current = catalogInstall(id: id), entry.versions.contains(where: { $0.hash == current.hash })
-            else { throw PluginCatalogError.installedLocally }
-        }
         await stopHosts { $0.pluginID == id }
+        // Checked after the last suspension, right before replacing: something at `Plugins/<id>` is replaced only
+        // if it is the catalog's own install, a real folder holding a published version. A symlink, a local build
+        // or a broken folder stays, and the reload restarts what was stopped.
+        if FileManager.default.fileExists(atPath: target.path) || (try? target.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            guard let current = catalogInstall(id: id), entry.versions.contains(where: { $0.hash == current.hash }) else {
+                await performReload()
+                throw PluginCatalogError.installedLocally
+            }
+        }
         do {
             if fileManager.fileExists(atPath: target.path) {
                 _ = try fileManager.replaceItemAt(target, withItemAt: staging)
