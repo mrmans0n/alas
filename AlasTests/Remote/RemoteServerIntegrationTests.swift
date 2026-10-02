@@ -113,7 +113,8 @@ struct RemoteServerIntegrationTests {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()
         let s = mgr.createSession(agentId: "claude")
-        s.transcript.messages = [.agent(id: UUID(), StreamingText("hello-remote"))]
+        let transcriptText = String(repeating: "hello-remote: the agent is reading the workspace and reporting its changes.\n", count: 2_000)
+        s.transcript.messages = [.agent(id: UUID(), StreamingText(transcriptText))]
         provider.sessions[s.id] = s
         provider.summaries = [RemoteSessionSummary(id: s.id, title: "T", agentId: "claude", status: "idle", canDrive: false)]
 
@@ -158,7 +159,7 @@ struct RemoteServerIntegrationTests {
             server.stop()
             return
         }
-        #expect(msgs.contains { $0.text == "hello-remote" })
+        #expect(msgs.contains { $0.text == transcriptText })
 
         task.cancel(with: .goingAway, reason: nil)
         server.stop()
