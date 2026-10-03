@@ -263,7 +263,8 @@ extension AppState {
                   let context = attentionContext(for: worktree) else {
                 return [
                     .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission"))
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission")),
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):limited"))
                 ]
             }
             return AttentionProducer.harness(
@@ -278,7 +279,8 @@ extension AppState {
             .flatMap { sessionID in
                 [
                     .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission"))
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission")),
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):limited"))
                 ]
             }
         for entry in attentionWorktrees {
@@ -736,7 +738,7 @@ extension AppState {
         // Forget can arrive after the tab or session owner has already been removed.
         guard let state = transition.state else {
             cancelPendingHarnessAttention(for: transition.sessionID)
-            for suffix in ["awaiting", "permission"] {
+            for suffix in ["awaiting", "permission", "limited"] {
                 observeAttention(.inactive(sourceKey: .init(rawValue: "session:\(transition.sessionID):\(suffix)")), at: transition.occurredAt)
             }
             return

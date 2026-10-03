@@ -1527,6 +1527,20 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 
+    @Test func forgettingALimitedSessionClearsItsLimitedAttention() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        let key = AttentionSourceKey(rawValue: "session:session:limited")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .limited, requiresUserInput: true)
+        #expect(state.attentionStore.document.observations[key]?.isActive == true)
+        state.harness.forgetSession("session")
+
+        #expect(state.attentionStore.document.observations[key]?.isActive == false)
+    }
+
     @Test func acknowledgeDuringSettleWindowKeepsLandedEventAcknowledged() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
