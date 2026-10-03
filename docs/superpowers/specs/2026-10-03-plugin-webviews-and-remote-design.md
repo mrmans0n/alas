@@ -141,9 +141,12 @@ Same messages, limits and error codes as API 6. Differences:
   not exclude `.git`. A plugin could read `.git` or reach another subscribed
   worktree through them. R2 adds helper operations that take the worktree
   root with the path and enforce containment and the case-folded `.git`
-  exclusion in the same call, walking components with `O_NOFOLLOW` so a
-  swapped symlink can't escape. A separate `RemotePathContainment` probe
-  before the call would bring the race back.
+  exclusion in the same call, walking components from a directory descriptor
+  with `O_NOFOLLOW` so a swapped symlink can't escape. A symlink met on the way
+  is resolved by the helper against the descriptors it holds and followed only
+  if it stays inside the worktree, so API 6's contained symlinks keep working
+  remotely. A separate `RemotePathContainment` probe before the call would
+  bring the race back.
 - Remote `file/*` requires the helper, like remote `process.*`. A shell
   script can put the check and the operation in one command but not make them
   atomic: another process can swap a component for a symlink in between, as
@@ -354,7 +357,9 @@ nothing if the page can talk to any host:
   `default-src 'none'; script-src alas-plugin://<id>/ui.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'`.
   No `unsafe-inline` or `unsafe-eval` for scripts, so injected `<script>` tags
   and `onerror=` handlers don't run (threat 2).
-- A `WKContentRuleList` that blocks every load outside `alas-plugin:`.
+- A `WKContentRuleList` that blocks every network load: anything outside
+  `alas-plugin:`, except the `data:` images and fonts and `blob:` images the
+  CSP allows.
 - `decidePolicyFor navigationAction` cancels everything except the shell,
   external links included: `WKNavigationAction` has no trustworthy
   user-activation flag, and page script can activate an anchor to leak data
@@ -477,8 +482,17 @@ Per the testing policy, pin the decisions:
 - Host-side containment: `..`, absolute paths, symlink escape, and `.git`
   aliases, by extending `ACPRemoteFileServerTests`, which already exercises
   `RemotePathContainment`, rather than adding a suite.
+- Host-side containment keeps a symlink that resolves inside the worktree
+  working (API 6's `inner/c.txt` through `inner -> a`), next to the escape
+  cases.
 - Argv quoting for remote processes (`SSHCommand`), including `appendArgs`
   with spaces and quotes.
+- Helper lifecycle, in the helper's own Rust tests: a backgrounded child is
+  stopped when the root exits; a `setsid` descendant is stopped by identity;
+  the group is not signalled once no member matches; a lapsed lease and the
+  one-shot deadline stop the run; a signal exit reports 128 + n; replay after
+  log truncation resumes at the retained base, in the original stdout/stderr
+  order.
 - Webviews: the scheme handler serves exactly the shell and `ui.js`; the
   navigation policy decision; the CSP header string; bridge size and queue
   caps; the trust hash including `web`. No WKWebView rendering tests.
