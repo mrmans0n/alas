@@ -83,8 +83,13 @@ struct ACPSessionRunnerQueueTests {
     @Test("a queued prompt stopped by a usage limit is delivered and a resume is scheduled at the reset")
     func usageLimitSchedulesResumeAtReset() async throws {
         let (runner, mock, session, _) = try mkRunner()
+        // The parser reads local time and ignores resets more than 8 days out.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d, yyyy h:mm a"
+        let reset = formatter.string(from: Date().addingTimeInterval(2 * 3600))
         mock.script(method: "session/prompt") { _ in
-            throw Self.codexLimitError("You've hit your usage limit. Try again at Sep 21st, 2099 4:35 PM.")
+            throw Self.codexLimitError("You've hit your usage limit. Try again at \(reset).")
         }
         session.enqueue(blocks: [.text("first")])
         session.enqueue(blocks: [.text("second")])

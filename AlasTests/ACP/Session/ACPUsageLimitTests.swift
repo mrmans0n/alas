@@ -30,9 +30,15 @@ struct ACPUsageLimitTests {
         // Claude, time only, later today in the named zone.
         .init(text: "You've hit your limit · resets 3pm (Europe/Madrid)",
               now: date(2026, 10, 3, 10, 0), expected: date(2026, 10, 3, 15, 0)),
-        // Claude, time only, already past today: next day.
+        // Claude, time only, an hour or more past today: next day.
         .init(text: "You've hit your limit · resets 3pm (Europe/Madrid)",
               now: date(2026, 10, 3, 16, 0), expected: date(2026, 10, 4, 15, 0)),
+        // Claude, time only, just past: kept in the past (the reset was wrong).
+        .init(text: "You've hit your limit · resets 3pm (Europe/Madrid)",
+              now: date(2026, 10, 3, 15, 2), expected: date(2026, 10, 3, 15, 0)),
+        // Claude, month/day just past: kept, not rolled to next year.
+        .init(text: "You've hit your weekly limit · resets Oct 4, 3:30pm (Europe/Madrid)",
+              now: date(2026, 10, 4, 15, 31), expected: date(2026, 10, 4, 15, 30)),
         // Claude, month/day with minutes, other zone.
         .init(text: "You've hit your weekly limit · resets Oct 4, 3:30pm (America/New_York)",
               now: date(2026, 10, 3, 10, 0), expected: date(2026, 10, 4, 15, 30, tz: "America/New_York")),
@@ -56,6 +62,7 @@ struct ACPUsageLimitTests {
         let rateLimit: ACPClaudeRateLimit?
         /// nil = not a usage limit.
         let expected: (resetsAt: Date?, source: ACPUsageLimit.ResetSource, resettable: Bool)?
+        var now: Date = ACPUsageLimitTests.now
         var testDescription: String { name }
     }
 
@@ -100,6 +107,18 @@ struct ACPUsageLimitTests {
               turnAgentText: "You've reached your weekly limit · resets Oct 4, 3:30pm (Europe/Madrid)",
               rateLimit: nil,
               expected: (date(2026, 10, 4, 15, 30), .parsed, true)),
+        .init(name: "claude reset that just passed is unknown",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit · resets 3pm (Europe/Madrid)", data: nil),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true), now: date(2026, 10, 3, 15, 2)),
+        .init(name: "claude month/day reset that just passed is unknown",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your weekly limit · resets Oct 4, 3:30pm (Europe/Madrid)", data: nil),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true), now: date(2026, 10, 4, 15, 31)),
+        .init(name: "parsed reset more than 8 days out is unknown",
+              error: codexError("You've hit your usage limit. Try again at Oct 12th, 2026 10:01 AM."),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true)),
         .init(name: "claude org block is not resettable",
               error: JSONRPCError(code: -32603, message: "Internal error: Your org is out of usage · contact your admin", data: nil),
               turnAgentText: nil, rateLimit: nil,
@@ -118,14 +137,14 @@ struct ACPUsageLimitTests {
     func detectsUsageLimit(_ c: DetectCase) {
         let limit = ACPUsageLimitDetector.detect(
             error: ACPClientError.jsonrpc(c.error), turnAgentText: c.turnAgentText,
-            claudeRateLimit: c.rateLimit, now: Self.now, calendar: Self.madrid
+            claudeRateLimit: c.rateLimit, now: c.now, calendar: Self.madrid
         )
         guard let expected = c.expected else {
             #expect(limit == nil)
             return
         }
         #expect(limit == ACPUsageLimit(
-            detectedAt: Self.now, resetsAt: expected.resetsAt, resetSource: expected.source,
+            detectedAt: c.now, resetsAt: expected.resetsAt, resetSource: expected.source,
             probeAttempt: 0, resettable: expected.resettable
         ))
     }

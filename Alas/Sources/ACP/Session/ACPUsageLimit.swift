@@ -56,7 +56,7 @@ struct ACPClaudeRateLimit: Codable, Equatable, Sendable {
 }
 
 /// Reads the reset time out of a provider's usage-limit message. Best effort:
-/// nil falls back to probing (`ACPUsageLimitResumePolicy`).
+/// nil, or a time already past, falls back to probing (`ACPUsageLimitResumePolicy`).
 ///
 /// Phrasings seen:
 /// - Codex: "…or try again at Sep 21st, 2026 4:35 PM." (local time)
@@ -97,15 +97,22 @@ enum ACPUsageLimitResetParser {
                 month: monthIndex + 1, day: day, hour: hour, minute: minute
             )
             guard var date = cal.date(from: components) else { return nil }
-            if explicitYear == nil, date <= now, let year = components.year {
+            if explicitYear == nil, now.timeIntervalSince(date) >= recentPastTolerance,
+               let year = components.year {
                 components.year = year + 1
                 date = cal.date(from: components) ?? date
             }
             return date
         }
         guard let today = cal.date(bySettingHour: hour, minute: minute, second: 0, of: now) else { return nil }
-        return today > now ? today : cal.date(byAdding: .day, value: 1, to: today)
+        return now.timeIntervalSince(today) < recentPastTolerance ? today : cal.date(byAdding: .day, value: 1, to: today)
     }
+
+    /// A reset that passed less than this long ago is returned as is, not
+    /// rolled to the next day or year: a limit still active just after its
+    /// stated reset means the reset was wrong, so the caller should probe
+    /// rather than wait a day (or a year).
+    static let recentPastTolerance: TimeInterval = 3600
 }
 
 /// Classifies a failed `session/prompt` as a provider usage limit. Uses only
@@ -133,6 +140,9 @@ enum ACPUsageLimitDetector {
     static let resettableClaudePrefixes: [String] = ["You've hit your", "You've reached your"]
     /// codex-acp puts `codexErrorInfo` in the JSON-RPC error `data`.
     static let codexUsageLimitInfo: Set<String> = ["usageLimitExceeded", "usage_limit_exceeded"]
+    /// The longest provider window is a week; a parsed reset further out is
+    /// a misread, so it is treated as unknown and probed.
+    static let maxParsedResetAhead: TimeInterval = 8 * 24 * 3600
 
     static func detect(
         error: Error,
@@ -168,7 +178,7 @@ enum ACPUsageLimitDetector {
             source = .structured
         } else if let parsed = candidates.lazy
             .compactMap({ ACPUsageLimitResetParser.resetDate(in: $0, now: now, calendar: calendar) })
-            .first, parsed > now {
+            .first, parsed > now, parsed.timeIntervalSince(now) <= maxParsedResetAhead {
             resetsAt = parsed
             source = .parsed
         }
