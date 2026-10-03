@@ -651,7 +651,7 @@ struct NextPromptCoordinatorTests {
         let (session, turn, environment) = readySession(manager.createSession(id: "s", agentId: "codex", autoRunDefault: false))
         await manager.flushPersistence()
         manager.markSessionVisible(id: session.id)
-        manager._ownedLeases.insert(session.id)
+        try #require(await manager.acquireWriterLease(sessionId: session.id))
         let generator = Generator()
         let coordinator = NextPromptCoordinator(engine: generator) { candidate in
             .live(session: session, turn: candidate, environment: environment)
@@ -669,7 +669,7 @@ struct NextPromptCoordinatorTests {
         await task?.value
         #expect(coordinator.offer != nil)
         switch event {
-        case "lease": manager._ownedLeases.remove(session.id)
+        case "lease": await manager.releaseWriterLease(sessionId: session.id)
         case "observed lease":
             _ = try store.seizeLease(sessionId: session.id, instanceId: "other", pid: Int64(getpid()),
                                      now: Int64(Date().timeIntervalSince1970))

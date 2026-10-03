@@ -165,13 +165,6 @@ final class ACPRemoteSessionCoordinator {
         let _: RemoteHelperProcKillResult = try await call("proc/kill", RemoteHelperProcKillParams(procId: lease.procId, leaseFence: expectedFence))
     }
 
-    func stopAndRelease(procId: String, expectedFence: RemoteSessionFence) async {
-        do {
-            let _: RemoteHelperProcKillResult = try await call("proc/kill", RemoteHelperProcKillParams(procId: procId, leaseFence: expectedFence))
-        } catch { return }
-        try? await release(fence: expectedFence)
-    }
-
     func delete(sessionId: String, expectedFence: RemoteSessionFence) async throws {
         guard let fence = fence(sessionId: sessionId), fence == expectedFence,
               hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }

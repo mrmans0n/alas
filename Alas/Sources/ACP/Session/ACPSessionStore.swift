@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 22
+    static let targetSchemaVersion = 23
     let path: String
     let db: SQLiteDatabase
 
@@ -49,6 +49,7 @@ final class ACPSessionStore {
         if current < 20 { try migrate_to_v20() }
         if current < 21 { try migrate_to_v21() }
         if current < 22 { try createReplicaSchema() }
+        if current < 23 { try migrate_to_v23() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -56,6 +57,16 @@ final class ACPSessionStore {
             try db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(Self.targetSchemaVersion)])
         }
         try db.exec("CREATE INDEX IF NOT EXISTS messages_session_kind_seq_idx ON messages(session_id, kind, seq)")
+    }
+
+    private func migrate_to_v23() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        if !columns.contains(where: { ($0["name"] as? String) == "recovery_proc_id" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN recovery_proc_id TEXT")
+        }
+        if !columns.contains(where: { ($0["name"] as? String) == "ephemeral_cleanup_pending" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN ephemeral_cleanup_pending INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     private func migrate_to_v1() throws {
@@ -363,6 +374,9 @@ struct ACPSessionRow: Equatable, Sendable {
     var remoteSessionId: String? = nil
     var origin: ACPSessionOrigin = .alasCreated
     var contextRecoveryPending: Bool = false
+    /// Local locator for an unbound context-recovery process. Cleared only
+    /// when native binding and the durable conversation identity agree.
+    var recoveryProcId: String? = nil
     var mcpPreamblePending: String? = nil
     var mcpPreambleSent: Bool = false
     var authStatus: ACPAuthStatus? = nil
@@ -382,6 +396,7 @@ struct ACPSessionRow: Equatable, Sendable {
     /// later upserts keep the stored value, and only
     /// `promoteEphemeralSession` clears it (see `migrate_to_v21`).
     var ephemeralParentId: String? = nil
+    var ephemeralCleanupPending: Bool = false
     var autoRun: Bool
     var helperProcStdoutOffset: Int64? = nil
     var helperProcStderrOffset: Int64? = nil
@@ -616,19 +631,21 @@ extension ACPSessionStore {
 
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
-        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
+        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
-                              ephemeral_parent_id, auto_run, helper_proc_stdout_offset,
+                              ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
-            remote_session_id = COALESCE(excluded.remote_session_id, sessions.remote_session_id),
+            remote_session_id = CASE WHEN sessions.recovery_proc_id IS NOT NULL
+                THEN sessions.remote_session_id ELSE COALESCE(excluded.remote_session_id, sessions.remote_session_id) END,
             origin = excluded.origin,
             context_recovery_pending = sessions.context_recovery_pending,
+            recovery_proc_id = sessions.recovery_proc_id,
             mcp_preamble_pending = sessions.mcp_preamble_pending,
             mcp_preamble_sent = sessions.mcp_preamble_sent,
             prompt_suggestions = COALESCE(excluded.prompt_suggestions, sessions.prompt_suggestions),
@@ -637,6 +654,7 @@ extension ACPSessionStore {
             config_option_values = excluded.config_option_values,
             native_subagents_disabled = COALESCE(sessions.native_subagents_disabled, excluded.native_subagents_disabled),
             ephemeral_parent_id = sessions.ephemeral_parent_id,
+            ephemeral_cleanup_pending = sessions.ephemeral_cleanup_pending,
             auto_run = excluded.auto_run,
             helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
@@ -653,12 +671,12 @@ extension ACPSessionStore {
             archived = excluded.archived
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
-            s.contextRecoveryPending ? 1 : 0,
+            s.contextRecoveryPending ? 1 : 0, s.recoveryProcId,
             s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
             s.promptSuggestions.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) },
             s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues),
             s.nativeSubagentsDisabled.map { $0 ? 1 : 0 },
-            s.ephemeralParentId,
+            s.ephemeralParentId, s.ephemeralCleanupPending ? 1 : 0,
             s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
@@ -839,7 +857,8 @@ extension ACPSessionStore {
                 let pid = row["orphan_pid"] as? Int64 ?? 0
                 guard heartbeatAt < staleCutoff || !ACPProcessLiveness.pidAlive(pid) else { return nil }
             } else {
-                guard ((row["updated_at"] as? Int64) ?? 0) < staleCutoff else { return nil }
+                guard ((row["ephemeral_cleanup_pending"] as? Int64) ?? 0) != 0
+                    || ((row["updated_at"] as? Int64) ?? 0) < staleCutoff else { return nil }
             }
             return Self.rowToSession(row)
         }
@@ -874,10 +893,17 @@ extension ACPSessionStore {
         }
     }
 
+    func markEphemeralCleanupPending(id: String) throws -> Bool {
+        try db.execChanges(
+            "UPDATE sessions SET ephemeral_cleanup_pending=1 WHERE id=? AND ephemeral_parent_id IS NOT NULL",
+            bindings: [id]
+        ) > 0
+    }
+
     /// Turns a hidden side-question session into a regular one.
     func promoteEphemeralSession(id: String) throws -> Bool {
         try db.execChanges(
-            "UPDATE sessions SET ephemeral_parent_id = NULL WHERE id = ? AND ephemeral_parent_id IS NOT NULL",
+            "UPDATE sessions SET ephemeral_parent_id = NULL, ephemeral_cleanup_pending=0 WHERE id = ? AND ephemeral_parent_id IS NOT NULL",
             bindings: [id]
         ) > 0
     }
@@ -1208,6 +1234,7 @@ extension ACPSessionStore {
             remoteSessionId: r["remote_session_id"] as? String,
             origin: ACPSessionOrigin(rawValue: r["origin"] as? String ?? "") ?? .alasCreated,
             contextRecoveryPending: ((r["context_recovery_pending"] as? Int64) ?? 0) != 0,
+            recoveryProcId: r["recovery_proc_id"] as? String,
             mcpPreamblePending: r["mcp_preamble_pending"] as? String,
             mcpPreambleSent: ((r["mcp_preamble_sent"] as? Int64) ?? 0) != 0,
             authStatus: (r["auth_status"] as? String).flatMap {
@@ -1221,6 +1248,7 @@ extension ACPSessionStore {
             promptSuggestions: (r["prompt_suggestions"] as? String)
                 .flatMap { try? JSONDecoder().decode([ACPPromptSuggestion].self, from: Data($0.utf8)) },
             ephemeralParentId: r["ephemeral_parent_id"] as? String,
+            ephemeralCleanupPending: ((r["ephemeral_cleanup_pending"] as? Int64) ?? 0) != 0,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
             helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,

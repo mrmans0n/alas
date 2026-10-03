@@ -266,6 +266,62 @@ struct ACPSessionPersistenceTests {
         }
     }
 
+    enum RecoveryMutation: CaseIterable, Sendable { case prepare, rotate, bind }
+
+    @Test("a replacement local writer fences every durable recovery transition", arguments: RecoveryMutation.allCases)
+    func recoveryMutationsRejectReplacedLease(mutation: RecoveryMutation) async throws {
+        let path = temporaryDatabaseURL().path
+        let persistence = ACPSessionPersistence(path: path)
+        var original = row(id: "session")
+        original.remoteSessionId = "original"
+        try await persistence.upsertSession(original)
+        let lease = try await persistence.seizeLease(sessionId: original.id, instanceId: "A", pid: 1, now: 100, leaseToken: "old")
+        let oldFence = fence(for: lease)
+        if mutation != .prepare {
+            try #require(try await persistence.prepareRemoteContextRecovery(fence: oldFence, procId: "recovery-proc"))
+        }
+        _ = try await persistence.seizeLease(sessionId: original.id, instanceId: "B", pid: 2, now: 101, leaseToken: "replacement")
+        switch mutation {
+        case .prepare:
+            #expect(try await persistence.prepareRemoteContextRecovery(fence: oldFence, procId: "recovery-proc") == false)
+        case .rotate:
+            #expect(try await persistence.rotateRemoteRecoveryLease(fence: oldFence, pid: 1, now: 102, token: "next") == nil)
+        case .bind:
+            #expect(try await persistence.completeRemoteContextRecoveryBinding(fence: oldFence,
+                procId: "recovery-proc", remoteSessionId: "recovered") == false)
+        }
+        let durable = try #require(try await persistence.loadSession(id: original.id))
+        #expect(durable.remoteSessionId == (mutation == .prepare ? "original" : nil))
+        #expect(durable.recoveryProcId == (mutation == .prepare ? nil : "recovery-proc"))
+        #expect(try await persistence.loadLease(sessionId: original.id)?.token == "replacement")
+    }
+
+    @Test("recovery intent survives stale metadata and clears only for the matching bound process")
+    func recoveryIntentSurvivesStaleMetadataUntilMatchingBind() async throws {
+        let path = temporaryDatabaseURL().path
+        let persistence = ACPSessionPersistence(path: path)
+        var original = row(id: "session")
+        original.remoteSessionId = "original"
+        try await persistence.upsertSession(original)
+        let lease = try await persistence.seizeLease(sessionId: original.id, instanceId: "A", pid: 1, now: 100, leaseToken: "old")
+        let localFence = fence(for: lease)
+        try #require(try await persistence.prepareRemoteContextRecovery(fence: localFence, procId: "recovery-proc"))
+        try await persistence.upsertSession(original)
+        let restarted = ACPSessionPersistence(path: path)
+        let intent = try #require(try await restarted.loadSession(id: original.id))
+        #expect(intent.remoteSessionId == nil)
+        #expect(intent.recoveryProcId == "recovery-proc")
+        #expect(intent.contextRecoveryPending)
+        #expect(try await restarted.completeRemoteContextRecoveryBinding(fence: localFence,
+            procId: "unrelated-proc", remoteSessionId: "wrong") == false)
+        try #require(try await restarted.completeRemoteContextRecoveryBinding(fence: localFence,
+            procId: "recovery-proc", remoteSessionId: "recovered"))
+        let bound = try #require(try await restarted.loadSession(id: original.id))
+        #expect(bound.remoteSessionId == "recovered")
+        #expect(bound.recoveryProcId == nil)
+        #expect(bound.contextRecoveryPending)
+    }
+
     private func temporaryDatabaseURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-persistence-\(UUID()).sqlite")

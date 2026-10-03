@@ -1374,33 +1374,42 @@ final class ACPSessionManager: ObservableObject {
         guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
         coordinator.stopPublishing(sessionId: sessionId)
+        // Retire the predecessor while its bound identity is still durable.
+        // A crash after cutover must leave only the new process to rediscover.
+        try await coordinator.killProc(sessionId: sessionId, expectedFence: previousFence)
+        await coordinator.release(sessionId: sessionId, expectedFence: previousFence)
+        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
         coordinator.markUnavailable(sessionId: sessionId)
-        try await persistence.disableReplicaExport(sessionId: sessionId,
-            localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: oldToken))
+        let procId = Self.helperACPProcId(sessionId: sessionId) + "-" + UUID().uuidString
+        guard try await persistence.prepareRemoteContextRecovery(
+            fence: .init(sessionId: sessionId, ownerInstance: instanceId, token: oldToken), procId: procId
+        ), isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+            throw RemoteSessionUnavailable.ownershipLost
+        }
+        persistedRows[sessionId]?.remoteSessionId = nil
+        persistedRows[sessionId]?.contextRecoveryPending = true
+        persistedRows[sessionId]?.recoveryProcId = procId
+        session.remoteSessionId = nil
         let token = UUID().uuidString
         var nextFence: RemoteSessionFence?
         do {
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
             let claim = try await coordinator.claim(sessionId: sessionId,
                 key: .init(worktreePath: previousLease.key.worktreePath, agentId: previousLease.key.agentId, remoteSessionId: nil),
-                proposedProcId: Self.helperACPProcId(sessionId: sessionId) + "-" + UUID().uuidString,
+                proposedProcId: procId,
                 requestedToken: token)
             guard let fence = claim.fence else { throw RemoteSessionUnavailable.ownershipLost }
             nextFence = fence
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
-            let lease = try await persistence.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid,
-                now: Int64(Date().timeIntervalSince1970), leaseToken: token)
+            guard let lease = try await persistence.rotateRemoteRecoveryLease(
+                fence: .init(sessionId: sessionId, ownerInstance: instanceId, token: oldToken), pid: pid,
+                now: Int64(Date().timeIntervalSince1970), token: token
+            ) else { throw RemoteSessionUnavailable.ownershipLost }
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                   coordinator.fence(sessionId: sessionId) == fence else { throw CancellationError() }
             _ownedLeases.insert(sessionId)
             ownedLeaseTokens[sessionId] = token
             observedLeases[sessionId] = lease
-            let localFence = ACPSessionLeaseFence(sessionId: sessionId, ownerInstance: instanceId, token: token)
-            guard try await persistence.prepareRemoteContextRecovery(fence: localFence),
-                  isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
-            persistedRows[sessionId]?.remoteSessionId = nil
-            persistedRows[sessionId]?.contextRecoveryPending = true
-            session.remoteSessionId = nil
             attempt.connectionShutdownRequested = true
             await attempt.connection?.shutdown()
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { throw CancellationError() }
@@ -1415,16 +1424,27 @@ final class ACPSessionManager: ObservableObject {
         } catch {
             await releaseWriterLease(sessionId: sessionId, leaseToken: token)
             if let nextFence { await coordinator.release(sessionId: sessionId, expectedFence: nextFence) }
-            await coordinator.stopAndRelease(procId: previousLease.procId, expectedFence: previousFence)
             throw error
         }
-        await coordinator.stopAndRelease(procId: previousLease.procId, expectedFence: previousFence)
+    }
+
+    private func persistRemoteRecoveryBinding(sessionId: ACPSession.ID, lease: RemoteSessionLease, localFence: ACPSessionLeaseFence) async throws {
+        guard let row = try await persistence.loadSession(id: sessionId),
+              let procId = row.recoveryProcId, let remoteSessionId = lease.key.remoteSessionId else { return }
+        guard procId == lease.procId,
+              try await persistence.completeRemoteContextRecoveryBinding(
+                fence: localFence, procId: procId, remoteSessionId: remoteSessionId
+              ) else { throw RemoteSessionUnavailable.ownershipLost }
+        persistedRows[sessionId]?.remoteSessionId = remoteSessionId
+        persistedRows[sessionId]?.recoveryProcId = nil
+        sessions[sessionId]?.remoteSessionId = remoteSessionId
     }
 
     private func acquireRemoteAuthority(sessionId: ACPSession.ID, lease: ACPSessionLease) async throws -> Bool {
         guard let coordinator = try coordination() else { return true }
-        let key = try await remoteKey(sessionId: sessionId)
-        let proposedProcId = coordinator.lease(sessionId: sessionId).flatMap {
+        guard let row = try await persistence.loadSession(id: sessionId) else { throw ACPSessionReplicaError.missingSession }
+        let key = RemoteSessionKey(worktreePath: RemotePath.realPath(worktreePath), agentId: row.agentId, remoteSessionId: row.remoteSessionId)
+        let proposedProcId = row.recoveryProcId ?? coordinator.lease(sessionId: sessionId).flatMap {
             $0.key.agentId == key.agentId && $0.key.remoteSessionId == key.remoteSessionId ? $0.procId : nil
         } ?? Self.helperACPProcId(sessionId: sessionId)
         let result = try await coordinator.claim(sessionId: sessionId, key: key, proposedProcId: proposedProcId, requestedToken: lease.token)
@@ -1435,6 +1455,8 @@ final class ACPSessionManager: ObservableObject {
         }
         // Replica imports can span the remote lease TTL.
         startHeartbeat(sessionId: sessionId)
+        try await persistRemoteRecoveryBinding(sessionId: sessionId, lease: result.lease,
+            localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token))
         if !coordinator.isPublishing(sessionId: sessionId) {
             try await coordinator.syncMirror(sessionId: sessionId, lease: result.lease, persistence: persistence,
                                              localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token)) { [weak self] in
@@ -2062,10 +2084,28 @@ final class ACPSessionManager: ObservableObject {
         await discardSideSession(id: sideID)
     }
 
-    /// Deletes a side session. When the remote close or teardown fails, it
-    /// still drops the local runner and row: nothing else could reach a
-    /// hidden session to retry, and the launch purge skips fresh rows.
+    /// SSH dismissal keeps a durable cleanup reservation until both the
+    /// native process and its replica are deleted. Failed teardown retires
+    /// the local runner without erasing the identity needed by a cold purge.
     private func discardSideSession(id: ACPSession.ID) async {
+        if effectiveRemoteHost() != nil {
+            await flushPersistence()
+            do {
+                _ = try await persistence.markEphemeralCleanupPending(id: id)
+            } catch {
+                persistenceError = error.localizedDescription
+            }
+            do {
+                try await disposeSession(id: id)
+                if let row = try await persistence.loadSession(id: id),
+                   try await cleanupRemoteOrphan(row) {
+                    forgetSession(id: id)
+                }
+            } catch {
+                persistenceError = error.localizedDescription
+            }
+            return
+        }
         do {
             try await deletePersistedSession(id: id)
         } catch {
@@ -3283,7 +3323,7 @@ final class ACPSessionManager: ObservableObject {
             let result = try await coordinator.claim(
                 sessionId: row.id,
                 key: .init(worktreePath: RemotePath.realPath(worktreePath), agentId: current.agentId, remoteSessionId: current.remoteSessionId),
-                proposedProcId: Self.helperACPProcId(sessionId: row.id), requestedToken: lease.token
+                proposedProcId: current.recoveryProcId ?? Self.helperACPProcId(sessionId: row.id), requestedToken: lease.token
             )
             nativeFence = result.fence
             guard let fence = nativeFence,
@@ -3292,7 +3332,7 @@ final class ACPSessionManager: ObservableObject {
                   reservation.ownerInstance == cleanupOwner, reservation.token == lease.token,
                   let latest = try await persistence.loadSession(id: row.id),
                   latest.ephemeralParentId != nil, latest.agentId == current.agentId,
-                  latest.remoteSessionId == current.remoteSessionId
+                  latest.remoteSessionId == current.remoteSessionId, latest.recoveryProcId == current.recoveryProcId
             else {
                 await finish()
                 return false
@@ -4712,8 +4752,10 @@ extension ACPSessionManager {
         do {
             if let coordinator = try coordination() {
                 coordinator.stopPublishing(sessionId: sessionId)
-                let result = try await coordinator.claim(sessionId: sessionId, key: remoteKey(sessionId: sessionId),
-                                                         proposedProcId: Self.helperACPProcId(sessionId: sessionId),
+                guard let row = try await persistence.loadSession(id: sessionId) else { throw ACPSessionReplicaError.missingSession }
+                let key = RemoteSessionKey(worktreePath: RemotePath.realPath(worktreePath), agentId: row.agentId, remoteSessionId: row.remoteSessionId)
+                let result = try await coordinator.claim(sessionId: sessionId, key: key,
+                                                         proposedProcId: row.recoveryProcId ?? Self.helperACPProcId(sessionId: sessionId),
                                                          requestedToken: requestedToken, seize: true)
                 guard let fence = result.fence else { throw RemoteSessionUnavailable.ownershipLost }
                 remoteTakeoverFence = fence
@@ -6836,6 +6878,10 @@ extension ACPSessionManager {
             if let coordinator = try coordination() {
                 try await coordinator.bind(sessionId: sessionId, remoteSessionId: result.sessionId)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+                guard let boundLease = coordinator.lease(sessionId: sessionId), let localFence = leaseFence(sessionId: sessionId) else {
+                    throw RemoteSessionUnavailable.ownershipLost
+                }
+                try await persistRemoteRecoveryBinding(sessionId: sessionId, lease: boundLease, localFence: localFence)
             }
             let providers: [ACPProviderInfo] = if initialized.providerCapabilities != nil {
                 (try? await connection.listProviders()) ?? []

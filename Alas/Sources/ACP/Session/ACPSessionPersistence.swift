@@ -114,11 +114,34 @@ actor ACPSessionPersistence {
         try openedStore().loadSession(agentId: agentId, remoteSessionId: remoteSessionId)
     }
 
-    func prepareRemoteContextRecovery(fence: ACPSessionLeaseFence) throws -> Bool {
+    func prepareRemoteContextRecovery(fence: ACPSessionLeaseFence, procId: String) throws -> Bool {
         let store = try openedStore()
         return try store.withLeaseFence(fence) {
-            try store.db.exec("UPDATE sessions SET remote_session_id=NULL,context_recovery_pending=1 WHERE id=?", bindings: [fence.sessionId])
-            return true
+            try store.disableReplicaExport(sessionId: fence.sessionId)
+            return try store.db.execChanges("""
+                UPDATE sessions SET remote_session_id=NULL,context_recovery_pending=1,recovery_proc_id=?
+                WHERE id=? AND recovery_proc_id IS NULL
+                """, bindings: [procId, fence.sessionId]) == 1
+        } ?? false
+    }
+
+    func rotateRemoteRecoveryLease(fence: ACPSessionLeaseFence, pid: Int64, now: Int64, token: String) throws -> ACPSessionLease? {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token)
+            return ACPSessionLease(sessionId: fence.sessionId, ownerInstance: fence.ownerInstance, pid: pid, heartbeatAt: now, status: "idle", token: token)
+        }
+    }
+
+    func completeRemoteContextRecoveryBinding(
+        fence: ACPSessionLeaseFence, procId: String, remoteSessionId: String
+    ) throws -> Bool {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            return try store.db.execChanges("""
+                UPDATE sessions SET remote_session_id=?,recovery_proc_id=NULL
+                WHERE id=? AND recovery_proc_id=?
+                """, bindings: [remoteSessionId, fence.sessionId, procId]) == 1
         } ?? false
     }
 
@@ -365,6 +388,10 @@ actor ACPSessionPersistence {
         fence: ACPSessionLeaseFence? = nil
     ) throws -> Bool {
         try openedStore().deleteOrphanedEphemeralSession(id: id, now: now, staleAfter: staleAfter, fence: fence)
+    }
+
+    func markEphemeralCleanupPending(id: String) throws -> Bool {
+        try openedStore().markEphemeralCleanupPending(id: id)
     }
 
     func promoteEphemeralSession(id: String) throws -> Bool {

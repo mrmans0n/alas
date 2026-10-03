@@ -49,7 +49,7 @@ actor ReplicaEndpoint {
         case "lease/claim", "lease/seize":
             let params = try decode(RemoteSessionClaimParams.self, data)
             if owner == nil || !lease.isFresh || (owner == params.owner && (fence?.token == params.requestedToken || params.previousFence == fence)) || method == "lease/seize" {
-                key = params.key
+                if procId.isEmpty || params.key.remoteSessionId != nil { key = params.key }
                 owner = params.owner
                 if procId.isEmpty { procId = params.proposedProcId }
                 fence = .init(recordId: recordId, token: params.requestedToken)

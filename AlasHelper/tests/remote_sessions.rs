@@ -120,27 +120,34 @@ impl Drop for Fixture {
 
 #[test]
 fn concurrent_claims_choose_one_owner_across_helper_processes() {
-    let fixture = Fixture::new();
-    let mut a = Helper::start(&fixture.0);
-    let mut b = Helper::start(&fixture.0);
-    let claim_a = fixture.claim("a");
-    let claim_b = fixture.claim("b");
-    let barrier = Arc::new(Barrier::new(2));
-    let results = std::thread::scope(|scope| {
-        let first = barrier.clone();
-        let left = scope.spawn(move || {
-            first.wait();
-            a.request("lease/claim", claim_a)
+    for _ in 0..16 {
+        let fixture = Fixture::new();
+        let barrier = Arc::new(Barrier::new(12));
+        let contenders: Vec<_> = (0..12)
+            .map(|owner| (Helper::start(&fixture.0), fixture.claim(&owner.to_string())))
+            .collect();
+        let results = std::thread::scope(|scope| {
+            let tasks: Vec<_> = contenders
+                .into_iter()
+                .map(|(mut helper, claim)| {
+                    let barrier = barrier.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        helper.request("lease/claim", claim)
+                    })
+                })
+                .collect();
+            tasks
+                .into_iter()
+                .map(|task| task.join().unwrap())
+                .collect::<Vec<_>>()
         });
-        let right = scope.spawn(move || {
-            barrier.wait();
-            b.request("lease/claim", claim_b)
-        });
-        [left.join().unwrap(), right.join().unwrap()]
-    });
-    assert_eq!(results.iter().filter(|r| !r["fence"].is_null()).count(), 1);
-    assert_eq!(results[0]["lease"]["owner"], results[1]["lease"]["owner"]);
-    assert_eq!(results[0]["lease"]["procId"], results[1]["lease"]["procId"]);
+        assert_eq!(results.iter().filter(|r| !r["fence"].is_null()).count(), 1);
+        for result in &results[1..] {
+            assert_eq!(result["lease"]["owner"], results[0]["lease"]["owner"]);
+            assert_eq!(result["lease"]["procId"], results[0]["lease"]["procId"]);
+        }
+    }
 }
 
 #[test]

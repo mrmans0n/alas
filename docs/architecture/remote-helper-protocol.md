@@ -226,6 +226,11 @@ require `leaseFence`, and the authority check and process mutation share that
 transaction. `expectedStdinOffset` still deduplicates retries but does not grant
 authority. Reading or attaching to output does not grant stdin authority.
 
+Helper startup serializes WAL and schema initialization with
+`remote_leases.open.lock`. The lock uses a separate inode from SQLite's
+byte-range locks and remains on disk so waiting helpers share the same inode.
+Normal arbitration still uses SQLite transactions.
+
 An ordinary claim of an ownerless or expired foreign-Mac lease retires its old
 process inside that write transaction before committing the new owner and token.
 Cleanup failure does not grant ownership. The next fresh spawn resets private
@@ -266,6 +271,15 @@ Replicated recovery state is authoritative on both initial and subsequent
 imports. A mirror remains recovery-pending until the writer publishes completion;
 takeover must not release queued prompts while that state is pending.
 
+Context recovery retires the old fenced process before replacing its durable
+local identity. One local transaction records the randomized recovery process
+locator, clears the old remote session ID, disables predecessor export, and
+marks recovery pending before the provisional claim or spawn. Cold attachment,
+takeover, and orphan cleanup reuse that locator. A successful native bind stores
+the bound identity and clears the locator under the local lease fence; a lost
+bind response is reconciled from the next claimed native lease. The locator
+remains Mac-local, and the original remote transcript is retained.
+
 One-time MCP guidance is portable conversation state: queued text and the sent
 flag survive takeover. Agent-reported authentication status is also replicated,
 including clearing it, so mirrors refresh sign-in state without their own attach.
@@ -292,6 +306,12 @@ claims remote ownership, then performs fenced process kill and record deletion
 before deleting the local row under that reservation. Fresh local or remote
 owners block cleanup. Helper, kill, or deletion failures retain the row for
 retry; a failed kill also retains remote ownership. Parent history is untouched.
+
+SSH side-session dismissal records a local cleanup-pending marker before
+teardown. Failed close, kill, or deletion retires the local runner but keeps the
+hidden row for immediate cold cleanup, even when its activity timestamp is
+fresh. The marker does not bypass live ownership or promotion to a normal
+session, and stale metadata writes cannot clear it.
 
 ## Security
 

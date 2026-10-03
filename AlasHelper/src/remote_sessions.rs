@@ -240,6 +240,23 @@ impl RemoteSessionStore {
             .map_err(|_| error(-32080, "Cannot create remote lease database"))?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|_| error(-32080, "Cannot protect remote lease database"))?;
+        // WAL upgrades can return SQLITE_BUSY without invoking the busy handler.
+        // A separate inode avoids conflicting with SQLite's own byte-range locks.
+        // Never remove it: another helper may already be waiting on this inode.
+        let lock_path = root.join("remote_leases.open.lock");
+        if std::fs::symlink_metadata(&lock_path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(error(-32080, "Unsafe remote lease initialization lock"));
+        }
+        let initialization_lock = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(lock_path)
+            .map_err(|_| error(-32080, "Cannot create remote lease initialization lock"))?;
+        initialization_lock
+            .lock()
+            .map_err(|_| error(-32080, "Cannot lock remote lease database initialization"))?;
         let connection = Connection::open(&path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
