@@ -316,12 +316,12 @@ struct DraftCommitTabView: View {
         .onChange(of: subject) { _, new in
             messageSuggestion.recordEdit(subject: new, body: bodyText)
             persist(subject: new, suggestion: .some(messageSuggestion.applied))
-            releaseMessageSuggestionIfIdle()
+            if !messageSuggestion.canFill(subject: new, body: bodyText) { stopMessageSuggestion() }
         }
         .onChange(of: bodyText) { _, new in
             messageSuggestion.recordEdit(subject: subject, body: new)
             persist(body: new, suggestion: .some(messageSuggestion.applied))
-            releaseMessageSuggestionIfIdle()
+            if !messageSuggestion.canFill(subject: subject, body: new) { stopMessageSuggestion() }
         }
         .onChange(of: amend) { _, new in
             persist(amend: new)
@@ -370,12 +370,16 @@ struct DraftCommitTabView: View {
     /// Restaging, toggling amend, or a change in whether a suggestion may run
     /// (model readiness, helper settings, a paused publish) restarts it.
     private var messageSuggestionKey: String {
-        "\(stagedIndexKey):\(amend):\(publishCheckpoint == nil):\(appState.commitMessageSuggestionAvailable)"
+        // Each backend separately, so revoking one cancels its in-flight work.
+        "\(stagedIndexKey):\(amend):\(publishCheckpoint == nil)"
+            + ":\(appState.commitMessageAppleSuggestionsAvailable):\(appState.commitMessageMLXSuggestionsAvailable)"
     }
 
-    /// Frees the local model once nothing is waiting for its answer.
-    private func releaseMessageSuggestionIfIdle() {
-        guard !messageSuggestion.isSuggesting else { return }
+    /// Frees the local model once someone else owns the next write to the
+    /// fields. Blank fields (including Alas withdrawing its own stale draft)
+    /// keep the request running.
+    private func stopMessageSuggestion() {
+        messageSuggestion.cancel()
         messageSuggestionJob?.cancel()
         messageSuggestionJob = nil
     }
@@ -384,14 +388,16 @@ struct DraftCommitTabView: View {
     /// and text the user typed is never replaced.
     private func suggestMessage() async {
         let indexKey = stagedIndexKey
+        // A draft for other staged changes must not stay committable while
+        // its replacement is computed, or when none can be.
+        if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
+            subject = ""
+            bodyText = ""
+        }
         // A running agent generation owns the next write to the fields.
         guard !amend, hasStaged, publishCheckpoint == nil, generation == nil,
               appState.commitMessageSuggestionAvailable else {
             messageSuggestion.cancel()
-            if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
-                subject = ""
-                bodyText = ""
-            }
             return
         }
         // Staging several files in a row moves the key repeatedly; only the
@@ -538,8 +544,7 @@ struct DraftCommitTabView: View {
         publishSession?.clearError()
         // The agent's message replaces the fields through the edit observers;
         // until then an untouched draft stays Alas's to refresh or withdraw.
-        messageSuggestion.cancel()
-        releaseMessageSuggestionIfIdle()
+        stopMessageSuggestion()
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
             availability: agentAvailability

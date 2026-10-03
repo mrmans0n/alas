@@ -551,7 +551,8 @@ struct CommitMessageSuggestionState {
         return withdrawStale(indexKey: indexKey, subject: subject, body: body) ? .clear : nil
     }
 
-    private func canFill(subject: String, body: String) -> Bool {
+    /// True when the fields are blank or hold Alas's own untouched draft.
+    func canFill(subject: String, body: String) -> Bool {
         Self.isBlank(subject: subject, body: body) || isShowingSuggestion(subject: subject, body: body)
     }
 
