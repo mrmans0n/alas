@@ -1190,7 +1190,7 @@ final class PluginHost {
                   let root = params["root"],
                   let rootData = try? JSONSerialization.data(withJSONObject: root, options: .fragmentsAllowed)
             else { return .violation("plugin sent a malformed view/render") }
-            switch PluginViewTree.decode(rootData) {
+            switch PluginViewTree.decode(rootData, api: manifest.api) {
             case .success(let node):
                 if let panel = header.panel {
                     panelViews[panel] = node

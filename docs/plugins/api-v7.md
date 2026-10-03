@@ -9,6 +9,7 @@
 API 7 brings plugins into the agent conversation: commands in a message's
 "…" menu, slash prompts in the composer that the plugin expands, and context
 the plugin adds to every prompt.
+[API 8](api-v8.md) adds commands that open a tab, and progress and link nodes.
 
 ## The `api` field
 

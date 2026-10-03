@@ -223,7 +223,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...7
+    static let supportedAPIVersions = 4...8
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -296,7 +296,7 @@ struct PluginManifest: Equatable, Sendable {
         if raw.contributesMalformed { throw .malformed }
         let tabs = try parseTabs(raw.contributes?.tabs ?? [])
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
-        let commands = try parseCommands(raw.contributes?.commands ?? [], api: api)
+        let commands = try parseCommands(raw.contributes?.commands ?? [], tabs: tabs, api: api)
         if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
         let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
         if raw.contributes?.prompts != nil, api < 7 { throw .needsNewerAPI("\"contributes.prompts\"", api: 7) }
@@ -411,7 +411,9 @@ struct PluginManifest: Equatable, Sendable {
         return prompts
     }
 
-    private static func parseCommands(_ raw: [Raw.RawCommand], api: Int) throws(PluginManifestError) -> [PluginCommandContribution] {
+    private static func parseCommands(
+        _ raw: [Raw.RawCommand], tabs: [PluginTabContribution], api: Int
+    ) throws(PluginManifestError) -> [PluginCommandContribution] {
         guard raw.count <= maxCommands else { throw .invalidCommand("at most \(maxCommands) commands") }
         var commands: [PluginCommandContribution] = []
         for entry in raw {
@@ -423,11 +425,17 @@ struct PluginManifest: Equatable, Sendable {
                 throw .invalidCommand("command \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
             }
             guard let slots = entry.slots, !slots.isEmpty else { throw .invalidCommand("command \"\(id)\" needs at least one slot") }
+            if let opens = entry.opens {
+                guard api >= 8 else { throw .needsNewerAPI("command \"\(id)\" \"opens\"", api: 8) }
+                guard tabs.contains(where: { $0.id == opens }) else {
+                    throw .invalidCommand("command \"\(id)\" opens \"\(opens)\", which is not a declared tab")
+                }
+            }
             // Slots will keep growing, so one this Alas does not know is skipped rather than refused, and so is one
             // newer than the manifest's API, as an Alas of that API would.
             commands.append(PluginCommandContribution(
                 id: id, title: title, icon: entry.icon,
-                slots: slots.compactMap(PluginCommandSlot.init(rawValue:)).filter { $0.api <= api }))
+                slots: slots.compactMap(PluginCommandSlot.init(rawValue:)).filter { $0.api <= api }, opens: entry.opens))
         }
         return commands
     }
@@ -495,6 +503,7 @@ private struct Raw: Decodable {
         let title: String?
         let icon: String?
         let slots: [String]?
+        let opens: String?
     }
     struct RawSetting: Decodable {
         let key: String?

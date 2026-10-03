@@ -34,6 +34,8 @@ struct PluginCommandContribution: Equatable, Sendable {
     /// An SF Symbol name.
     var icon: String?
     let slots: [PluginCommandSlot]
+    /// API 8: a tab of the same manifest Alas opens before it runs the command.
+    var opens: String? = nil
 }
 
 /// `command/run`'s `target`: what the user acted on. `kind` says which of the other fields are set.

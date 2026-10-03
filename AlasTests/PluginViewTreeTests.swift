@@ -3,8 +3,8 @@ import Testing
 @testable import Alas
 
 struct PluginViewTreeTests {
-    private func decode(_ json: String) -> Result<PluginViewNode, PluginViewTreeError> {
-        PluginViewTree.decode(Data(json.utf8))
+    private func decode(_ json: String, api: Int = 8) -> Result<PluginViewNode, PluginViewTreeError> {
+        PluginViewTree.decode(Data(json.utf8), api: api)
     }
 
     @Test func aValidTreeDecodesAndIgnoresUnknownOptionalFields() throws {
@@ -37,9 +37,29 @@ struct PluginViewTreeTests {
         (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"","label":"x"}]}"#, "menu item ids must be 1 to 64 bytes"),
         (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"\#(String(repeating: "i", count: 65))","label":"x"}]}"#, "menu item ids must be 1 to 64 bytes"),
         (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"i","label":"\#(String(repeating: "x", count: 4_001))"}]}"#, "menu item label is longer than 4000 characters"),
+        (#"{"id":"a","kind":"link","label":"PR"}"#, "link \"a\" needs url"),
+        (#"{"id":"a","kind":"link","label":"PR","url":"http://github.com/x"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
+        (#"{"id":"a","kind":"link","label":"PR","url":"/pulls"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
+        (#"{"id":"a","kind":"link","label":"PR","url":"javascript:alert(1)"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
+        (#"{"id":"a","kind":"link","label":"PR","url":"https://a.com/\#(String(repeating: "x", count: 2_035))"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
     ])
     func invalidTreesAreRejected(json: String, reason: String) {
         #expect(throws: PluginViewTreeError(reason: reason)) { try decode(json).get() }
+    }
+
+    @Test func progressAndLinkDecode() throws {
+        let tree = try decode(#"""
+        {"id":"r","kind":"hstack","children":[{"id":"p","kind":"progress"},{"id":"q","kind":"progress","text":"Loading"},
+          {"id":"l","kind":"link","label":"PR","url":"https://github.com/\#(String(repeating: "x", count: 2_029))"}]}
+        """#).get()
+        #expect(tree.children.map(\.text) == [nil, "Loading", nil])
+        #expect(tree.children[2].url?.host == "github.com")
+    }
+
+    @Test(arguments: [#"{"id":"a","kind":"progress"}"#, #"{"id":"a","kind":"link","label":"PR","url":"https://a.com"}"#])
+    func api8KindsNeedAPI8(json: String) {
+        let kind = json.contains("link") ? "link" : "progress"
+        #expect(throws: PluginViewTreeError(reason: "kind \"\(kind)\" needs \"api\": 8")) { try decode(json, api: 7).get() }
     }
 
     @Test(arguments: [(17, "tree is deeper than 16 levels"), (2_001, "tree has more than 2000 nodes")])
