@@ -13557,11 +13557,9 @@ final class AppState {
             manager.runners[sid]?.stop()
             scheduledAgentTurns.sessionClosed(sid)
         }
-        // Cancel mirror pollers and heartbeats — mirror sessions have no
-        // runner and are never reached by the detach loop above, so they
-        // must be torn down explicitly to stop the 2.5s backstop polls and
-        // notifier subscriptions from outliving the manager.
-        manager.shutdownBackgroundTasks()
+        // Mirrors have no runner, so stop their pollers and subscriptions now.
+        // Writer leases must remain fresh while sequential teardown is pending.
+        manager.prepareForDisposal()
         localTextObservers.managers[owner] = nil
     }
 

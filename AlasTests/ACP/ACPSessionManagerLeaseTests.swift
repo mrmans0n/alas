@@ -82,6 +82,36 @@ import Foundation
         #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [payload])
     }
 
+    @Test("a remote writer waiting for manager disposal stays fenced beyond a lease window")
+    func waitingRemoteDisposalKeepsLeaseFresh() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        // Isolate periodic renewal from status-only replica drains.
+        coordinator.stopPublishing(sessionId: session.id)
+        runner.stop()
+        manager.prepareForDisposal()
+        for _ in 0..<3 {
+            let before = await endpoint.heartbeatCount
+            await endpoint.advanceTime(by: 40)
+            let deadline = ContinuousClock.now + .seconds(10)
+            while await endpoint.heartbeatCount == before, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+        }
+        let key = RemoteSessionKey(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")
+        let waiting = try #require(try await coordinator.observe(sessionId: "observer", key: key))
+        #expect(waiting.isFresh)
+        await manager.disposeAllLiveSessions()
+        await manager.releaseAllOwnedLeases()
+        let released = try #require(try await coordinator.observe(sessionId: "observer", key: key))
+        #expect(released.owner == nil)
+    }
+
     @Test("failed SSH teardown retains ownership and can be retried without waiting for expiry", arguments: ["proc/kill", "lease/release"])
     func failedRemoteTeardownRetainsOwnershipUntilRetry(method: String) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

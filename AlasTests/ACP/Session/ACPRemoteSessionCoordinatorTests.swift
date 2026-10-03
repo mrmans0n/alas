@@ -19,6 +19,9 @@ actor ReplicaEndpoint {
     private var publicationUnavailable = false
     private var unavailableMethod: String?
     private let recordId: String
+    private var clock: Int64 = 0
+    private var renewedAt: Int64 = 0
+    private(set) var heartbeatCount = 0
 
     init(recordId: String = "record") { self.recordId = recordId }
 
@@ -27,13 +30,14 @@ actor ReplicaEndpoint {
     func expireLease() { leaseFresh = false }
     func setPublicationUnavailable(_ value: Bool) { publicationUnavailable = value }
     func setUnavailableMethod(_ method: String?) { unavailableMethod = method }
+    func advanceTime(by seconds: Int64) { clock += seconds }
     private func encoded<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
     private var lease: RemoteSessionLease {
-        .init(recordId: recordId, key: key, procId: procId, owner: owner, status: status, isFresh: owner != nil && leaseFresh, revision: revision)
+        .init(recordId: recordId, key: key, procId: procId, owner: owner, status: status, isFresh: owner != nil && leaseFresh && clock - renewedAt < 60, revision: revision)
     }
     private func validate(_ supplied: RemoteSessionFence) throws {
-        guard supplied == fence else { throw RemoteHelperClientError.jsonrpc(.init(code: -32081, message: "lease lost", data: nil)) }
+        guard supplied == fence, lease.isFresh else { throw RemoteHelperClientError.jsonrpc(.init(code: -32081, message: "lease lost", data: nil)) }
     }
     func request(_ method: String, _ data: Data) throws -> Data {
         if method == unavailableMethod { throw NSError(domain: "TransientTeardownFailure", code: 1) }
@@ -47,6 +51,8 @@ actor ReplicaEndpoint {
                 owner = params.owner
                 if procId.isEmpty { procId = params.proposedProcId }
                 fence = .init(recordId: recordId, token: params.requestedToken)
+                renewedAt = clock
+                leaseFresh = true
                 return try encoded(RemoteSessionClaimResult(lease: lease, fence: fence))
             }
             return try encoded(RemoteSessionClaimResult(lease: lease, fence: nil))
@@ -66,6 +72,8 @@ actor ReplicaEndpoint {
             let params = try decode(RemoteSessionHeartbeatParams.self, data)
             try validate(params.fence)
             status = params.status
+            renewedAt = clock
+            heartbeatCount += 1
             return try encoded(lease)
         case "replica/publish":
             if publicationUnavailable {

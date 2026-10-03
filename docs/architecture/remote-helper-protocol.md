@@ -226,10 +226,10 @@ require `leaseFence`, and the authority check and process mutation share that
 transaction. `expectedStdinOffset` still deduplicates retries but does not grant
 authority. Reading or attaching to output does not grant stdin authority.
 
-An ordinary claim of an expired foreign-Mac lease retires its old process inside
-that write transaction before committing the new owner and token. Cleanup failure
-does not grant ownership. The next fresh spawn resets private protocol offsets;
-same-Mac reconnects preserve intentional process reuse.
+An ordinary claim of an ownerless or expired foreign-Mac lease retires its old
+process inside that write transaction before committing the new owner and token.
+Cleanup failure does not grant ownership. The next fresh spawn resets private
+protocol offsets; same-Mac reconnects preserve intentional process reuse.
 
 Explicit takeover seizes first and imports the last committed remote replica.
 It does not wait for predecessor acknowledgement; Mac-local writes whose
@@ -267,10 +267,11 @@ including clearing it, so mirrors refresh sign-in state without their own attach
 
 On writer stand-down, Alas stops the runner and flushes its queued writes
 before retiring the local lease fence. It cannot publish under a lost remote
-fence. During manager disposal, remote publication stays alive until stopped
-runners have flushed and their final replica changes have drained before lease
-release. The coordinator shuts down once the disposed manager has no owned
-leases, including after an in-flight attachment releases its lease.
+fence. During manager disposal, remote heartbeats and publication stay alive
+while sessions wait for sequential teardown and their final replica drain.
+Each heartbeat ends when its lease is released. The coordinator shuts down once
+the disposed manager has no owned leases, including after an in-flight
+attachment releases its lease.
 
 After a publication failure, final flush reconfirms the same fence and drains
 pending batches before any fenced kill or release. If synchronization remains

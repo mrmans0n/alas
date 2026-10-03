@@ -434,10 +434,10 @@ impl RemoteSessionStore {
                     .lease
                     .owner
                     .as_ref()
-                    .is_some_and(|owner| owner.server_id != p.owner.server_id)
+                    .is_none_or(|owner| owner.server_id != p.owner.server_id)
             {
-                // The previous owner's initialized protocol cannot be reused by another Mac.
-                // Retirement must succeed while the old fence is still stored under this lock.
+                // Neither an ownerless runtime nor a foreign owner's initialized protocol is reusable.
+                // Retirement must succeed before the new fence is stored under this lock.
                 retire_process(&current.lease.proc_id)?;
             }
             current.lease.record_id

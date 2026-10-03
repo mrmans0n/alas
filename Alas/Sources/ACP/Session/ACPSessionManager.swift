@@ -4401,6 +4401,7 @@ extension ACPSessionManager {
             persistenceError = error.localizedDescription
         }
         if ownedLeaseTokens[sessionId] == leaseToken {
+            stopHeartbeat(sessionId: sessionId)
             _ownedLeases.remove(sessionId)
             ownedLeaseTokens.removeValue(forKey: sessionId)
             observedLeases[sessionId] = nil
@@ -4848,6 +4849,14 @@ extension ACPSessionManager {
     /// Remote publication remains alive until the final lease release has
     /// drained the stopped runners' persistence.
     func shutdownBackgroundTasks() {
+        prepareForDisposal()
+        for (_, task) in _heartbeatTasks { task.cancel() }
+        _heartbeatTasks.removeAll()
+    }
+
+    /// Stop incoming work before sequential teardown begins.
+    /// Remote writer heartbeats end with their lease release, not with preparation.
+    func prepareForDisposal() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
         for session in sessions.values {
             session.nextPromptActivity.send()
@@ -4855,8 +4864,10 @@ extension ACPSessionManager {
         }
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
-        for (_, task) in _heartbeatTasks { task.cancel() }
-        _heartbeatTasks.removeAll()
+        if effectiveRemoteHost() == nil {
+            for (_, task) in _heartbeatTasks { task.cancel() }
+            _heartbeatTasks.removeAll()
+        }
     }
 
     /// Release every lease this manager still owns. Call AFTER runner
@@ -8893,7 +8904,6 @@ extension ACPSessionManager {
             }
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
-        stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         await releaseWriterLease(sessionId: sessionId)
         endMirroring(sessionId: sessionId)

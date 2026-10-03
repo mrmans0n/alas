@@ -277,71 +277,78 @@ fn takeover_fences_old_stdin_retries_spawn_and_kill_without_disturbing_the_new_w
 }
 
 #[test]
-fn expired_foreign_claim_stops_the_predecessor_before_granting_a_fresh_spawn() {
+fn ordinary_claim_retires_processes_without_a_reusable_owner() {
     use base64::Engine;
-    let fixture = Fixture::new();
-    let mut old = Helper::start(&fixture.0);
-    let mut new = Helper::start(&fixture.0);
-    let first = old.request("lease/claim", fixture.claim("a"));
-    let proc_id = first["lease"]["procId"].clone();
-    let mut spawn = json!({"procId":proc_id,"command":"/bin/cat","args":[],"cwd":fixture.0,"env":{},"leaseFence":first["fence"]});
-    assert_eq!(old.request("proc/spawn", spawn.clone())["spawned"], true);
-    let initialized = b"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\"}\n";
-    old.request(
-        "proc/write",
-        json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(initialized),"expectedStdinOffset":0,"leaseFence":first["fence"]}),
-    );
-    let previous_output = old.wait_for_echo(
-        &proc_id,
-        json!({"jsonrpc":"2.0","method":"initialize"}),
-    );
-    assert_eq!(previous_output["stdinOffset"], initialized.len());
-    let process_dir = fixture.0.join("procs").join(proc_id.as_str().unwrap());
-    let predecessor_pid = std::fs::read_to_string(process_dir.join("pid")).unwrap();
-    fixture.expire(&first["lease"]["recordId"]);
-    let successor = new.request("lease/claim", fixture.claim("b"));
-    assert_eq!(successor["lease"]["owner"]["serverId"], "b");
-    assert_eq!(successor["lease"]["procId"], proc_id);
-    assert_eq!(successor["fence"]["token"], "token-b");
-    assert_eq!(
-        old.raw("proc/attach", json!({"procId":proc_id}))["error"]["code"],
-        -32051
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while Command::new("/bin/kill")
-        .args(["-0", predecessor_pid.trim()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "expired owner's process survived the ownership grant"
+    for aborted_takeover in [false, true] {
+        let fixture = Fixture::new();
+        let mut old = Helper::start(&fixture.0);
+        let mut new = Helper::start(&fixture.0);
+        let first = old.request("lease/claim", fixture.claim("a"));
+        let proc_id = first["lease"]["procId"].clone();
+        let mut spawn = json!({"procId":proc_id,"command":"/bin/cat","args":[],"cwd":fixture.0,"env":{},"leaseFence":first["fence"]});
+        assert_eq!(old.request("proc/spawn", spawn.clone())["spawned"], true);
+        let initialized = b"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\"}\n";
+        old.request(
+            "proc/write",
+            json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(initialized),"expectedStdinOffset":0,"leaseFence":first["fence"]}),
+        );
+        let previous_output = old.wait_for_echo(
+            &proc_id,
+            json!({"jsonrpc":"2.0","method":"initialize"}),
+        );
+        assert_eq!(previous_output["stdinOffset"], initialized.len());
+        let process_dir = fixture.0.join("procs").join(proc_id.as_str().unwrap());
+        let predecessor_pid = std::fs::read_to_string(process_dir.join("pid")).unwrap();
+        if aborted_takeover {
+            let seized = new.request("lease/seize", fixture.claim("b"));
+            new.request("lease/release", json!({"fence":seized["fence"]}));
+        } else {
+            fixture.expire(&first["lease"]["recordId"]);
+        }
+        let successor = new.request("lease/claim", fixture.claim("b"));
+        assert_eq!(successor["lease"]["owner"]["serverId"], "b");
+        assert_eq!(successor["lease"]["procId"], proc_id);
+        assert_eq!(successor["fence"]["token"], "token-b");
+        assert_eq!(
+            old.raw("proc/attach", json!({"procId":proc_id}))["error"]["code"],
+            -32051
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while Command::new("/bin/kill")
+            .args(["-0", predecessor_pid.trim()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "retired owner's process survived the ownership grant"
+            );
+        }
+        assert_eq!(
+            old.raw("proc/write", json!({"procId":proc_id,"dataBase64":"e30K","expectedStdinOffset":initialized.len(),"leaseFence":first["fence"]}))["error"]["code"],
+            -32081
+        );
+        spawn["leaseFence"] = successor["fence"].clone();
+        assert_eq!(new.request("proc/spawn", spawn)["spawned"], true);
+        let fresh = new.request("proc/attach", json!({"procId":proc_id}));
+        assert_eq!(fresh["stdinOffset"], 0);
+        assert_eq!(fresh["stdoutOffset"], 0);
+        assert!(fresh["stdoutFrames"].as_array().unwrap().is_empty());
+        let resumed = b"{\"jsonrpc\":\"2.0\",\"method\":\"session/load\"}\n";
+        new.request(
+            "proc/write",
+            json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(resumed),"expectedStdinOffset":0,"leaseFence":successor["fence"]}),
+        );
+        let output = new.wait_for_echo(&proc_id, json!({"jsonrpc":"2.0","method":"session/load"}));
+        assert_eq!(output["stdinOffset"], resumed.len());
+        new.request(
+            "proc/kill",
+            json!({"procId":proc_id,"leaseFence":successor["fence"]}),
         );
     }
-    assert_eq!(
-        old.raw("proc/write", json!({"procId":proc_id,"dataBase64":"e30K","expectedStdinOffset":initialized.len(),"leaseFence":first["fence"]}))["error"]["code"],
-        -32081
-    );
-    spawn["leaseFence"] = successor["fence"].clone();
-    assert_eq!(new.request("proc/spawn", spawn)["spawned"], true);
-    let fresh = new.request("proc/attach", json!({"procId":proc_id}));
-    assert_eq!(fresh["stdinOffset"], 0);
-    assert_eq!(fresh["stdoutOffset"], 0);
-    assert!(fresh["stdoutFrames"].as_array().unwrap().is_empty());
-    let resumed = b"{\"jsonrpc\":\"2.0\",\"method\":\"session/load\"}\n";
-    new.request(
-        "proc/write",
-        json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(resumed),"expectedStdinOffset":0,"leaseFence":successor["fence"]}),
-    );
-    let output = new.wait_for_echo(&proc_id, json!({"jsonrpc":"2.0","method":"session/load"}));
-    assert_eq!(output["stdinOffset"], resumed.len());
-    new.request(
-        "proc/kill",
-        json!({"procId":proc_id,"leaseFence":successor["fence"]}),
-    );
 }
 
 #[test]
