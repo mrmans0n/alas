@@ -160,8 +160,11 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
 
     /// Reads the output until the exit, attaching again from where it got to when the connection drops.
     private func follow(_ client: RemoteHelperClient) async {
-        let renew = Task { [client, procId, lease] in
+        // A stopped process is never renewed again: if the stop itself was lost to an outage, its lease lapses
+        // and the helper stops it then.
+        let renew = Task { [weak self, client, procId, lease] in
             while (try? await Task.sleep(for: Self.renewInterval)) != nil {
+                guard let self, !lock.withLock({ stopRequested }) else { return }
                 try? await client.renewPluginProc(procId: procId, lease: lease, leaseMs: Self.leaseMs)
             }
         }
@@ -184,6 +187,10 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
                 continue
             }
             let (result, stream) = attached
+            // A stop asked for while the connection was down is asked again now that it is back; it is idempotent.
+            if result.exit == nil, lock.withLock({ stopRequested }) {
+                Task { [procId, lease] in try? await client.killPluginProc(procId: procId, lease: lease) }
+            }
             for chunk in result.chunks { append(chunk, next: &next) }
             if let exit = result.exit {
                 return finish(exit: exit, truncated: result.truncated, timedOut: result.timedOut == true)
