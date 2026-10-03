@@ -213,7 +213,11 @@ Same messages, limits and error codes as API 6. Differences:
   a pid reused between the check and the signal is never hit. Sampling alone
   misses a child that double-forks and is orphaned before the first sample.
   On Linux the supervisor makes itself a child subreaper
-  (`PR_SET_CHILD_SUBREAPER`), so orphans reparent to it and stay findable;
+  (`PR_SET_CHILD_SUBREAPER`), so orphans reparent to it and stay findable.
+  Cleanup doesn't stop at one pass: the supervisor keeps enumerating its
+  adopted children while it signals, and repeats `SIGTERM` passes, then
+  `SIGKILL` passes after the grace, until nothing it owns is left, so a
+  descendant that forks again while handling `SIGTERM` is caught too;
   cgroups are not required. macOS has no subreaper, so remote `process.*` is
   refused on macOS SSH hosts until a race-free mechanism exists; remote
   `file/*` still works there.
@@ -520,6 +524,8 @@ Per the testing policy, pin the decisions:
   EOF on stdin; the login environment survives a noisy profile and a value
   with a newline; a backgrounded child is
   stopped when the root exits; a `setsid` descendant is stopped by identity;
+  a descendant that forks a new detached child during the `SIGTERM` grace is
+  stopped too;
   the group is not signalled once no member matches; the anchor ignores the
   group's `SIGTERM` and outlives it, and is removed only after the final
   `SIGKILL` pass; a lapsed lease and the
