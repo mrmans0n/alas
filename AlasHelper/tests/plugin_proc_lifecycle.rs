@@ -510,20 +510,62 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
     let _ = stranger.wait();
 }
 
-#[test]
-fn a_retry_overlapping_the_original_spawn_joins_its_claim() {
-    let mut helper = Helper::start();
-    // The original spawn created the directory and is still writing its claim
-    // when the retry after a dropped connection arrives.
-    let dir = helper.dir("overlap");
+/// A process and its `pid start` identity, as the helper records launchers.
+fn live_identity() -> (Child, String) {
+    let child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
+        .split(' ')
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap();
+    (child, format!("{pid} {start}"))
+}
+
+/// A published claim, as a helper leaves it between publishing and launching
+/// the supervisor.
+fn publish_claim(helper: &Helper, proc_id: &str, launcher: &str) -> PathBuf {
+    let dir = helper.dir(proc_id);
     std::fs::create_dir_all(&dir).unwrap();
-    let claim = dir.clone();
+    std::fs::write(dir.join("owner"), LEASE).unwrap();
+    std::fs::write(dir.join("launching"), launcher).unwrap();
+    dir
+}
+
+#[test]
+fn a_retry_while_the_original_launcher_lives_joins_its_claim() {
+    let mut helper = Helper::start();
+    let (mut launcher, identity) = live_identity();
+    let dir = publish_claim(&helper, "overlap", &identity);
+    // The original helper's supervisor starts the process a moment later.
     let original = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        std::fs::write(claim.join("owner"), LEASE).unwrap();
-        std::fs::write(claim.join("started"), "").unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(dir.join("started"), "").unwrap();
     });
     let retried = helper.spawn("overlap", &["/bin/sh", "-c", "printf twice"], json!({}));
     original.join().unwrap();
     assert_eq!(retried["spawned"], false);
+    let _ = launcher.kill();
+    let _ = launcher.wait();
+}
+
+#[test]
+fn a_retry_after_the_launcher_died_unstarted_runs_again() {
+    let mut helper = Helper::start();
+    // Its pid now belongs to another process: the start time doesn't match.
+    let (mut stranger, identity) = live_identity();
+    let (pid, start) = identity.split_once(' ').unwrap();
+    publish_claim(
+        &helper,
+        "relaunch",
+        &format!("{pid} {}", start.parse::<u64>().unwrap() + 1),
+    );
+    let retried = helper.spawn("relaunch", &["/bin/sh", "-c", "printf ran"], json!({}));
+    assert_eq!(retried["spawned"], true);
+    let result = helper.wait_exit("relaunch");
+    assert_eq!(output(&result), "ran");
+    let _ = stranger.kill();
+    let _ = stranger.wait();
 }

@@ -47,6 +47,9 @@ const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// after `SIGTERM`, as API 6 says.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const LEFTOVER_GRACE_MS: u64 = 1000;
+/// A login environment past this is not one: the capture fails and the
+/// helper's own is used.
+const MAX_LOGIN_ENV_BYTES: usize = 1024 * 1024;
 const ENV_BEGIN: &str = "__ALAS_ENV_BEGIN__";
 const ENV_END: &str = "__ALAS_ENV_END__";
 
@@ -203,17 +206,6 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
         .filter(|path| path.is_dir())
         .ok_or_else(|| jsonrpc_error(-32003, format!("worktree {} does not exist", params.cwd)))?;
 
-    if let Some(dir) = owned_dir(&params.proc_id, &params.lease)? {
-        if let Some(joined) = join_claim(&dir, &params.proc_id)? {
-            return Ok(joined);
-        }
-        // An earlier helper died before anything started it: nothing owns
-        // this directory but its owner file, so it goes and the spawn runs.
-        std::fs::remove_dir_all(&dir).map_err(|error| {
-            jsonrpc_error(-32050, format!("stale process cleanup failed: {error}"))
-        })?;
-    }
-
     let env = login_env();
     let path = env
         .iter()
@@ -222,36 +214,6 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
     let executable = resolve_executable(&params.argv[0], &cwd, path.unwrap_or(""))
         .ok_or_else(|| jsonrpc_error(-32003, format!("command not found: {}", params.argv[0])))?;
 
-    let root = root_dir()?;
-    create_private_dir_all(&root)?;
-    let dir = root.join(&params.proc_id);
-    // `create_dir` fails if it exists, so two racing spawns can't share it. A retry that overlaps the original
-    // spawn (the connection dropped while it ran) finds the directory here: it joins that claim once its owner is
-    // written, rather than reporting a failure while the original starts the command.
-    match std::fs::create_dir(&dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !dir.join("owner").is_file() && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(10));
-            }
-            if owned_dir(&params.proc_id, &params.lease)?.is_some() {
-                if let Some(joined) = join_claim(&dir, &params.proc_id)? {
-                    return Ok(joined);
-                }
-            }
-            return Err(jsonrpc_error(
-                -32050,
-                "another spawn of this process is still starting",
-            ));
-        }
-        Err(error) => {
-            return Err(jsonrpc_error(
-                -32050,
-                format!("process directory failed: {error}"),
-            ));
-        }
-    }
     let launch = Launch {
         executable: executable.display().to_string(),
         argv: params.argv,
@@ -271,20 +233,136 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
             .unwrap_or(STOP_GRACE_MS)
             .min(STOP_GRACE_MS),
     };
-    let result = (|| {
-        write_atomic(&dir.join("owner"), params.lease.as_bytes())?;
-        write_lease(&dir, params.lease_ms)?;
+    let root = root_dir()?;
+    create_private_dir_all(&root)?;
+    let dir = root.join(&params.proc_id);
+    // The claim is built aside and published with one rename, so it is never
+    // seen without its owner or its launcher's identity. A dot keeps the
+    // temporary name out of the process id space.
+    // ponytail: a helper that dies while building leaves a `.claim-*`
+    // behind; sweep old ones if they ever pile up.
+    let launcher = process_identity(std::process::id() as i32)
+        .ok_or_else(|| jsonrpc_error(-32050, "helper identity unavailable"))?;
+    let temp = root.join(format!(".claim-{}-{}", params.proc_id, now_ms()));
+    let built = (|| {
+        create_private_dir_all(&temp)?;
+        write_atomic(&temp.join("owner"), params.lease.as_bytes())?;
+        write_atomic(&temp.join("launching"), launcher.as_bytes())?;
+        write_lease(&temp, params.lease_ms)?;
         write_atomic(
-            &dir.join("launch.json"),
+            &temp.join("launch.json"),
             &serde_json::to_vec(&launch).expect("launch serializes"),
-        )?;
-        start_supervisor(&dir)
+        )
     })();
+    if let Err(error) = built {
+        let _ = std::fs::remove_dir_all(&temp);
+        return Err(error);
+    }
+    let published = publish_claim(&temp, &dir, &params.proc_id, &params.lease);
+    if !matches!(published, Ok(None)) {
+        let _ = std::fs::remove_dir_all(&temp);
+        return published.map(|joined| joined.expect("an earlier claim's answer"));
+    }
+    // A retry never removes a claim whose launcher lives, so this one is ours
+    // until the supervisor starts; checked all the same before launching.
+    let ours =
+        std::fs::read_to_string(dir.join("launching")).is_ok_and(|record| record == launcher);
+    let result = if ours {
+        start_supervisor(&dir)
+    } else {
+        Err(jsonrpc_error(-32050, "the process claim was taken over"))
+    };
     if let Err(error) = result {
-        let _ = std::fs::remove_dir_all(&dir);
+        if ours {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
         return Err(error);
     }
     Ok(json!({ "procId": params.proc_id, "spawned": true }))
+}
+
+/// Publishes the claim built in `temp` as `dir`. `Ok(None)` once it is
+/// published; the answer to give instead when an earlier claim of this lease
+/// started, or still may start, the process. A claim nothing will start is
+/// removed and replaced.
+fn publish_claim(
+    temp: &Path,
+    dir: &Path,
+    proc_id: &str,
+    lease: &str,
+) -> Result<Option<Value>, HelperError> {
+    for _ in 0..3 {
+        match owned_dir(proc_id, lease)? {
+            Some(existing) => {
+                if let Some(joined) = join_claim(&existing, proc_id)? {
+                    return Ok(Some(joined));
+                }
+                remove_claim(&existing)?;
+            }
+            // Ownerless: left by a helper from before claims were published
+            // whole.
+            None if dir.exists() => remove_claim(dir)?,
+            None => {}
+        }
+        match std::fs::rename(temp, dir) {
+            Ok(()) => return Ok(None),
+            // Another spawn published first; look at its claim again.
+            Err(_) if dir.exists() => {}
+            Err(error) => {
+                return Err(jsonrpc_error(
+                    -32050,
+                    format!("process claim failed: {error}"),
+                ));
+            }
+        }
+    }
+    Err(jsonrpc_error(
+        -32050,
+        "another spawn of this process is still starting",
+    ))
+}
+
+fn remove_claim(dir: &Path) -> Result<(), HelperError> {
+    match std::fs::remove_dir_all(dir) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(jsonrpc_error(
+            -32050,
+            format!("stale process cleanup failed: {error}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `pid` with its start time, so a reused pid never matches it.
+fn process_identity(pid: i32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::stat(pid).map(|stat| format!("{pid} {}", stat.start))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Whether the process a `pid start` record names still runs; a bare `pid`
+/// only says that some process has it.
+fn identity_alive(record: &str) -> bool {
+    let mut fields = record.split_whitespace().map(str::parse::<u64>);
+    let Some(Ok(pid)) = fields.next() else {
+        return false;
+    };
+    match fields.next() {
+        #[cfg(target_os = "linux")]
+        Some(Ok(start)) => {
+            linux::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Some(Ok(_)) => false,
+        Some(Err(_)) => false,
+        // SAFETY: signal 0 only checks that the pid exists.
+        None => (unsafe { libc::kill(pid as i32, 0) }) == 0,
+    }
 }
 
 /// A program name, at most `MAX_ARGS` entries of at most `MAX_ARGV_BYTES`
@@ -342,8 +420,20 @@ fn join_claim(dir: &Path, proc_id: &str) -> Result<Option<Value>, HelperError> {
         settled_exit(dir);
         return Ok(Some(json!({ "procId": proc_id, "spawned": false })));
     }
-    if supervisor_alive(dir) && await_start(dir)? {
-        return Ok(Some(json!({ "procId": proc_id, "spawned": false })));
+    let launching =
+        std::fs::read_to_string(dir.join("launching")).is_ok_and(|record| identity_alive(&record));
+    if supervisor_alive(dir) || launching {
+        if await_start(dir)? {
+            return Ok(Some(json!({ "procId": proc_id, "spawned": false })));
+        }
+        // ponytail: a launcher alive but stalled past the start deadline is
+        // refused rather than raced; the retry can come again.
+        if launching {
+            return Err(jsonrpc_error(
+                -32050,
+                "another spawn of this process is still starting",
+            ));
+        }
     }
     Ok(None)
 }
@@ -379,21 +469,7 @@ fn supervisor_alive(dir: &Path) -> bool {
         }
         Err(_) => return false,
     };
-    let mut fields = record.split_whitespace().map(str::parse::<u64>);
-    let Some(Ok(pid)) = fields.next() else {
-        return false;
-    };
-    match fields.next() {
-        #[cfg(target_os = "linux")]
-        Some(Ok(start)) => {
-            linux::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
-        }
-        #[cfg(not(target_os = "linux"))]
-        Some(Ok(_)) => false,
-        Some(Err(_)) => false,
-        // SAFETY: signal 0 only checks that the pid exists.
-        None => (unsafe { libc::kill(pid as i32, 0) }) == 0,
-    }
+    identity_alive(&record)
 }
 
 /// The run's exit; for a started run whose supervisor is gone, which nothing
@@ -553,8 +629,17 @@ fn release(params: Option<Value>) -> Result<Value, HelperError> {
         // The supervisor finishes stopping from memory and leaves when it
         // sees its directory gone.
         request_stop(&dir);
-        std::fs::remove_dir_all(&dir)
+        // Moved aside first, in one step: the supervisor may still be writing
+        // into it, and a removal racing its writes would fail half done.
+        let trash = dir.with_file_name(format!(".released-{}-{}", params.proc_id, now_ms()));
+        std::fs::rename(&dir, &trash)
             .map_err(|error| jsonrpc_error(-32050, format!("release failed: {error}")))?;
+        for _ in 0..3 {
+            if remove_claim(&trash).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
     Ok(json!({ "ok": true }))
 }
@@ -605,7 +690,19 @@ fn create_private_dir_all(path: &Path) -> Result<(), HelperError> {
 
 /// Readers see the old file or the new one, never half of one.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), HelperError> {
-    let temp = path.with_extension("tmp");
+    // A temporary name of its own per writer: `supervisor` and
+    // `supervisor.launch` once shared `supervisor.tmp`, and the helper and the
+    // supervisor write files in one directory at the same time.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let temp = path.with_file_name(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -614,10 +711,14 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), HelperError> {
         options.mode(0o600);
     }
     let fail = |error: std::io::Error| jsonrpc_error(-32050, format!("write failed: {error}"));
-    let mut file = options.open(&temp).map_err(fail)?;
-    file.write_all(bytes).map_err(fail)?;
-    drop(file);
-    std::fs::rename(&temp, path).map_err(fail)
+    let written = options
+        .open(&temp)
+        .and_then(|mut file| file.write_all(bytes))
+        .and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written.map_err(fail)
 }
 
 // MARK: - Executable and environment
@@ -677,6 +778,7 @@ fn login_env() -> &'static [(String, String)] {
 /// and values holding newlines can't corrupt what's read back.
 fn capture_login_env(shell: &Path, home: &Path) -> Option<Vec<(String, String)>> {
     use std::io::Read;
+    use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     let script = format!("printf '%s' '{ENV_BEGIN}'; env -0; printf '%s' '{ENV_END}'");
     // Its own group, so whatever a startup file leaves running, holding the
@@ -692,45 +794,93 @@ fn capture_login_env(shell: &Path, home: &Path) -> Option<Vec<(String, String)>>
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let (sender, output) = std::sync::mpsc::channel();
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        let _ = sender.send(bytes);
-    });
+    let fd = stdout.as_raw_fd();
+    // SAFETY: fcntl on a pipe we own; reads below then never block.
+    unsafe {
+        libc::fcntl(
+            fd,
+            libc::F_SETFL,
+            libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK,
+        )
+    };
     let pid = child.id() as i32;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let exited = loop {
-        // Not reaped yet: until it is, its pid, and so its group id, stays ours.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        // SAFETY: waitid with a valid out pointer, on our own child.
-        let waited = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        // SAFETY: reading the pid field waitid filled in, zero when nothing exited.
-        if waited == 0 && unsafe { info.si_pid() } == pid {
-            break true;
-        }
-        if waited != 0 || Instant::now() >= deadline {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut deadline = Instant::now() + Duration::from_secs(10);
+    let mut exited = false;
+    let mut eof = false;
+    let captured = loop {
+        if Instant::now() >= deadline {
             break false;
         }
-        thread::sleep(Duration::from_millis(10));
+        if !exited && shell_exited(pid) {
+            exited = true;
+            // What it left holding the pipe goes; what's written is read for
+            // at most another second.
+            // SAFETY: plain kill of the group the unreaped shell still leads.
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            deadline = deadline.min(Instant::now() + Duration::from_secs(1));
+        }
+        if exited && eof {
+            break true;
+        }
+        if eof {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll on one valid pollfd.
+        if unsafe { libc::poll(&mut poll, 1, 10) } <= 0 {
+            continue;
+        }
+        match stdout.read(&mut buffer) {
+            Ok(0) => eof = true,
+            Ok(read) => {
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.len() > MAX_LOGIN_ENV_BYTES {
+                    break false;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => break false,
+        }
     };
+    // Closing the read end stops any writer that is left.
+    drop(stdout);
     // SAFETY: plain kill of the group the unreaped shell still leads.
     unsafe { libc::kill(-pid, libc::SIGKILL) };
     let _ = child.wait();
-    // ponytail: a process that left the group keeps the pipe; the capture then
-    // gives up after a second and the helper's own environment is used.
-    let bytes = output.recv_timeout(Duration::from_secs(1)).ok()?;
-    if !exited {
-        return None;
+    if captured {
+        parse_env_block(&bytes)
+    } else {
+        None
     }
-    parse_env_block(&bytes)
+}
+
+/// Whether the shell exited, without reaping it: until it is reaped, its pid,
+/// and so its group id, stays ours.
+fn shell_exited(pid: i32) -> bool {
+    // SAFETY: zeroed siginfo is a valid out value.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: waitid with a valid out pointer, on our own child.
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    // SAFETY: reading the pid field waitid filled in, zero when nothing exited.
+    waited != 0 || unsafe { info.si_pid() } == pid
 }
 
 fn parse_env_block(bytes: &[u8]) -> Option<Vec<(String, String)>> {
@@ -1566,6 +1716,22 @@ mod tests {
         assert!(!argv_valid(&args(1024, 1024)));
         assert!(!argv_valid(&["".into()]));
         assert!(!argv_valid(&["ls".into(), "a\0b".into()]));
+    }
+
+    #[test]
+    fn a_profile_that_floods_stdout_falls_back_promptly() {
+        let home = std::env::temp_dir().join(format!("alas-pproc-yes-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".profile"), "yes\n").unwrap();
+        let started = Instant::now();
+        let env = capture_login_env(Path::new("/bin/sh"), &home);
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(env.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
