@@ -11,11 +11,11 @@ Closes the two open design items of phase 5 in
 Builds on API 8 and the API 9 work in progress (configure screens,
 plugin-scoped storage, runtime prompts, tab visibility). The runtime,
 JSON-RPC contract, approval and trust hash are unchanged unless stated here.
-New behavior ships as API 10 and later.
+New behavior ships as API 10 and later. Each API number ships whole: an Alas that advertises it implements all of it, because the catalog filters on the number alone and manifests ignore unknown fields.
 
 ## Decisions in brief
 
-- **Remote comes first (API 10).** It fixes a gap the full-access archetypes
+- **Remote comes first (API 10 says where a project runs; API 11 runs files and commands there).** It fixes a gap the full-access archetypes
   hit at once: a worktree-setup plugin is refused on every worktree of an SSH
   project.
 - **Plugin JavaScript always runs on this Mac.** Only `process.*` and
@@ -24,7 +24,7 @@ New behavior ships as API 10 and later.
 - **Remote full access is opt-in twice.** The manifest declares
   `"remote": true`, and the approval sheet says that commands run on the SSH
   host.
-- **Webviews are designed but not built (API 11)** until a plugin in the
+- **Webviews are designed but not built (API 12)** until a plugin in the
   catalog needs one. Today every catalog plugin is covered by view trees and
   canvases.
 - **When webviews ship:** a `web` tab kind; one extra hashed file (`ui.js`)
@@ -108,7 +108,7 @@ headers, which run locally, and processes never receive them, local or remote.
 ### Opting in: the manifest and the approval sheet
 
 ```json
-{ "api": 10, "capabilities": ["process.exec", "files.read", "files.write"],
+{ "api": 11, "capabilities": ["process.exec", "files.read", "files.write"],
   "remote": true, "processes": [ … ] }
 ```
 
@@ -208,7 +208,9 @@ Same messages, limits and error codes as API 6. Differences:
   daemonizes is out of the recorded group, so R3 adds descendant tracking to
   the helper as the local launcher does: sample the tree while the root runs,
   keep each descendant's pid with its start time, and on stop or root exit
-  signal those still matching, so a reused pid is never hit. Sampling alone
+  signal those still matching. On Linux the helper opens a pidfd for each
+  descendant when it validates it and signals through `pidfd_send_signal`, so
+  a pid reused between the check and the signal is never hit. Sampling alone
   misses a child that double-forks and is orphaned before the first sample.
   On Linux the supervisor makes itself a child subreaper
   (`PR_SET_CHILD_SUBREAPER`), so orphans reparent to it and stay findable;
@@ -309,7 +311,7 @@ reference plugin committed (likely a usage dashboard or a stack graph).
 **The bundle.** One optional extra file, a classic script like `plugin.js`:
 
 ```json
-{ "api": 11, "entry": "plugin.js", "web": "ui.js",
+{ "api": 12, "entry": "plugin.js", "web": "ui.js",
   "contributes": { "tabs": [{ "id": "usage", "title": "Usage", "kind": "web" }] } }
 ```
 
@@ -469,12 +471,12 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 | # | API | Slice | Size |
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
-| R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
-| R3 | 10 | Helper: raw output mode, stdin with EOF (`/dev/null` for starts and runs without input), a framed login environment, descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
-| R4 | 10 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
+| R2 | 11 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
+| R3 | 11 | Helper: raw output mode, stdin with EOF (`/dev/null` for starts and runs without input), a framed login environment, descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
+| R4 | 11 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
-| W1 | 11 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
-| W2 | 11 | Inspector for folder-loaded plugins; `jsc-run`-style smoke test for `ui.js` in alas-plugins CI (load the shell in a headless WKWebView). | S |
+| W1 | 12 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
+| W2 | 12 | Inspector for folder-loaded plugins; `jsc-run`-style smoke test for `ui.js` in alas-plugins CI (load the shell in a headless WKWebView). | S |
 
 R1 is worth landing on its own even if R2–R4 wait. W1 waits for a committed
 consumer.
@@ -484,9 +486,11 @@ consumer.
 - `project.host`, `remote`, `web` and `kind: "web"` are additions. An API 4–9
   plugin keeps loading. On a remote project it gets the clearer refusal and the
   same `-32003` code.
-- A manifest using `remote` below API 10, or `web` below API 11, is refused,
+- A manifest using `remote` below API 11, or `web` below API 12, is refused,
   like `opens` below API 8.
-- An Alas that predates API 11 refuses `kind: "web"` as an unknown tab kind.
+- R2, R3 and R4 ship together as API 11; until all three are in, Alas keeps
+  advertising 10, so no client accepts a `remote` manifest it can't serve.
+- An Alas that predates API 12 refuses `kind: "web"` as an unknown tab kind.
   That is already the rule.
 
 ## Testing
@@ -516,11 +520,15 @@ Per the testing policy, pin the decisions:
   order.
 - Webviews: the scheme handler serves exactly the shell and `ui.js`; the
   navigation policy decision; the CSP header string; bridge size and queue
-  caps; the trust hash including `web`. No WKWebView rendering tests.
+  caps; the trust hash including `web`. One focused headless `WKWebView` test
+  loads hostile page code and proves it can't see the raw message handler,
+  that inline script and network loads are blocked, and that DNS prefetch is
+  off. That is sandbox policy, not view composition; no other rendering
+  tests.
 
 ## Decisions (2026-10-03)
 
-- **Order:** remote first, as API 10. Webviews (API 11) wait for a plugin that
+- **Order:** remote first, as APIs 10 and 11. Webviews (API 12) wait for a plugin that
   needs them.
 - **`markdown` node:** goes into API 9.
 - **Remote trust:** one `remote: true` approval per plugin covers every SSH
@@ -534,7 +542,7 @@ Questions 1, 2, 4 and 8 are settled above; the rest stay open until webviews
 are built.
 
 
-1. **Order.** Remote (API 10) before webviews (API 11)? This spec assumes yes.
+1. **Order.** Remote (APIs 10–11) before webviews (API 12)? This spec assumes yes.
 2. **`markdown` node first?** Should N1 go into API 9, which is still open,
    since it closes the most common native gap at low cost?
 3. **First webview consumer.** Is there a plugin you want soon that needs
