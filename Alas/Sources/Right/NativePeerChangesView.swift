@@ -165,7 +165,10 @@ struct NativePeerChangesView: View {
     @ViewBuilder
     private func commitFilesSection(sha: String) -> some View {
         switch commitFiles[sha] ?? .idle {
-        case .idle, .loading:
+        case .idle:
+            NativePeerRailMessage(text: "Loading commit files…")
+                .onAppear { onLoadCommitFiles(sha) }
+        case .loading:
             NativePeerRailMessage(text: "Loading commit files…")
         case .failed(let message):
             VStack(alignment: .leading, spacing: 0) {
