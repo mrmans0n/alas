@@ -29,7 +29,6 @@ private struct HeightModelContent: View {
     var body: some View { Color.clear.frame(width: 500, height: model.height) }
 }
 
-
 /// Wide markdown tables scroll sideways in an AppKit scroll view that keeps
 /// only horizontal gestures, so vertical scrolling over a table reaches the
 /// transcript through the ordinary responder chain.
