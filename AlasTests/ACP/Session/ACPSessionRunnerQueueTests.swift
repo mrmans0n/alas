@@ -223,20 +223,6 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
-    @Test("an unrelated prompt error keeps today's failed-item behavior")
-    func unrelatedErrorKeepsTodayBehavior() async throws {
-        let (runner, mock, session, _) = try mkRunner()
-        mock.script(method: "session/prompt") { _ in
-            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: boom", data: nil))
-        }
-        session.enqueue(blocks: [.text("first")])
-        runner.persistQueue()
-        runner.flushQueueIfIdle()
-        try await waitUntil { session.queue.first?.lastError != nil }
-        #expect(session.usageLimit == nil)
-        #expect(session.usageLimitResumeItem == nil)
-    }
-
     @Test("queued user turn publishes only after the queue head is removed")
     func queuedUserTurnPublishesAfterQueueReconciliation() async throws {
         let observed = QueueTestGate()

@@ -63,6 +63,8 @@ struct ACPUsageLimitTests {
         /// nil = not a usage limit.
         let expected: (resetsAt: Date?, source: ACPUsageLimit.ResetSource, resettable: Bool)?
         var now: Date = ACPUsageLimitTests.now
+        /// Pass the error as a bare `JSONRPCError` instead of wrapped in `ACPClientError`.
+        var bare = false
         var testDescription: String { name }
     }
 
@@ -119,6 +121,10 @@ struct ACPUsageLimitTests {
               error: codexError("You've hit your usage limit. Try again at Oct 12th, 2026 10:01 AM."),
               turnAgentText: nil, rateLimit: nil,
               expected: (nil, .unknown, true)),
+        .init(name: "bare JSONRPCError",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit", data: nil),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true), bare: true),
         .init(name: "claude org block is not resettable",
               error: JSONRPCError(code: -32603, message: "Internal error: Your org is out of usage · contact your admin", data: nil),
               turnAgentText: nil, rateLimit: nil,
@@ -136,7 +142,7 @@ struct ACPUsageLimitTests {
     @Test("a failed prompt is classified as a usage limit only on provider signals", arguments: detectCases)
     func detectsUsageLimit(_ c: DetectCase) {
         let limit = ACPUsageLimitDetector.detect(
-            error: ACPClientError.jsonrpc(c.error), turnAgentText: c.turnAgentText,
+            error: c.bare ? c.error as Error : ACPClientError.jsonrpc(c.error), turnAgentText: c.turnAgentText,
             claudeRateLimit: c.rateLimit, now: c.now, calendar: Self.madrid
         )
         guard let expected = c.expected else {
@@ -147,15 +153,6 @@ struct ACPUsageLimitTests {
             detectedAt: c.now, resetsAt: expected.resetsAt, resetSource: expected.source,
             probeAttempt: 0, resettable: expected.resettable
         ))
-    }
-
-    @Test("a bare JSONRPCError is accepted too")
-    func acceptsBareJSONRPCError() {
-        let limit = ACPUsageLimitDetector.detect(
-            error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit", data: nil),
-            turnAgentText: nil, claudeRateLimit: nil, now: Self.now, calendar: Self.madrid
-        )
-        #expect(limit != nil)
     }
 
     struct ResumeCase: Sendable, CustomTestStringConvertible {
