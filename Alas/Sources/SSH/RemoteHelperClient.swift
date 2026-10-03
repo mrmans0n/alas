@@ -504,6 +504,16 @@ actor RemoteHelperClient {
         try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
     }
 
+    func reconnectAfterUpgrade() {
+        guard let previousTransport = transport else { return }
+        // Retire this generation before the old transport's asynchronous exit.
+        generation += 1
+        coordinationCapability = nil
+        dispatchTask?.cancel()
+        handleExit(0)
+        previousTransport.terminate()
+    }
+
     func shutdown() {
         idleShutdownTask?.cancel()
         idleShutdownTask = nil
@@ -991,6 +1001,10 @@ actor RemoteHelperClientPool {
         let client = RemoteHelperClient(host: host)
         clients[host] = client
         return client
+    }
+
+    func reconnectAfterUpgrade(host: String) async {
+        await clients[host]?.reconnectAfterUpgrade()
     }
 
     func shutdown(host: String) {
