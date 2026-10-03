@@ -1418,18 +1418,19 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
-    @Test func commitInspectionIgnoresLaterCommitsAndWorkingTreeEdits() async throws {
+    @Test(arguments: ["a.txt", "tab\tfile.txt", "line\nfile.txt", "quote\"file.txt", "back\\slash.txt"])
+    func commitInspectionIgnoresLaterCommitsAndWorkingTreeEdits(fileName: String) async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
-        try "committed\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", "a.txt"], cwd: repository)
+        try "committed\n".write(to: repository.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", fileName], cwd: repository)
         _ = try await Process.git(["commit", "-qm", "first"], cwd: repository)
         let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repository)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         try "later\n".write(to: repository.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "b.txt"], cwd: repository)
         _ = try await Process.git(["commit", "-qm", "second"], cwd: repository)
-        try "uncommitted\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "uncommitted\n".write(to: repository.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
         let state = makeRemoteGitBackedState(repositoryPath: repository)
         let worktreeId = try #require(state.selectedWorktreeId)
         defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
@@ -1439,9 +1440,9 @@ struct RemoteAppStateAccessTests {
             Issue.record("expected commit files")
             return
         }
-        #expect(files.map(\.path) == ["a.txt"])
+        #expect(files.map(\.path) == [fileName])
         guard case .success(let hunks, false, _) = await state.remoteCommitDiff(
-            sessionId: tab.sessionId, sha: sha, path: "a.txt") else {
+            sessionId: tab.sessionId, sha: sha, path: fileName) else {
             Issue.record("expected commit diff")
             return
         }

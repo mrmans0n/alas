@@ -260,6 +260,35 @@ struct CommitDetailsTests {
         #expect(!texts.contains("line 5"))
     }
 
+    @Test(arguments: ["tab\tfile.txt", "line\nfile.txt", "quote\"file.txt", "back\\slash.txt", "literal => file.txt"])
+    func commitFilesPreserveLiteralPathsThroughRenames(fileName: String) async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let originalPath = "old-" + fileName
+        let path = "new-" + fileName
+        let content = (1...10).map { "line \($0)\n" }.joined()
+        try content.write(to: repo.appendingPathComponent(originalPath), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "seed"], cwd: repo)
+        let git = GitService()
+        let initial = try await git.commitDetails(at: repo, sha: currentSha(in: repo))
+        #expect(initial.files == [CommitChangedFile(
+            path: originalPath, originalPath: nil, status: "A", add: 10, del: 0)])
+
+        try FileManager.default.moveItem(at: repo.appendingPathComponent(originalPath), to: repo.appendingPathComponent(path))
+        try (content + "extra\n").write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "rename"], cwd: repo)
+        let details = try await git.commitDetails(at: repo, sha: currentSha(in: repo))
+        #expect(details.files == [CommitChangedFile(
+            path: path, originalPath: originalPath, status: "R", add: 1, del: 0)])
+        let file = try #require(details.files.first)
+        let diff = try await git.diff(worktreePath: repo, sha: details.info.sha,
+                                      file: file.path, originalPath: file.originalPath)
+        let additions = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        #expect(additions == ["extra"])
+    }
+
     @Test func sliceDiffForFileKeepsOnlyMatchingSection() {
         let raw = """
         diff --git a/old.txt b/new.txt

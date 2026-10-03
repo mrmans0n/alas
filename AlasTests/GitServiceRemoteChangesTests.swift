@@ -1107,11 +1107,12 @@ struct GitServiceRemoteChangesTests {
 
     // MARK: - parseNumstatZOutput / parseNameStatusZOutput
 
-    @Test func parseNumstatZOutput_parsesOrdinaryRecords() {
-        let stream = "3\t1\tfile1.txt\00\t5\tcafé.txt\0"
+    @Test(arguments: ["file1.txt", "left => right.txt", "{left => right}.txt"])
+    func parseNumstatZOutput_parsesOrdinaryRecords(path: String) {
+        let stream = "3\t1\t\(path)\00\t5\tcafé.txt\0"
         let (add, del) = GitService.parseNumstatZOutput(stream)
-        #expect(add == ["file1.txt": 3, "café.txt": 0])
-        #expect(del == ["file1.txt": 1, "café.txt": 5])
+        #expect(add == [path: 3, "café.txt": 0])
+        #expect(del == [path: 1, "café.txt": 5])
     }
 
     @Test func parseNumstatZOutput_parsesRenameRecords() {

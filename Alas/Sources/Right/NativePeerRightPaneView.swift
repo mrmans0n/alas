@@ -136,9 +136,7 @@ struct NativePeerRightPaneView: View {
     }
 
     private var changesCount: Int {
-        if case .loaded(let changes) = client.workspace.changes {
-            return Set((changes.staged + changes.unstaged).map(\.path)).count
-        }
+        if case .loaded(let changes) = client.workspace.changes { return changes.branchFiles.count }
         return client.selectedRow?.worktree?.changedFileCount ?? 0
     }
 

@@ -1413,12 +1413,12 @@ extension GitService {
     private func changedFiles(worktree: URL, leftTree: String, rightTree: String) async throws -> [CommitChangedFile] {
         async let numstatResult = Process.git(
             ["-c", "core.quotePath=false",
-             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", "-z", leftTree, rightTree],
             cwd: worktree
         )
         async let nameStatusResult = Process.git(
             ["-c", "core.quotePath=false",
-             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", "-z", leftTree, rightTree],
             cwd: worktree
         )
         let numstatOut = try await numstatResult
@@ -1433,49 +1433,15 @@ extension GitService {
                           userInfo: [NSLocalizedDescriptionKey: nameStatusOut.stderr])
         }
 
-        var addByPath: [String: Int] = [:]
-        var delByPath: [String: Int] = [:]
-        var statusByPath: [String: String] = [:]
-        var originalByPath: [String: String] = [:]
-        var ordered: [String] = []
-        var orderedSet: Set<String> = []
-
-        for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
-            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { continue }
-            let addStr = parts[0]
-            let delStr = parts[1]
-            let path = Self.numstatNewPath(parts[2])
-            addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
-            delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
-        }
-
-        for line in nameStatusOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
-            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 2 else { continue }
-            let statusLetter = String(parts[0].prefix(1))
-            let newPath: String
-            let oldPath: String?
-            if statusLetter == "R" || statusLetter == "C" {
-                guard parts.count >= 3 else { continue }
-                newPath = parts[2]
-                oldPath = parts[1]
-            } else {
-                newPath = parts[1]
-                oldPath = nil
-            }
-            statusByPath[newPath] = statusLetter
-            if let oldPath { originalByPath[newPath] = oldPath }
-            if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
-        }
-
-        return ordered.map { path in
+        let counts = Self.parseNumstatZOutput(numstatOut.stdout)
+        let entries = Self.parseNameStatusZOutput(nameStatusOut.stdout)
+        return entries.ordered.map { path in
             CommitChangedFile(
                 path: path,
-                originalPath: originalByPath[path],
-                status: statusByPath[path] ?? "M",
-                add: addByPath[path] ?? 0,
-                del: delByPath[path] ?? 0
+                originalPath: entries.original[path],
+                status: entries.status[path] ?? "M",
+                add: counts.add[path] ?? 0,
+                del: counts.del[path] ?? 0
             )
         }
     }
@@ -1491,31 +1457,6 @@ extension GitService {
             threeDot: threeDot
         )
         return try await changedFiles(worktree: worktree, leftTree: revisions.before, rightTree: revisions.after)
-    }
-
-    /// Given a numstat path field that may describe a rename via `old => new`
-    /// or the brace form `prefix/{old => new}/suffix`, return the new path.
-    /// For non-rename paths, returns the input unchanged.
-    private static func numstatNewPath(_ raw: String) -> String {
-        // Brace form: prefix/{old => new}/suffix
-        if let openBrace = raw.firstIndex(of: "{"),
-           let closeBrace = raw.firstIndex(of: "}"),
-           openBrace < closeBrace {
-            let inside = raw[raw.index(after: openBrace)..<closeBrace]
-            guard let arrow = inside.range(of: " => ") else { return raw }
-            let newInside = inside[arrow.upperBound...]
-            let prefix = raw[..<openBrace]
-            let suffix = raw[raw.index(after: closeBrace)...]
-            // Collapse any double-slash that arises from an empty new-inside
-            // segment (e.g. "dir/{old => }foo" → "dir/foo").
-            let joined = String(prefix) + String(newInside) + String(suffix)
-            return joined.replacingOccurrences(of: "//", with: "/")
-        }
-        // Simple form: "old => new"
-        if let arrow = raw.range(of: " => ") {
-            return String(raw[arrow.upperBound...])
-        }
-        return raw
     }
 
     /// Returns the list of staged (index vs HEAD) changed files in the same
@@ -1615,7 +1556,7 @@ extension GitService {
                 newPath = tokens[i + 2]
                 i += 3
             } else {
-                newPath = numstatNewPath(pathField)
+                newPath = pathField
                 i += 1
             }
             addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
