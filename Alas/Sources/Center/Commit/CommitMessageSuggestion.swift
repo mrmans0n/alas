@@ -15,8 +15,18 @@ struct CommitMessageSuggestionInput: Equatable, Sendable {
     let recentSubjects: [String]
 
     static func load(worktreePath: URL, ticketTitle: String?) async throws -> Self {
-        async let stat = Process.git(["diff", "--cached", "--stat", "--no-color"], cwd: worktreePath)
-        async let diff = Process.git(["diff", "--cached", "--no-color", "--no-ext-diff"], cwd: worktreePath)
+        // Both outputs are bounded while reading: a huge generated file must
+        // not be buffered whole just to be budgeted down to a few KB.
+        async let stat = Process.gitCapped(
+            ["diff", "--cached", "--stat", "--no-color"],
+            cwd: worktreePath,
+            maxOutputBytes: CommitMessageSuggestionPolicy.statOutputByteLimit
+        )
+        async let diff = Process.gitCapped(
+            ["diff", "--cached", "--no-color", "--no-ext-diff"],
+            cwd: worktreePath,
+            maxOutputBytes: CommitMessageSuggestionPolicy.diffOutputByteLimit
+        )
         async let log = Process.git(
             ["log", "-\(CommitMessageSuggestionPolicy.recentSubjectCount)", "--pretty=format:%s"],
             cwd: worktreePath
@@ -25,9 +35,12 @@ struct CommitMessageSuggestionInput: Equatable, Sendable {
         let branchName = try await branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         // An unborn branch has no log; that only means there is no convention to follow.
         let subjects = (try? await log)?.stdout ?? ""
+        let diffResult = try await diff
         return Self(
             stat: try await stat.stdout,
-            diff: try await diff.stdout,
+            diff: diffResult.stdoutTruncated
+                ? CommitMessageSuggestionPolicy.droppingPartialTail(diffResult.stdout)
+                : diffResult.stdout,
             branch: branchName.isEmpty || branchName == "HEAD" ? nil : branchName,
             ticketTitle: ticketTitle,
             recentSubjects: subjects.split(separator: "\n").map(String.init)
@@ -51,6 +64,8 @@ enum CommitMessageSuggestionPolicy {
     /// Apple Intelligence bounds by UTF-8 bytes, which lands on the reduced
     /// diff. Stat-only is the floor when even that does not fit.
     static let diffCharacterBudgets = [24_000, 5_000, 0]
+    static let diffOutputByteLimit = 1_000_000
+    static let statOutputByteLimit = 64_000
     private static let statCharacterLimit = 2_000
     private static let contextCharacterLimit = 300
 
@@ -171,6 +186,14 @@ enum CommitMessageSuggestionPolicy {
         return files
     }
 
+    /// Cuts a diff read through a byte cap back to its last complete hunk or
+    /// file, so the cut never passes for a whole hunk.
+    static func droppingPartialTail(_ diff: String) -> String {
+        let boundaries = ["\n@@", "\ndiff --git "].compactMap { diff.range(of: $0, options: .backwards)?.lowerBound }
+        guard let cut = boundaries.max() else { return "" }
+        return String(diff[..<cut])
+    }
+
     /// Keeps whole hunks only, highest-priority files first, until the budget
     /// runs out. A file whose hunks all miss the budget is left to the stat.
     static func budgetedDiff(_ diff: String, characterBudget: Int) -> String {
@@ -284,8 +307,10 @@ enum CommitMessageSuggestionPolicy {
         else { return nil }
 
         var description = Substring(subject)
-        if let prefix = subject.firstMatch(of: conventionalPrefix) {
-            guard conventionalCommits else { return nil }
+        let prefix = subject.firstMatch(of: conventionalPrefix)
+        // The prefix must follow the repository's convention either way.
+        guard (prefix != nil) == conventionalCommits else { return nil }
+        if let prefix {
             // The match ends on the description's first character.
             description = subject[subject.index(before: prefix.range.upperBound)...]
         }

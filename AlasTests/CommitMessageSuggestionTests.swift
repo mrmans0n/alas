@@ -107,6 +107,18 @@ struct CommitMessageSuggestionTests {
         #expect(CommitMessageSuggestionPolicy.parse(output, conventionalCommits: false) == nil)
     }
 
+    @Test func conventionalRepositoriesRequireAPrefix() {
+        let output = #"{"subject": "Fix crash on reconnect"}"#
+        #expect(CommitMessageSuggestionPolicy.parse(output, conventionalCommits: true) == nil)
+    }
+
+    @Test func cappedDiffIsCutBackToTheLastCompleteHunk() {
+        let complete = Self.fileHeader("Sources/Sync.swift") + "\n" + Self.hunk("@@ -1 +1 @@", lines: 3)
+        let cut = complete + "\n" + Self.hunk("@@ -9 +9 @@", lines: 3).dropLast(4)
+
+        #expect(CommitMessageSuggestionPolicy.droppingPartialTail(cut) == complete)
+    }
+
     // MARK: Suggester
 
     @Test(arguments: [
