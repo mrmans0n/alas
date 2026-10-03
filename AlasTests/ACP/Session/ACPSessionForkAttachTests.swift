@@ -42,6 +42,57 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
+    @Test(
+        "only Claude's bare fork answer is resumed; ACP lets other agents answer a live fork that way",
+        arguments: [("claude", true), ("codex", false)]
+    )
+    func bareForkResultIsResumed(agentId: String, resumes: Bool) async throws {
+        let store = try seededForkStore(agentId: agentId)
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true, supportsResume: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
+        client.script(method: "session/resume") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "forked-remote",
+                availableModels: [],
+                availableModes: [ACPModeInfo(id: "plan", name: "Plan", description: nil)],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.contains { $0.method == "session/resume" } == resumes)
+        #expect(target.remoteSessionId == "forked-remote")
+        #expect(target.forkRecord?.mechanism == .nativeACP)
+    }
+
+    @Test("a bare fork whose resume fails is closed before the transcript fallback")
+    func failedBareForkResumeClosesFork() async throws {
+        let store = try seededForkStore()
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true, supportsResume: true, supportsClose: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
+        client.script(method: "session/resume") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error", data: nil))
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        let close = try #require(client.sent.first { $0.method == "session/close" })
+        #expect((close.params as? ACPSessionCloseParams)?.sessionId == "forked-remote")
+        #expect(target.remoteSessionId == "new-remote")
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+    }
+
     @Test("non-durable connection falls back without issuing session/fork")
     func nonDurableConnectionFallsBackWithoutForking() async throws {
         let store = try seededForkStore()
@@ -859,12 +910,14 @@ struct ACPSessionForkAttachTests {
     }
 
     private func seededForkStore(
-        sourceRemoteSessionID: String = "source-remote"
+        sourceRemoteSessionID: String = "source-remote",
+        agentId: String = "claude"
     ) throws -> ACPSessionStore {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             id: "source",
-            remoteSessionID: sourceRemoteSessionID
+            remoteSessionID: sourceRemoteSessionID,
+            agentId: agentId
         ))
         try store.appendMessage(
             sessionId: "source",
@@ -879,12 +932,12 @@ struct ACPSessionForkAttachTests {
             createdAt: 0
         )
         try store.createFork(
-            session: row(id: "target", remoteSessionID: nil),
+            session: row(id: "target", remoteSessionID: nil, agentId: agentId),
             messages: [],
             record: .init(
                 targetSessionID: "target",
                 sourceSessionID: "source",
-                sourceAgentID: "claude",
+                sourceAgentID: agentId,
                 sourceBoundarySequence: 0,
                 inheritedMessageCount: 0,
                 phase: .negotiatingNative,
@@ -895,10 +948,10 @@ struct ACPSessionForkAttachTests {
         return store
     }
 
-    private func row(id: String, remoteSessionID: String?) -> ACPSessionRow {
+    private func row(id: String, remoteSessionID: String?, agentId: String = "claude") -> ACPSessionRow {
         ACPSessionRow(
             id: id,
-            agentId: "claude",
+            agentId: agentId,
             title: id.capitalized,
             titleSource: .placeholder,
             remoteSessionId: remoteSessionID,
@@ -994,6 +1047,7 @@ struct ACPSessionForkAttachTests {
     private func scriptInitialize(
         _ client: ACPMockClient,
         supportsFork: Bool,
+        supportsResume: Bool = false,
         supportsClose: Bool = false,
         authMethods: [ACPInitializeResult.ACPAuthMethod] = []
     ) {
@@ -1002,6 +1056,7 @@ struct ACPSessionForkAttachTests {
                 protocolVersion: 1,
                 agentCapabilities: .init(
                     sessionCapabilities: .init(
+                        resume: supportsResume ? .init() : nil,
                         fork: supportsFork ? .init() : nil,
                         close: supportsClose ? .init() : nil
                     )

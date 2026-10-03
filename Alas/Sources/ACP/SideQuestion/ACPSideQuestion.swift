@@ -11,11 +11,21 @@ struct ACPSideQuestion: Equatable, Sendable {
     var isSubmitted = false
     /// Set while Keep is storing the promotion, so it runs once.
     var isPromoting = false
+
+    /// Sent ahead of every prompt in a side session, never recorded. Claude's
+    /// plan mode otherwise turns any question into a plan, and the exit-plan
+    /// request it ends with is blocked, so the turn ends with no answer.
+    static let guidance = """
+    This is a quick side question asked while another task runs. Answer it \
+    directly in text. You may read files to answer, but do not write a plan, \
+    edit files, or ask to leave plan mode.
+    """
 }
 
 enum ACPSideQuestionError: LocalizedError, Equatable {
     case notAccepted
     case unsafeMode
+    case attachFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +33,8 @@ enum ACPSideQuestionError: LocalizedError, Equatable {
             "The side session couldn't accept the question."
         case .unsafeMode:
             "Couldn't switch the side session to a read-only mode, so the question wasn't sent."
+        case .attachFailed(let reason):
+            reason
         }
     }
 }
