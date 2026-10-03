@@ -352,7 +352,7 @@ struct ACPHorizontalScrollViewTests {
         window.contentView = outer
         window.orderFrontRegardless()
         outer.layoutSubtreeIfNeeded()
-        let settled = table.fittingMeasurementCountForTesting
+        let settled = table.contentFittingSizeReadCountForTesting
 
         for y in stride(from: CGFloat(10), through: 300, by: 10) {
             outer.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
@@ -360,7 +360,7 @@ struct ACPHorizontalScrollViewTests {
             window.contentView?.layoutSubtreeIfNeeded()
         }
 
-        #expect(table.fittingMeasurementCountForTesting == settled)
+        #expect(table.contentFittingSizeReadCountForTesting == settled)
         #expect(table.contentFittingSize.height == 60)
     }
 }

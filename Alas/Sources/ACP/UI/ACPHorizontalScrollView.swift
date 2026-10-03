@@ -55,6 +55,16 @@ private final class ACPHorizontalHostingView: NSHostingView<AnyView> {
         super.invalidateIntrinsicContentSize()
         onIntrinsicSizeInvalidated?()
     }
+
+    #if DEBUG
+    /// Every read of the expensive measurement, wherever it comes from.
+    private(set) var fittingSizeReadCount = 0
+
+    override var fittingSize: NSSize {
+        fittingSizeReadCount += 1
+        return super.fittingSize
+    }
+    #endif
 }
 
 /// Routing owner of one phased wheel gesture over the table.
@@ -74,7 +84,8 @@ final class ACPHorizontalNSScrollView: NSScrollView {
     private var lastRefreshWidth: CGFloat?
     private var lastRefreshIntrinsicSize: NSSize?
     #if DEBUG
-    private(set) var fittingMeasurementCountForTesting = 0
+    /// How many times the hosted content was measured through `fittingSize`.
+    var contentFittingSizeReadCountForTesting: Int { hostingView.fittingSizeReadCount }
     #endif
 
     init() {
@@ -246,9 +257,6 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         defer { isRefreshingFittingSize = false }
         fittingNeedsRefresh = false
         let fitting = hostingView.fittingSize
-        #if DEBUG
-        fittingMeasurementCountForTesting += 1
-        #endif
         lastRefreshWidth = contentView.bounds.width
         lastRefreshIntrinsicSize = hostingView.intrinsicContentSize
         sizeDocument(to: fitting)
