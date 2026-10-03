@@ -102,6 +102,25 @@ struct ACPSideQuestionCard: View {
         let enforcesReadOnly: Bool
 
         @Environment(\.theme) private var theme
+        @State private var expandedActivityIDs: Set<String> = []
+
+        private var activityRows: [ACPTranscriptRenderRow] {
+            let rows = latestTurn.indices.compactMap { index -> ACPTranscriptVisibleRow? in
+                let message = transcript.messages[index]
+                switch message {
+                case .user, .agent, .toolCall:
+                    return ACPTranscriptVisibleRow(index: index, stableId: message.stableId)
+                default:
+                    return nil
+                }
+            }
+            return ACPToolCallGrouping.fold(
+                rows: rows,
+                messages: transcript.messages,
+                options: .init(enabled: true, isTurnActive: transcript.streamingState != .idle),
+                isExpanded: { expandedActivityIDs.contains($0.id) }
+            )
+        }
 
         /// Messages after the ones inherited from the parent.
         private var ownMessages: ArraySlice<ACPMessage> {
@@ -186,8 +205,17 @@ struct ACPSideQuestionCard: View {
                     ForEach(Array(earlierQuestions.dropFirst().enumerated()), id: \.offset) { _, question in
                         followUpLine(question)
                     }
-                    ForEach(Array(latestTurn.enumerated()), id: \.offset) { index, message in
-                        row(message, isFirstOfTurn: index == 0)
+                    ForEach(activityRows) { activityRow in
+                        switch activityRow {
+                        case .message(let visible):
+                            row(transcript.messages[visible.index], isFirstOfTurn: visible.index == latestTurn.startIndex)
+                        case .toolCallGroup(let group), .toolCallGroupHeader(let group):
+                            activityHeader(group)
+                        case .toolCallGroupMember(let visible, _):
+                            ACPToolCallGroupMemberRow {
+                                row(transcript.messages[visible.index], isFirstOfTurn: false)
+                            }
+                        }
                     }
                     ForEach(Array(latestBlocked.enumerated()), id: \.offset) { _, blocked in
                         blockedNotice(blocked.title)
@@ -239,6 +267,23 @@ struct ACPSideQuestionCard: View {
                             scopeKey: Self.scopeKey(for: transcript.pendingPermission)
                         )
                     }
+                }
+            }
+        }
+
+        private func activityHeader(_ group: ACPTranscriptToolCallGroup) -> some View {
+            let calls = group.members.compactMap { member -> ACPMessage.ToolCall? in
+                if case .toolCall(let call) = transcript.messages[member.index] { return call }
+                return nil
+            }
+            return ACPToolCallGroupHeaderRow(
+                summary: ACPToolCallGroupSummary(toolCalls: calls, isLive: group.isLive),
+                expanded: expandedActivityIDs.contains(group.id)
+            ) { expanded in
+                if expanded {
+                    expandedActivityIDs.insert(group.id)
+                } else {
+                    expandedActivityIDs.remove(group.id)
                 }
             }
         }
