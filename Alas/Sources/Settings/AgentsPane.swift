@@ -65,6 +65,10 @@ struct AgentsPane: View {
                                 desc: "Give chat agents an MCP server with Alas actions: open files, manage worktrees, and open reviews. Applies to newly connected sessions.") {
                         AlasToggle(on: state.bind(\.harness.exposeAlasMCP))
                     }
+                    SettingsRow(name: "Resume automatically after usage limits",
+                                desc: "When a provider usage limit stops a session, continue it after the limit resets. When the reset time is unknown, check again periodically for up to a day.") {
+                        AlasToggle(on: state.bind(\.harness.acpAutoResumeAfterUsageLimit))
+                    }
                     SettingsRow(name: "Alas MCP transport",
                                 desc: "How the built-in Alas MCP server is delivered. Use HTTP if your agent restricts stdio MCP servers by policy.") {
                         Picker("", selection: state.bind(\.harness.alasMCPTransport)) {

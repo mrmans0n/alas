@@ -225,6 +225,9 @@ private struct ACPSessionView: View {
                 if let retry = session.retryStatus {
                     retryBanner(retry)
                 }
+                if let limit = session.usageLimit {
+                    usageLimitBanner(limit, resumeAt: session.usageLimitResumeItem?.scheduledAt)
+                }
                 if isMirror {
                     mirrorBanner()
                 }
@@ -1297,6 +1300,46 @@ private struct ACPSessionView: View {
         .background(theme.color("del").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
+        }
+    }
+
+    private func usageLimitBanner(_ limit: ACPUsageLimit, resumeAt: Date?) -> some View {
+        let time = Date.FormatStyle.dateTime.hour().minute()
+        let detail: String = if let resumeAt {
+            if let resetsAt = limit.resetsAt {
+                "resets \(resetsAt.formatted(time)) · resuming automatically"
+            } else {
+                "checking again at \(resumeAt.formatted(time))"
+            }
+        } else if let resetsAt = limit.resetsAt {
+            "resets \(resetsAt.formatted(time))"
+        } else {
+            ""
+        }
+        return HStack(spacing: 8) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .foregroundStyle(theme.color("warn"))
+            Text(detail.isEmpty ? "Usage limit reached" : "Usage limit reached · \(detail)")
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .foregroundStyle(theme.color("fg"))
+            Spacer()
+            if !isMirror {
+                Button("Resume now") { Task { await manager.usageLimitResumeNow(for: sessionId) } }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(theme.color("accent"))
+                if resumeAt != nil {
+                    Button("Cancel auto-resume") { Task { await manager.usageLimitCancelAutoResume(for: sessionId) } }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(theme.color("warn").opacity(0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color("warn").opacity(0.3)).frame(height: 0.5)
         }
     }
 

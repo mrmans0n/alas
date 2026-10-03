@@ -520,6 +520,24 @@ final class ACPSessionManager: ObservableObject {
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
+    /// Send the usage-limit continue prompt now instead of at the reset.
+    func usageLimitResumeNow(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id],
+              let limit = session.usageLimit else { return }
+        session.upsertUsageLimitResume(limit: limit, scheduledAt: Date())
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
+    /// Drop the scheduled resume; the session stays Limited until a turn succeeds.
+    func usageLimitCancelAutoResume(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id],
+              session.removeUsageLimitResume() else { return }
+        persistQueue(for: session)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
     /// Clear a failed item's error so the flusher re-attempts it.
     func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
