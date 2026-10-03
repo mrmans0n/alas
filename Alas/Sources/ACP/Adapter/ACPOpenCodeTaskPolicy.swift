@@ -20,6 +20,16 @@ enum ACPOpenCodeTaskPolicy {
     static let adapterName = "OpenCode"
     static let configKey = "OPENCODE_CONFIG_CONTENT"
 
+    /// The version `opencode --version` printed: `1.18.34` on 1.x,
+    /// `opencode v2.0.22` on 2.x. Nil when it printed no version.
+    static func reportedVersion(_ versionOutput: String) -> String? {
+        guard var token = versionOutput.split(whereSeparator: \.isWhitespace).last.map(String.init)
+        else { return nil }
+        if token.hasPrefix("v") { token.removeFirst() }
+        guard token.split(separator: ".").first.flatMap({ Int($0) }) != nil else { return nil }
+        return token
+    }
+
     /// One agent from `opencode agent list`.
     struct Agent: Equatable, Sendable {
         let name: String
@@ -206,9 +216,30 @@ enum ACPOpenCodeTaskPolicy {
               ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism == .openCodeConfigContent,
               let content = spec.extraEnv[configKey]
         else { return spec }
+        // Fail on a major whose policy Alas has not verified before running
+        // `opencode agent list`, which OpenCode 2 no longer has.
+        try ACPNativeDelegationControls.checkAdapterVersion(
+            reportedVersion(await versionOutput(command: spec.command, extraEnv: spec.extraEnv, cwd: cwd)),
+            mechanism: .openCodeConfigContent,
+            agentID: spec.agentID
+        )
         let runner = agentListRunner(command: spec.command, extraEnv: spec.extraEnv, cwd: cwd)
         let verified = try await verifiedConfig(startingFrom: content, runAgentList: runner)
         return spec.mergingExtraEnv([configKey: verified])
+    }
+
+    /// `opencode --version` stdout, or "" when it cannot run; an empty
+    /// result fails the version check as an unidentified version.
+    static func versionOutput(command: String, extraEnv: [String: String], cwd: String) async -> String {
+        let absolute = command.hasPrefix("/")
+        guard let result = try? await Process.run(
+            absolute ? command : "/usr/bin/env",
+            args: (absolute ? [] : [command]) + ["--version"],
+            cwd: URL(fileURLWithPath: cwd),
+            env: ACPProcessEnvironment.sanitizedForACP(extra: extraEnv),
+            timeout: 30
+        ), result.exitCode == 0 else { return "" }
+        return result.stdout
     }
 
     /// `opencode agent list` in the environment and directory the adapter

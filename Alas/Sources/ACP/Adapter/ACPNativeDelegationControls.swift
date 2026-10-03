@@ -49,6 +49,16 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .piCommandWrapper: "0.0.34"
         }
     }
+
+    /// First major version whose native-tool control has not been verified.
+    /// OpenCode 2 removed `opencode agent list` and renamed `task` to
+    /// `subagent`, so the 1.x check cannot vouch for it.
+    var firstUnverifiedMajorVersion: Int? {
+        switch self {
+        case .openCodeConfigContent: 2
+        case .claudeDisallowedTools, .codexConfigEnvironment, .ompConfigOverlay, .piCommandWrapper: nil
+        }
+    }
 }
 
 /// What turning on "Disable native subagents" can actually do for an agent.
@@ -106,7 +116,8 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
                 + "OPENCODE_CONFIG_CONTENT, keeping any OPENCODE_CONFIG_CONTENT you "
                 + "already set. Before each launch Alas checks every OpenCode agent's "
                 + "effective permissions; if managed or other configuration keeps "
-                + "task enabled, the session fails to start instead. Local sessions only."
+                + "task enabled, the session fails to start instead. OpenCode 1.x, "
+                + "local sessions only."
         case .toolOmission(.ompConfigOverlay):
             return "Starts OMP with a launch-only settings overlay that sets "
                 + "task.maxRecursionDepth to 0. This removes the task and hub tools "
@@ -177,6 +188,7 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
     case openCodePolicyUnverifiable(String)
     case remoteHostUnsupported(agentID: String)
     case adapterVersionUnverified(agentID: String, found: String?, minimum: String)
+    case adapterVersionUnsupported(agentID: String, found: String, firstUnverifiedMajor: Int)
     case adapterUnverified(agentID: String, found: String?, expected: String)
     case launchOverlayUnavailable(agentID: String, detail: String)
     case piCommandUnavailable(command: String, isUserCommand: Bool)
@@ -218,6 +230,12 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
             return "Native subagents are disabled for this session, but the "
                 + "\(agentID) ACP adapter reported \(version); disabling them is "
                 + "verified from \(minimum). Update the adapter or turn off "
+                + "\"Disable native subagents\" in Settings → Agents, then start a "
+                + "new session."
+        case .adapterVersionUnsupported(let agentID, let found, let major):
+            return "Native subagents are disabled for this session, but the "
+                + "\(agentID) ACP adapter reported version \(found); Alas has not "
+                + "verified how to disable them from version \(major) on. Turn off "
                 + "\"Disable native subagents\" in Settings → Agents, then start a "
                 + "new session."
         case .adapterUnverified(let agentID, let found, let expected):
@@ -368,14 +386,26 @@ enum ACPNativeDelegationControls {
                 expected: mechanism.verifiedAdapterName
             )
         }
-        guard let version = agentInfo?.version,
-              isVersion(version, atLeast: mechanism.minimumAdapterVersion)
-        else {
+        try checkAdapterVersion(agentInfo?.version, mechanism: mechanism, agentID: agentID)
+    }
+
+    /// Fails unless `version` is within the verified range of `mechanism`:
+    /// at least its minimum and below its first unverified major. A
+    /// pre-release of an unverified major counts as that major.
+    static func checkAdapterVersion(
+        _ version: String?,
+        mechanism: ACPNativeDelegationMechanism,
+        agentID: String
+    ) throws {
+        guard let version, isVersion(version, atLeast: mechanism.minimumAdapterVersion) else {
             throw ACPNativeDelegationError.adapterVersionUnverified(
-                agentID: agentID,
-                found: agentInfo?.version,
-                minimum: mechanism.minimumAdapterVersion
-            )
+                agentID: agentID, found: version, minimum: mechanism.minimumAdapterVersion)
+        }
+        if let ceiling = mechanism.firstUnverifiedMajorVersion,
+           let major = version.split(separator: ".").first.flatMap({ Int($0) }),
+           major >= ceiling {
+            throw ACPNativeDelegationError.adapterVersionUnsupported(
+                agentID: agentID, found: version, firstUnverifiedMajor: ceiling)
         }
     }
 
