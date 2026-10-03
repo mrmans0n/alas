@@ -520,9 +520,6 @@ Per the testing policy, pin the decisions:
   symlink swapped mid-walk, `.git` aliases in any case, and a contained
   symlink that must keep working. `ACPRemoteFileServerTests` covers the Swift
   shell paths, not these operations, so it is not the place.
-- Host-side containment keeps a symlink that resolves inside the worktree
-  working (API 6's `inner/c.txt` through `inner -> a`), next to the escape
-  cases.
 - Remote argv reaches the program unchanged: `appendArgs` with spaces and
   quotes arrive as the same strings, quoted only once, in the helper.
 - Helper lifecycle, in the helper's own Rust tests: a long-running start sees
