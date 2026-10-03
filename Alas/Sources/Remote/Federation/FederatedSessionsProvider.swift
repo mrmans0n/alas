@@ -88,12 +88,16 @@ final class FederatedSessionsProvider {
     private enum ComparisonRequestKey: Hashable {
         case changes(sessionId: String)
         case diff(sessionId: String, path: String, stage: String?)
+        case commitFiles(sessionId: String, sha: String)
+        case commitDiff(sessionId: String, sha: String, path: String)
         case files(sessionId: String, path: String?)
 
         var sessionId: String {
             switch self {
             case .changes(let sessionId),
                  .diff(let sessionId, _, _),
+                 .commitFiles(let sessionId, _),
+                 .commitDiff(let sessionId, _, _),
                  .files(let sessionId, _):
                 sessionId
             }
@@ -350,6 +354,10 @@ final class FederatedSessionsProvider {
             .changes(sessionId: namespacedSessionId)
         case .fileDiff(_, let path, let stage, _):
             .diff(sessionId: namespacedSessionId, path: path, stage: stage)
+        case .listCommitFiles(_, let sha):
+            .commitFiles(sessionId: namespacedSessionId, sha: sha)
+        case .commitFileDiff(_, let sha, let path):
+            .commitDiff(sessionId: namespacedSessionId, sha: sha, path: path)
         case .listFiles(_, let path, _):
             .files(sessionId: namespacedSessionId, path: path)
         default:
@@ -367,6 +375,10 @@ final class FederatedSessionsProvider {
         case .fileDiffResult(_, let path, let stage, _, _, _),
              .fileDiffFailed(_, let path, let stage, _, _):
             .diff(sessionId: namespacedSessionId, path: path, stage: stage)
+        case .commitFiles(_, let sha, _, _), .commitFilesFailed(_, let sha, _, _):
+            .commitFiles(sessionId: namespacedSessionId, sha: sha)
+        case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
+            .commitDiff(sessionId: namespacedSessionId, sha: sha, path: path)
         case .fileTree(_, let path, _, _),
              .fileTreeFailed(_, let path, _, _):
             .files(sessionId: namespacedSessionId, path: path)

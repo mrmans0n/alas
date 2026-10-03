@@ -344,6 +344,27 @@ final class RemoteSessionGateway {
             case .failure(let reason, let message):
                 send(.fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message))
             }
+        case .listCommitFiles(let id, let sha):
+            guard let key = message.fileRequestDedupKey,
+                  inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteCommitFiles(sessionId: id, sha: sha) {
+            case .success(let files, let truncated):
+                send(.commitFiles(sessionId: id, sha: sha, files: files, truncated: truncated))
+            case .failure(let reason, let message):
+                send(.commitFilesFailed(sessionId: id, sha: sha, reason: reason, message: message))
+            }
+        case .commitFileDiff(let id, let sha, let path):
+            guard let key = message.fileRequestDedupKey,
+                  inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteCommitDiff(sessionId: id, sha: sha, path: path) {
+            case .success(let hunks, let truncated, let metadataNote):
+                send(.commitDiffResult(sessionId: id, sha: sha, path: path, hunks: hunks,
+                                       truncated: truncated, metadataNote: metadataNote))
+            case .failure(let reason, let message):
+                send(.commitDiffFailed(sessionId: id, sha: sha, path: path, reason: reason, message: message))
+            }
         case .listFiles(let id, let path, let comparisonMode):
             let key = if let comparisonMode {
                 "listFiles\u{0}\(id)\u{0}\(path ?? "")\u{0}\(comparisonMode.rawValue)"

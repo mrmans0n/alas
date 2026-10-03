@@ -91,8 +91,11 @@ struct NativePeerRightPaneView: View {
             NativePeerChangesView(
                 changes: client.workspace.changes,
                 worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                commitFiles: client.workspace.commitFiles,
+                onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                 onOpen: { client.open($0) }
             )
+            .id(client.selectedSessionId)
         }
     }
 
@@ -133,7 +136,9 @@ struct NativePeerRightPaneView: View {
     }
 
     private var changesCount: Int {
-        if case .loaded(let changes) = client.workspace.changes { return changes.branchFiles.count }
+        if case .loaded(let changes) = client.workspace.changes {
+            return Set((changes.staged + changes.unstaged).map(\.path)).count
+        }
         return client.selectedRow?.worktree?.changedFileCount ?? 0
     }
 

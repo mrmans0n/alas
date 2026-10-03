@@ -22,15 +22,21 @@ struct NativePeerWorkspace: Equatable {
         var commitsTruncated: Bool
     }
 
+    struct CommitFiles: Equatable {
+        var files: [ChangedFile]
+        var truncated: Bool
+    }
+
     enum Document: Hashable {
         /// A nil `stage` diffs against the comparison ref, matching
         /// `RemoteClientMessage.fileDiff`.
         case diff(path: String, stage: ChangeStage?)
+        case commitDiff(path: String, sha: String)
         case file(path: String)
 
         var path: String {
             switch self {
-            case .diff(let path, _), .file(let path): path
+            case .diff(let path, _), .commitDiff(let path, _), .file(let path): path
             }
         }
     }
@@ -42,6 +48,7 @@ struct NativePeerWorkspace: Equatable {
 
     static let offlineMessage = "Peer is offline."
 
+    private(set) var commitFiles: [String: Load<CommitFiles>] = [:]
     private(set) var changes: Load<Changes> = .idle
     private(set) var fileTree: Load<[FileTreeNode]> = .idle
     /// Bumped on every tree merge so `FileTreeListView` re-evaluates its
@@ -69,6 +76,23 @@ struct NativePeerWorkspace: Equatable {
     mutating func beginChangesLoad() {
         if case .loaded = changes { return }
         changes = .loading
+    }
+
+    /// Commit contents are immutable, so loaded lists can be reused.
+    mutating func beginCommitFilesLoad(sha: String) -> Bool {
+        // Full commit identities were added with the inspection endpoints.
+        // Older peers silently discard these request types.
+        if case .loaded(let changes) = changes,
+           let commit = changes.commits.first(where: { $0.revision == sha }), commit.sha == nil {
+            commitFiles[sha] = .failed("Update the peer to inspect commit files.")
+            return false
+        }
+        switch commitFiles[sha] {
+        case .loading?, .loaded?: return false
+        default:
+            commitFiles[sha] = .loading
+            return true
+        }
     }
 
     /// False while the root listing is already in flight. A loaded tree
@@ -122,6 +146,9 @@ struct NativePeerWorkspace: Equatable {
     /// can be retried immediately once the peer returns, rather than staying
     /// gated the way an explicit `fileTreeFailed` reply gates it.
     mutating func markUnavailable() {
+        for (sha, load) in commitFiles where load == .loading {
+            commitFiles[sha] = .failed(Self.offlineMessage)
+        }
         if changes == .loading { changes = .failed(Self.offlineMessage) }
         if fileTree == .loading {
             fileTree = .failed(Self.offlineMessage)
@@ -160,6 +187,18 @@ struct NativePeerWorkspace: Equatable {
             // A failed refresh keeps the list the user is already reading.
             if case .loaded = changes { return true }
             changes = .failed(Self.describe(reason, message: message))
+        case .commitFiles(_, let sha, let files, let truncated):
+            commitFiles[sha] = .loaded(CommitFiles(
+                files: files.map { Self.changedFile($0, stage: .unstaged) }, truncated: truncated))
+        case .commitFilesFailed(_, let sha, let reason, let message):
+            commitFiles[sha] = .failed(Self.describe(reason, message: message))
+        case .commitDiffResult(_, let sha, let path, let hunks, let truncated, let metadataNote):
+            guard document == .commitDiff(path: path, sha: sha) else { return true }
+            documentContent = .loaded(.diff(
+                ParsedDiff(hunks: hunks.map(Self.hunk), metadataSummary: metadataNote), truncated: truncated))
+        case .commitDiffFailed(_, let sha, let path, let reason, let message):
+            guard document == .commitDiff(path: path, sha: sha) else { return true }
+            documentContent = .failed(Self.describe(reason, message: message))
         case .fileTree(_, let path, let nodes, let truncated):
             let mapped = nodes.map(Self.fileTreeNode)
             let truncationKey = path ?? ""

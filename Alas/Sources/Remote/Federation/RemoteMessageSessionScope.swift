@@ -20,7 +20,7 @@ extension RemoteClientMessage {
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
-             .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _):
+             .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _):
             return id
         }
     }
@@ -66,6 +66,8 @@ extension RemoteClientMessage {
             )
         case .listFiles(_, let path, let comparisonMode):
             return .listFiles(sessionId: new, path: path, comparisonMode: comparisonMode)
+        case .listCommitFiles(_, let sha): return .listCommitFiles(sessionId: new, sha: sha)
+        case .commitFileDiff(_, let sha, let path): return .commitFileDiff(sessionId: new, sha: sha, path: path)
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
         }
     }
@@ -90,6 +92,8 @@ extension RemoteServerMessage {
              .sessionRenamed(let id, _), .queueState(let id, _), .queueEditRestored(let id, _, _),
              .changeList(let id, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
              .fileDiffResult(let id, _, _, _, _, _), .fileDiffFailed(let id, _, _, _, _),
+             .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
+             .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _),
              .fileUnavailable(let id, _, _, _, _):
             return id
@@ -147,6 +151,15 @@ extension RemoteServerMessage {
                                    metadataNote: metadataNote)
         case .fileDiffFailed(_, let path, let stage, let reason, let message):
             return .fileDiffFailed(sessionId: new, path: path, stage: stage, reason: reason, message: message)
+        case .commitFiles(_, let sha, let files, let truncated):
+            return .commitFiles(sessionId: new, sha: sha, files: files, truncated: truncated)
+        case .commitFilesFailed(_, let sha, let reason, let message):
+            return .commitFilesFailed(sessionId: new, sha: sha, reason: reason, message: message)
+        case .commitDiffResult(_, let sha, let path, let hunks, let truncated, let metadataNote):
+            return .commitDiffResult(sessionId: new, sha: sha, path: path, hunks: hunks,
+                                     truncated: truncated, metadataNote: metadataNote)
+        case .commitDiffFailed(_, let sha, let path, let reason, let message):
+            return .commitDiffFailed(sessionId: new, sha: sha, path: path, reason: reason, message: message)
         case .fileTree(_, let path, let nodes, let truncated):
             return .fileTree(sessionId: new, path: path, nodes: nodes, truncated: truncated)
         case .fileTreeFailed(_, let path, let reason, let message):

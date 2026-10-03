@@ -31,6 +31,7 @@ struct NativePeerDocumentView: View {
         case .diff(_, .staged): "staged"
         case .diff(_, .unstaged): "unstaged"
         case .diff(_, nil): "branch"
+        case .commitDiff(_, let sha): String(sha.prefix(7))
         case .file: "peer"
         }
     }

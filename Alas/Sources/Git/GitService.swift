@@ -656,6 +656,11 @@ extension GitService {
     }
 
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+        try await diff(worktreePath: worktreePath, sha: sha, file: file,
+                       originalPath: originalPath, maxOutputBytes: .max)
+    }
+
+    func diff(worktreePath: URL, sha: String, file: String, originalPath: String?, maxOutputBytes: Int) async throws -> ParsedDiff {
         // Detect initial commit (no parent) so we can fall back to the empty
         // tree, mirroring the technique used in commitDetails. Empirically,
         // `<sha>^!` fails for parentless commits because `<sha>^` doesn't
@@ -697,20 +702,29 @@ extension GitService {
         // exists with its own modifications) is then sliced down to just
         // the requested file's section before handing it to DiffParser.
         // See commitDetails for the rationale on -c core.quotePath=false.
-        var args: [String] = ["-c", "core.quotePath=false",
+        var args: [String] = ["--literal-pathspecs", "-c", "core.quotePath=false",
                               "diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
+        if maxOutputBytes != .max {
+            // Bounded peer reads only inspect blobs, without invoking drivers.
+            args.insert(contentsOf: ["--no-ext-diff", "--no-textconv"], at: 4)
+        }
         if let originalPath { args.append(originalPath) }
-        let result = try await Process.git(args, cwd: worktreePath)
-        guard result.exitCode == 0 else {
+        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+        guard result.stdoutTruncated || result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.diff(sha:file:)",
                 code: Int(result.exitCode),
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]
             )
         }
-        let stdout = result.stdout
+        let stdout = Self.sliceDiffForFile(result.stdout, file: file)
+        guard !(result.stdoutTruncated && stdout.isEmpty) else {
+            throw ProcessError.nonZeroExit(
+                result.exitCode,
+                "diff for \(file) exceeded the size cap before its section was captured")
+        }
         return await Task.detached(priority: .userInitiated) {
-            DiffParser.parse(Self.sliceDiffForFile(stdout, file: file))
+            DiffParser.parse(stdout)
         }.value
     }
 

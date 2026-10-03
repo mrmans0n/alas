@@ -17,6 +17,56 @@ struct NativePeerWorkspaceTests {
               badge: "M", childrenState: "loaded", isSubmodule: false)
     }
 
+    @Test func commitFilesLoadOnceAndRetryAfterDisconnect() {
+        var workspace = NativePeerWorkspace()
+        let started = workspace.beginCommitFilesLoad(sha: "abc1234")
+        let duplicate = workspace.beginCommitFilesLoad(sha: "abc1234")
+        #expect(started)
+        #expect(!duplicate)
+        workspace.markUnavailable()
+        let retried = workspace.beginCommitFilesLoad(sha: "abc1234")
+        #expect(retried)
+        let applied = workspace.apply(.commitFiles(sessionId: "B:s", sha: "abc1234",
+            files: [changed("src/a.swift")], truncated: true))
+        #expect(applied)
+        guard case .loaded(let files) = workspace.commitFiles["abc1234"] else {
+            Issue.record("expected loaded commit files")
+            return
+        }
+        #expect(files.files.map(\.path) == ["src/a.swift"])
+        #expect(files.truncated)
+        let reloaded = workspace.beginCommitFilesLoad(sha: "abc1234")
+        #expect(!reloaded)
+    }
+
+    @Test func olderPeerCommitRepliesDoNotStartUnsupportedRequests() {
+        var workspace = NativePeerWorkspace()
+        _ = workspace.apply(.changeList(sessionId: "B:s", comparisonRef: "main", metricsAvailable: true,
+            files: [], staged: [], unstaged: [], commits: [
+                RemoteCommit(shortSha: "abc1234", subject: "change", author: "author", add: 1, del: 0),
+            ], truncated: false))
+        let started = workspace.beginCommitFilesLoad(sha: "abc1234")
+        #expect(!started)
+        guard case .failed = workspace.commitFiles["abc1234"] else {
+            Issue.record("expected an unsupported-peer message")
+            return
+        }
+    }
+
+    @Test func commitDiffRepliesAreScopedToTheSelectedCommit() {
+        var workspace = NativePeerWorkspace()
+        workspace.beginDocument(.commitDiff(path: "a.swift", sha: "bbb2222"))
+        _ = workspace.apply(.commitDiffResult(sessionId: "B:s", sha: "aaa1111", path: "a.swift",
+            hunks: [], truncated: false, metadataNote: "old"))
+        _ = workspace.apply(.fileDiffResult(sessionId: "B:s", path: "a.swift",
+            hunks: [], truncated: false))
+        #expect(workspace.documentContent == .loading)
+        _ = workspace.apply(.commitDiffResult(sessionId: "B:s", sha: "bbb2222", path: "a.swift",
+            hunks: [], truncated: false, metadataNote: "File renamed"))
+        #expect(workspace.documentContent == .loaded(.diff(
+            ParsedDiff(hunks: [], metadataSummary: "File renamed"), truncated: false)))
+    }
+
     @Test func changeListFillsSectionsAndAFailedRefreshKeepsIt() {
         var workspace = NativePeerWorkspace()
         workspace.beginChangesLoad()

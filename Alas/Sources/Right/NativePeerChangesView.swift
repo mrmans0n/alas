@@ -1,18 +1,20 @@
 import SwiftUI
 
-/// Read-only Changes tab for a peer worktree: its working tree, everything
-/// that differs from the comparison ref, and its commits. Rows open a diff in
-/// the center; nothing here writes to the peer.
+/// Read-only working-tree changes and expandable commits for a peer session.
+/// File rows open their working-tree or commit diff in the center.
 struct NativePeerChangesView: View {
     let changes: NativePeerWorkspace.Load<NativePeerWorkspace.Changes>
     /// The peer worktree's root, only used to build the "Copy Full Path" text.
     let worktreePath: URL
+    let commitFiles: [String: NativePeerWorkspace.Load<NativePeerWorkspace.CommitFiles>]
+    let onLoadCommitFiles: (String) -> Void
     let onOpen: (NativePeerWorkspace.Document) -> Void
 
     @Environment(\.theme) private var theme
     @State private var collapsedSections: Set<String> = []
     @State private var collapsedWorkingTreePaths: Set<String> = []
-    @State private var collapsedBranchPaths: Set<String> = []
+    @State private var expandedCommits: Set<String> = []
+    @State private var collapsedCommitPaths: [String: Set<String>] = [:]
 
     var body: some View {
         switch changes {
@@ -21,8 +23,7 @@ struct NativePeerChangesView: View {
         case .failed(let message):
             NativePeerRailMessage(text: message)
         case .loaded(let changes):
-            if changes.branchFiles.isEmpty && changes.staged.isEmpty
-                && changes.unstaged.isEmpty && changes.commits.isEmpty {
+            if changes.staged.isEmpty && changes.unstaged.isEmpty && changes.commits.isEmpty {
                 NativePeerRailMessage(text: "No changes.")
             } else {
                 ScrollView {
@@ -35,13 +36,6 @@ struct NativePeerChangesView: View {
                             onSelectStage: { file, stage in
                                 onOpen(.diff(path: file.path, stage: stage))
                             }
-                        )
-                        treeSection(
-                            changes.comparisonRef.map { "Since \($0)" } ?? "Branch",
-                            files: changes.branchFiles,
-                            collapsedPaths: $collapsedBranchPaths,
-                            document: { .diff(path: $0.path, stage: nil) },
-                            showsStageState: false
                         )
                         commitSection(changes.commits, truncated: changes.commitsTruncated)
                         if changes.truncated {
@@ -61,24 +55,27 @@ struct NativePeerChangesView: View {
         collapsedPaths: Binding<Set<String>>,
         document: @escaping (ChangedFile) -> NativePeerWorkspace.Document,
         onSelectStage: ((ChangedFile, ChangeStage) -> Void)? = nil,
-        showsStageState: Bool = true
+        showsStageState: Bool = true,
+        showsHeader: Bool = true
     ) -> some View {
         if !files.isEmpty {
             let expanded = !collapsedSections.contains(title)
             let groups = WorkingTreeChangeGroup.group(files: files)
             let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
-            SectionHeader(
-                role: .workingTree,
-                title: title,
-                count: groups.count,
-                expanded: expanded,
-                onToggle: { toggle(title) },
-                stats: (
-                    add: groups.reduce(0) { $0 + $1.add },
-                    del: groups.reduce(0) { $0 + $1.del }
-                )
-            ) { EmptyView() }
-            if expanded {
+            if showsHeader {
+                SectionHeader(
+                    role: .workingTree,
+                    title: title,
+                    count: groups.count,
+                    expanded: expanded,
+                    onToggle: { toggle(title) },
+                    stats: (
+                        add: groups.reduce(0) { $0 + $1.add },
+                        del: groups.reduce(0) { $0 + $1.del }
+                    )
+                ) { EmptyView() }
+            }
+            if expanded || !showsHeader {
                 ForEach(WorkingTreeFlatRow.make(
                     groups: groups,
                     collapsedPaths: collapsedPaths.wrappedValue
@@ -121,26 +118,83 @@ struct NativePeerChangesView: View {
                 onToggle: { toggle(title) }
             ) { EmptyView() }
             if expanded {
-                ForEach(commits, id: \.shortSha) { commit in
-                    HStack(spacing: 6) {
-                        Text(commit.shortSha).foregroundColor(theme.color("fg-faint"))
-                        Text(commit.subject)
-                            .font(.system(size: 11.5))
-                            .foregroundColor(theme.color("fg"))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 4)
-                        if commit.add > 0 { Text("+\(commit.add)").foregroundColor(theme.color("add")) }
-                        if commit.del > 0 { Text("−\(commit.del)").foregroundColor(theme.color("del")) }
+                ForEach(commits, id: \.revision) { commit in
+                    let sha = commit.revision
+                    let isExpanded = expandedCommits.contains(sha)
+                    Button {
+                        if expandedCommits.remove(sha) == nil {
+                            expandedCommits.insert(sha)
+                            onLoadCommitFiles(sha)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundColor(theme.color("fg-faint"))
+                                .frame(width: 8)
+                            Text(commit.shortSha).foregroundColor(theme.color("fg-faint"))
+                            Text(commit.subject)
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg"))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 4)
+                            if commit.add > 0 { Text("+\(commit.add)").foregroundColor(theme.color("add")) }
+                            if commit.del > 0 { Text("−\(commit.del)").foregroundColor(theme.color("del")) }
+                        }
+                        .font(.system(size: 11, design: .monospaced))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
                     }
-                    .font(.system(size: 11, design: .monospaced))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .buttonStyle(.plain)
                     .help("\(commit.subject)\n\(commit.author)")
+                    .accessibilityLabel("\(commit.shortSha) \(commit.subject)")
+                    .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    if isExpanded {
+                        commitFilesSection(sha: sha)
+                    }
                 }
                 if truncated {
                     NativePeerRailMessage(text: "Showing the latest \(commits.count) commits.")
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func commitFilesSection(sha: String) -> some View {
+        switch commitFiles[sha] ?? .idle {
+        case .idle, .loading:
+            NativePeerRailMessage(text: "Loading commit files…")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 0) {
+                NativePeerRailMessage(text: message)
+                Button("Retry") { onLoadCommitFiles(sha) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("accent"))
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+        case .loaded(let result):
+            if result.files.isEmpty {
+                NativePeerRailMessage(text: "No files changed in this commit.")
+            } else {
+                treeSection(
+                    sha,
+                    files: result.files,
+                    collapsedPaths: Binding(
+                        get: { collapsedCommitPaths[sha] ?? [] },
+                        set: { collapsedCommitPaths[sha] = $0 }
+                    ),
+                    document: { .commitDiff(path: $0.path, sha: sha) },
+                    showsStageState: false,
+                    showsHeader: false
+                )
+            }
+            if result.truncated {
+                NativePeerRailMessage(text: "The peer shortened this commit's file list.")
             }
         }
     }

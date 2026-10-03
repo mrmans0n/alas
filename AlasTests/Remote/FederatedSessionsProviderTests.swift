@@ -178,7 +178,28 @@ struct FederatedSessionsProviderTests {
         #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
     }
 
-    @Test func comparisonSensitiveRepliesReturnOnlyToTheirRequestingDownstream() {
+    @Test(arguments: [
+        (
+            RemoteClientMessage.listChanges(sessionId: "srv-b:s1", comparisonMode: .auto),
+            RemoteClientMessage.listChanges(sessionId: "srv-b:s1", comparisonMode: .branchUpstream),
+            RemoteServerMessage.changeList(sessionId: "s1", comparisonRef: "main", metricsAvailable: true,
+                files: [], staged: [], unstaged: [], commits: [], truncated: false)
+        ),
+        (
+            RemoteClientMessage.listCommitFiles(sessionId: "srv-b:s1", sha: "abc1234"),
+            RemoteClientMessage.listCommitFiles(sessionId: "srv-b:s1", sha: "abc1234"),
+            RemoteServerMessage.commitFiles(sessionId: "s1", sha: "abc1234", files: [], truncated: false)
+        ),
+        (
+            RemoteClientMessage.commitFileDiff(sessionId: "srv-b:s1", sha: "abc1234", path: "a.txt"),
+            RemoteClientMessage.commitFileDiff(sessionId: "srv-b:s1", sha: "abc1234", path: "a.txt"),
+            RemoteServerMessage.commitDiffFailed(sessionId: "s1", sha: "abc1234", path: "a.txt",
+                reason: .binary, message: nil)
+        ),
+    ])
+    func fileRepliesReturnOnlyToTheirRequestingDownstream(
+        firstRequest: RemoteClientMessage, secondRequest: RemoteClientMessage, reply: RemoteServerMessage
+    ) {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
         let first = Client()
@@ -189,37 +210,18 @@ struct FederatedSessionsProviderTests {
         _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
         _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: second.downstream)
         links.sent.removeAll()
-
-        _ = provider.route(
-            .listChanges(sessionId: "srv-b:s1", comparisonMode: .auto),
-            from: first.downstream
-        )
-        _ = provider.route(
-            .listChanges(sessionId: "srv-b:s1", comparisonMode: .branchUpstream),
-            from: second.downstream
-        )
-
-        #expect(links.sent(to: "srv-b") == [
-            .listChanges(sessionId: "s1", comparisonMode: .auto),
-        ])
-
-        let firstReply = RemoteServerMessage.changeList(
-            sessionId: "s1", comparisonRef: "main", metricsAvailable: true,
-            files: [], staged: [], unstaged: [], commits: [], truncated: false)
-        links.receive(firstReply, from: "srv-b")
-        #expect(first.received == [firstReply.replacingSessionId("srv-b:s1")])
+        _ = provider.route(firstRequest, from: first.downstream)
+        _ = provider.route(secondRequest, from: second.downstream)
+        #expect(links.sent(to: "srv-b") == [firstRequest.replacingSessionId("s1")])
+        links.receive(reply, from: "srv-b")
+        #expect(first.received == [reply.replacingSessionId("srv-b:s1")])
         #expect(second.received.isEmpty)
         #expect(links.sent(to: "srv-b") == [
-            .listChanges(sessionId: "s1", comparisonMode: .auto),
-            .listChanges(sessionId: "s1", comparisonMode: .branchUpstream),
+            firstRequest.replacingSessionId("s1"), secondRequest.replacingSessionId("s1"),
         ])
-
-        let secondReply = RemoteServerMessage.changeList(
-            sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
-            files: [], staged: [], unstaged: [], commits: [], truncated: false)
-        links.receive(secondReply, from: "srv-b")
+        links.receive(reply, from: "srv-b")
         #expect(first.received.count == 1)
-        #expect(second.received == [secondReply.replacingSessionId("srv-b:s1")])
+        #expect(second.received == [reply.replacingSessionId("srv-b:s1")])
     }
 
     @Test func aNewSubscriberReceivesActivePlanAndElicitationRequestsWithoutDuplicatingThem() {
