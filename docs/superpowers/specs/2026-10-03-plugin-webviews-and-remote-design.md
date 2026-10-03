@@ -208,8 +208,11 @@ Same messages, limits and error codes as API 6. Differences:
   daemonizes is out of the recorded group, so R3 adds descendant tracking to
   the helper as the local launcher does: sample the tree while the root runs,
   keep each descendant's pid with its start time, and on stop or root exit
-  signal those still matching. On Linux the helper opens a pidfd for each
-  descendant when it validates it and signals through `pidfd_send_signal`, so
+  signal those still matching. The command's own process is tracked the same
+  way, from spawn: a root that calls `setsid` leaves the anchored group, and
+  it isn't its own descendant, so stop, deadlines and leases signal it
+  through its own handle. On Linux the helper opens a pidfd for the root at
+  spawn and for each descendant when it validates it and signals through `pidfd_send_signal`, so
   a pid reused between the check and the signal is never hit. Sampling alone
   misses a child that double-forks and is orphaned before the first sample.
   On Linux the supervisor makes itself a child subreaper
@@ -527,7 +530,7 @@ Per the testing policy, pin the decisions:
   with a newline; a backgrounded child is
   stopped when the root exits; a `setsid` descendant is stopped by identity;
   a descendant that forks a new detached child during the `SIGTERM` grace is
-  stopped too;
+  stopped too; a root that calls `setsid` itself is stopped;
   the group is not signalled once no member matches; the anchor ignores the
   group's `SIGTERM` and outlives it, and is removed only after the final
   `SIGKILL` pass; a lapsed lease and the
