@@ -350,6 +350,9 @@ enum ACPSessionOrchestrationPolicy {
             return .wake
         case .cancelled:
             return .notice
+        case .limited:
+            // The child resumes on its own; the parent shouldn't burn a turn.
+            return .notice
         case .completed:
             if let lastParentReportAt, lastParentReportAt >= turnStartedAt {
                 return .notice

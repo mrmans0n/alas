@@ -626,6 +626,11 @@ extension AppState {
                 schedule, reason: "\(agentName) failed in \(worktree.branch): \(message)",
                 project: project, worktree: worktree
             )
+        case .limited:
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) hit its usage limit in \(worktree.branch). It resumes when the limit resets.",
+                project: project, worktree: worktree
+            )
         case .cancelled:
             // Stopped by the user, who already knows.
             break

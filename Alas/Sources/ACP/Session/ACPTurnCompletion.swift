@@ -8,6 +8,8 @@ struct ACPTurnCompletion: Equatable, Sendable {
         case completed
         case failed(String)
         case cancelled
+        /// Stopped by a provider usage limit; Alas may resume it later.
+        case limited
     }
 
     /// Cap for `lastAgentText`; the tail of the message is kept.

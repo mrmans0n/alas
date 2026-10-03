@@ -141,6 +141,7 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
+    private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let qwenTitleFallback: ACPQwenTitleFallback?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
@@ -1588,6 +1589,7 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          qwenTitleFallback: ACPQwenTitleFallback? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
@@ -1637,6 +1639,7 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
+        self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.qwenTitleFallback = qwenTitleFallback
         self.onInputAwaiting = onInputAwaiting
         self.onPlanAwaiting = onPlanAwaiting
@@ -6408,6 +6411,7 @@ extension ACPSessionManager {
                                               self.changeNotifier.post()
                                           },
                                           localTitlesEnabled: localTitlesEnabled,
+                                          autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
                                           localTitleGenerator: { [qwenTitleFallback] in
                                               await ACPLocalTitleGenerator.generate(from: $0, fallback: qwenTitleFallback)
                                           },

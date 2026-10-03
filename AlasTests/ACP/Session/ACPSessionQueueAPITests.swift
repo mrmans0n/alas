@@ -455,6 +455,12 @@ struct ACPSessionQueueAPITests {
         #expect(session.queue[0].usageLimit == bumped)
         #expect(session.queue[0].scheduledAt == first.addingTimeInterval(900))
         #expect(session.queue[0].blocks == [.text(ACPUsageLimitResumePolicy.continueText)])
+        // A resume already in flight is left alone.
+        session.queue[0].status = .sending
+        session.upsertUsageLimitResume(limit: limit, scheduledAt: first)
+        #expect(session.queue.count == 2)
+        #expect(session.queue[0].usageLimit == bumped)
+        session.queue[0].status = .pending
         #expect(session.removeUsageLimitResume())
         #expect(session.queue.map(\.blocks) == [[.text("later")]])
     }

@@ -47,7 +47,8 @@ struct ACPSessionRunnerQueueTests {
         validateLease: (() async -> Bool)? = nil,
         onPromptWorkChanged: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
-        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in }
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true }
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -66,9 +67,128 @@ struct ACPSessionRunnerQueueTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
+            autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
+    }
+
+    private static func codexLimitError(_ message: String) -> ACPClientError {
+        .jsonrpc(.init(code: -32603, message: "Internal error", data: AnyCodable([
+            "message": AnyCodable(message),
+            "codexErrorInfo": AnyCodable("usageLimitExceeded"),
+        ])))
+    }
+
+    @Test("a queued prompt stopped by a usage limit is delivered and a resume is scheduled at the reset")
+    func usageLimitSchedulesResumeAtReset() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit. Try again at Sep 21st, 2099 4:35 PM.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+
+        let limit = try #require(session.usageLimit)
+        #expect(limit.resetSource == .parsed)
+        #expect(session.lastError == nil)
+        // "first" was delivered (its text is in the agent's history); the
+        // resume item now heads the queue, ahead of "second".
+        #expect(session.queue.count == 2)
+        #expect(session.queue[0].usageLimit == limit)
+        #expect(session.queue[0].scheduledAt == limit.resetsAt.map { $0 + 60 })
+        #expect(session.queue[0].lastError == nil)
+        #expect(session.queue[1].blocks == [.text("second")])
+    }
+
+    @Test("a resume that succeeds clears the Limited state and the queue drains")
+    func usageLimitResumeSucceeds() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.queue[0].scheduledAt = Date()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit == nil)
+    }
+
+    @Test("a resume that hits the limit again backs off and keeps the episode start")
+    func usageLimitResumeHitsLimitAgain() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+        let firstDetection = try #require(session.usageLimit).detectedAt
+
+        session.queue[0].scheduledAt = Date()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit?.probeAttempt == 1 }
+
+        #expect(session.usageLimit?.detectedAt == firstDetection)
+        #expect(session.queue.count == 1)
+        let next = try #require(session.queue[0].scheduledAt)
+        #expect(next > Date().addingTimeInterval(29 * 60))
+    }
+
+    @Test("a message sent while Limited goes first, and its success clears the resume")
+    func manualSuccessClearsLimitAndResumeItem() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("typed while limited")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit == nil }
+        #expect(session.usageLimitResumeItem == nil)
+    }
+
+    @Test("with auto-resume off a limit shows Limited without a resume item")
+    func usageLimitWithoutAutoResume() async throws {
+        let (runner, mock, session, _) = try mkRunner(autoResumeAfterUsageLimit: { false })
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("an unrelated prompt error keeps today's failed-item behavior")
+    func unrelatedErrorKeepsTodayBehavior() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: boom", data: nil))
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        #expect(session.usageLimit == nil)
+        #expect(session.usageLimitResumeItem == nil)
     }
 
     @Test("queued user turn publishes only after the queue head is removed")

@@ -203,6 +203,7 @@ enum RunScheduleOutcome: Codable, Equatable, Hashable, Sendable {
         case .completed: self = .succeeded
         case .failed(let message): self = .agentFailed(message)
         case .cancelled: self = .stopped
+        case .limited: self = .agentFailed("Usage limit reached")
         case nil: self = .unknown
         }
     }

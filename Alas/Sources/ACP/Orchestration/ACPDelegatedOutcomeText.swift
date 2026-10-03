@@ -84,6 +84,10 @@ enum ACPDelegatedOutcomeText {
         "Delegated session \(label(context)) had its turn cancelled by the user."
     }
 
+    static func limited(_ context: Context) -> String {
+        "Delegated session \(label(context)) stopped at a provider usage limit. Alas resumes it when the limit resets."
+    }
+
     /// The kinds of prompt Alas itself sends a parent about one of its
     /// children, as opposed to a report the child sent. Raw values are
     /// persisted with the transcript row.

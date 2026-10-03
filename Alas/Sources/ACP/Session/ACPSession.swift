@@ -2346,8 +2346,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Put (or move) the single usage-limit resume item at the head of the
     /// pending queue. Ordinary prompts queued later are inserted ahead of
     /// scheduled items (`enqueue`), so a message typed while Limited still
-    /// goes out first.
+    /// goes out first. No-op while a resume is already in flight (`.sending`),
+    /// so "Resume now" mid-resume cannot schedule a duplicate.
     func upsertUsageLimitResume(limit: ACPUsageLimit, scheduledAt: Date) {
+        if queue.contains(where: { $0.usageLimit != nil && $0.status == .sending }) { return }
         queue.removeAll { $0.usageLimit != nil && $0.status == .pending }
         let item = QueuedPrompt(
             blocks: [.text(ACPUsageLimitResumePolicy.continueText)],
