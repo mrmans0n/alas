@@ -114,6 +114,8 @@ targets:
         product: BeautifulMermaid
     settings:
       base:
+        ARCHS: $(ALAS_APP_ARCHS)
+        ALAS_APP_ARCHS: $(ARCHS_STANDARD)
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas
         PRODUCT_NAME: Alas
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

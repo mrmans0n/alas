@@ -188,16 +188,31 @@ raise "Alas.entitlements must not allow JIT: it disables the plugin time limit" 
 release_path = File.expand_path("../../../.github/workflows/release.yml", __dir__)
 release_workflow = YAML.safe_load(File.read(release_path), aliases: true)
 release_steps = release_workflow.fetch("jobs").fetch("macos-app").fetch("steps")
+release_checkout = release_steps.find { |step| step["name"] == "Checkout (with submodules)" }
+raise "manual releases must fetch the workflow commit as well as the immutable release tag" unless
+  release_checkout&.dig("with", "fetch-depth") == 0
+materialize_verifier = release_steps.find { |step| step["name"] == "Materialize release architecture verifier" }
+raise "manual releases must load the verifier from the workflow commit, not the older release tag" unless
+  materialize_verifier&.dig("env", "WORKFLOW_SHA") == "${{ github.sha }}" &&
+    materialize_verifier.fetch("run", "").include?('git show "${WORKFLOW_SHA}:scripts/verify-release-architecture.sh"')
 release_build = release_steps.find { |step| step["name"] == "Build release app (${{ matrix.arch }})" }
 raise "release workflow must build each matrix destination" unless
   release_build&.fetch("run", "")&.include?("-destination 'platform=macOS,arch=${{ matrix.arch }}'")
+raise "release build must select the Alas target architecture without overriding host build tools" unless
+  release_build.fetch("run").include?("ALAS_APP_ARCHS=${{ matrix.arch }}")
 raise "release build must not force ARCHS globally because host macro targets need the runner architecture" if
-  release_build.fetch("run").include?("ARCHS=${{ matrix.arch }}")
+  release_build.fetch("run").lines.any? { |line| line.strip.start_with?("ARCHS=") }
 raise "release build must not force ONLY_ACTIVE_ARCH globally because it also affects host build tools" if
-  release_build.fetch("run").include?("ONLY_ACTIVE_ARCH=YES")
+  release_build.fetch("run").lines.any? { |line| line.strip.start_with?("ONLY_ACTIVE_ARCH=") }
 release_architecture = release_steps.find { |step| step["name"] == "Verify release architecture (${{ matrix.arch }})" }
-raise "release workflow must use the tested architecture verifier" unless
+raise "release workflow must use the materialized tested architecture verifier" unless
   release_architecture&.fetch("run", "") ==
-    'scripts/verify-release-architecture.sh build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"'
+    '"$RUNNER_TEMP/verify-release-architecture.sh" build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"'
+project_path = File.expand_path("../../../project.yml", __dir__)
+project = YAML.safe_load(File.read(project_path), aliases: true)
+alas_settings = project.fetch("targets").fetch("Alas").fetch("settings").fetch("base")
+raise "Alas target must expose a release-only architecture selector" unless
+  alas_settings["ARCHS"] == "$(ALAS_APP_ARCHS)" &&
+    alas_settings["ALAS_APP_ARCHS"] == "$(ARCHS_STANDARD)"
 
 puts "ci workflow contract: ok"

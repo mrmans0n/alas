@@ -10558,6 +10558,8 @@
 		6202B549740A569C39BD0B49 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALAS_APP_ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = "$(ALAS_APP_ARCHS)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alas/Resources/Alas.entitlements;
 				CODE_SIGN_IDENTITY = "-";
@@ -10597,6 +10599,8 @@
 		A2FE0D1E9BE6C7D51667B232 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ALAS_APP_ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = "$(ALAS_APP_ARCHS)";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alas/Resources/Alas.entitlements;
 				CODE_SIGN_IDENTITY = "-";

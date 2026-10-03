@@ -46,7 +46,15 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Materialize release architecture verifier
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git show "${WORKFLOW_SHA}:scripts/verify-release-architecture.sh" > "$RUNNER_TEMP/verify-release-architecture.sh"
+          chmod +x "$RUNNER_TEMP/verify-release-architecture.sh"
 
       - name: Configure headless git for package resolution
         run: |
@@ -211,6 +219,7 @@ jobs:
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=${{ matrix.arch }}' \
             -skipMacroValidation -skipPackagePluginValidation \
+            ALAS_APP_ARCHS=${{ matrix.arch }} \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -220,7 +229,7 @@ jobs:
       - name: Verify release architecture (${{ matrix.arch }})
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
-        run: scripts/verify-release-architecture.sh build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"
+        run: '"$RUNNER_TEMP/verify-release-architecture.sh" build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"'
 
       - name: Sign + notarize + staple .app (${{ matrix.arch }})
         env:
