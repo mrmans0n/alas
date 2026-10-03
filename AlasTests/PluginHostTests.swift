@@ -1475,6 +1475,9 @@ struct PluginHostTests {
         await host.activate()
         let first = Task { await host.expandPrompt("linear", args: "", session: "s1") }
         #expect(await awaitCondition { sleeper.waiting == 1 })
+        // Sending again while it waits does not ask the plugin twice.
+        #expect(await host.expandPrompt("linear", args: "", session: "s1") == .busy)
+        #expect(host.trace.filter { $0.text.contains("prompt/expand") }.count == 1)
         await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
         #expect(await first.value == .text("Later"))
         let second = Task { await host.expandPrompt("linear", args: "", session: "s1") }

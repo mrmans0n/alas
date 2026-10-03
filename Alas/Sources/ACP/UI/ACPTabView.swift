@@ -838,6 +838,8 @@ private struct ACPSessionView: View {
                         manager.persistComposerDraft(ACPComposerDraft(segments: [.text(expanded)]), for: session)
                     case .failed(let reason):
                         session.lastError = reason
+                    case .busy:
+                        break
                     }
                 }
                 return false

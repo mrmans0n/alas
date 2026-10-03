@@ -36,6 +36,8 @@ struct PluginTaskRequest: Equatable, Sendable {
 enum PluginPromptExpansion: Equatable {
     case text(String)
     case failed(String)
+    /// Another expansion for the same session is still waiting; a repeated send is ignored.
+    case busy
 }
 
 enum PluginTaskStart: Equatable {
@@ -335,6 +337,9 @@ final class PluginHost {
             id: nil, method: "command/run", params: PluginCommandRunParams(command: id, target: target))))
     }
 
+    /// Sessions with an expansion waiting, so pressing Send again does not ask the plugin twice.
+    @ObservationIgnored private var expandingSessions: Set<String> = []
+
     /// Whether this instance adds context to prompts, so the composer names it.
     var providesContext: Bool { state == .active && grants.contains(.sessionContext) }
 
@@ -343,6 +348,8 @@ final class PluginHost {
     func expandPrompt(_ name: String, args: String, session: String) async -> PluginPromptExpansion {
         guard manifest.prompts.contains(where: { $0.name == name }) else { return .failed("Unknown prompt /\(name).") }
         guard args.utf8.count <= Self.maxPromptBytes else { return .failed("The text after /\(name) is longer than 32 KiB.") }
+        guard expandingSessions.insert(session).inserted else { return .busy }
+        defer { expandingSessions.remove(session) }
         guard let response = await ask(
             "prompt/expand", PluginPromptExpandParams(name: name, args: args, session: session), wait: Self.promptExpandTimeout)
         else { return .failed("\(manifest.name) did not expand /\(name).") }
