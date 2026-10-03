@@ -4098,8 +4098,12 @@ final class ACPSessionManager: ObservableObject {
                     )
                     // Newer Claude adapters only copy the transcript and
                     // answer with a bare id; the fork isn't live, and has no
-                    // modes or options, until it is resumed.
-                    guard forked.isBareSessionID, initialized.sessionCapabilities.supportsResume else {
+                    // modes or options, until it is resumed. ACP allows a bare
+                    // answer from a live fork, so other agents are left alone.
+                    guard session.agentId == ACPManagedAdapterDescriptor.claude.agentID,
+                          forked.isBareSessionID,
+                          initialized.sessionCapabilities.supportsResume
+                    else {
                         return forked
                     }
                     do {

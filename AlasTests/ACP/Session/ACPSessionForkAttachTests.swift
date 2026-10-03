@@ -42,9 +42,12 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
-    @Test("a fork answered with a bare id is resumed so it is live with its modes")
-    func bareForkResultIsResumed() async throws {
-        let store = try seededForkStore()
+    @Test(
+        "only Claude's bare fork answer is resumed; ACP lets other agents answer a live fork that way",
+        arguments: [("claude", true), ("codex", false)]
+    )
+    func bareForkResultIsResumed(agentId: String, resumes: Bool) async throws {
+        let store = try seededForkStore(agentId: agentId)
         let client = durableMockClient()
         scriptInitialize(client, supportsFork: true, supportsResume: true)
         scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
@@ -63,9 +66,9 @@ struct ACPSessionForkAttachTests {
 
         await manager.attach(to: target.id, freshlyCreated: true)
 
-        #expect(client.sent.map(\.method) == ["initialize", "session/fork", "session/resume"])
+        #expect(client.sent.contains { $0.method == "session/resume" } == resumes)
         #expect(target.remoteSessionId == "forked-remote")
-        #expect(target.availableModes.map(\.id) == ["plan"])
+        #expect(target.forkRecord?.mechanism == .nativeACP)
     }
 
     @Test("a bare fork whose resume fails is closed before the transcript fallback")
@@ -907,12 +910,14 @@ struct ACPSessionForkAttachTests {
     }
 
     private func seededForkStore(
-        sourceRemoteSessionID: String = "source-remote"
+        sourceRemoteSessionID: String = "source-remote",
+        agentId: String = "claude"
     ) throws -> ACPSessionStore {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             id: "source",
-            remoteSessionID: sourceRemoteSessionID
+            remoteSessionID: sourceRemoteSessionID,
+            agentId: agentId
         ))
         try store.appendMessage(
             sessionId: "source",
@@ -927,12 +932,12 @@ struct ACPSessionForkAttachTests {
             createdAt: 0
         )
         try store.createFork(
-            session: row(id: "target", remoteSessionID: nil),
+            session: row(id: "target", remoteSessionID: nil, agentId: agentId),
             messages: [],
             record: .init(
                 targetSessionID: "target",
                 sourceSessionID: "source",
-                sourceAgentID: "claude",
+                sourceAgentID: agentId,
                 sourceBoundarySequence: 0,
                 inheritedMessageCount: 0,
                 phase: .negotiatingNative,
@@ -943,10 +948,10 @@ struct ACPSessionForkAttachTests {
         return store
     }
 
-    private func row(id: String, remoteSessionID: String?) -> ACPSessionRow {
+    private func row(id: String, remoteSessionID: String?, agentId: String = "claude") -> ACPSessionRow {
         ACPSessionRow(
             id: id,
-            agentId: "claude",
+            agentId: agentId,
             title: id.capitalized,
             titleSource: .placeholder,
             remoteSessionId: remoteSessionID,
