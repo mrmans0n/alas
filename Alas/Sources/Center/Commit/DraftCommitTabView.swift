@@ -355,9 +355,11 @@ struct DraftCommitTabView: View {
     }
 
     /// Identifies the staged contents a suggestion describes. Unlike
-    /// `stagedKey`, unstaged and untracked churn leaves it unchanged.
-    private var stagedIndexKey: String {
-        guard let rps = rightPane else { return "" }
+    /// `stagedKey`, unstaged and untracked churn leaves it unchanged. Nil
+    /// until the right pane has loaded a snapshot, so a restored draft is not
+    /// judged stale against an index Alas has not read yet.
+    private var stagedIndexKey: String? {
+        guard let rps = rightPane, rps.hasLoadedSnapshot else { return nil }
         let staged = rps.changes
             .filter { $0.stage == .staged }
             .map { "\($0.path):\($0.add):\($0.del)" }
@@ -371,7 +373,7 @@ struct DraftCommitTabView: View {
     /// (model readiness, helper settings, a paused publish) restarts it.
     private var messageSuggestionKey: String {
         // Each backend separately, so revoking one cancels its in-flight work.
-        "\(stagedIndexKey):\(amend):\(publishCheckpoint == nil)"
+        "\(stagedIndexKey ?? "unloaded"):\(amend):\(publishCheckpoint == nil)"
             + ":\(appState.commitMessageAppleSuggestionsAvailable):\(appState.commitMessageMLXSuggestionsAvailable)"
     }
 
@@ -387,7 +389,10 @@ struct DraftCommitTabView: View {
     /// Seeds empty fields with an on-device draft. Commit never waits on it,
     /// and text the user typed is never replaced.
     private func suggestMessage() async {
-        let indexKey = stagedIndexKey
+        guard let indexKey = stagedIndexKey else {
+            messageSuggestion.cancel()
+            return
+        }
         // A draft for other staged changes must not stay committable while
         // its replacement is computed, or when none can be.
         if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
@@ -415,8 +420,12 @@ struct DraftCommitTabView: View {
             suggestion = nil
         }
         guard !Task.isCancelled else { return }
+        guard let currentIndexKey = stagedIndexKey else {
+            messageSuggestion.cancel()
+            return
+        }
         switch messageSuggestion.complete(
-            id, suggestion: suggestion, indexKey: stagedIndexKey, subject: subject, body: bodyText
+            id, suggestion: suggestion, indexKey: currentIndexKey, subject: subject, body: bodyText
         ) {
         case .fill(let suggestion):
             subject = suggestion.subject
