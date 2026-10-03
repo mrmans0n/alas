@@ -399,8 +399,16 @@ nothing if the page can talk to any host:
   the page's, so `ui.js` can't reach `window.webkit.messageHandlers` and skip
   the checks. A relay in that world takes `alas.post` calls, enforces the
   size and queue limits, and only then forwards; Alas checks the same bounds
-  again before a message enters the plugin's delivery queue. The page sees
-  only `window.alas`, defined by a document-start script:
+  again before a message enters the plugin's delivery queue. Scripts and
+  handlers are scoped to their world, so the two halves meet through the DOM,
+  which both worlds share: a page-world shim defines `window.alas`, and
+  `alas.post` serializes the value to a JSON string and dispatches a
+  `CustomEvent` with an unguessable per-tab name on `document`. The
+  isolated-world relay listens for it, checks the string's size and the queue,
+  and posts to the handler. Messages to the page go the other way: Alas
+  evaluates a call to the shim's dispatcher in the page world with the JSON
+  string as an argument, never as code. The page sees only `window.alas`,
+  defined by that document-start shim:
 
   ```js
   alas.post(value)            // any JSON value; the whole web/message it becomes must fit in 1 MiB
