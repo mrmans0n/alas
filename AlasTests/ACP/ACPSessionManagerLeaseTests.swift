@@ -112,6 +112,91 @@ import Foundation
         #expect(released.owner == nil)
     }
 
+    @Test("SSH authority survives a paginated import longer than the remote lease TTL", arguments: [false, true])
+    func remoteImportRenewsAuthorityBeforeAttach(takeover: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (writer, source, _, publisher, sourceRunner, endpoint) = try await remoteWriter(in: folder)
+        let message = ACPMessage.user(id: UUID(), text: "Imported before writer attach", attachments: [])
+        source.transcript.messages.append(message)
+        #expect(sourceRunner.persistIndices([0]))
+        await sourceRunner.flushPersistence()
+        await publisher.flush(sessionId: source.id)
+        writer.shutdownBackgroundTasks()
+        publisher.stopPublishing(sessionId: source.id)
+        if !takeover {
+            let fence = try #require(publisher.fence(sessionId: source.id))
+            await publisher.release(sessionId: source.id, expectedFence: fence)
+        }
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("reader.sqlite").path)
+        try store.upsertSession(.init(id: "reader", agentId: "claude", title: "Reader",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let gate = LeaseTestGate()
+        let parked = AsyncStream<Void>.makeStream()
+        let ready = AsyncStream<Void>.makeStream()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in
+            if method == "replica/read",
+               try JSONDecoder().decode(RemoteSessionReadParams.self, from: data).pageToken != nil {
+                parked.continuation.yield(())
+                await gate.wait()
+            }
+            return try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: "")) },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        defer {
+            reader.shutdownBackgroundTasks()
+            publisher.shutdown()
+            coordinator.shutdown()
+            parked.continuation.finish()
+            ready.continuation.finish()
+        }
+        reader.afterRunnerRegistrationForTesting = { _ in ready.continuation.yield(()) }
+        let session = try #require(reader.placeholderSession(id: "reader"))
+        await reader.hydrateIfNeeded(id: session.id)
+        let acquisition = Task { @MainActor in
+            if takeover { return await reader.takeOver(sessionId: session.id) }
+            await reader.attach(to: session.id, freshlyCreated: false)
+            return reader.runners[session.id] != nil
+        }
+        for await _ in parked.stream { break }
+        // Only the manager's renewal task can heartbeat while the read is paused.
+        for _ in 0..<3 {
+            let before = await endpoint.heartbeatCount
+            await endpoint.advanceTime(by: 40)
+            let deadline = ContinuousClock.now + .seconds(10)
+            while await endpoint.heartbeatCount == before, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+        }
+        await gate.open()
+        try #require(await acquisition.value)
+        if takeover {
+            for await _ in ready.stream { break }
+            await reader.attach(to: session.id, freshlyCreated: false)
+        }
+        _ = try #require(reader.runners[session.id], "Attach state: \(session.agentState)")
+        #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [try ACPMessageCodec.encode(message)])
+        #expect(await coordinator.flush(sessionId: session.id))
+        let fence = try #require(coordinator.fence(sessionId: session.id))
+        try await coordinator.killProc(sessionId: session.id, expectedFence: fence)
+        let observed = try #require(try await coordinator.observe(sessionId: "observer",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")))
+        #expect(observed.isFresh)
+        #expect(observed.owner == coordinator.owner)
+    }
+
     @Test("failed SSH teardown retains ownership and can be retried without waiting for expiry", arguments: ["proc/kill", "lease/release"])
     func failedRemoteTeardownRetainsOwnershipUntilRetry(method: String) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

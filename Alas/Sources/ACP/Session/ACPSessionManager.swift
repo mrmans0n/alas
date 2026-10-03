@@ -1276,6 +1276,8 @@ final class ACPSessionManager: ObservableObject {
     }
     /// Per-session periodic heartbeat tasks (backing store).
     var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var heartbeatTaskTokens: [ACPSession.ID: String] = [:]
+
     /// Per-session debounced write tasks for `composer_drafts`. The
     /// in-memory `session.composerDraft` updates on every keystroke;
     /// the SQLite write only fires after a brief idle (or a forced
@@ -1431,6 +1433,8 @@ final class ACPSessionManager: ObservableObject {
             await coordinator.release(sessionId: sessionId, expectedFence: remoteFence)
             return false
         }
+        // Replica imports can span the remote lease TTL.
+        startHeartbeat(sessionId: sessionId)
         if !coordinator.isPublishing(sessionId: sessionId) {
             try await coordinator.syncMirror(sessionId: sessionId, lease: result.lease, persistence: persistence,
                                              localFence: .init(sessionId: sessionId, ownerInstance: instanceId, token: lease.token)) { [weak self] in
@@ -3208,21 +3212,111 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    /// Deletes hidden `/btw` side sessions left behind by a crash or a quit
-    /// while a side question was open. No runner of this instance drives
-    /// them, so only the rows and any remote helper process need cleanup.
+    /// Cleans hidden `/btw` sessions left by a crash. SSH rows retain the
+    /// agent and conversation identity until fenced native cleanup succeeds.
     func purgeOrphanedEphemeralSessions() async {
-        let persistence = persistence
+        await flushPersistence()
         do {
-            let ids = try await persistence.deleteOrphanedEphemeralSessions(
+            let rows = try await persistence.orphanedEphemeralSessions(
                 now: Int64(Date().timeIntervalSince1970),
                 staleAfter: Self.leaseStaleAfter
             )
-            for id in ids where runners[id] == nil {
-                forgetSession(id: id)
+            for row in rows where orphanCleanupIsInactive(sessionId: row.id) {
+                do {
+                    let deleted: Bool
+                    if effectiveRemoteHost() != nil {
+                        deleted = try await cleanupRemoteOrphan(row)
+                    } else {
+                        deleted = try await persistence.deleteOrphanedEphemeralSession(
+                            id: row.id, now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter
+                        )
+                    }
+                    if deleted { forgetSession(id: row.id) }
+                } catch {
+                    persistenceError = error.localizedDescription
+                }
             }
         } catch {
             persistenceError = error.localizedDescription
+        }
+    }
+
+    private func orphanCleanupIsInactive(sessionId: ACPSession.ID) -> Bool {
+        runners[sessionId] == nil && attachingSessions[sessionId] == nil
+            && disposalTasks[sessionId] == nil && !_ownedLeases.contains(sessionId)
+    }
+
+    private func cleanupRemoteOrphan(_ row: ACPSessionRow) async throws -> Bool {
+        guard let coordinator = try coordination() else { return false }
+        // A separate local owner prevents another ordinary attachment on this
+        // Mac from adopting the cleanup reservation while native calls await.
+        let cleanupOwner = "\(instanceId)-orphan-\(UUID().uuidString)"
+        guard let lease = try await persistence.claimLease(
+            sessionId: row.id, instanceId: cleanupOwner, pid: pid,
+            now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter,
+            leaseToken: UUID().uuidString
+        ) else { return false }
+        let localFence = ACPSessionLeaseFence(sessionId: row.id, ownerInstance: cleanupOwner, token: lease.token)
+        var nativeFence: RemoteSessionFence?
+        var didKill = false
+        func finish() async {
+            if let nativeFence {
+                if didKill {
+                    await coordinator.release(sessionId: row.id, expectedFence: nativeFence)
+                } else {
+                    // A failed kill must not make a still-running process
+                    // ownerless. Preserve its fence for a safe later claim.
+                    coordinator.markUnavailable(sessionId: row.id)
+                }
+            }
+            try? await persistence.releaseLease(sessionId: row.id, instanceId: cleanupOwner, leaseToken: lease.token)
+        }
+        do {
+            guard orphanCleanupIsInactive(sessionId: row.id),
+                  let current = try await persistence.loadSession(id: row.id),
+                  current.ephemeralParentId != nil, current.agentId == row.agentId,
+                  current.remoteSessionId == row.remoteSessionId
+            else {
+                await finish()
+                return false
+            }
+            let result = try await coordinator.claim(
+                sessionId: row.id,
+                key: .init(worktreePath: RemotePath.realPath(worktreePath), agentId: current.agentId, remoteSessionId: current.remoteSessionId),
+                proposedProcId: Self.helperACPProcId(sessionId: row.id), requestedToken: lease.token
+            )
+            nativeFence = result.fence
+            guard let fence = nativeFence,
+                  orphanCleanupIsInactive(sessionId: row.id),
+                  let reservation = try await persistence.loadLease(sessionId: row.id),
+                  reservation.ownerInstance == cleanupOwner, reservation.token == lease.token,
+                  let latest = try await persistence.loadSession(id: row.id),
+                  latest.ephemeralParentId != nil, latest.agentId == current.agentId,
+                  latest.remoteSessionId == current.remoteSessionId
+            else {
+                await finish()
+                return false
+            }
+            try await coordinator.killProc(sessionId: row.id, expectedFence: fence)
+            didKill = true
+            guard orphanCleanupIsInactive(sessionId: row.id) else {
+                await finish()
+                return false
+            }
+            try await coordinator.delete(sessionId: row.id, expectedFence: fence)
+            nativeFence = nil
+            guard orphanCleanupIsInactive(sessionId: row.id) else {
+                await finish()
+                return false
+            }
+            let deleted = try await persistence.deleteOrphanedEphemeralSession(
+                id: row.id, now: Int64(Date().timeIntervalSince1970), staleAfter: Self.leaseStaleAfter, fence: localFence
+            )
+            await finish()
+            return deleted
+        } catch {
+            await finish()
+            throw error
         }
     }
 
@@ -4467,15 +4561,18 @@ extension ACPSessionManager {
     // exposed for tests
     @discardableResult
     func heartbeatTick(sessionId: ACPSession.ID) async -> Bool {
-        guard _ownedLeases.contains(sessionId) else { return false }
+        guard _ownedLeases.contains(sessionId), let leaseToken = ownedLeaseTokens[sessionId],
+              !Task.isCancelled else { return false }
         let now = Int64(Date().timeIntervalSince1970)
         do {
-            guard let lease = try await persistence.loadLease(sessionId: sessionId) else {
+            let loadedLease = try await persistence.loadLease(sessionId: sessionId)
+            guard ownedLeaseTokens[sessionId] == leaseToken, !Task.isCancelled else { return false }
+            guard let lease = loadedLease else {
                 observedLeases[sessionId] = nil
                 return true
             }
             observedLeases[sessionId] = lease
-            if lease.ownerInstance != instanceId {
+            if lease.ownerInstance != instanceId || lease.token != leaseToken {
                 return true   // taken over → stand down
             }
             // Still ours — refresh heartbeat + status.
@@ -4483,11 +4580,13 @@ extension ACPSessionManager {
                 ? "busy" : "idle"
             try await persistence.refreshHeartbeat(
                 sessionId: sessionId, instanceId: instanceId, now: now, status: status)
+            guard ownedLeaseTokens[sessionId] == leaseToken, !Task.isCancelled else { return false }
             if let coordinator = try coordination() {
                 return try await !coordinator.heartbeat(sessionId: sessionId, status: remoteWriterStatus(sessionId: sessionId))
             }
             return false
         } catch {
+            guard ownedLeaseTokens[sessionId] == leaseToken, !Task.isCancelled else { return false }
             persistenceError = error.localizedDescription
             if error.isRemoteSessionLeaseLoss { return true }
             return false
@@ -4495,18 +4594,23 @@ extension ACPSessionManager {
     }
 
     private func startHeartbeat(sessionId: ACPSession.ID) {
-        _heartbeatTasks[sessionId]?.cancel()
         guard let leaseToken = ownedLeaseTokens[sessionId] else { return }
+        if heartbeatTaskTokens[sessionId] == leaseToken,
+           let task = _heartbeatTasks[sessionId], !task.isCancelled { return }
+        _heartbeatTasks[sessionId]?.cancel()
+        heartbeatTaskTokens[sessionId] = leaseToken
         _heartbeatTasks[sessionId] = Task { @MainActor [weak self] in
             // Refresh immediately so the just-claimed lease doesn't rely on
             // the first 5s tick (a slow initialize/newSession could otherwise
             // let the heartbeat age past leaseStaleAfter mid-attach).
-            guard let self else { return }
+            guard let self, !Task.isCancelled,
+                  self.ownedLeaseTokens[sessionId] == leaseToken else { return }
             if await self.heartbeatTick(sessionId: sessionId) {
                 await self.standDown(sessionId: sessionId, leaseToken: leaseToken)
             }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
+                guard !Task.isCancelled, self.ownedLeaseTokens[sessionId] == leaseToken else { return }
                 let shouldStandDown = await self.heartbeatTick(sessionId: sessionId)
                 if shouldStandDown {
                     await self.standDown(sessionId: sessionId, leaseToken: leaseToken)
@@ -4517,6 +4621,7 @@ extension ACPSessionManager {
 
     private func stopHeartbeat(sessionId: ACPSession.ID) {
         _heartbeatTasks.removeValue(forKey: sessionId)?.cancel()
+        heartbeatTaskTokens.removeValue(forKey: sessionId)
     }
 
     // MARK: - Writer watch (prompt stand-down on takeover ping)
@@ -4648,6 +4753,7 @@ extension ACPSessionManager {
         _ownedLeases.insert(sessionId)
         ownedLeaseTokens[sessionId] = lease.token
         observedLeases[sessionId] = lease
+        startHeartbeat(sessionId: sessionId)
         do {
             if let coordinator = remoteCoordinator, let remoteLease = coordinator.lease(sessionId: sessionId),
                let fence = remoteTakeoverFence {
@@ -4678,7 +4784,6 @@ extension ACPSessionManager {
             return false
         }
         changeNotifier.post()
-        startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
         // Refresh the cached remoteSessionId from the store so the re-attach
         // uses session/load (resuming the existing agent conversation) rather
@@ -4852,6 +4957,7 @@ extension ACPSessionManager {
         prepareForDisposal()
         for (_, task) in _heartbeatTasks { task.cancel() }
         _heartbeatTasks.removeAll()
+        heartbeatTaskTokens.removeAll()
     }
 
     /// Stop incoming work before sequential teardown begins.
@@ -4867,6 +4973,7 @@ extension ACPSessionManager {
         if effectiveRemoteHost() == nil {
             for (_, task) in _heartbeatTasks { task.cancel() }
             _heartbeatTasks.removeAll()
+            heartbeatTaskTokens.removeAll()
         }
     }
 

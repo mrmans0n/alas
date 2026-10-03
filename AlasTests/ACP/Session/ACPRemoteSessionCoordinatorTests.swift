@@ -22,6 +22,7 @@ actor ReplicaEndpoint {
     private var clock: Int64 = 0
     private var renewedAt: Int64 = 0
     private(set) var heartbeatCount = 0
+    private(set) var runningProcId: String?
 
     init(recordId: String = "record") { self.recordId = recordId }
 
@@ -31,6 +32,7 @@ actor ReplicaEndpoint {
     func setPublicationUnavailable(_ value: Bool) { publicationUnavailable = value }
     func setUnavailableMethod(_ method: String?) { unavailableMethod = method }
     func advanceTime(by seconds: Int64) { clock += seconds }
+    func startClaimedProc() { runningProcId = procId }
     private func encoded<T: Encodable>(_ value: T) throws -> Data { try JSONEncoder().encode(value) }
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T { try JSONDecoder().decode(type, from: data) }
     private var lease: RemoteSessionLease {
@@ -46,7 +48,7 @@ actor ReplicaEndpoint {
             return try encoded(RemoteHelperHelloResult(name: "alas-helper", protocolVersion: 1, binaryVersion: "0.6.0", capabilities: .init(watchKinds: [], fs: .init(read: true, write: true, stat: true, lineCounts: nil, list: nil), search: nil, proc: true, acp: nil, ping: true, sessionCoordination: coordinationSupported ? 1 : nil)))
         case "lease/claim", "lease/seize":
             let params = try decode(RemoteSessionClaimParams.self, data)
-            if owner == nil || (owner == params.owner && (fence?.token == params.requestedToken || params.previousFence == fence)) || method == "lease/seize" {
+            if owner == nil || !lease.isFresh || (owner == params.owner && (fence?.token == params.requestedToken || params.previousFence == fence)) || method == "lease/seize" {
                 key = params.key
                 owner = params.owner
                 if procId.isEmpty { procId = params.proposedProcId }
@@ -110,7 +112,17 @@ actor ReplicaEndpoint {
             let params = try decode(RemoteHelperProcKillParams.self, data)
             guard let fence = params.leaseFence else { throw RemoteSessionUnavailable.ownershipLost }
             try validate(fence)
+            if runningProcId == params.procId { runningProcId = nil }
             return try encoded(RemoteHelperProcKillResult(ok: true))
+        case "lease/delete":
+            try validate(decode(RemoteSessionReleaseParams.self, data).fence)
+            guard runningProcId == nil else { throw NSError(domain: "ProcessStillRunning", code: 1) }
+            owner = nil
+            fence = nil
+            procId = ""
+            entries.removeAll()
+            revision = 0
+            return try encoded(RemoteSessionMutationResult(ok: true))
         default: throw NSError(domain: "UnsupportedMethod", code: 1)
         }
     }

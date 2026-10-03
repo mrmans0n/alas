@@ -231,6 +231,11 @@ process inside that write transaction before committing the new owner and token.
 Cleanup failure does not grant ownership. The next fresh spawn resets private
 protocol offsets; same-Mac reconnects preserve intentional process reuse.
 
+After a successful claim or takeover, the manager starts heartbeats before
+importing the remote replica. Long or paused imports keep both the local
+reservation and remote ownership fresh. Heartbeats are scoped to the current
+local lease token, so a canceled predecessor cannot renew a replacement lease.
+
 Explicit takeover seizes first and imports the last committed remote replica.
 It does not wait for predecessor acknowledgement; Mac-local writes whose
 publication is unacknowledged are outside that shared cutoff.
@@ -280,6 +285,13 @@ instead of claiming a clean release.
 Ownership release also requires a successful process kill. A failed kill leaves
 the remote record owned, and a failed release leaves the active coordinator's
 fence available for immediate reclaim or retry rather than waiting for expiry.
+
+Cold-start orphan cleanup retains each ephemeral session's local and remote
+identity until cleanup succeeds. It reserves the stale local row, ordinarily
+claims remote ownership, then performs fenced process kill and record deletion
+before deleting the local row under that reservation. Fresh local or remote
+owners block cleanup. Helper, kill, or deletion failures retain the row for
+retry; a failed kill also retains remote ownership. Parent history is untouched.
 
 ## Security
 

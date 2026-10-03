@@ -167,9 +167,58 @@ struct ACPSessionStoreSchemaTests {
             """, bindings: [leaseRow.pid, leaseRow.heartbeatAt])
         }
 
-        #expect(try store.deleteOrphanedEphemeralSessions(now: now, staleAfter: 15) == (orphaned ? ["side"] : []))
+        let candidates = try store.orphanedEphemeralSessions(now: now, staleAfter: 15)
+        #expect(candidates.map(\.id) == (orphaned ? ["side"] : []))
+        #expect(try store.loadSession(id: "side") != nil)
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15) == orphaned)
         #expect(try (store.loadSession(id: "side") == nil) == orphaned)
         #expect(try store.loadSession(id: "visible") != nil)
+    }
+
+    @Test("orphan deletion rechecks local ownership and promotion after enumeration", arguments: [false, true])
+    func orphanDeletionRechecksEligibility(promoted: Bool) throws {
+        let store = try tmpStore()
+        let now: Int64 = 100
+        try store.upsertSession(.init(
+            id: "side", agentId: "claude", title: "Side", currentModel: nil, currentMode: nil,
+            ephemeralParentId: "parent", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false
+        ))
+        #expect(try store.orphanedEphemeralSessions(now: now, staleAfter: 15).map(\.id) == ["side"])
+        if promoted {
+            #expect(try store.promoteEphemeralSession(id: "side"))
+        } else {
+            #expect(try store.claimLease(
+                sessionId: "side", instanceId: "active", pid: Int64(ProcessInfo.processInfo.processIdentifier),
+                now: now, staleAfter: 15, leaseToken: "active-token"
+            ))
+        }
+
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15) == false)
+        #expect(try store.loadSession(id: "side") != nil)
+    }
+
+    @Test("native cleanup cannot delete a promoted side session or one whose local reservation changed",
+          arguments: [false, true])
+    func orphanDeletionRechecksReservation(promoted: Bool) throws {
+        let store = try tmpStore()
+        let now: Int64 = 100
+        try store.upsertSession(.init(
+            id: "side", agentId: "claude", title: "Side", currentModel: nil, currentMode: nil,
+            ephemeralParentId: "parent", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false
+        ))
+        let pid = Int64(ProcessInfo.processInfo.processIdentifier)
+        #expect(try store.claimLease(
+            sessionId: "side", instanceId: "cleanup", pid: pid, now: now, staleAfter: 15, leaseToken: "cleanup-token"
+        ))
+        let fence = ACPSessionLeaseFence(sessionId: "side", ownerInstance: "cleanup", token: "cleanup-token")
+        if promoted {
+            #expect(try store.promoteEphemeralSession(id: "side"))
+        } else {
+            try store.seizeLease(sessionId: "side", instanceId: "active", pid: pid, now: now, leaseToken: "active-token")
+        }
+
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15, fence: fence) == false)
+        #expect(try store.loadSession(id: "side") != nil)
     }
 
     @Test("re-opening doesn't double-apply migrations")
