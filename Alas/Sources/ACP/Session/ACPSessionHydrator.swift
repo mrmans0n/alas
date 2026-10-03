@@ -159,24 +159,10 @@ struct HydrationResult: Sendable {
     var wireMessages: [ACPMessageWire] { messages.map(\.wire) }
 
     func replacingRowLastOpenedAt(_ lastOpenedAt: Int64) -> HydrationResult {
-        HydrationResult(
-            row: ACPSessionRow(
-                id: row.id, agentId: row.agentId, title: row.title,
-                titleSource: row.titleSource,
-                remoteSessionId: row.remoteSessionId,
-                origin: row.origin,
-                contextRecoveryPending: row.contextRecoveryPending,
-                mcpPreamblePending: row.mcpPreamblePending,
-                mcpPreambleSent: row.mcpPreambleSent,
-                authStatus: row.authStatus,
-                currentModel: row.currentModel, currentMode: row.currentMode,
-                configOptionValues: row.configOptionValues,
-                nativeSubagentsDisabled: row.nativeSubagentsDisabled,
-                promptSuggestions: row.promptSuggestions,
-                autoRun: row.autoRun,
-                createdAt: row.createdAt, updatedAt: row.updatedAt,
-                lastOpenedAt: lastOpenedAt,
-                archived: row.archived),
+        var row = self.row
+        row.lastOpenedAt = lastOpenedAt
+        return HydrationResult(
+            row: row,
             messages: messages,
             queue: queue,
             draft: draft,

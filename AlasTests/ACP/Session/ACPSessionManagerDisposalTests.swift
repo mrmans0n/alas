@@ -670,6 +670,288 @@ struct ACPSessionManagerDisposalTests {
         #expect(replacementClient.requestsAfterShutdownCount == 0)
     }
 
+    @Test("dismissed SSH side failures retain identity for cold fenced cleanup",
+          arguments: ["session/close", "proc/kill", "lease/delete", "local-delete", "foreign-owner"])
+    func dismissedRemoteSideRetainsIdentityUntilColdCleanup(failure: String) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(resume: .init(), close: .init())),
+                authMethods: []
+            ))
+        }
+        client.script(method: "session/resume") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "crashed-side-conversation", availableModels: [], availableModes: [],
+                currentModel: nil, currentMode: nil, promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/close") { _ in
+            if failure == "session/close" { throw TestError.closeFailed }
+            return Data("{}".utf8)
+        }
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(
+            in: folder, idleSeconds: 0, client: client
+        )
+        defer {
+            manager.shutdownBackgroundTasks()
+            previous.shutdown()
+            cleanup.shutdown()
+        }
+        await previous.release(sessionId: "side", expectedFence: try #require(previous.fence(sessionId: "side")))
+        try store.db.exec("DELETE FROM session_leases WHERE session_id = 'side'")
+        let parentMessage = ACPMessage.agent(id: UUID(), StreamingText("original parent answer"))
+        try store.appendMessage(
+            sessionId: "parent", id: "parent-answer", kind: parentMessage.kind, seq: 0,
+            payload: try ACPMessageCodec.encode(parentMessage), createdAt: Int64(Date().timeIntervalSince1970)
+        )
+        let parentMessages = try store.loadMessages(sessionId: "parent").map(\.payload)
+        let parentRow = try #require(try store.loadSession(id: "parent"))
+        _ = await manager.persistedSessionRow(id: "side")
+        let side = try #require(manager.placeholderSession(id: "side"))
+        await manager.attach(to: side.id, freshlyCreated: false)
+        _ = try #require(manager.runners[side.id], "Attach state: \(side.agentState)")
+        await manager.replaceSideQuestion(parentID: "parent", with: .init(question: "why?", sessionID: side.id))
+        if failure == "proc/kill" || failure == "lease/delete" {
+            await endpoint.setUnavailableMethod(failure)
+        } else if failure == "local-delete" {
+            try store.db.exec("""
+            CREATE TRIGGER fail_side_delete BEFORE DELETE ON sessions
+            WHEN OLD.id = 'side' BEGIN SELECT RAISE(FAIL, 'side deletion failed'); END
+            """)
+        } else if failure == "foreign-owner" {
+            _ = try await previous.claim(
+                sessionId: "side", key: remoteOrphanKey, proposedProcId: "foreign-proc",
+                requestedToken: "foreign-fence", seize: true
+            )
+        }
+
+        await manager.dismissSideQuestion(parentID: "parent")
+        await manager.flushPersistence()
+
+        #expect(manager.sideQuestions["parent"] == nil)
+        #expect(manager.runners[side.id] == nil)
+        #expect(manager.liveSession(for: side.id) == nil)
+        #expect(try store.loadSession(id: side.id)?.remoteSessionId == remoteOrphanKey.remoteSessionId)
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == "parent")
+        #expect(try store.loadSession(id: side.id)?.ephemeralCleanupPending == true)
+        #expect(!manager.recent.contains { $0.id == side.id })
+        if failure == "proc/kill" || failure == "foreign-owner" {
+            #expect(await endpoint.runningProcId == "crashed-side-proc")
+            #expect(try await previous.observe(sessionId: "observer", key: remoteOrphanKey)?.owner
+                == (failure == "foreign-owner" ? previous.owner : cleanup.owner))
+        }
+        if failure == "local-delete" { try store.db.exec("DROP TRIGGER fail_side_delete") }
+        await endpoint.setUnavailableMethod(nil)
+        manager.shutdownBackgroundTasks()
+        cleanup.shutdown()
+        let restartedCoordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-c", instanceId: "cold-instance")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let restarted = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "cold-instance", remoteHost: "fixture", remoteSessionCoordinator: restartedCoordinator
+        )
+        defer {
+            restarted.shutdownBackgroundTasks()
+            restartedCoordinator.shutdown()
+        }
+        if failure == "proc/kill" || failure == "foreign-owner" {
+            await restarted.purgeOrphanedEphemeralSessions()
+            #expect(try store.loadSession(id: side.id) != nil)
+            #expect(await endpoint.runningProcId == "crashed-side-proc")
+            await endpoint.advanceTime(by: 61)
+        }
+        await restarted.purgeOrphanedEphemeralSessions()
+
+        #expect(try store.loadSession(id: side.id) == nil)
+        #expect(await endpoint.runningProcId == nil)
+        #expect(try await previous.observe(sessionId: "observer", key: remoteOrphanKey) == nil)
+        let replica = try JSONDecoder().decode(RemoteSessionReadResult.self, from: await endpoint.request(
+            "replica/read", JSONEncoder().encode(RemoteSessionReadParams(recordId: "record", afterRevision: 0, pageToken: nil))
+        ))
+        #expect(replica.entries.isEmpty)
+        #expect(try store.loadSession(id: "parent") == parentRow)
+        #expect(try store.loadMessages(sessionId: "parent").map(\.payload) == parentMessages)
+    }
+
+    @Test("a cold manager cleans crashed SSH side sessions before forgetting their identity", arguments: [false, true])
+    func coldManagerPurgesRemoteOrphan(ownerless: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(in: folder, idleSeconds: 0)
+        defer {
+            manager.shutdownBackgroundTasks()
+            previous.shutdown()
+            cleanup.shutdown()
+        }
+        if ownerless {
+            await previous.release(sessionId: "side", expectedFence: try #require(previous.fence(sessionId: "side")))
+        } else {
+            await endpoint.advanceTime(by: 61)
+        }
+        #expect(cleanup.fence(sessionId: "side") == nil)
+        #expect(await endpoint.runningProcId == "crashed-side-proc")
+
+        await manager.purgeOrphanedEphemeralSessions()
+
+        #expect(try store.loadSession(id: "side") == nil)
+        #expect(try store.loadSession(id: "parent")?.remoteSessionId == "parent-conversation")
+        #expect(await endpoint.runningProcId == nil)
+        #expect(try await previous.observe(sessionId: "observer", key: remoteOrphanKey) == nil)
+        let replica = try JSONDecoder().decode(RemoteSessionReadResult.self, from: await endpoint.request(
+            "replica/read", JSONEncoder().encode(RemoteSessionReadParams(recordId: "record", afterRevision: 0, pageToken: nil))
+        ))
+        #expect(replica.entries.isEmpty)
+    }
+
+    @Test("SSH orphan cleanup keeps local identity when ownership or native cleanup is unavailable",
+          arguments: ["foreign-owner", "helper-unavailable", "proc/kill", "lease/delete"])
+    func remoteOrphanCleanupRetainsIdentityUntilRetry(failure: String) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            previous.shutdown()
+            cleanup.shutdown()
+        }
+        if failure != "foreign-owner" { await endpoint.advanceTime(by: 61) }
+        if failure == "helper-unavailable" {
+            await endpoint.setCoordinationSupported(false)
+        } else if failure != "foreign-owner" {
+            await endpoint.setUnavailableMethod(failure)
+        }
+
+        await manager.purgeOrphanedEphemeralSessions()
+
+        #expect(try store.loadSession(id: "side")?.remoteSessionId == remoteOrphanKey.remoteSessionId)
+        #expect(try store.loadSession(id: "side")?.ephemeralParentId == "parent")
+        #expect(try store.loadLease(sessionId: "side") == nil)
+        let retained = try #require(try await previous.observe(sessionId: "observer", key: remoteOrphanKey))
+        #expect(retained.key == remoteOrphanKey)
+        if failure == "foreign-owner" { #expect(retained.owner == previous.owner) }
+        #expect(await endpoint.runningProcId == (failure == "lease/delete" ? nil : "crashed-side-proc"))
+        if failure == "proc/kill" {
+            let intruder = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-c", instanceId: "intruder")) {
+                method, data in try await endpoint.request(method, data)
+            }
+            defer { intruder.shutdown() }
+            let denied = try await intruder.claim(
+                sessionId: "intruder", key: remoteOrphanKey, proposedProcId: "intruder-proc", requestedToken: "intruder-token"
+            )
+            #expect(denied.fence == nil)
+            #expect(denied.lease.owner == cleanup.owner)
+        }
+
+        await endpoint.setCoordinationSupported(true)
+        await endpoint.setUnavailableMethod(nil)
+        if failure == "foreign-owner" { await endpoint.advanceTime(by: 61) }
+        await manager.purgeOrphanedEphemeralSessions()
+
+        #expect(try store.loadSession(id: "side") == nil)
+        #expect(try store.loadSession(id: "parent") != nil)
+        #expect(await endpoint.runningProcId == nil)
+        #expect(try await previous.observe(sessionId: "observer", key: remoteOrphanKey) == nil)
+    }
+
+    @Test("SSH orphan cleanup leaves a locally leased side session and its native process alone")
+    func remoteOrphanCleanupProtectsLiveLocalLease() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, store, endpoint, previous, cleanup) = try await remoteOrphanManager(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            previous.shutdown()
+            cleanup.shutdown()
+        }
+        await endpoint.advanceTime(by: 61)
+        try store.db.exec("""
+        UPDATE session_leases SET pid = ?, heartbeat_at = ? WHERE session_id = 'side'
+        """, bindings: [Int64(ProcessInfo.processInfo.processIdentifier), Int64(Date().timeIntervalSince1970)])
+
+        await manager.purgeOrphanedEphemeralSessions()
+
+        #expect(try store.loadSession(id: "side")?.remoteSessionId == remoteOrphanKey.remoteSessionId)
+        #expect(try store.loadLease(sessionId: "side")?.ownerInstance == "crashed-instance")
+        #expect(await endpoint.runningProcId == "crashed-side-proc")
+        #expect(try await previous.observe(sessionId: "observer", key: remoteOrphanKey)?.owner == previous.owner)
+    }
+
+    @Test("orphan cleanup never discards a side session with an active runner")
+    func orphanCleanupProtectsActiveRunner() async throws {
+        let (manager, store, parent) = try await attachedManager(client: ACPMockClient(), supportsClose: true)
+        let side = try await manager.startSideQuestion(parentID: parent.id, question: "why?")
+        try store.db.exec("UPDATE session_leases SET heartbeat_at = 0 WHERE session_id = ?", bindings: [side.id])
+
+        await manager.purgeOrphanedEphemeralSessions()
+
+        #expect(manager.runners[side.id] != nil)
+        #expect(try store.loadSession(id: side.id)?.ephemeralParentId == parent.id)
+        await manager.dismissSideQuestion(parentID: parent.id)
+        await manager.detach(sessionId: parent.id)
+    }
+
+    private var remoteOrphanKey: RemoteSessionKey {
+        .init(worktreePath: "/work", agentId: "codex", remoteSessionId: "crashed-side-conversation")
+    }
+
+    private func remoteOrphanManager(in folder: URL, idleSeconds: Int64 = 100, client: ACPMockClient? = nil) async throws -> (
+        ACPSessionManager, ACPSessionStore, ReplicaEndpoint, ACPRemoteSessionCoordinator, ACPRemoteSessionCoordinator
+    ) {
+        let path = folder.appendingPathComponent("orphan.sqlite").path
+        let store = try ACPSessionStore(path: path)
+        let now = Int64(Date().timeIntervalSince1970)
+        for (id, remoteID, parentID) in [
+            ("parent", "parent-conversation", nil as String?),
+            ("side", "crashed-side-conversation", "parent"),
+        ] {
+            try store.upsertSession(.init(
+                id: id, agentId: "codex", title: id, remoteSessionId: remoteID,
+                currentModel: nil, currentMode: nil, ephemeralParentId: parentID,
+                autoRun: false, createdAt: now - idleSeconds, updatedAt: now - idleSeconds,
+                lastOpenedAt: now - idleSeconds, archived: false
+            ))
+        }
+        try store.db.exec("""
+        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+        VALUES ('side', 'crashed-instance', -1, ?, 'busy', 'crashed-token')
+        """, bindings: [now])
+        let endpoint = ReplicaEndpoint()
+        let previous = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "crashed-instance")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let claimed = try await previous.claim(
+            sessionId: "side", key: remoteOrphanKey, proposedProcId: "crashed-side-proc", requestedToken: "crashed-fence"
+        )
+        let fence = try #require(claimed.fence)
+        await endpoint.startClaimedProc()
+        _ = try await endpoint.request("replica/publish", JSONEncoder().encode(RemoteSessionPublishParams(
+            fence: fence, batchId: "crashed-batch",
+            entries: [.init(kind: .message, key: "0",
+                payload: try JSONSerialization.data(withJSONObject: [
+                    "kind": "agent", "seq": 0, "createdAt": now,
+                    "payload": try ACPMessageCodec.encode(.agent(id: UUID(), StreamingText("side reply"))).base64EncodedString(),
+                ]), revision: 0)], status: "busy"
+        )))
+        let cleanup = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "restarted-instance")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "restarted-instance", remoteHost: "fixture", remoteSessionCoordinator: cleanup,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in .ready(.init(adapterPath: "/fixture/codex-acp", nodeBinDirectory: "")) },
+            connectionFactory: client.map { client -> ACPSessionManager.ACPConnectionFactory in
+                { _, _, _ in ACPConnection(client: client) }
+            }
+        )
+        return (manager, store, endpoint, previous, cleanup)
+    }
+
     /// `client` serves the first connection and `laterClients` the following
     /// ones in order; the last client serves any beyond them.
     private func attachedManager(

@@ -3,9 +3,10 @@
 ## Decision
 
 The Alas remote helper is implemented in stable Rust and built with Cargo.
-The build uses Rust's distributed targets directly. Linux artifacts link with
-the `rust-lld` shipped in the pinned Rust toolchain; no additional compiler or
-cross-linker toolchain is required.
+Linux artifacts link with the `rust-lld` shipped in the pinned Rust toolchain.
+Bundled SQLite is compiled and archived with Zig's `cc` and `ar` for Linux musl
+targets; Darwin targets use the host compiler. `ALAS_ZIG_BIN` can select the Zig
+binary. No target SQLite installation is required.
 
 The release matrix is:
 
@@ -48,9 +49,10 @@ polling paths.
 ## Build Policy
 
 `scripts/build-alas-helper.sh` owns the four-target matrix. The Rust toolchain,
-target list, Cargo lockfile, helper sources, manifest, and build script are all
-fingerprint inputs. Xcode builds reuse matching artifacts from `.build`.
+target list, Cargo lockfile, helper sources, manifest, build script, and resolved
+Zig binary and version are fingerprint inputs. Xcode builds reuse matching
+artifacts from `.build`.
 
-The helper intentionally starts with only the handshake. RPC methods, file
-watching, search, and helper-owned ACP processes belong to their follow-up
-issues.
+The helper serves filesystem, watch, search, persistent process, and SSH ACP
+session-coordination RPCs. Session leases and transcript replicas use bundled
+SQLite in the private helper state directory.

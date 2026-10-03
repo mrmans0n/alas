@@ -114,6 +114,37 @@ actor ACPSessionPersistence {
         try openedStore().loadSession(agentId: agentId, remoteSessionId: remoteSessionId)
     }
 
+    func prepareRemoteContextRecovery(fence: ACPSessionLeaseFence, procId: String) throws -> Bool {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            try store.disableReplicaExport(sessionId: fence.sessionId)
+            return try store.db.execChanges("""
+                UPDATE sessions SET remote_session_id=NULL,context_recovery_pending=1,recovery_proc_id=?
+                WHERE id=? AND recovery_proc_id IS NULL
+                """, bindings: [procId, fence.sessionId]) == 1
+        } ?? false
+    }
+
+    func rotateRemoteRecoveryLease(fence: ACPSessionLeaseFence, pid: Int64, now: Int64, token: String) throws -> ACPSessionLease? {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            try store.seizeLease(sessionId: fence.sessionId, instanceId: fence.ownerInstance, pid: pid, now: now, leaseToken: token)
+            return ACPSessionLease(sessionId: fence.sessionId, ownerInstance: fence.ownerInstance, pid: pid, heartbeatAt: now, status: "idle", token: token)
+        }
+    }
+
+    func completeRemoteContextRecoveryBinding(
+        fence: ACPSessionLeaseFence, procId: String, remoteSessionId: String
+    ) throws -> Bool {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            return try store.db.execChanges("""
+                UPDATE sessions SET remote_session_id=?,recovery_proc_id=NULL
+                WHERE id=? AND recovery_proc_id=?
+                """, bindings: [remoteSessionId, fence.sessionId, procId]) == 1
+        } ?? false
+    }
+
     func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false) throws {
         try openedStore().upsertSession(row, preserveTitle: preserveTitle)
     }
@@ -346,8 +377,21 @@ actor ACPSessionPersistence {
         try openedStore().deleteSession(id: id)
     }
 
-    func deleteOrphanedEphemeralSessions(now: Int64, staleAfter: Int64) throws -> [String] {
-        try openedStore().deleteOrphanedEphemeralSessions(now: now, staleAfter: staleAfter)
+    func orphanedEphemeralSessions(now: Int64, staleAfter: Int64, sessionId: String? = nil) throws -> [ACPSessionRow] {
+        try openedStore().orphanedEphemeralSessions(now: now, staleAfter: staleAfter, sessionId: sessionId)
+    }
+
+    func deleteOrphanedEphemeralSession(
+        id: String,
+        now: Int64,
+        staleAfter: Int64,
+        fence: ACPSessionLeaseFence? = nil
+    ) throws -> Bool {
+        try openedStore().deleteOrphanedEphemeralSession(id: id, now: now, staleAfter: staleAfter, fence: fence)
+    }
+
+    func markEphemeralCleanupPending(id: String) throws -> Bool {
+        try openedStore().markEphemeralCleanupPending(id: id)
     }
 
     func promoteEphemeralSession(id: String) throws -> Bool {
@@ -736,5 +780,61 @@ actor ACPSessionPersistence {
             throw SQLiteError.stepFailed(code: SQLITE_ERROR, message: "Lease seizure did not persist", sql: "session_leases")
         }
         return lease
+    }
+}
+
+extension ACPSessionPersistence {
+    func replicaChangeEvents() throws -> AsyncStream<Void> {
+        let (events, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observerId = UUID()
+        try openedStore().db.observeReplicaChanges(id: observerId) { continuation.yield(()) }
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeReplicaChangeObserver(id: observerId) }
+        }
+        return events
+    }
+
+    private func removeReplicaChangeObserver(id: UUID) {
+        store?.db.removeReplicaChangeObserver(id: id)
+    }
+
+    func enableReplicaExport(sessionId: String, recordId: String, localFence: ACPSessionLeaseFence? = nil) throws {
+        try openedStore().enableReplicaExport(sessionId: sessionId, recordId: recordId, localFence: localFence)
+    }
+
+    func disableReplicaExport(sessionId: String, localFence: ACPSessionLeaseFence? = nil) throws {
+        let store = try openedStore()
+        if let localFence {
+            guard localFence.sessionId == sessionId else { throw ACPSessionReplicaError.localWriterActive }
+            _ = try store.withLeaseFence(localFence) { try store.disableReplicaExport(sessionId: sessionId) }
+        } else { try store.disableReplicaExport(sessionId: sessionId) }
+    }
+
+    func replicaChanges(sessionId: String, limit: Int) throws -> ACPSessionReplicaExport? {
+        try openedStore().replicaChanges(sessionId: sessionId, limit: limit)
+    }
+
+    func acknowledgeReplicaChanges(sessionId: String, export: ACPSessionReplicaExport) throws {
+        try openedStore().acknowledgeReplicaChanges(sessionId: sessionId, export: export)
+    }
+
+    func stageReplicaPage(sessionId: String, recordId: String, page: RemoteSessionReadResult) throws {
+        try openedStore().stageReplicaPage(sessionId: sessionId, recordId: recordId, page: page)
+    }
+
+    func commitReplicaImport(importGuard: ACPSessionReplicaImportGuard) throws -> Int64 {
+        try openedStore().commitReplicaImport(importGuard: importGuard)
+    }
+
+    func discardReplicaImport(sessionId: String) throws {
+        try openedStore().discardReplicaImport(sessionId: sessionId)
+    }
+
+    func replicaRevision(sessionId: String, recordId: String) throws -> Int64 {
+        try openedStore().replicaRevision(sessionId: sessionId, recordId: recordId)
+    }
+
+    func resolveReplicaRelations() throws {
+        try openedStore().resolveReplicaRelations()
     }
 }

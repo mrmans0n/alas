@@ -12988,6 +12988,11 @@ final class AppState {
                 )
             }
         )
+        mgr.remoteServerIdProvider = { [weak self] in
+            guard let self else { return nil }
+            if self.config.remote.ensureServerId() { self.saveConfig() }
+            return self.config.remote.serverId
+        }
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
@@ -13307,6 +13312,11 @@ final class AppState {
                 )
             }
         )
+        manager.remoteServerIdProvider = { [weak self] in
+            guard let self else { return nil }
+            if self.config.remote.ensureServerId() { self.saveConfig() }
+            return self.config.remote.serverId
+        }
         manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
@@ -13547,11 +13557,9 @@ final class AppState {
             manager.runners[sid]?.stop()
             scheduledAgentTurns.sessionClosed(sid)
         }
-        // Cancel mirror pollers and heartbeats — mirror sessions have no
-        // runner and are never reached by the detach loop above, so they
-        // must be torn down explicitly to stop the 2.5s backstop polls and
-        // notifier subscriptions from outliving the manager.
-        manager.shutdownBackgroundTasks()
+        // Mirrors have no runner, so stop their pollers and subscriptions now.
+        // Writer leases must remain fresh while sequential teardown is pending.
+        manager.prepareForDisposal()
         localTextObservers.managers[owner] = nil
     }
 

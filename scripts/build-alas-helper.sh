@@ -14,6 +14,7 @@ build_root="${srcroot}/.build/alas-helper"
 fingerprint_path="${build_root}/fingerprint"
 rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
 rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.96.1}"
+zig_bin="${ALAS_ZIG_BIN:-$(command -v zig || true)}"
 
 targets=(
     x86_64-unknown-linux-musl
@@ -29,6 +30,7 @@ die() {
 
 command -v "${rustup_bin}" >/dev/null 2>&1 || die "rustup not found"
 [ -f "${helper_root}/Cargo.lock" ] || die "missing ${helper_root}/Cargo.lock"
+[ -x "${zig_bin}" ] || die "Zig is required to compile bundled SQLite for Linux musl"
 
 fingerprint="$({
     (
@@ -39,6 +41,9 @@ fingerprint="$({
     )
     shasum -a 256 < "${script_dir}/build-alas-helper.sh"
     printf 'rust_toolchain=%s\n' "${rust_toolchain}"
+    printf 'zig_bin=%s\n' "${zig_bin}"
+    "${zig_bin}" version
+    shasum -a 256 "${zig_bin}"
     printf 'target=%s\n' "${targets[@]}"
 } | shasum -a 256 | awk '{print $1}')"
 
@@ -74,12 +79,22 @@ ln -sf "${rust_lld}" "${build_root}/toolchain/ld.lld"
 
 for target in "${targets[@]}"; do
     rustflags=()
+    build_env=("RUSTC=${rustc_bin}")
     case "${target}" in
         *-unknown-linux-musl)
             rustflags=(-C "linker=${build_root}/toolchain/ld.lld" -C linker-flavor=ld)
+            zig_target="${target/-unknown-linux-musl/-linux-musl}"
+            cc_wrapper="${build_root}/toolchain/cc-${target}"
+            printf '#!/bin/sh\nexec "%s" cc -target %s "$@"\n' "${zig_bin}" "${zig_target}" > "${cc_wrapper}"
+            chmod +x "${cc_wrapper}"
+            ar_wrapper="${build_root}/toolchain/ar-${target}"
+            printf '#!/bin/sh\nexec "%s" ar "$@"\n' "${zig_bin}" > "${ar_wrapper}"
+            chmod +x "${ar_wrapper}"
+            # cc-rs otherwise supplies a Rust-style --target that Zig rejects.
+            # The wrapper owns the target; retain optimization/PIC explicitly.
+            build_env+=("CC_${target//-/_}=${cc_wrapper}" "AR_${target//-/_}=${ar_wrapper}" "CRATE_CC_NO_DEFAULTS=1" "CFLAGS_${target//-/_}=-O3 -fPIC")
             ;;
     esac
-    build_env=("RUSTC=${rustc_bin}")
     if [ "${#rustflags[@]}" -gt 0 ]; then
         encoded_rustflags="${rustflags[0]}"
         for flag in "${rustflags[@]:1}"; do

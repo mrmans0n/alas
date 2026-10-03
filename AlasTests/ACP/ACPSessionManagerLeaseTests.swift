@@ -13,14 +13,350 @@ import Foundation
                           hydratorPath: hydratorPath)
     }
 
-    @Test("manager exposes its instanceId")
-    func exposesInstanceId() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mgr-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        let mgr = tempManager(instanceId: "INST-A", store: store)
-        #expect(mgr.instanceId == "INST-A")
-        #expect(mgr.pid == Int64(getpid()))
+    @Test("cross-Mac stand-down preserves runner writes queued behind the lost remote fence")
+    func remoteStandDownFlushesPendingTranscriptBeforeLocalLeaseRelease() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, store, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer { manager.shutdownBackgroundTasks()
+        coordinator.shutdown() }
+        let gate = LeaseTestGate()
+        let completion = AsyncStream<Bool>.makeStream()
+        defer { completion.continuation.finish() }
+        runner.beforePersistenceForTesting = { await gate.wait() }
+        runner.onPersistenceFlushForTesting = { Task { await gate.open() } }
+        session.transcript.messages.append(.user(id: UUID(), text: "Pending before takeover", attachments: []))
+        #expect(runner.persistIndices([0], completion: { completion.continuation.yield($0) }))
+        let params = RemoteSessionClaimParams(
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation"),
+            owner: .init(serverId: "mac-b", instanceId: "B"), proposedProcId: "replacement",
+            requestedToken: "replacement")
+        _ = try await endpoint.request("lease/seize", JSONEncoder().encode(params))
+        await coordinator.flush(sessionId: session.id)
+        var persisted: Bool?
+        for await value in completion.stream { persisted = value
+        break }
+        #expect(persisted == true)
+        let messages = try store.loadMessages(sessionId: session.id)
+        #expect(messages.map(\.payload) == [try ACPMessageCodec.encode(session.transcript.messages[0])])
+        #expect(manager.isMirror(sessionId: session.id))
+    }
+
+    @Test("disposal releases remote ownership only after final transcript publication succeeds", arguments: [Optional<Bool>.none, true, false])
+    func disposalPublishesPendingTranscriptBeforeRemoteLeaseRelease(publicationRecovers: Bool?) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, store, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer { coordinator.shutdown() }
+        await endpoint.setPublicationUnavailable(publicationRecovers != nil)
+        let message = ACPMessage.user(id: UUID(), text: "Final transcript before disposal", attachments: [])
+        session.transcript.messages.append(message)
+        #expect(runner.persistIndices([0]))
+        if let publicationRecovers {
+            await runner.flushPersistence()
+            await coordinator.flush(sessionId: session.id)
+            await endpoint.setPublicationUnavailable(!publicationRecovers)
+        }
+        runner.stop()
+        manager.shutdownBackgroundTasks()
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        await manager.releaseAllOwnedLeases()
+
+        let reader = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        defer { reader.shutdown() }
+        let lease = try #require(try await reader.observe(sessionId: "mirror",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")))
+        #expect(lease.owner == (publicationRecovers == false ? coordinator.owner : nil))
+        let mirrorStore = try ACPSessionStore(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try mirrorStore.upsertSession(.init(id: "mirror", agentId: "claude", title: "Mirror",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try await reader.syncMirror(sessionId: "mirror", lease: lease,
+            persistence: ACPSessionPersistence(path: mirrorStore.path)) { true }
+        let payload = try ACPMessageCodec.encode(message)
+        let expected = publicationRecovers == false ? [] : [payload]
+        #expect(try mirrorStore.loadMessages(sessionId: "mirror").map(\.payload) == expected)
+        #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [payload])
+    }
+
+    @Test("a remote writer waiting for manager disposal stays fenced beyond a lease window")
+    func waitingRemoteDisposalKeepsLeaseFresh() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, runner, endpoint) = try await remoteWriter(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        // Isolate periodic renewal from status-only replica drains.
+        coordinator.stopPublishing(sessionId: session.id)
+        runner.stop()
+        manager.prepareForDisposal()
+        for _ in 0..<3 {
+            let before = await endpoint.heartbeatCount
+            await endpoint.advanceTime(by: 40)
+            let deadline = ContinuousClock.now + .seconds(10)
+            while await endpoint.heartbeatCount == before, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+        }
+        let key = RemoteSessionKey(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")
+        let waiting = try #require(try await coordinator.observe(sessionId: "observer", key: key))
+        #expect(waiting.isFresh)
+        await manager.disposeAllLiveSessions()
+        await manager.releaseAllOwnedLeases()
+        let released = try #require(try await coordinator.observe(sessionId: "observer", key: key))
+        #expect(released.owner == nil)
+    }
+
+    @Test("SSH authority survives a paginated import longer than the remote lease TTL", arguments: [false, true])
+    func remoteImportRenewsAuthorityBeforeAttach(takeover: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (writer, source, _, publisher, sourceRunner, endpoint) = try await remoteWriter(in: folder)
+        let message = ACPMessage.user(id: UUID(), text: "Imported before writer attach", attachments: [])
+        source.transcript.messages.append(message)
+        #expect(sourceRunner.persistIndices([0]))
+        await sourceRunner.flushPersistence()
+        await publisher.flush(sessionId: source.id)
+        writer.shutdownBackgroundTasks()
+        publisher.stopPublishing(sessionId: source.id)
+        if !takeover {
+            let fence = try #require(publisher.fence(sessionId: source.id))
+            await publisher.release(sessionId: source.id, expectedFence: fence)
+        }
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("reader.sqlite").path)
+        try store.upsertSession(.init(id: "reader", agentId: "claude", title: "Reader",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let gate = LeaseTestGate()
+        let parked = AsyncStream<Void>.makeStream()
+        let ready = AsyncStream<Void>.makeStream()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in
+            if method == "replica/read",
+               try JSONDecoder().decode(RemoteSessionReadParams.self, from: data).pageToken != nil {
+                parked.continuation.yield(())
+                await gate.wait()
+            }
+            return try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: "")) },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        defer {
+            reader.shutdownBackgroundTasks()
+            publisher.shutdown()
+            coordinator.shutdown()
+            parked.continuation.finish()
+            ready.continuation.finish()
+        }
+        reader.afterRunnerRegistrationForTesting = { _ in ready.continuation.yield(()) }
+        let session = try #require(reader.placeholderSession(id: "reader"))
+        await reader.hydrateIfNeeded(id: session.id)
+        let acquisition = Task { @MainActor in
+            if takeover { return await reader.takeOver(sessionId: session.id) }
+            await reader.attach(to: session.id, freshlyCreated: false)
+            return reader.runners[session.id] != nil
+        }
+        for await _ in parked.stream { break }
+        // Only the manager's renewal task can heartbeat while the read is paused.
+        for _ in 0..<3 {
+            let before = await endpoint.heartbeatCount
+            await endpoint.advanceTime(by: 40)
+            let deadline = ContinuousClock.now + .seconds(10)
+            while await endpoint.heartbeatCount == before, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+        }
+        await gate.open()
+        try #require(await acquisition.value)
+        if takeover {
+            for await _ in ready.stream { break }
+            await reader.attach(to: session.id, freshlyCreated: false)
+        }
+        _ = try #require(reader.runners[session.id], "Attach state: \(session.agentState)")
+        #expect(try store.loadMessages(sessionId: session.id).map(\.payload) == [try ACPMessageCodec.encode(message)])
+        #expect(await coordinator.flush(sessionId: session.id))
+        let fence = try #require(coordinator.fence(sessionId: session.id))
+        try await coordinator.killProc(sessionId: session.id, expectedFence: fence)
+        let observed = try #require(try await coordinator.observe(sessionId: "observer",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")))
+        #expect(observed.isFresh)
+        #expect(observed.owner == coordinator.owner)
+    }
+
+    @Test("failed SSH teardown retains ownership and can be retried without waiting for expiry", arguments: ["proc/kill", "lease/release"])
+    func failedRemoteTeardownRetainsOwnershipUntilRetry(method: String) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, _, endpoint) = try await remoteWriter(in: folder)
+        defer {
+            manager.shutdownBackgroundTasks()
+            coordinator.shutdown()
+        }
+        await endpoint.setUnavailableMethod(method)
+        await manager.releaseWriterLease(sessionId: session.id)
+        let foreign = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        defer { foreign.shutdown() }
+        let key = RemoteSessionKey(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation")
+        let blocked = try await foreign.claim(sessionId: "foreign", key: key, proposedProcId: "foreign", requestedToken: "foreign")
+        #expect(blocked.fence == nil)
+        #expect(blocked.lease.owner == coordinator.owner)
+        await endpoint.setUnavailableMethod(nil)
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.releaseWriterLease(sessionId: session.id)
+        let acquired = try await foreign.claim(sessionId: "foreign", key: key, proposedProcId: "foreign", requestedToken: "foreign")
+        #expect(acquired.fence != nil)
+    }
+
+    @Test("SSH takeover preserves queued or already-sent delegation guidance", arguments: [false, true])
+    func remoteTakeoverPreservesOneTimePreamble(sent: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (writer, source, store, publisher, _, endpoint) = try await remoteWriter(in: folder, nativeSubagentsDisabled: true)
+        defer {
+            writer.shutdownBackgroundTasks()
+            publisher.shutdown()
+        }
+        let pending: String? = sent ? nil : "Queued delegation guidance"
+        try store.setMCPPreamble(sessionId: source.id, pendingText: pending, sent: sent)
+        await publisher.flush(sessionId: source.id)
+        publisher.stopPublishing(sessionId: source.id)
+        let mirrorStore = try ACPSessionStore(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try mirrorStore.upsertSession(.init(id: "mirror", agentId: "claude", title: "Mirror",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: mirrorStore,
+            instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: "")) },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let ready = AsyncStream<Void>.makeStream()
+        defer {
+            reader.shutdownBackgroundTasks()
+            coordinator.shutdown()
+            ready.continuation.finish()
+        }
+        reader.afterRunnerRegistrationForTesting = { _ in ready.continuation.yield(()) }
+        let session = try #require(reader.placeholderSession(id: "mirror"))
+        await reader.hydrateIfNeeded(id: session.id)
+        try #require(await reader.takeOver(sessionId: session.id))
+        for await _ in ready.stream { break }
+        await reader.attach(to: session.id, freshlyCreated: false)
+        _ = try #require(reader.runners[session.id], "Attach state: \(session.agentState)")
+        #expect(session.mcpPreambleSent == sent)
+        #expect(session.pendingMCPPreamble == pending)
+    }
+
+    private func remoteWriter(in folder: URL, nativeSubagentsDisabled: Bool? = nil) async throws -> (
+        ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
+    ) {
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
+        try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, nativeSubagentsDisabled: nativeSubagentsDisabled, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let endpoint = ReplicaEndpoint()
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,
+            instanceId: "A", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: ""))
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let session = try #require(manager.placeholderSession(id: "session"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id],
+            "Attach state: \(session.agentState), persistence error: \(manager.persistenceError ?? "none")")
+        await coordinator.flush(sessionId: session.id)
+        return (manager, session, store, coordinator, runner, endpoint)
+    }
+
+    @Test("an SSH takeover fences the old writer despite independent Mac-local lease databases")
+    func remoteTakeoverReplacesAuthorityAcrossIndependentStores() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let storeA = try ACPSessionStore(path: folder.appendingPathComponent("a.sqlite").path)
+        let storeB = try ACPSessionStore(path: folder.appendingPathComponent("b.sqlite").path)
+        for (store, id) in [(storeA, "local-a"), (storeB, "local-b")] {
+            try store.upsertSession(.init(id: id, agentId: "claude", title: "Session", remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        }
+        let endpoint = ReplicaEndpoint()
+        let coordinatorA = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) { method, data in try await endpoint.request(method, data) }
+        let coordinatorB = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) { method, data in try await endpoint.request(method, data) }
+        let a = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: storeA, instanceId: "A", remoteHost: "fixture", remoteSessionCoordinator: coordinatorA)
+        let b = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: storeB, instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinatorB)
+        let attachBarrier = AsyncStream<Void>.makeStream()
+        b.beforeTakeoverAttachForTesting = { _ in for await _ in attachBarrier.stream {} }
+        defer {
+            a.shutdownBackgroundTasks()
+            b.shutdownBackgroundTasks()
+            attachBarrier.continuation.finish()
+        }
+        #expect(await a.acquireWriterLease(sessionId: "local-a"))
+        #expect(!(await b.acquireWriterLease(sessionId: "local-b")))
+        #expect(a.isWriter(for: "local-a"))
+        #expect(b.isMirror(sessionId: "local-b"))
+        #expect(try storeB.loadLease(sessionId: "local-b") == nil)
+        _ = b.placeholderSession(id: "local-b")
+        #expect(await b.takeOver(sessionId: "local-b"))
+        _ = await a.heartbeatTick(sessionId: "local-a")
+        #expect(!a.isWriter(for: "local-a"))
+        #expect(a.isMirror(sessionId: "local-a"))
+        #expect(b.isWriter(for: "local-b"))
+        await a.releaseWriterLease(sessionId: "local-a")
+        await b.releaseWriterLease(sessionId: "local-b")
+    }
+
+    @Test("an old SSH helper leaves the session read-only and releases the tentative local lease")
+    func unsupportedHelperCannotGrantWriterAuthority() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("session.sqlite").path)
+        try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session", remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let endpoint = ReplicaEndpoint()
+        await endpoint.setCoordinationSupported(false)
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac", instanceId: "instance")) { method, data in try await endpoint.request(method, data) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store, instanceId: "instance", remoteHost: "fixture", remoteSessionCoordinator: coordinator)
+        defer { manager.shutdownBackgroundTasks() }
+        #expect(!(await manager.acquireWriterLease(sessionId: "session")))
+        #expect(!manager.isWriter(for: "session"))
+        #expect(manager.isMirror(sessionId: "session"))
+        #expect(try store.loadLease(sessionId: "session") == nil)
     }
 
     @Test("second instance attaching the same session becomes a mirror")

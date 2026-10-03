@@ -75,6 +75,7 @@ actor RemoteHelperClient {
     private var dispatchTask: Task<Void, Never>?
     private var idleShutdownTask: Task<Void, Never>?
     private var generation = 0
+    private var coordinationCapability: (generation: Int, supported: Bool)?
     private var nextId = 0
     private var nextClientSubscriptionId = 0
     private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
@@ -126,7 +127,25 @@ actor RemoteHelperClient {
     }
 
     func hello(_ params: RemoteHelperHelloParams = .init()) async throws -> RemoteHelperHelloResult {
-        try await request(method: "hello", params: params)
+        _ = try ensureStarted()
+        let helloGeneration = generation
+        let result: RemoteHelperHelloResult = try await request(method: "hello", params: params)
+        if generation == helloGeneration {
+            coordinationCapability = (helloGeneration, result.capabilities.sessionCoordination == 1)
+        }
+        return result
+    }
+
+    /// Coordination payloads already contain typed real paths. In particular,
+    /// transcript bytes and opaque remote IDs must never be path-rewritten.
+    func remoteSessionRequest(method: String, encodedParams: Data) async throws -> Data {
+        if method == "hello" {
+            return try JSONEncoder().encode(try await hello(JSONDecoder().decode(RemoteHelperHelloParams.self, from: encodedParams)))
+        }
+        let params = try JSONDecoder().decode([String: AnyCodable].self, from: encodedParams)
+        let result: AnyCodable = try await request(method: method, params: params, stripVirtualPaths: false,
+            requiresSessionCoordination: method.hasPrefix("proc/") && params["leaseFence"] != nil)
+        return try JSONEncoder().encode(result)
     }
 
     func ping() async throws -> RemoteHelperPingResult {
@@ -288,7 +307,8 @@ actor RemoteHelperClient {
         args: [String],
         cwd: String,
         env: [String: String],
-        pathPrefixDirectories: [String] = []
+        pathPrefixDirectories: [String] = [],
+        leaseFence: RemoteSessionFence? = nil
     ) async throws -> RemoteHelperProcStatus {
         try await request(
             method: "proc/spawn",
@@ -298,8 +318,10 @@ actor RemoteHelperClient {
                 args: args,
                 cwd: cwd,
                 env: env,
-                pathPrefixDirectories: pathPrefixDirectories
-            )
+                pathPrefixDirectories: pathPrefixDirectories,
+                leaseFence: leaseFence
+            ),
+            requiresSessionCoordination: leaseFence != nil
         )
     }
 
@@ -416,24 +438,27 @@ actor RemoteHelperClient {
         scheduleIdleShutdownIfPossible()
     }
 
-    func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil) async throws -> UInt64 {
+    func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil, leaseFence: RemoteSessionFence? = nil) async throws -> UInt64 {
         let result: RemoteHelperProcWriteResult = try await request(
             method: "proc/write",
             params: RemoteHelperProcWriteParams(
                 procId: procId,
                 dataBase64: data.base64EncodedString(),
-                expectedStdinOffset: expectedStdinOffset
+                expectedStdinOffset: expectedStdinOffset,
+                leaseFence: leaseFence
             ),
-            replaySubscriptionsOnStart: false
+            replaySubscriptionsOnStart: false,
+            requiresSessionCoordination: leaseFence != nil
         )
         return result.stdinOffset
     }
 
-    func killProc(procId: String) async throws {
+    func killProc(procId: String, leaseFence: RemoteSessionFence? = nil) async throws {
         let _: RemoteHelperProcKillResult = try await request(
             method: "proc/kill",
-            params: RemoteHelperProcKillParams(procId: procId),
-            replaySubscriptionsOnStart: false
+            params: RemoteHelperProcKillParams(procId: procId, leaseFence: leaseFence),
+            replaySubscriptionsOnStart: false,
+            requiresSessionCoordination: leaseFence != nil
         )
     }
 
@@ -517,7 +542,8 @@ actor RemoteHelperClient {
         method: String,
         params: Params,
         replaySubscriptionsOnStart: Bool = true,
-        stripVirtualPaths: Bool = true
+        stripVirtualPaths: Bool = true,
+        requiresSessionCoordination: Bool = false
     ) async throws -> Result {
         let didStart = try ensureStarted()
         if replaySubscriptionsOnStart {
@@ -530,6 +556,11 @@ actor RemoteHelperClient {
             if let subscriptionReplayTask {
                 try await subscriptionReplayTask.value
             }
+        }
+        if requiresSessionCoordination {
+            if coordinationCapability?.generation != generation { _ = try await hello() }
+            guard coordinationCapability?.generation == generation,
+                  coordinationCapability?.supported == true else { throw RemoteSessionUnavailable.helperRequired }
         }
         idleShutdownTask?.cancel()
         idleShutdownTask = nil

@@ -8,6 +8,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
 
     private let host: String
     private let procId: String
+    private let leaseFence: RemoteSessionFence?
+    private let onLeaseLost: @MainActor @Sendable () async -> Void
     private let command: String
     private let arguments: [String]
     private let cwd: String
@@ -36,11 +38,15 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         pathPrefixDirectories: [String] = [],
         initialOutputOffsets: OutputOffsets? = nil,
         onFreshProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
-        onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in }
+        onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in },
+        leaseFence: RemoteSessionFence? = nil,
+        onLeaseLost: @escaping @MainActor @Sendable () async -> Void = {}
     ) {
         let launch = Self.homeExpandedLaunch(command: command, arguments: arguments)
         self.host = host
         self.procId = procId
+        self.leaseFence = leaseFence
+        self.onLeaseLost = onLeaseLost
         self.command = launch.command
         self.arguments = launch.arguments
         self.cwd = cwd
@@ -131,7 +137,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                             args: arguments,
                             cwd: cwd,
                             env: environment,
-                            pathPrefixDirectories: pathPrefixDirectories
+                            pathPrefixDirectories: pathPrefixDirectories,
+                            leaseFence: leaseFence
                         )
                         attachFreshSpawnFromStart = status.spawned == true
                         if attachFreshSpawnFromStart {
@@ -139,6 +146,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                             outputConsumption.reset(stdoutOffset: 0, stderrOffset: 0)
                         }
                     } catch {
+                        if error.isRemoteSessionLeaseLoss { await onLeaseLost() }
                         guard Self.shouldRetrySpawnFailure(error) else {
                             state.setWritesEnabled(false)
                             let message = "Remote helper failed to launch ACP process: \(error.localizedDescription)\n"
@@ -217,8 +225,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                                 stderrOffset: offsets.stderr ?? 0
                             )
                             do {
-                                try await client.killProc(procId: procId)
+                                try await client.killProc(procId: procId, leaseFence: leaseFence)
                             } catch {
+                                if error.isRemoteSessionLeaseLoss { await onLeaseLost() }
                                 continuation?.yield(.frame(data))
                                 continuation?.finish()
                                 return
@@ -367,11 +376,13 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     stdinOffset = try await client.writeProc(
                         procId: procId,
                         data: Self.frameForProcWrite(next.data),
-                        expectedStdinOffset: expectedStdinOffset
+                        expectedStdinOffset: expectedStdinOffset,
+                        leaseFence: leaseFence
                     )
                     next.onWritten?()
                     state.markMayHaveDurableProcInput()
                 } catch RemoteHelperClientError.jsonrpc(let error) {
+                    if error.code == -32081 { await onLeaseLost() }
                     _ = state.markTerminated()
                     let message = "Remote helper failed to write ACP input: \(error.message)\n"
                     continuation?.yield(.stderr(Data(message.utf8)))

@@ -1636,48 +1636,6 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
     }
 
-    @Test("fresh remote session preamble omits built-in but names a surviving user server")
-    func freshRemoteSessionPreambleOmitsBuiltInButNamesUserServer() async throws {
-        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task4-remote-preamble-\(UUID().uuidString)")
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let client = ACPMockClient()
-        client.script(method: "initialize") { _ in
-            try JSONEncoder().encode(ACPInitializeResult(
-                protocolVersion: 1,
-                agentCapabilities: .init(mcpCapabilities: .init(http: true)),
-                authMethods: []
-            ))
-        }
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        let configuredServers = [
-            ProjectMCPServer(
-                id: UUID().uuidString,
-                name: "docs",
-                transport: .http(url: "https://mcp.example.com/docs", headers: [])
-            )
-        ]
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: root,
-            store: store,
-            remoteAdapterResolver: { _, _, _ in
-                .ready(.init(adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp", nodeBinDirectory: ""))
-            },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) },
-            mcpProjectContextProvider: {
-                MCPProjectContext(projectDirectory: root, configuredServers: configuredServers)
-            }
-        )
-        let session = manager.createSession(agentId: "codex")
-
-        await manager.attach(to: session.id, freshlyCreated: true)
-
-        let preamble = try #require(session.pendingMCPPreamble)
-        #expect(preamble.contains("(built-in)") == false)
-        #expect(preamble.contains("docs") == true)
-        #expect(session.mcpPreambleSent == false)
-    }
-
     @Test("local attach merges alas CLI env into the launch spec")
     func localAttachMergesCLIEnv() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1863,10 +1821,13 @@ struct ACPSessionManagerAttachRestoreTests {
         scriptInitialize(client)
         scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
         var capturedSpec: ACPLaunchSpec?
+        let instanceId = UUID().uuidString
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: root,
             store: store,
+            instanceId: instanceId,
+            remoteSessionCoordinator: remoteCoordinator(instanceId: instanceId),
             remoteAdapterResolver: { _, _, _ in
                 .ready(.init(adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp", nodeBinDirectory: ""))
             },
@@ -1957,10 +1918,13 @@ struct ACPSessionManagerAttachRestoreTests {
         let configuredServers = [
             ProjectMCPServer.stdio(name: "linear", command: "linear-mcp")
         ]
+        let instanceId = UUID().uuidString
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: root,
             store: store,
+            instanceId: instanceId,
+            remoteSessionCoordinator: remoteCoordinator(instanceId: instanceId),
             remoteAdapterResolver: { _, _, _ in
                 .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
             },
@@ -1982,9 +1946,6 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.mcpExternalStatus?.userServerNames == ["linear"])
         #expect(session.mcpExternalStatus?.adapterServerAvailability == .notInstalled)
         #expect(session.mcpExternalStatus?.canInstallAdapterLocally == false)
-        let preamble = try #require(session.pendingMCPPreamble)
-        #expect(preamble.contains("linear"))
-        #expect(preamble.contains("cannot be reached"))
     }
 
     @Test("Codex-style load response without session id restores normally")
@@ -5121,10 +5082,13 @@ struct ACPSessionManagerAttachRestoreTests {
             ? "codex-acp is not installed on devbox."
             : "Node.js and npm are unavailable."
         let store = try ACPSessionStore(path: tmpStorePath())
+        let instanceId = UUID().uuidString
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: root,
             store: store,
+            instanceId: instanceId,
+            remoteSessionCoordinator: remoteCoordinator(instanceId: instanceId),
             remoteAdapterResolver: { _, _, _ in
                 adapterMissing ? .missing(reason: reason) : .error(message: reason)
             }
@@ -5152,10 +5116,13 @@ struct ACPSessionManagerAttachRestoreTests {
             var launchSpec: ACPLaunchSpec?
         }
         let capture = Capture()
+        let instanceId = UUID().uuidString
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: root,
             store: store,
+            instanceId: instanceId,
+            remoteSessionCoordinator: remoteCoordinator(instanceId: instanceId),
             remoteAdapterResolver: { _, descriptor, _ in
                 capture.resolverCalls += 1
                 #expect(descriptor == .codex)
@@ -5617,6 +5584,13 @@ struct ACPSessionManagerAttachRestoreTests {
             payload: ACPMessageCodec.encode(message),
             createdAt: seq
         )
+    }
+
+    private func remoteCoordinator(instanceId: String) -> ACPRemoteSessionCoordinator {
+        let endpoint = ReplicaEndpoint()
+        return ACPRemoteSessionCoordinator(owner: .init(serverId: "test-mac", instanceId: instanceId)) {
+            method, data in try await endpoint.request(method, data)
+        }
     }
 
     private func waitUntil(

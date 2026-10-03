@@ -167,9 +167,110 @@ struct ACPSessionStoreSchemaTests {
             """, bindings: [leaseRow.pid, leaseRow.heartbeatAt])
         }
 
-        #expect(try store.deleteOrphanedEphemeralSessions(now: now, staleAfter: 15) == (orphaned ? ["side"] : []))
+        let candidates = try store.orphanedEphemeralSessions(now: now, staleAfter: 15)
+        #expect(candidates.map(\.id) == (orphaned ? ["side"] : []))
+        #expect(try store.loadSession(id: "side") != nil)
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15) == orphaned)
         #expect(try (store.loadSession(id: "side") == nil) == orphaned)
         #expect(try store.loadSession(id: "visible") != nil)
+    }
+
+    @Test("dismissal cleanup is immediate without deleting a live or promoted side session",
+          arguments: SideSessionLeaseCases.allCases, [false, true])
+    func pendingSideCleanupPreservesOwnershipAndPromotion(lease: SideSessionLeaseCases, promoted: Bool) throws {
+        let store = try tmpStore()
+        let now = Int64(Date().timeIntervalSince1970)
+        let row = ACPSessionRow(id: "side", agentId: "claude", title: "Side",
+            currentModel: nil, currentMode: nil, ephemeralParentId: "parent", autoRun: false,
+            createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
+        try store.upsertSession(row)
+        try #require(try store.markEphemeralCleanupPending(id: row.id))
+        try store.upsertSession(row)
+        let loaded = try #require(try store.loadSession(id: row.id))
+        #expect(loaded.ephemeralCleanupPending)
+        #expect(loaded.updatedAt == now)
+        #expect(loaded.lastOpenedAt == now)
+        if lease == .live {
+            _ = try store.claimLease(sessionId: row.id, instanceId: "writer",
+                pid: Int64(getpid()), now: now, staleAfter: 15)
+        }
+        if promoted { try #require(try store.promoteEphemeralSession(id: row.id)) }
+        let eligible = lease == .none && !promoted
+        #expect(try store.orphanedEphemeralSessions(now: now, staleAfter: 15).map(\.id) == (eligible ? ["side"] : []))
+        #expect(try store.deleteOrphanedEphemeralSession(id: row.id, now: now, staleAfter: 15) == eligible)
+        #expect(try (store.loadSession(id: row.id) == nil) == eligible)
+    }
+
+    enum SideSessionLeaseCases: CaseIterable, Sendable { case none, live }
+
+    @Test("a pre-locator database upgrades without losing retained conversation history")
+    func recoveryLocatorMigrationRetainsHistory() async throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "session", agentId: "claude", title: "Original",
+            remoteSessionId: "original", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 2, lastOpenedAt: 3, archived: false))
+        let payload = try await MainActor.run { try ACPMessageCodec.encode(.agent(id: UUID(), StreamingText("Retained reply"))) }
+        try store.appendMessage(sessionId: "session", id: "message", kind: "agent", seq: 0, payload: payload, createdAt: 1)
+        try store.db.exec("ALTER TABLE sessions DROP COLUMN recovery_proc_id")
+        try store.db.exec("ALTER TABLE sessions DROP COLUMN ephemeral_cleanup_pending")
+        try store.db.exec("UPDATE schema_version SET version=22")
+        let upgraded = try ACPSessionStore(path: store.path)
+        #expect(try upgraded.loadSession(id: "session")?.remoteSessionId == "original")
+        let persistence = ACPSessionPersistence(path: store.path)
+        _ = try await persistence.seizeLease(sessionId: "session", instanceId: "writer", pid: 1, now: 100, leaseToken: "recovery")
+        try #require(try await persistence.prepareRemoteContextRecovery(
+            fence: .init(sessionId: "session", ownerInstance: "writer", token: "recovery"), procId: "recovery-proc"))
+        let restarted = try ACPSessionStore(path: store.path)
+        let recovered = try #require(try restarted.loadSession(id: "session"))
+        #expect(recovered.remoteSessionId == nil)
+        #expect(recovered.recoveryProcId == "recovery-proc")
+        #expect(try restarted.loadMessages(sessionId: "session").map(\.payload) == [payload])
+    }
+
+    @Test("orphan deletion rechecks local ownership and promotion after enumeration", arguments: [false, true])
+    func orphanDeletionRechecksEligibility(promoted: Bool) throws {
+        let store = try tmpStore()
+        let now: Int64 = 100
+        try store.upsertSession(.init(
+            id: "side", agentId: "claude", title: "Side", currentModel: nil, currentMode: nil,
+            ephemeralParentId: "parent", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false
+        ))
+        #expect(try store.orphanedEphemeralSessions(now: now, staleAfter: 15).map(\.id) == ["side"])
+        if promoted {
+            #expect(try store.promoteEphemeralSession(id: "side"))
+        } else {
+            #expect(try store.claimLease(
+                sessionId: "side", instanceId: "active", pid: Int64(ProcessInfo.processInfo.processIdentifier),
+                now: now, staleAfter: 15, leaseToken: "active-token"
+            ))
+        }
+
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15) == false)
+        #expect(try store.loadSession(id: "side") != nil)
+    }
+
+    @Test("native cleanup cannot delete a promoted side session or one whose local reservation changed",
+          arguments: [false, true])
+    func orphanDeletionRechecksReservation(promoted: Bool) throws {
+        let store = try tmpStore()
+        let now: Int64 = 100
+        try store.upsertSession(.init(
+            id: "side", agentId: "claude", title: "Side", currentModel: nil, currentMode: nil,
+            ephemeralParentId: "parent", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false
+        ))
+        let pid = Int64(ProcessInfo.processInfo.processIdentifier)
+        #expect(try store.claimLease(
+            sessionId: "side", instanceId: "cleanup", pid: pid, now: now, staleAfter: 15, leaseToken: "cleanup-token"
+        ))
+        let fence = ACPSessionLeaseFence(sessionId: "side", ownerInstance: "cleanup", token: "cleanup-token")
+        if promoted {
+            #expect(try store.promoteEphemeralSession(id: "side"))
+        } else {
+            try store.seizeLease(sessionId: "side", instanceId: "active", pid: pid, now: now, leaseToken: "active-token")
+        }
+
+        #expect(try store.deleteOrphanedEphemeralSession(id: "side", now: now, staleAfter: 15, fence: fence) == false)
+        #expect(try store.loadSession(id: "side") != nil)
     }
 
     @Test("re-opening doesn't double-apply migrations")

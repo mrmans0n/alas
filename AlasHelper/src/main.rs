@@ -1,6 +1,7 @@
 mod watch;
 
 use alas_helper::acp_broker_process;
+use alas_helper::remote_sessions::{RemoteSessionError, RemoteSessionFence, RemoteSessionStore};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,6 +48,12 @@ struct HelperError {
     message: String,
 }
 
+impl From<RemoteSessionError> for HelperError {
+    fn from(error: RemoteSessionError) -> Self {
+        Self { code: error.code, message: error.message }
+    }
+}
+
 #[derive(Default)]
 struct HelperState {
     next_subscription_id: u64,
@@ -56,6 +63,7 @@ struct HelperState {
     searches: HashMap<String, Arc<AtomicBool>>,
     event_sender: Option<Sender<ServerMessage>>,
     proc_tailers: HashSet<String>,
+    remote_sessions: Option<RemoteSessionStore>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,7 +257,8 @@ fn capabilities() -> Value {
         "ping": true,
         "proc": true
         ,
-        "acp": true
+        "acp": true,
+        "sessionCoordination": 1
     })
 }
 
@@ -711,11 +720,20 @@ fn handle_request(
         "fs/list" => fs_list(state, params),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
-        "proc/spawn" => proc_spawn(state, params),
+        "proc/spawn" => fenced_proc_request(state, method, params),
         "proc/attach" => proc_attach(state, params),
-        "proc/write" => proc_write(params),
-        "proc/kill" => proc_kill(params),
+        "proc/write" | "proc/kill" => fenced_proc_request(state, method, params),
         "proc/list" => proc_list(),
+        method if method.starts_with("lease/") || method.starts_with("replica/") => {
+            remote_session_store(state)?
+                .handle(method, params, alas_helper::remote_sessions::now(), |proc_id| {
+                    kill_proc(proc_id).map_err(|error| RemoteSessionError {
+                        code: error.code,
+                        message: error.message,
+                    })
+                })
+                .map_err(Into::into)
+        }
         method if method.starts_with("acp/") => {
             acp_broker_process::handle_control_request(method, params).map_err(|error| {
                 HelperError {
@@ -726,6 +744,37 @@ fn handle_request(
         }
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
+}
+
+fn remote_session_store(state: &mut HelperState) -> Result<&mut RemoteSessionStore, HelperError> {
+    if state.remote_sessions.is_none() {
+        let root = alas_helper::helper_state_dir().ok_or_else(|| jsonrpc_error(-32080, "HOME is not set"))?;
+        state.remote_sessions = Some(RemoteSessionStore::open(&root)?);
+    }
+    Ok(state.remote_sessions.as_mut().expect("initialized remote session store"))
+}
+
+fn fenced_proc_request(state: &mut HelperState, method: &str, params: Option<Value>) -> Result<Value, HelperError> {
+    let value = params.as_ref().ok_or_else(|| jsonrpc_error(-32602, "missing process params"))?;
+    let proc_id = value.get("procId").and_then(Value::as_str)
+        .ok_or_else(|| jsonrpc_error(-32602, "missing procId"))?.to_owned();
+    validate_proc_id(&proc_id)?;
+    let fence: Option<RemoteSessionFence> = value.get("leaseFence").filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone())).transpose()
+        .map_err(|_| jsonrpc_error(-32602, "invalid leaseFence"))?;
+    remote_session_store(state)?;
+    // Take the store out temporarily so spawn can update the other helper state.
+    let mut store = state.remote_sessions.take().expect("initialized remote session store");
+    let result = store.with_proc_fence(&proc_id, fence.as_ref(), alas_helper::remote_sessions::now(), || {
+        match method {
+            "proc/spawn" => proc_spawn(state, params),
+            "proc/write" => proc_write(params),
+            "proc/kill" => proc_kill(params),
+            _ => unreachable!(),
+        }
+    });
+    state.remote_sessions = Some(store);
+    result
 }
 
 fn watch_subscribe(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
@@ -1142,6 +1191,8 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     let dir = proc_dir(&params.proc_id)?;
     std::fs::create_dir_all(&dir)
         .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
+    std::fs::create_dir_all(dir.join("exits"))
+        .map_err(|error| jsonrpc_error(-32050, format!("proc exits dir failed: {error}")))?;
     let status = proc_status_in_dir(&dir);
     if status.running {
         register_proc_cwd(state, &params.proc_id, cwd);
@@ -1309,8 +1360,8 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
     let child = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
-    write_proc_pid(&dir, child.id())?;
-    run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
+    let exit_file = write_proc_pid(&dir, child.id())?;
+    run_supervised_proc_child(child, dir.join("stdin.log"), exit_file);
     Ok(())
 }
 
@@ -1328,10 +1379,10 @@ fn configure_proc_child_stdio(
 fn run_supervised_proc_child(
     mut child: std::process::Child,
     stdin_path: PathBuf,
-    exit_path: PathBuf,
+    exit_file: std::fs::File,
 ) {
     let child_stdin = Option::take(&mut child.stdin);
-    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
+    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_file);
 }
 
 fn proc_launch_script(
@@ -1590,7 +1641,7 @@ fn pump_proc_stdin_and_record_exit(
     mut child: std::process::Child,
     mut child_stdin: Option<std::process::ChildStdin>,
     stdin_path: PathBuf,
-    exit_path: PathBuf,
+    mut exit_file: std::fs::File,
 ) {
     let mut stdin_offset = 0_u64;
     let mut buffer = [0_u8; 8192];
@@ -1604,14 +1655,14 @@ fn pump_proc_stdin_and_record_exit(
             Ok(Some(status)) => {
                 drop(child_stdin.take());
                 let code = status.code().unwrap_or(2);
-                let _ = std::fs::write(&exit_path, format!("{code}\n"));
+                let _ = exit_file.write_all(format!("{code}\n").as_bytes());
                 break;
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(_) => {
                 drop(child_stdin.take());
                 let _ = child.kill();
-                let _ = std::fs::write(&exit_path, "2\n");
+                let _ = exit_file.write_all(b"2\n");
                 break;
             }
         }
@@ -1660,13 +1711,17 @@ fn input_log_already_contains(
 
 fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
     let params: ProcKillParams = decode_params(params)?;
-    validate_proc_id(&params.proc_id)?;
-    let dir = proc_dir(&params.proc_id)?;
+    kill_proc(&params.proc_id)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn kill_proc(proc_id: &str) -> Result<(), HelperError> {
+    validate_proc_id(proc_id)?;
+    let dir = proc_dir(proc_id)?;
     if let Some(pid) = verified_proc_pid(&dir) {
         terminate_process_group_and_wait(&dir, pid)?;
     }
-    remove_proc_directory(&dir)?;
-    Ok(json!({ "ok": true }))
+    remove_proc_directory(&dir)
 }
 
 fn remove_proc_directory(dir: &Path) -> Result<(), HelperError> {
@@ -1710,7 +1765,13 @@ struct ProcStatus {
 }
 
 fn proc_status_in_dir(dir: &Path) -> ProcStatus {
-    let exit_code = std::fs::read_to_string(dir.join("exit"))
+    // A killed supervisor can finish after its directory was removed and a
+    // successor spawned. Its old PID's exit file cannot poison the successor.
+    let exit_path = match std::fs::read_to_string(dir.join("generation")) {
+        Ok(pid) => dir.join("exits").join(pid.trim()),
+        Err(_) => dir.join("exit"),
+    };
+    let exit_code = std::fs::read_to_string(exit_path)
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok());
     let running = exit_code.is_none() && verified_proc_pid(dir).is_some();
@@ -1907,12 +1968,25 @@ fn read_pid(dir: &Path) -> Option<u32> {
         .and_then(|value| value.split_whitespace().next()?.parse::<u32>().ok())
 }
 
-fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
-    write_restrictive_bytes(
-        dir.join("pid").as_path(),
-        format!("{pid}\n").as_bytes(),
-        "pid",
-    )?;
+fn write_proc_pid(dir: &Path, pid: u32) -> Result<std::fs::File, HelperError> {
+    let pid_bytes = format!("{pid}\n");
+    let exit_path = dir.join("exits").join(pid_bytes.trim());
+    // A fresh inode prevents a late predecessor from writing into a reused PID.
+    match std::fs::remove_file(&exit_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(jsonrpc_error(-32050, format!("stale exit cleanup failed: {error}"))),
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let exit_file = options.open(&exit_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("exit open failed: {error}")))?;
+    write_restrictive_bytes(&dir.join("generation"), pid_bytes.as_bytes(), "generation")?;
     let metadata = ProcPidMetadata {
         pid,
         process_group_id: current_process_group_id(pid),
@@ -1921,7 +1995,13 @@ fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
         dir.join("pid.json").as_path(),
         &serde_json::to_vec(&metadata).expect("pid metadata serialization must succeed"),
         "pid metadata",
-    )
+    )?;
+    // Publish readiness only after the metadata is complete.
+    let pending = dir.join("pid.pending");
+    write_restrictive_bytes(&pending, pid_bytes.as_bytes(), "pid")?;
+    std::fs::rename(pending, dir.join("pid"))
+        .map_err(|error| jsonrpc_error(-32050, format!("pid publish failed: {error}")))?;
+    Ok(exit_file)
 }
 
 fn read_proc_pid_metadata(dir: &Path) -> Option<ProcPidMetadata> {
@@ -3460,7 +3540,7 @@ mod tests {
             std::process::id(),
             system_time_seconds(SystemTime::now()).unwrap()
         ));
-        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
         let mut child = Command::new("/bin/sh");
         child
             .arg("-c")
@@ -3503,6 +3583,46 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn proc_pid_reuse_does_not_inherit_an_old_exit() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-reused-pid-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
+        let pid = std::process::id();
+        std::fs::write(root.join("exits").join(pid.to_string()), b"42\n").expect("old exit");
+        write_proc_pid(&root, pid).expect("new pid generation");
+        let status = proc_status_in_dir(&root);
+        let _ = std::fs::remove_dir_all(root);
+        assert!(status.running);
+        assert_eq!(status.exit_code, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retired_exit_record_cannot_stop_a_live_reused_pid() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-retired-exit-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
+        let old_exit = write_proc_pid(&root, std::process::id()).expect("old generation");
+        let _successor_exit = write_proc_pid(&root, std::process::id()).expect("live successor");
+        let old_child = Command::new("/bin/sh")
+            .args(["-c", "exit 42"])
+            .spawn()
+            .expect("old child");
+        pump_proc_stdin_and_record_exit(old_child, None, root.join("stdin.log"), old_exit);
+        let status = proc_status_in_dir(&root);
+        let _ = std::fs::remove_dir_all(root);
+        assert!(status.running);
+        assert_eq!(status.exit_code, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn proc_pid_metadata_uses_restrictive_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3511,7 +3631,7 @@ mod tests {
             std::process::id(),
             system_time_seconds(SystemTime::now()).unwrap()
         ));
-        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(root.join("exits")).expect("exits");
 
         write_proc_pid(&root, std::process::id()).expect("pid write");
 

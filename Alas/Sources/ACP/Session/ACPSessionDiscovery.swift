@@ -201,12 +201,14 @@ final class ACPSessionDiscoveryModel {
         defer { finishDeletion(session.remoteSessionId) }
 
         if !remotelyDeletedSessionIds.contains(session.remoteSessionId) {
-            try await manager.closeActiveSessionForDeletion(
-                localSessionId: session.localSessionId,
-                agentId: session.agentId,
-                remoteSessionId: session.remoteSessionId
-            )
-            try await handle.deleteSession(remoteSessionId: session.remoteSessionId)
+            if try await !manager.deleteCoordinatedAgentHistory(session) {
+                try await manager.closeActiveSessionForDeletion(
+                    localSessionId: session.localSessionId,
+                    agentId: session.agentId,
+                    remoteSessionId: session.remoteSessionId
+                )
+                try await handle.deleteSession(remoteSessionId: session.remoteSessionId)
+            }
             remotelyDeletedSessionIds.insert(session.remoteSessionId)
         }
 

@@ -11,6 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add ordinary On-device AI settings with reasoned Apple Intelligence availability, independent helper preferences, and explicit permission for the shared optional local model. Download, retry, cancellation, and removal no longer belong to an individual feature.
 - Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
 - Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill, and existing or undo-restored chips refresh when session ownership changes.
+- Coordinate SSH ACP sessions across Macs with one remote writer, persisted read-only transcript mirrors, and fenced takeover.
 
 ### Performance
 

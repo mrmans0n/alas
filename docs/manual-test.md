@@ -568,6 +568,7 @@ remained on the isolated profile. It produced
 `NextPromptInferenceTests` passed. The probe was removed afterward. The
 focused coordinator and settings suites passed 26 and 14 tests respectively.
 
+
 ### On-device AI productionization verification, 2026-10-02
 
 The actual `SettingsWindow` and `OnDeviceAIPane` ran in Xcode's Debug app host
@@ -769,3 +770,57 @@ SwiftFormat again reported zero of 2,127 files requiring formatting. Both arm64
 and x86_64 Release builds passed with the final correction.
 Compiled-inventory planning again discovered 12,505 definitions, excluded 22,
 and scheduled 12,483, without the removed probe.
+
+## SSH ACP sessions across Macs
+
+Use two Macs with independent Alas profiles, this Alas build on both, and one
+SSH worktree. The helper must advertise `proc: true` and
+`sessionCoordination: 1`. Different SSH aliases may point to the same host and
+canonical worktree. WebSocket remote access and Mac-to-Mac pairing are not
+required.
+
+1. On Mac A, open an ACP conversation and send a prompt. On Mac B, discover and
+   open that same agent conversation; its local UUID will differ. B must show
+   the read-only mirror banner and disable prompt/configuration writes while A
+   remains the writer.
+2. Keep B active while A produces a streamed reply and a tool call. B must show
+   persisted edits and busy/idle transitions after a successful active refresh.
+   Verify expanded tool content and literal text such as
+   `/.alas-remote/example/literal` are unchanged. Repeat with enough history to
+   require multiple replica pages and inspect scrollback.
+3. Save an unsent draft on B, switch tabs, and return. Importing A's transcript
+   must not change that draft. Verify queued inputs and native-subagent history
+   reflect the same conversation, not a separately created session.
+4. On B, choose Take Over. The existing conversation must load into a fresh ACP
+   context, without `session/new`. Send a new prompt and verify its user/agent
+   turn persists. No stdin-offset mismatch may occur. On A's next ownership
+   check, A must become read-only and receive B's subsequent persisted changes.
+   Already accepted work from A may have run; takeover does not undo it.
+5. Race Take Over on both Macs and repeat after an SSH interruption. Exactly
+   one current writer may send. An unavailable owner must stay disabled until
+   authority is refreshed; no plain-SSH fallback is permitted. Late completion
+   of a cancelled attachment must not release or kill the successor.
+6. Close a mirror tab or use local Forget. The other Mac's process and shared
+   history must survive. Close the current writer normally: its supervised
+   process must stop, while reopening the conversation still restores history.
+   Shared agent-history deletion must be refused while another live writer
+   owns the conversation and must remove the replica only after authorized
+   agent deletion succeeds.
+7. Open a second Alas window on one Mac. Its SSH mirror must continue using
+   the shared local database and Darwin notifications. Check an ordinary local
+   ACP conversation still has its existing writer/mirror behavior.
+8. With an older helper, confirm SSH ACP stays read-only/unavailable with an
+   upgrade error, while unrelated helper filesystem/discovery operations still
+   work. Restore the current helper before completing the scenario.
+9. Exercise ordinary SSH context recovery on a disposable conversation whose
+   agent context is unavailable. Recovery into a new conversation must use a
+   distinct remote identity and process, retain the original shared transcript,
+   and avoid a binding-conflict error. Successful takeover of an available
+   conversation must still use `session/load`, never this recovery path.
+
+### Verification scope
+
+Automated independent-store managers and real helper processes exercise the
+ownership, replication, and process-fencing mechanisms. They do not establish
+a visual result on two physical Macs. The checklist above remains the live
+two-Mac acceptance gate when that fixture is available.
