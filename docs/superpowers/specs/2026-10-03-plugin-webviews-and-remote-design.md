@@ -218,7 +218,10 @@ Same messages, limits and error codes as API 6. Differences:
   adopted children while it signals, and repeats `SIGTERM` passes, then
   `SIGKILL` passes after the grace, until nothing it owns is left, so a
   descendant that forks again while handling `SIGTERM` is caught too;
-  cgroups are not required. macOS has no subreaper, so remote `process.*` is
+  cgroups are not required. The helper probes `pidfd_open` and
+  `pidfd_send_signal` (Linux 5.3 and later) before accepting remote
+  `process.*`, and refuses older kernels with the reason rather than falling
+  back to numeric pids. macOS has no subreaper, so remote `process.*` is
   refused on macOS SSH hosts until a race-free mechanism exists; remote
   `file/*` still works there.
 - Processes see EOF. Today `proc/write` only appends to `stdin.log` and
@@ -512,9 +515,11 @@ Per the testing policy, pin the decisions:
 - Remote routing: which calls go to the host, which are refused, and the
   message for each case (pure function over project host, `remote` and
   capability).
-- Host-side containment: `..`, absolute paths, symlink escape, and `.git`
-  aliases, by extending `ACPRemoteFileServerTests`, which already exercises
-  `RemotePathContainment`, rather than adding a suite.
+- Host-side containment, in the helper's own Rust tests, calling each new
+  worktree-scoped operation directly: `..`, absolute paths, symlink escape, a
+  symlink swapped mid-walk, `.git` aliases in any case, and a contained
+  symlink that must keep working. `ACPRemoteFileServerTests` covers the Swift
+  shell paths, not these operations, so it is not the place.
 - Host-side containment keeps a symlink that resolves inside the worktree
   working (API 6's `inner/c.txt` through `inner -> a`), next to the escape
   cases.
