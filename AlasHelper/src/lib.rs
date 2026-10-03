@@ -2,6 +2,7 @@ pub mod acp_broker;
 pub mod acp_broker_process;
 pub mod acp_broker_protocol;
 pub mod remote_sessions;
+pub mod scoped_fs;
 
 use std::ffi::OsString;
 use std::path::PathBuf;

@@ -368,7 +368,7 @@ private struct PluginApprovalSheet: View {
             }
             .frame(maxHeight: 420)
             if !fullAccess.isEmpty {
-                Toggle(Self.confirmation(fullAccess), isOn: $acceptsFullAccess)
+                Toggle(Self.confirmation(fullAccess, remote: manifest.remote), isOn: $acceptsFullAccess)
             }
             Text("Changing the plugin's files requires approving it again.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -410,15 +410,31 @@ private struct PluginApprovalSheet: View {
                         .padding(.leading, 12)
                 }
             }
+            if let remote = Self.remoteSummary(manifest) {
+                Text("On SSH hosts").font(.subheadline.weight(.semibold))
+                Text(remote)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private static func confirmation(_ fullAccess: [PluginCapability]) -> String {
+    /// Outside the full access group, so a read-only plugin is not labelled full access.
+    private static func remoteSummary(_ manifest: PluginManifest) -> String? {
+        guard manifest.remote else { return nil }
+        let does = [
+            manifest.capabilities.contains(.filesRead) ? "reads files" : nil,
+            manifest.capabilities.contains(.filesWrite) ? "changes files" : nil,
+            manifest.capabilities.contains(.processExec) ? "runs these commands" : nil,
+        ].compactMap { $0 }
+        let list = does.count > 1 ? does.dropLast().joined(separator: ", ") + " and " + (does.last ?? "") : does.joined()
+        return "In a project on an SSH host, it \(list) on that host, as your user there."
+    }
+
+    private static func confirmation(_ fullAccess: [PluginCapability], remote: Bool) -> String {
         let does = [
             fullAccess.contains(.processExec) ? "run these commands" : nil,
             fullAccess.contains(.filesWrite) ? "change files" : nil,
         ].compactMap { $0 }.joined(separator: " and ")
-        return "I understand this plugin can \(does) in my worktrees"
+        return "I understand this plugin can \(does) in my worktrees" + (remote ? ", on this Mac and on SSH hosts" : "")
     }
 }

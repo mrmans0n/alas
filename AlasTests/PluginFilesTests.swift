@@ -36,4 +36,29 @@ struct PluginFilesTests {
         let resolved = try? PluginFiles.resolve(path, in: root).get()
         #expect(resolved.map { $0.path.hasSuffix("/" + (resolvesTo ?? "\0")) } ?? (resolvesTo == nil))
     }
+
+    /// A remote worktree's files go to the helper only for a plugin that declares `remote`; others keep API 10's refusal.
+    @Test(arguments: [
+        (.local(URL(fileURLWithPath: "/wt")), false, PluginFileRoute.local(URL(fileURLWithPath: "/wt"))),
+        (.remote(host: "devbox", root: "/srv/wt"), true, .remote(host: "devbox", root: "/srv/wt")),
+        (.remote(host: "devbox", root: "/srv/wt"), false, .refused("worktree w is on remote host devbox; plugins can't run commands or use files there yet")),
+        (nil, true, .refused("unknown worktree w")),
+    ] as [(PluginWorktreeLocation?, Bool, PluginFileRoute)])
+    func fileRequestsRouteByWhereTheWorktreeIs(location: PluginWorktreeLocation?, remote: Bool, expected: PluginFileRoute) {
+        #expect(PluginFiles.route(location, worktree: "w", remote: remote) == expected)
+    }
+
+    /// Remote failures answer with a reason and never stop the plugin; the helper's own refusals pass through.
+    @Test(arguments: [
+        (PluginRemoteFileProblem.helperMissing, "the Alas helper is not installed on remote host devbox; plugins need it to use files there"),
+        (PluginRemoteFileProblem.unreachable, "remote host devbox is unreachable"),
+        (RemoteHelperClientError.notRunning, "remote host devbox is unreachable"),
+        (RemoteHelperClientError.unavailable("ssh exited"), "remote host devbox is unreachable"),
+        (RemoteHelperClientError.jsonrpc(JSONRPCError(code: -32601, message: "method not found", data: nil)),
+         "the Alas helper on remote host devbox is out of date; plugins need a newer one to use files there"),
+        (RemoteHelperClientError.jsonrpc(JSONRPCError(code: -32027, message: ".GIT/config is inside .git", data: nil)), ".GIT/config is inside .git"),
+    ] as [(any Error, String)])
+    func remoteFailuresSayWhy(error: any Error, message: String) {
+        #expect(PluginFiles.remoteFailure(error, host: "devbox") == .refused(message))
+    }
 }

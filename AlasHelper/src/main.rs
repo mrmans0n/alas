@@ -251,7 +251,8 @@ fn capabilities() -> Value {
             "write": true,
             "stat": true,
             "lineCounts": true,
-            "list": true
+            "list": true,
+            "scoped": true
         },
         "search": true,
         "ping": true,
@@ -718,6 +719,9 @@ fn handle_request(
         "fs/stat" => fs_stat(state, params),
         "fs/line-counts" => fs_line_counts(state, params),
         "fs/list" => fs_list(state, params),
+        // Plugin file access (API 11): containment is checked in the same call as the operation.
+        method if method.starts_with("fs/scoped-") => alas_helper::scoped_fs::handle_request(method, params)
+            .map_err(|error| HelperError { code: error.code, message: error.message }),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
         "proc/spawn" => fenced_proc_request(state, method, params),
