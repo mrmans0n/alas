@@ -216,6 +216,8 @@ final class PluginHost {
     /// Running processes of this instance, by run id. Ending the instance stops them.
     @ObservationIgnored private var processes: [String: any PluginProcessHandle] = [:]
     @ObservationIgnored private var nextProcess = 0
+    /// With the instance, the lease remote processes are owned by: the helper refuses calls about them under any other.
+    @ObservationIgnored private let processLease = UUID().uuidString
     /// Requests Alas sent to the plugin (`prompt/expand`, `context/provide`), waiting for its response, by id.
     @ObservationIgnored private var hostRequests: [Int: CheckedContinuation<Data?, Never>] = [:]
     @ObservationIgnored private var nextHostRequest = 0
@@ -899,14 +901,6 @@ final class PluginHost {
         }
     }
 
-    /// Processes run on this Mac, so a worktree on a remote host is out of reach.
-    private func worktreeRefusal(_ id: JSONRPCID, _ worktree: String) -> Data? {
-        guard case .remote(let host, _)? = actions.worktreeLocation(worktree) else {
-            return errorReply(id, code: -32003, "unknown worktree \(worktree)")
-        }
-        return errorReply(id, code: -32003, PluginFiles.remoteRefusal(worktree, host: host))
-    }
-
     // MARK: - Processes
 
     /// Runs a command the manifest declares, as declared, with args appended only where it allows them.
@@ -930,7 +924,13 @@ final class PluginHost {
         guard (params.stdin?.utf8.count ?? 0) <= Self.maxProcessStdinBytes, !(longRunning && params.stdin != nil) else {
             return errorReply(id, code: -32602, "stdin is up to 256 KiB, and only for process/run")
         }
-        guard case .local(let directory)? = actions.worktreeLocation(params.worktree) else { return worktreeRefusal(id, params.worktree) }
+        let route = PluginFiles.route(actions.worktreeLocation(params.worktree), worktree: params.worktree, remote: manifest.remote)
+        switch route {
+        case .refused(let reason): return errorReply(id, code: -32003, reason)
+        case .remote where longRunning:
+            return errorReply(id, code: -32003, "process/start can't run on remote hosts yet; process/run can")
+        case .local, .remote: break
+        }
         guard processes.count < Self.maxProcessesRunning else {
             return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")
         }
@@ -942,16 +942,35 @@ final class PluginHost {
         // stdout and stderr together, half the message limit, so the reply usually fits as it is; the Run tab keeps
         // the latest output.
         let maxOutput = limits.maxMessageBytes / 2
-        let handle: any PluginProcessHandle
-        do {
-            handle = try launcher.launch(
-                argv, in: directory, stdin: params.stdin.map { Data($0.utf8) },
-                keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
-        } catch {
-            return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
-        }
+        let stdin = params.stdin.map { Data($0.utf8) }
         nextProcess += 1
         let run = "p\(nextProcess)"
+        let handle: any PluginProcessHandle
+        /// A remote process starts in the later delivery: the helper's answer takes a round trip.
+        var startRemote: (@Sendable () async throws -> Void)?
+        switch route {
+        case .local(let directory):
+            do {
+                handle = try launcher.launch(
+                    argv, in: directory, stdin: stdin,
+                    keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
+            } catch {
+                return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+            }
+        case .remote(let host, let root):
+            let lease = "\(processLease).\(instance)"
+            let remote = RemotePluginProcess(
+                host: host, procId: RemotePluginProcess.procId(plugin: manifest.id, project: project.id, lease: lease, run: run),
+                lease: lease, keep: .head, limit: maxOutput)
+            handle = remote
+            // The helper enforces the limit too, with the grace, in case Alas is gone by then.
+            startRemote = {
+                try await remote.start(
+                    argv: argv, cwd: root, stdin: stdin, longRunning: false, limit: maxOutput,
+                    timeout: Self.processTimeout + Self.processKillGrace)
+            }
+        case .refused: return nil
+        }
         processes[run] = handle
         let instance = instance
         if longRunning {
@@ -965,6 +984,13 @@ final class PluginHost {
         }
         let sleep = sleep
         return replyLater(id) { [weak self] in
+            do {
+                try await startRemote?()
+            } catch {
+                guard let self else { return Data() }
+                if self.instance == instance { self.processes[run] = nil }
+                return self.errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+            }
             let timeout = Task { () -> Bool in
                 do { try await sleep(Self.processTimeout) } catch { return false }
                 handle.terminate()

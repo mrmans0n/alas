@@ -197,14 +197,15 @@ extension PluginFiles {
     }
 
     /// What the plugin is told when a remote file request fails. The helper's own refusals pass through as they are.
-    static func remoteFailure(_ error: Error, host: String) -> PluginFilesError {
+    /// `need` says what the plugin needs the helper for.
+    static func remoteFailure(_ error: Error, host: String, need: String = "use files there") -> PluginFilesError {
         let unreachable = PluginFilesError.refused("remote host \(host) is unreachable")
         switch error {
         case PluginRemoteFileProblem.unreachable: return unreachable
         case PluginRemoteFileProblem.helperMissing:
-            return .refused("the Alas helper is not installed on remote host \(host); plugins need it to use files there")
+            return .refused("the Alas helper is not installed on remote host \(host); plugins need it to \(need)")
         case RemoteHelperClientError.jsonrpc(let error) where error.code == -32601:
-            return .refused("the Alas helper on remote host \(host) is out of date; plugins need a newer one to use files there")
+            return .refused("the Alas helper on remote host \(host) is out of date; plugins need a newer one to \(need)")
         case RemoteHelperClientError.jsonrpc(let error): return .refused(error.message)
         case RemoteHelperClientError.decoding(let message): return .refused("the Alas helper on \(host) answered badly: \(message)")
         default: return unreachable

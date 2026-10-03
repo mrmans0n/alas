@@ -80,6 +80,7 @@
 		0890C803E92308809BE12930 /* MergeWordDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD6C7F7A898CE1A030F28C3 /* MergeWordDiff.swift */; };
 		0897C90085DD3BEA32093C36 /* AppState+SessionSummaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = D509D72B4B1BBB2A29F201BA /* AppState+SessionSummaries.swift */; };
 		08C8CD106B50E925CFC2B1F4 /* LocalTextInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2556EDD2A6C6875CA05AC0C9 /* LocalTextInferenceEngine.swift */; };
+		08D1A7045BA27B8B411AD856 /* PluginRemoteProcesses.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818414DE33FE23B9E856603C /* PluginRemoteProcesses.swift */; };
 		08DBBE562CC62A888617AC09 /* SidebarHeaderViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25DBE942154BD154F2D10B9D /* SidebarHeaderViewTests.swift */; };
 		08DF3AC4BA50775940371445 /* ACPSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A443685B2A3322208D51AE /* ACPSessionStoreTests.swift */; };
 		095A19B85DFA5EBA5A24786D /* AdvancedPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = E16C4F54FB3E390F80208DA1 /* AdvancedPane.swift */; };
@@ -3320,6 +3321,7 @@
 		81773A01826A91080F5A2E95 /* ACPCodeBlockHighlighterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPCodeBlockHighlighterTests.swift; sourceTree = "<group>"; };
 		817DF0174BF04CF5DA288E99 /* ACPRemoteFileServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteFileServer.swift; sourceTree = "<group>"; };
 		8182DA33443DD22A370892B7 /* BinaryFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryFileType.swift; sourceTree = "<group>"; };
+		818414DE33FE23B9E856603C /* PluginRemoteProcesses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginRemoteProcesses.swift; sourceTree = "<group>"; };
 		818B29F6B58D4FFC80603AAD /* ACPAdapterTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterTarget.swift; sourceTree = "<group>"; };
 		81D94695C26A2270165EC820 /* ACPTranscriptScrollerReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptScrollerReconciler.swift; sourceTree = "<group>"; };
 		81E981C10B13C43CE65DA74D /* ProjectMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMCPServer.swift; sourceTree = "<group>"; };
@@ -7755,6 +7757,7 @@
 				512B1885624D4E69D7906ABA /* PluginNetwork.swift */,
 				0F4B064183B1D357EF4E187E /* PluginPanelView.swift */,
 				97ACBD188DC9AE2F1AF17CEF /* PluginProcesses.swift */,
+				818414DE33FE23B9E856603C /* PluginRemoteProcesses.swift */,
 				63DA8954B5EC0B75956C63F9 /* PluginRuntime.swift */,
 				335B2B000025A83F204A0524 /* PluginSettings.swift */,
 				017121A8305C387DF9EE82EE /* PluginsPane.swift */,
@@ -9035,6 +9038,7 @@
 				DE5A3757086CCBDB47DD4081 /* PluginNetwork.swift in Sources */,
 				B5C122DBF5DD6D6C1266C955 /* PluginPanelView.swift in Sources */,
 				7D40CD0AA91812F9E257156D /* PluginProcesses.swift in Sources */,
+				08D1A7045BA27B8B411AD856 /* PluginRemoteProcesses.swift in Sources */,
 				19B7DAB42D0005FE63730ABF /* PluginRuntime.swift in Sources */,
 				3F6D38A1836E44BA242ED792 /* PluginSettings.swift in Sources */,
 				339717029FEA33AA03DC7016 /* PluginStorage.swift in Sources */,

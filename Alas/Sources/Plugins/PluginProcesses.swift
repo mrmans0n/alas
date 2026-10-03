@@ -30,10 +30,13 @@ protocol PluginProcessLauncher: Sendable {
 
 enum PluginProcessError: Error, CustomStringConvertible {
     case notFound(String)
+    /// Said as it is.
+    case refused(String)
 
     var description: String {
         switch self {
         case .notFound(let name): "command not found: \(name)"
+        case .refused(let reason): reason
         }
     }
 }
@@ -103,6 +106,12 @@ final class PluginProcessOutput: @unchecked Sendable {
                 if pending[index].data.isEmpty { pending.remove(at: index) } else { index += 1 }
             }
         }
+        wake.yield()
+    }
+
+    /// Output was dropped before it got here, as the remote helper caps it too.
+    func markTruncated() {
+        lock.withLock { truncated = true }
         wake.yield()
     }
 
