@@ -36,6 +36,11 @@ private func processCall(_ id: Int, _ method: String = "process/run", _ process:
 private let api6Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","contributes":{"commands":[{"id":"fix","title":"Fix","slots":["changes.toolbar"]}],"panels":[{"id":"checks","title":"Checks","location":"changes.section"},{"id":"explain","title":"Explain","location":"run.report.section"}]}}"#
 private let api5Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js"}"#
 
+/// A response to the request Alas sent with `id` (API 7).
+private func answer(_ id: Int, _ body: String) -> PluginFixtureStep {
+    .send(#"{"jsonrpc":"2.0","id":\#(id),\#(body)}"#)
+}
+
 private func decorate(_ slot: String, target: String, worktree: String? = nil, _ items: String) -> PluginFixtureStep {
     let worktree = worktree.map { #","worktree":"\#($0)""# } ?? ""
     return .send(#"{"jsonrpc":"2.0","method":"decorations/set","params":{"slot":"\#(slot)","target":"\#(target)"\#(worktree),"items":[\#(items)]}}"#)
@@ -1439,5 +1444,73 @@ struct PluginHostTests {
             #expect(try String(contentsOf: root.appending(path: path), encoding: .utf8) == content)
         }
         #expect(try String(contentsOf: root.appending(path: ".git"), encoding: .utf8) == "gitdir: elsewhere")
+    }
+
+    // MARK: - API 7
+
+    static let api7Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":7,"entry":"p.js","capabilities":["session.context","workspace.read"],"contributes":{"prompts":[{"name":"linear"}]}}"#
+
+    @Test(arguments: [
+        ("linear", answer(1, #""result":{"text":"Fix ENG-1"}"#), PluginPromptExpansion.text("Fix ENG-1")),
+        ("linear", answer(1, #""error":{"code":-32003,"message":"no such issue"}"#), .failed("Test could not expand /linear: no such issue")),
+        ("linear", answer(1, #""result":{"text":" "}"#), .failed("Test expanded /linear to nothing.")),
+        ("nope", answer(1, #""result":{"text":"x"}"#), .failed("Unknown prompt /nope.")),
+    ] as [(String, PluginFixtureStep, PluginPromptExpansion)])
+    func promptExpansionCarriesTheArgsAndTakesTheAnswer(name: String, answer: PluginFixtureStep, expected: PluginPromptExpansion) async throws {
+        let host = try makeHost([[.send(activateOK)], [answer]], manifest: Self.api7Manifest)
+        await host.activate()
+        #expect(await host.expandPrompt(name, args: "ENG-1", session: "s1") == expected)
+        if name == "linear" {
+            let sent = try #require(host.trace.last { $0.direction == .toPlugin && $0.text.contains("prompt/expand") }?.text)
+            #expect(sent.contains(#""name":"linear""#) && sent.contains(#""args":"ENG-1""#) && sent.contains(#""session":"s1""#))
+        }
+    }
+
+    /// The plugin may answer after its own requests, in a later delivery; past the timeout the prompt is not expanded.
+    @Test func promptExpansionWaitsForALaterAnswerUntilTheTimeout() async throws {
+        let sleeper = Sleeper()
+        let host = try makeHost(
+            [[.send(activateOK)], [], [answer(1, #""result":{"text":"Later"}"#)], []],
+            grants: [.workspaceRead], manifest: Self.api7Manifest, sleeper: sleeper)
+        await host.activate()
+        let first = Task { await host.expandPrompt("linear", args: "", session: "s1") }
+        #expect(await awaitCondition { sleeper.waiting == 1 })
+        // Sending again while it waits does not ask the plugin twice.
+        #expect(await host.expandPrompt("linear", args: "", session: "s1") == .busy)
+        #expect(host.trace.filter { $0.text.contains("prompt/expand") }.count == 1)
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        #expect(await first.value == .text("Later"))
+        let second = Task { await host.expandPrompt("linear", args: "", session: "s1") }
+        #expect(await awaitCondition { sleeper.waiting == 2 })
+        #expect(sleeper.durations.last == PluginHost.promptExpandTimeout)
+        sleeper.fireAll()
+        #expect(await second.value == .failed("Test did not expand /linear."))
+    }
+
+    struct ContextCase: Sendable {
+        var grants: Set<PluginCapability> = [.sessionContext]
+        let step: PluginFixtureStep?
+        let expected: String?
+        var stops = false
+    }
+
+    /// Context is answered within its own delivery or skipped, so the prompt never waits; a plugin over the time limit
+    /// stops, and the prompt goes without its context.
+    @Test(arguments: [
+        ContextCase(step: .send(#"{"jsonrpc":"2.0","id":1,"result":{"text":"Docs"}}"#), expected: "Docs"),
+        ContextCase(grants: [], step: .send(#"{"jsonrpc":"2.0","id":1,"result":{"text":"Docs"}}"#), expected: nil),
+        ContextCase(step: .send(#"{"jsonrpc":"2.0","id":1,"error":{"code":-32003,"message":"offline"}}"#), expected: nil),
+        ContextCase(step: .send(#"{"jsonrpc":"2.0","id":1,"result":{"text":"\#(String(repeating: "x", count: 16 * 1024 + 1))"}}"#), expected: nil),
+        ContextCase(step: nil, expected: nil),
+        ContextCase(step: .spin, expected: nil, stops: true),
+    ])
+    func contextIsBoundedAndNeverHoldsThePrompt(_ c: ContextCase) async throws {
+        let host = try makeHost(
+            [[.send(activateOK)], c.step.map { [$0] } ?? []], grants: c.grants,
+            limits: PluginLimits(timePerCall: .milliseconds(100)), manifest: Self.api7Manifest)
+        await host.activate()
+        #expect(await host.provideContext(session: "s1", worktree: "wt") == c.expected)
+        #expect(host.trace.contains { $0.text.contains(#""method":"context/provide""#) } == c.grants.contains(.sessionContext))
+        #expect((host.state != .active) == c.stops)
     }
 }

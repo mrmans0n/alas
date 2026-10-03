@@ -300,3 +300,27 @@ struct PluginReviewCommentParams: Decodable, Equatable, Sendable {
             && body.utf8.count <= Self.maxBodyBytes
     }
 }
+
+// API 7.
+
+struct PluginPromptExpandParams: Codable, Sendable {
+    let name: String
+    /// What the user typed after the command.
+    let args: String
+    let session: String
+}
+
+struct PluginContextProvideParams: Codable, Sendable {
+    let session: String
+    let worktree: String
+}
+
+/// A response to `prompt/expand` or `context/provide`: `{"text": …}`, or an error.
+struct PluginTextResponse: Decodable {
+    struct Result: Decodable {
+        let text: String?
+    }
+
+    var result: Result?
+    var error: JSONRPCError?
+}

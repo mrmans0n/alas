@@ -17,12 +17,14 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case processExec = "process.exec"
     case filesRead = "files.read"
     case filesWrite = "files.write"
+    case sessionContext = "session.context"
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
     var api: Int {
         switch self {
         case .notify, .network, .timers: 5
         case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
+        case .sessionContext: 7
         default: 4
         }
     }
@@ -46,6 +48,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .processExec: "Run the commands listed below in this project's worktrees"
         case .filesRead: "Read files in this project's worktrees"
         case .filesWrite: "Create and change files in this project's worktrees"
+        case .sessionContext: "Add text to every prompt sent to agents in this project"
         }
     }
 
@@ -59,6 +62,12 @@ struct PluginProcessContribution: Equatable, Sendable {
     let command: [String]
     var appendArgs = false
     var longRunning = false
+}
+
+/// A slash command in the agent composer that the plugin expands into a prompt with `prompt/expand` (API 7).
+struct PluginPromptContribution: Equatable, Sendable {
+    let name: String
+    var description: String?
 }
 
 /// Changes a plugin can subscribe to with the manifest's `events`.
@@ -170,6 +179,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case invalidNetwork(String)
     case invalidPanel(String)
     case invalidProcess(String)
+    case invalidPrompt(String)
 
     var description: String {
         switch self {
@@ -205,13 +215,15 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "invalid panel contribution: \(reason)"
         case .invalidProcess(let reason):
             "invalid process: \(reason)"
+        case .invalidPrompt(let reason):
+            "invalid prompt contribution: \(reason)"
         }
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...6
+    static let supportedAPIVersions = 4...7
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -220,6 +232,8 @@ struct PluginManifest: Equatable, Sendable {
     static let maxPanelsAPI6 = 4
     static let maxProcesses = 16
     static let maxArgBytes = 1024
+    static let maxPrompts = 16
+    static let maxPromptDescriptionLength = 200
 
     let id: String
     let name: String
@@ -236,6 +250,8 @@ struct PluginManifest: Equatable, Sendable {
     var network: [String] = []
     /// Commands `process.exec` may run.
     var processes: [PluginProcessContribution] = []
+    /// Slash commands for the agent composer.
+    var prompts: [PluginPromptContribution] = []
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -283,6 +299,8 @@ struct PluginManifest: Equatable, Sendable {
         let commands = try parseCommands(raw.contributes?.commands ?? [], api: api)
         if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
         let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
+        if raw.contributes?.prompts != nil, api < 7 { throw .needsNewerAPI("\"contributes.prompts\"", api: 7) }
+        let prompts = try parsePrompts(raw.contributes?.prompts ?? [])
         if raw.network != nil || raw.settings != nil, api < 5 {
             throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
         }
@@ -306,7 +324,7 @@ struct PluginManifest: Equatable, Sendable {
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network, processes: processes)
+            settings: settings, network: network, processes: processes, prompts: prompts)
     }
 
     static func isValidHost(_ host: String) -> Bool {
@@ -374,6 +392,23 @@ struct PluginManifest: Equatable, Sendable {
                 id: id, command: command, appendArgs: entry.appendArgs ?? false, longRunning: entry.longRunning ?? false))
         }
         return processes
+    }
+
+    private static func parsePrompts(_ raw: [Raw.RawPrompt]) throws(PluginManifestError) -> [PluginPromptContribution] {
+        guard raw.count <= maxPrompts else { throw .invalidPrompt("at most \(maxPrompts) prompts") }
+        var prompts: [PluginPromptContribution] = []
+        for entry in raw {
+            // Typed after a slash in the composer, so no dots, spaces or capitals.
+            let name = entry.name ?? ""
+            guard name.wholeMatch(of: /[a-z0-9][a-z0-9-]{0,31}/) != nil else { throw .invalidPrompt("invalid prompt name \"\(name)\"") }
+            guard !prompts.contains(where: { $0.name == name }) else { throw .invalidPrompt("duplicate prompt name \"\(name)\"") }
+            let description = entry.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (description?.count ?? 0) <= maxPromptDescriptionLength else {
+                throw .invalidPrompt("prompt \"\(name)\" has a description longer than \(maxPromptDescriptionLength) characters")
+            }
+            prompts.append(PluginPromptContribution(name: name, description: description?.isEmpty == false ? description : nil))
+        }
+        return prompts
     }
 
     private static func parseCommands(_ raw: [Raw.RawCommand], api: Int) throws(PluginManifestError) -> [PluginCommandContribution] {
@@ -485,10 +520,15 @@ private struct Raw: Decodable {
         let appendArgs: Bool?
         let longRunning: Bool?
     }
+    struct RawPrompt: Decodable {
+        let name: String?
+        let description: String?
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
         let panels: [RawPanel]?
+        let prompts: [RawPrompt]?
     }
 
     let id: String?
