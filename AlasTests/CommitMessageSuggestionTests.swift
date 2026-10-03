@@ -186,23 +186,30 @@ struct CommitMessageSuggestionTests {
         #expect(result == nil)
     }
 
-    @Test func untouchedSuggestionIsRefreshedAfterRestaging() throws {
+    /// A refresh after restaging replaces the untouched draft, and a failed
+    /// refresh withdraws it rather than leaving a message for other changes.
+    @Test(arguments: [
+        (CommitMessageSuggestion(subject: "Resolve conflicts and retry", body: nil) as CommitMessageSuggestion?,
+         CommitMessageSuggestionState.Update.fill(.init(subject: "Resolve conflicts and retry", body: nil))),
+        (nil, .clear),
+    ])
+    func untouchedSuggestionFollowsTheStagedIndex(
+        refreshed: CommitMessageSuggestion?, expected: CommitMessageSuggestionState.Update
+    ) throws {
         var state = CommitMessageSuggestionState()
         let firstRequest = state.begin(indexKey: "a", subject: "", body: "")
         let first = try #require(firstRequest)
         let completed = state.complete(first, suggestion: Self.suggestion, indexKey: "a", subject: "", body: "")
-        let applied = try #require(completed)
-        let (subject, body) = (applied.subject, applied.body ?? "")
+        #expect(completed == .fill(Self.suggestion))
+        let (subject, body) = (Self.suggestion.subject, Self.suggestion.body ?? "")
         // Applying the suggestion echoes back through the field observers.
         state.recordEdit(subject: subject, body: body)
-        #expect(state.isShowingSuggestion(subject: subject, body: body))
 
         let secondRequest = state.begin(indexKey: "b", subject: subject, body: body)
         let second = try #require(secondRequest)
-        let replacement = CommitMessageSuggestion(subject: "Resolve conflicts and retry", body: nil)
-        let result = state.complete(second, suggestion: replacement, indexKey: "b", subject: subject, body: body)
+        let result = state.complete(second, suggestion: refreshed, indexKey: "b", subject: subject, body: body)
 
-        #expect(result == replacement)
+        #expect(result == expected)
     }
 
     @Test func supersededRequestCannotApply() throws {

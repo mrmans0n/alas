@@ -381,6 +381,13 @@ struct CommitMessageSuggester {
 /// fills blank fields or fields still holding its own untouched suggestion;
 /// anything the user (or another writer) put there wins.
 struct CommitMessageSuggestionState {
+    enum Update: Equatable {
+        /// Seed the fields with this suggestion.
+        case fill(CommitMessageSuggestion)
+        /// The fields hold an untouched draft for an older staged index.
+        case clear
+    }
+
     private struct Pending {
         let id: UInt64
         let indexKey: String
@@ -388,13 +395,13 @@ struct CommitMessageSuggestionState {
 
     private var generation: UInt64 = 0
     private var pending: Pending?
-    private var applied: CommitMessageSuggestion?
+    private var applied: (suggestion: CommitMessageSuggestion, indexKey: String)?
 
     var isSuggesting: Bool { pending != nil }
 
     /// True while the fields show an untouched suggestion.
     func isShowingSuggestion(subject: String, body: String) -> Bool {
-        applied.map { $0.subject == subject && ($0.body ?? "") == body } ?? false
+        applied.map { $0.suggestion.subject == subject && ($0.suggestion.body ?? "") == body } ?? false
     }
 
     /// Starts a request for the staged index identified by `indexKey`, or
@@ -427,21 +434,33 @@ struct CommitMessageSuggestionState {
         pending = nil
     }
 
-    /// Returns the suggestion to apply, or nil when the request is stale, was
-    /// computed against a different staged index, failed, or the fields are no
-    /// longer Alas's to fill.
+    /// True (and forgets the draft) when the fields still show an untouched
+    /// suggestion computed for a staged index other than `indexKey`. Such a
+    /// draft describes changes that are no longer what would be committed.
+    mutating func withdrawStale(indexKey: String, subject: String, body: String) -> Bool {
+        guard let applied, applied.indexKey != indexKey,
+              isShowingSuggestion(subject: subject, body: body) else { return false }
+        self.applied = nil
+        return true
+    }
+
+    /// Fills the fields with a suggestion for the current index; otherwise
+    /// withdraws an untouched draft left over from an older index. Nil leaves
+    /// the fields alone: the request was superseded, or the user owns them.
     mutating func complete(
         _ id: UInt64,
         suggestion: CommitMessageSuggestion?,
         indexKey: String,
         subject: String,
         body: String
-    ) -> CommitMessageSuggestion? {
+    ) -> Update? {
         guard let request = pending, request.id == id else { return nil }
         pending = nil
-        guard let suggestion, request.indexKey == indexKey, canFill(subject: subject, body: body) else { return nil }
-        applied = suggestion
-        return suggestion
+        if let suggestion, request.indexKey == indexKey, canFill(subject: subject, body: body) {
+            applied = (suggestion, indexKey)
+            return .fill(suggestion)
+        }
+        return withdrawStale(indexKey: indexKey, subject: subject, body: body) ? .clear : nil
     }
 
     private func canFill(subject: String, body: String) -> Bool {

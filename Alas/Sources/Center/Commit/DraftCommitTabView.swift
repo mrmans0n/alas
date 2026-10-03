@@ -344,14 +344,20 @@ struct DraftCommitTabView: View {
                 onStartupRecoveryReady()
             }
         }
-        // Restaging, toggling amend, or closing the tab cancels the request.
-        .task(id: "\(stagedKey):\(amend)") {
+        // Closing the tab or a new key cancels the request.
+        .task(id: messageSuggestionKey) {
             // Held separately so typing or the agent generator can stop the
             // model request without waiting for the next key change.
             let job = Task { await suggestMessage() }
             messageSuggestionJob = job
             await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
         }
+    }
+
+    /// Restaging, toggling amend, or a change in whether a suggestion may run
+    /// (model readiness, helper settings, a paused publish) restarts it.
+    private var messageSuggestionKey: String {
+        "\(stagedKey):\(amend):\(publishCheckpoint == nil):\(appState.commitMessageSuggestionAvailable)"
     }
 
     /// Frees the local model once nothing is waiting for its answer.
@@ -367,6 +373,10 @@ struct DraftCommitTabView: View {
         let indexKey = stagedKey
         guard !amend, hasStaged, publishCheckpoint == nil, appState.commitMessageSuggestionAvailable else {
             messageSuggestion.cancel()
+            if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
+                subject = ""
+                bodyText = ""
+            }
             return
         }
         // Staging several files in a row moves the key repeatedly; only the
@@ -384,11 +394,18 @@ struct DraftCommitTabView: View {
             suggestion = nil
         }
         guard !Task.isCancelled else { return }
-        guard let suggestion = messageSuggestion.complete(
+        switch messageSuggestion.complete(
             id, suggestion: suggestion, indexKey: stagedKey, subject: subject, body: bodyText
-        ) else { return }
-        subject = suggestion.subject
-        bodyText = suggestion.body ?? ""
+        ) {
+        case .fill(let suggestion):
+            subject = suggestion.subject
+            bodyText = suggestion.body ?? ""
+        case .clear:
+            subject = ""
+            bodyText = ""
+        case nil:
+            break
+        }
     }
 
     @ViewBuilder
