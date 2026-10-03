@@ -400,7 +400,21 @@ Per the testing policy, pin the decisions:
   navigation policy decision; the CSP header string; bridge size and queue
   caps; the trust hash including `web`. No WKWebView rendering tests.
 
+## Decisions (2026-10-03)
+
+- **Order:** remote first, as API 10. Webviews (API 11) wait for a plugin that
+  needs them.
+- **`markdown` node:** goes into API 9.
+- **Remote trust:** one `remote: true` approval per plugin covers every SSH
+  host its projects use. No per-host grants.
+- **No helper:** remote `process.*` is refused when the remote helper is not
+  installed; there is no `RemoteExec` fallback.
+
 ## Open questions
+
+Questions 1, 2, 4 and 8 are settled above; the rest stay open until webviews
+are built.
+
 
 1. **Order.** Remote (API 10) before webviews (API 11)? This spec assumes yes.
 2. **`markdown` node first?** Should N1 go into API 9, which is still open,
