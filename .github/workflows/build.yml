@@ -162,6 +162,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/alas-build/run.sh
 
+      - name: Test release project preparation
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/prepare-release-project/run.sh
+
       - name: Test release architecture verifier
         if: ${{ !cancelled() }}
         run: bash scripts/tests/verify-release-architecture/run.sh

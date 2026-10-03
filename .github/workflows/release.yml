@@ -54,6 +54,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           git show "${WORKFLOW_SHA}:scripts/verify-release-architecture.sh" > "$RUNNER_TEMP/verify-release-architecture.sh"
+          git show "${WORKFLOW_SHA}:scripts/prepare-release-project.rb" > "$RUNNER_TEMP/prepare-release-project.rb"
           chmod +x "$RUNNER_TEMP/verify-release-architecture.sh"
 
       - name: Configure headless git for package resolution
@@ -105,6 +106,9 @@ jobs:
             File.write(path, text.gsub(pattern, "\\1\"#{version}\""))
           '
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Alas/Resources/Info.plist
+
+      - name: Prepare release project architecture
+        run: 'ruby "$RUNNER_TEMP/prepare-release-project.rb" project.yml'
 
       - name: Generate project
         run: xcodegen

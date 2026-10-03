@@ -175,6 +175,7 @@ shell_steps = builder_steps.map { |step| step["run"] }
   "bash scripts/tests/embed-ghostty-resources/run.sh",
   "bash scripts/tests/xcode-state/run.sh",
   "bash scripts/tests/alas-build/run.sh",
+  "bash scripts/tests/prepare-release-project/run.sh",
   "bash scripts/tests/verify-release-architecture/run.sh"
 ].each do |command|
   raise "builder must run #{command}" unless shell_steps.include?(command)
@@ -194,7 +195,12 @@ raise "manual releases must fetch the workflow commit as well as the immutable r
 materialize_verifier = release_steps.find { |step| step["name"] == "Materialize release architecture verifier" }
 raise "manual releases must load the verifier from the workflow commit, not the older release tag" unless
   materialize_verifier&.dig("env", "WORKFLOW_SHA") == "${{ github.sha }}" &&
-    materialize_verifier.fetch("run", "").include?('git show "${WORKFLOW_SHA}:scripts/verify-release-architecture.sh"')
+    materialize_verifier.fetch("run", "").include?('git show "${WORKFLOW_SHA}:scripts/verify-release-architecture.sh"') &&
+    materialize_verifier.fetch("run", "").include?('git show "${WORKFLOW_SHA}:scripts/prepare-release-project.rb"')
+prepare_release_project = release_steps.find { |step| step["name"] == "Prepare release project architecture" }
+raise "manual releases must apply the target-scoped architecture mapping to historical tags" unless
+  prepare_release_project&.fetch("run", "") ==
+    'ruby "$RUNNER_TEMP/prepare-release-project.rb" project.yml'
 release_build = release_steps.find { |step| step["name"] == "Build release app (${{ matrix.arch }})" }
 raise "release workflow must build each matrix destination" unless
   release_build&.fetch("run", "")&.include?("-destination 'platform=macOS,arch=${{ matrix.arch }}'")
