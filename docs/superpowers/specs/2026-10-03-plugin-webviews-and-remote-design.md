@@ -136,8 +136,16 @@ Same messages, limits and error codes as API 6. Differences:
   `RemotePathContainment`'s probe, which already excludes `.git`, and the
   guarded replace/mkdir commands in `RemoteFileOps`, rather than writing a
   second checker.
-- Reads and lists go through the remote helper (`read`, `list`) when it is
-  installed, and fall back to `RemoteFileAccess`'s `RemoteExec` scripts.
+- The helper's existing `fs/read` and `fs/list` are not enough: they take
+  only a path, authorize it against the union of every watched root, and do
+  not exclude `.git`. A plugin could read `.git` or reach another subscribed
+  worktree through them. R2 adds helper operations that take the worktree
+  root with the path and enforce containment and the case-folded `.git`
+  exclusion in the same call, walking components with `O_NOFOLLOW` so a
+  swapped symlink can't escape. A separate `RemotePathContainment` probe
+  before the call would bring the race back. Without the helper, reads and
+  lists fall back to `RemoteFileAccess`'s `RemoteExec` scripts, which run the
+  check and the operation in one command.
 - Replies already arrive in a later delivery. Remote ones also count towards
   the 4 requests in flight, because each one holds an SSH round trip.
 - A connection failure answers `-32003 "remote host devbox is unreachable"`.
@@ -156,10 +164,22 @@ Same messages, limits and error codes as API 6. Differences:
   the worktree, bare names on the remote login shell's `PATH`, the same policy
   `RemoteExec` uses for run scripts. The environment is the remote user's.
   Nothing from the Mac's environment is forwarded.
-- Output caps, the 10-minute limit, `stdin` and the 2-per-instance cap are
-  unchanged. On stop, the helper sends `SIGTERM` to the process group, then
-  `SIGKILL` after 5 s. Slice R3 verifies that `killProc` does this for the
-  whole group, and extends the helper if it doesn't.
+- The 10-minute limit, `stdin` and the 2-per-instance cap are unchanged. On
+  stop, the helper sends `SIGTERM` to the process group, then `SIGKILL` after
+  5 s.
+- The helper needs two changes for API 6's "no daemons left behind" to hold
+  remotely. Today its supervisor only records the root's exit, and
+  `killProc` skips signalling once the recorded leader is dead and then
+  deletes the process directory, so a backgrounded child survives forever.
+  R3 makes the supervisor terminate the group when the root exits on its own
+  (`SIGTERM`, then `SIGKILL` after the grace), and makes `killProc` signal the
+  recorded process group even when the leader is gone. The group id can't be
+  reused while any member is alive.
+- Output is bounded on the host too. The helper's `stdout.log` and
+  `stderr.log` grow without limit today, so a verbose dev server fills the
+  remote disk and replays it all on attach. R3 caps each log on the helper
+  side, keeping the head for `process/run` and the tail for long-running
+  processes, the same limits the plugin host applies.
 - Long-running processes appear in the remote worktree's Run tab under
   *Plugins*, exactly like local ones, and stop when the plugin stops.
 
@@ -364,8 +384,8 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 | # | API | Slice | Size |
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
-| R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; remote `file/read`/`file/list`/`file/write` over the helper or `RemoteExec`, with host-side containment. | M |
-| R3 | 10 | Remote `process/run` over helper `spawnProc`; process-group kill verified; executable resolution on the host. | M |
+| R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion; remote `file/read`/`file/list`/`file/write` over them or `RemoteExec`, with host-side containment. | M |
+| R3 | 10 | Helper: terminate the group when the root exits, `killProc` signals the group after the leader dies, capped output logs. Remote `process/run` over helper `spawnProc`; executable resolution on the host. | M |
 | R4 | 10 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
 | W1 | 11 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
