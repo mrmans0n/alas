@@ -15636,7 +15636,7 @@ extension AppState: RemoteSessionsProvider {
 
     private static func remoteCommit(_ commit: CommitInfo) -> RemoteCommit {
         RemoteCommit(
-            shortSha: commit.shortSha, subject: commit.rawSubject, author: commit.author,
+            sha: commit.sha, shortSha: commit.shortSha, subject: commit.rawSubject, author: commit.author,
             add: commit.insertions, del: commit.deletions)
     }
 
@@ -15835,6 +15835,61 @@ extension AppState: RemoteSessionsProvider {
                 hunks: capped.hunks.map(Self.remoteDiffHunk),
                 truncated: capped.truncated,
                 metadataNote: parsed.metadataSummary)
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+    }
+
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let found): worktree = found
+        }
+        guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+            return .failure(reason: .pathRejected, message: nil)
+        }
+        do {
+            let details = try await GitService().commitDetails(at: worktree.path, sha: sha)
+            let files = details.files.filter {
+                RemoteWorktreeFileAccess.normalizedRelativePath($0.path) != nil
+            }
+            return .success(files: files.prefix(RemoteWorktreeFileAccess.maxChangedFiles).map {
+                RemoteChangedFile(path: $0.path, status: $0.status, add: $0.add, del: $0.del,
+                                  conflict: nil, renameFrom: $0.originalPath)
+            }, truncated: files.count > RemoteWorktreeFileAccess.maxChangedFiles)
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+    }
+
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let found): worktree = found
+        }
+        guard RemoteWorktreeFileAccess.isCommitSHA(sha),
+              let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path) else {
+            return .failure(reason: .pathRejected, message: nil)
+        }
+        do {
+            let git = GitService()
+            let details = try await git.commitDetails(at: worktree.path, sha: sha)
+            guard let file = details.files.first(where: { $0.path == normalizedPath }) else {
+                return .failure(reason: .pathRejected, message: nil)
+            }
+            // Both sides are git blobs. Deleted paths and historical symlinks
+            // need no filesystem resolution or working-tree binary sniff.
+            let parsed = try await git.diff(worktreePath: worktree.path, sha: details.info.sha,
+                file: normalizedPath, originalPath: file.originalPath,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+            guard !parsed.isBinary else { return .failure(reason: .binary, message: nil) }
+            let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
+            return .success(hunks: capped.hunks.map(Self.remoteDiffHunk),
+                            truncated: capped.truncated, metadataNote: parsed.metadataSummary)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }

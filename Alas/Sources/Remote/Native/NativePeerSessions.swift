@@ -275,6 +275,13 @@ final class NativePeerSessions {
         }
     }
 
+    func loadCommitFiles(sha: String) {
+        guard selectedSessionId != nil, workspace.beginCommitFilesLoad(sha: sha) else { return }
+        if !routeWhileOnline({ .listCommitFiles(sessionId: $0, sha: sha) }) {
+            workspace.markUnavailable()
+        }
+    }
+
     /// Opens `document`, or — when it's already the open one — refreshes it.
     /// A refresh is gated the same way changes/file-tree refreshes are: a
     /// request already in flight for this same document skips the send, and
@@ -306,6 +313,8 @@ final class NativePeerSessions {
                     comparisonMode: comparisonMode()
                 )
             }
+        case .commitDiff(let path, let sha):
+            routeWhileOnline { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
             routeWhileOnline { .readFile(sessionId: $0, path: path) }
         }
@@ -449,6 +458,8 @@ final class NativePeerSessions {
         let replyDocument: NativePeerWorkspace.Document? = switch message {
         case .fileDiffResult(_, let path, let stage, _, _, _), .fileDiffFailed(_, let path, let stage, _, _):
             .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
+        case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
+            .commitDiff(path: path, sha: sha)
         case .fileContents(_, let path, _, _), .fileUnavailable(_, let path, _, _, _):
             .file(path: path)
         default: nil

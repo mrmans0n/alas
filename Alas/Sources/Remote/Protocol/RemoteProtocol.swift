@@ -109,11 +109,13 @@ enum RemoteClientMessage: Equatable, Sendable {
         path: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
     )
+    case listCommitFiles(sessionId: String, sha: String)
+    case commitFileDiff(sessionId: String, sha: String, path: String)
     case readFile(sessionId: String, path: String)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -239,6 +241,13 @@ extension RemoteClientMessage: Codable {
                     forKey: .comparisonMode
                 )
             )
+        case "listCommitFiles":
+            self = .listCommitFiles(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                    sha: try c.decode(String.self, forKey: .sha))
+        case "commitFileDiff":
+            self = .commitFileDiff(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                   sha: try c.decode(String.self, forKey: .sha),
+                                   path: try c.decode(String.self, forKey: .path))
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
@@ -368,6 +377,15 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(path, forKey: .path)
             try c.encodeIfPresent(comparisonMode, forKey: .comparisonMode)
+        case .listCommitFiles(let s, let sha):
+            try c.encode("listCommitFiles", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+        case .commitFileDiff(let s, let sha, let path):
+            try c.encode("commitFileDiff", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+            try c.encode(path, forKey: .path)
         case .readFile(let s, let path):
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -419,6 +437,10 @@ extension RemoteClientMessage {
                 return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")\u{0}\(comparisonMode.rawValue)"
             }
             return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")"
+        case .listCommitFiles(let sessionId, let sha):
+            return "listCommitFiles\u{0}\(sessionId)\u{0}\(sha)"
+        case .commitFileDiff(let sessionId, let sha, let path):
+            return "commitFileDiff\u{0}\(sessionId)\u{0}\(sha)\u{0}\(path)"
         case .readFile(let sessionId, let path):
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
         default:
@@ -505,6 +527,11 @@ enum RemoteServerMessage: Equatable, Sendable {
         sessionId: String, path: String, stage: String? = nil, hunks: [RemoteDiffHunk], truncated: Bool,
         metadataNote: String? = nil)
     case fileDiffFailed(sessionId: String, path: String, stage: String? = nil, reason: RemoteFileAccessReason, message: String?)
+    case commitFiles(sessionId: String, sha: String, files: [RemoteChangedFile], truncated: Bool)
+    case commitFilesFailed(sessionId: String, sha: String, reason: RemoteFileAccessReason, message: String?)
+    case commitDiffResult(sessionId: String, sha: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool,
+                          metadataNote: String? = nil)
+    case commitDiffFailed(sessionId: String, sha: String, path: String, reason: RemoteFileAccessReason, message: String?)
     case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
     case fileContents(sessionId: String, path: String, text: String, truncated: Bool)
@@ -521,7 +548,7 @@ extension RemoteServerMessage: Codable {
         case firstIndex, totalCount, epoch, revision
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
-        case metadataNote, commitsTruncated
+        case metadataNote, commitsTruncated, sha
         case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers
         case challenge, publicKey, signature
     }
@@ -685,6 +712,27 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
                 stage: try c.decodeIfPresent(String.self, forKey: .stage),
+                reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
+                message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "commitFiles":
+            self = .commitFiles(sessionId: try c.decode(String.self, forKey: .sessionId),
+                sha: try c.decode(String.self, forKey: .sha),
+                files: try c.decode([RemoteChangedFile].self, forKey: .files),
+                truncated: try c.decode(Bool.self, forKey: .truncated))
+        case "commitFilesFailed":
+            self = .commitFilesFailed(sessionId: try c.decode(String.self, forKey: .sessionId),
+                sha: try c.decode(String.self, forKey: .sha),
+                reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
+                message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "commitDiffResult":
+            self = .commitDiffResult(sessionId: try c.decode(String.self, forKey: .sessionId),
+                sha: try c.decode(String.self, forKey: .sha), path: try c.decode(String.self, forKey: .path),
+                hunks: try c.decode([RemoteDiffHunk].self, forKey: .hunks),
+                truncated: try c.decode(Bool.self, forKey: .truncated),
+                metadataNote: try c.decodeIfPresent(String.self, forKey: .metadataNote))
+        case "commitDiffFailed":
+            self = .commitDiffFailed(sessionId: try c.decode(String.self, forKey: .sessionId),
+                sha: try c.decode(String.self, forKey: .sha), path: try c.decode(String.self, forKey: .path),
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
         case "fileTree":
@@ -886,6 +934,33 @@ extension RemoteServerMessage: Codable {
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(stage, forKey: .stage)
             try c.encode(reason.rawValue, forKey: .reason)
+            try c.encodeIfPresent(message, forKey: .message)
+        case .commitFiles(let s, let sha, let files, let truncated):
+            try c.encode("commitFiles", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+            try c.encode(files, forKey: .files)
+            try c.encode(truncated, forKey: .truncated)
+        case .commitFilesFailed(let s, let sha, let reason, let message):
+            try c.encode("commitFilesFailed", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+            try c.encode(reason, forKey: .reason)
+            try c.encodeIfPresent(message, forKey: .message)
+        case .commitDiffResult(let s, let sha, let path, let hunks, let truncated, let metadataNote):
+            try c.encode("commitDiffResult", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+            try c.encode(path, forKey: .path)
+            try c.encode(hunks, forKey: .hunks)
+            try c.encode(truncated, forKey: .truncated)
+            try c.encodeIfPresent(metadataNote, forKey: .metadataNote)
+        case .commitDiffFailed(let s, let sha, let path, let reason, let message):
+            try c.encode("commitDiffFailed", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(sha, forKey: .sha)
+            try c.encode(path, forKey: .path)
+            try c.encode(reason, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
         case .fileTree(let s, let path, let nodes, let truncated):
             try c.encode("fileTree", forKey: .type)

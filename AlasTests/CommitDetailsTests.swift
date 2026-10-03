@@ -4,13 +4,20 @@ import Foundation
 
 @Suite(.serialized)
 struct CommitDetailsTests {
+    private static let repositoryTemplate = Task {
+        let template = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cd-template-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: template, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: template)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: template)
+        _ = try await Process.git(["config", "user.name", "test user"], cwd: template)
+        return template
+    }
+
     private func makeRepo() async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cd-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
-        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
-        _ = try await Process.git(["config", "user.name", "test user"], cwd: tmp)
+        try FileManager.default.copyItem(at: try await Self.repositoryTemplate.value, to: tmp)
         return tmp
     }
 
@@ -214,35 +221,72 @@ struct CommitDetailsTests {
         #expect(delCount >= 1)
     }
 
-    @Test func diffOfCopiedFileExcludesSourceHunks() async throws {
+    @Test(arguments: [Int.max, 64])
+    func diffOfCopiedFileExcludesSourceHunks(maxOutputBytes: Int) async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
         // Seed with a 10-line file so git's copy detection has enough
         // similarity to consider the duplicate a copy.
         try (1...10).map { "line \($0)\n" }.joined()
-            .write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+            .write(to: repo.appendingPathComponent("a-source.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "."], cwd: repo)
         _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
-        // Copy old.txt to new.txt AND modify old.txt — exactly the
+        // Copy a-source.txt to z-copy.txt AND modify a-source.txt — exactly the
         // scenario where passing both paths without slicing would pull
-        // in old.txt's M hunks under new.txt's header.
+        // in a-source.txt's M hunks under z-copy.txt's header.
         try (1...10).map { "line \($0)\n" }.joined()
-            .write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+            .write(to: repo.appendingPathComponent("z-copy.txt"), atomically: true, encoding: .utf8)
         try (1...10).map { i in i == 5 ? "MODIFIED\n" : "line \(i)\n" }.joined()
-            .write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+            .write(to: repo.appendingPathComponent("a-source.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "-A"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "-m", "copy + edit"], cwd: repo)
         let sha = try await currentSha(in: repo)
 
         let svc = GitService()
-        // Diff for new.txt with originalPath = old.txt. The slice should
-        // strip old.txt's M hunks. A pure copy with no further edits has
-        // zero hunks; if our slice kept old.txt's section, we'd see the
+        // Diff for z-copy.txt with originalPath = a-source.txt. The slice should
+        // strip a-source.txt's M hunks. A pure copy with no further edits has
+        // zero hunks; if our slice kept a-source.txt's section, we'd see the
         // MODIFIED <- line 5 swap.
-        let diff = try await svc.diff(worktreePath: repo, sha: sha, file: "new.txt", originalPath: "old.txt")
+        if maxOutputBytes == 64 {
+            await #expect(throws: ProcessError.self) {
+                try await svc.diff(worktreePath: repo, sha: sha, file: "z-copy.txt",
+                                   originalPath: "a-source.txt", maxOutputBytes: maxOutputBytes)
+            }
+            return
+        }
+        let diff = try await svc.diff(worktreePath: repo, sha: sha, file: "z-copy.txt", originalPath: "a-source.txt")
         let texts = diff.hunks.flatMap { $0.lines }.map(\.text)
         #expect(!texts.contains("MODIFIED"))
         #expect(!texts.contains("line 5"))
+    }
+
+    @Test(arguments: ["tab\tfile.txt", "line\nfile.txt", "quote\"file.txt", "back\\slash.txt", "literal => file.txt"])
+    func commitFilesPreserveLiteralPathsThroughRenames(fileName: String) async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let originalPath = "old-" + fileName
+        let path = "new-" + fileName
+        let content = (1...10).map { "line \($0)\n" }.joined()
+        try content.write(to: repo.appendingPathComponent(originalPath), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "seed"], cwd: repo)
+        let git = GitService()
+        let initial = try await git.commitDetails(at: repo, sha: currentSha(in: repo))
+        #expect(initial.files == [CommitChangedFile(
+            path: originalPath, originalPath: nil, status: "A", add: 10, del: 0)])
+
+        try FileManager.default.moveItem(at: repo.appendingPathComponent(originalPath), to: repo.appendingPathComponent(path))
+        try (content + "extra\n").write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-qm", "rename"], cwd: repo)
+        let details = try await git.commitDetails(at: repo, sha: currentSha(in: repo))
+        #expect(details.files == [CommitChangedFile(
+            path: path, originalPath: originalPath, status: "R", add: 1, del: 0)])
+        let file = try #require(details.files.first)
+        let diff = try await git.diff(worktreePath: repo, sha: details.info.sha,
+                                      file: file.path, originalPath: file.originalPath)
+        let additions = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        #expect(additions == ["extra"])
     }
 
     @Test func sliceDiffForFileKeepsOnlyMatchingSection() {

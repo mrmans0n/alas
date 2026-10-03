@@ -8,6 +8,39 @@ struct RemoteProtocolTests {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    @Test func commitInspectionMessagesPreserveRevisionAndSessionRouting() throws {
+        let requests: [RemoteClientMessage] = [
+            .listCommitFiles(sessionId: "B:s", sha: "abc1234"),
+            .commitFileDiff(sessionId: "B:s", sha: "abc1234", path: "src/a.txt"),
+            .commitFileDiff(sessionId: "B:s", sha: "def5678", path: "src/a.txt"),
+        ]
+        for request in requests {
+            #expect(try roundTrip(request) == request)
+            let forwarded = request.replacingSessionId("s")
+            #expect(forwarded.sessionId == "s")
+            #expect(forwarded.replacingSessionId("B:s") == request)
+        }
+        #expect(Set(requests.compactMap(\.fileRequestDedupKey)).count == 3)
+        let replies: [RemoteServerMessage] = [
+            .changeList(sessionId: "s", comparisonRef: "main", metricsAvailable: true,
+                files: [], staged: [], unstaged: [], commits: [
+                    RemoteCommit(sha: String(repeating: "a", count: 40), shortSha: "aaaaaaa",
+                                 subject: "change", author: "author", add: 1, del: 0),
+                ], truncated: false),
+            .commitFiles(sessionId: "s", sha: "abc1234", files: [], truncated: true),
+            .commitFilesFailed(sessionId: "s", sha: "abc1234", reason: .gitFailed, message: nil),
+            .commitDiffResult(sessionId: "s", sha: "abc1234", path: "src/a.txt", hunks: [],
+                              truncated: false, metadataNote: "File renamed"),
+            .commitDiffFailed(sessionId: "s", sha: "abc1234", path: "src/a.txt", reason: .binary, message: nil),
+        ]
+        for reply in replies {
+            #expect(try roundTrip(reply) == reply)
+            let forwarded = reply.replacingSessionId("B:s")
+            #expect(forwarded.sessionId == "B:s")
+            #expect(forwarded.replacingSessionId("s") == reply)
+        }
+    }
+
     @Test func worktreeCreationClientMessagesRoundTripAndEncodeRequiredFields() throws {
         let listProjects = RemoteClientMessage.listProjects
         #expect(try roundTrip(listProjects) == listProjects)

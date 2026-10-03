@@ -8,6 +8,13 @@ import Darwin
 /// entirely: a worktree's git config can hold remote URLs with embedded
 /// credentials.
 enum RemoteWorktreeFileAccess {
+    /// Only object IDs, never rev expressions or git options, cross this boundary.
+    static func isCommitSHA(_ sha: String) -> Bool {
+        (7...64).contains(sha.utf8.count) && sha.utf8.allSatisfy {
+            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
+        }
+    }
+
     static let maxFileBytes = 512 * 1024
     static let maxDiffLines = 2_000
     static let maxChangedFiles = 500

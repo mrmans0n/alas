@@ -486,6 +486,9 @@ struct RemoteChangedFile: Codable, Equatable, Sendable {
 }
 
 struct RemoteCommit: Codable, Equatable, Sendable {
+    /// Full identity on current peers; absent in older change-list replies.
+    var sha: String? = nil
+    var revision: String { sha ?? shortSha }
     let shortSha: String
     let subject: String
     let author: String
@@ -566,6 +569,11 @@ enum RemoteChangeListResult: Equatable, Sendable {
         comparisonRef: String?, metricsAvailable: Bool,
         files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
         commits: [RemoteCommit], truncated: Bool, commitsTruncated: Bool = false)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteCommitFilesResult: Equatable, Sendable {
+    case success(files: [RemoteChangedFile], truncated: Bool)
     case failure(reason: RemoteFileAccessReason, message: String?)
 }
 

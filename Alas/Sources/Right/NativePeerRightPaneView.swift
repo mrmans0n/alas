@@ -91,8 +91,11 @@ struct NativePeerRightPaneView: View {
             NativePeerChangesView(
                 changes: client.workspace.changes,
                 worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                commitFiles: client.workspace.commitFiles,
+                onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                 onOpen: { client.open($0) }
             )
+            .id(client.selectedSessionId)
         }
     }
 

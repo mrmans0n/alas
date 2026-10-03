@@ -55,7 +55,7 @@ protocol RemoteSessionsProvider: AnyObject {
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
     /// Read-only worktree inspection for the remote changes/files tabs. All
-    /// four resolve the session's worktree first and are ungated by the writer
+    /// methods resolve the session's worktree first and are ungated by the writer
     /// lease: seeing a session is enough to read its code.
     func remoteChangeList(
         sessionId: String,
@@ -72,10 +72,19 @@ protocol RemoteSessionsProvider: AnyObject {
         path: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     ) async -> RemoteFileTreeResult
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
 }
 
 extension RemoteSessionsProvider {
+    func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+    func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
     func respondToPlan(for id: String, requestId: JSONRPCID, _ response: ACPCursorPlanResponse) {}
 }

@@ -1418,6 +1418,41 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
+    @Test(arguments: ["a.txt", "tab\tfile.txt", "line\nfile.txt", "quote\"file.txt", "back\\slash.txt"])
+    func commitInspectionIgnoresLaterCommitsAndWorkingTreeEdits(fileName: String) async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "committed\n".write(to: repository.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", fileName], cwd: repository)
+        _ = try await Process.git(["commit", "-qm", "first"], cwd: repository)
+        let sha = try await Process.git(["rev-parse", "HEAD"], cwd: repository)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try "later\n".write(to: repository.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "b.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-qm", "second"], cwd: repository)
+        try "uncommitted\n".write(to: repository.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        guard case .success(let files, false) = await state.remoteCommitFiles(sessionId: tab.sessionId, sha: sha) else {
+            Issue.record("expected commit files")
+            return
+        }
+        #expect(files.map(\.path) == [fileName])
+        guard case .success(let hunks, false, _) = await state.remoteCommitDiff(
+            sessionId: tab.sessionId, sha: sha, path: fileName) else {
+            Issue.record("expected commit diff")
+            return
+        }
+        #expect(hunks.flatMap(\.lines).filter { $0.kind == "add" }.map(\.text) == ["committed"])
+        #expect(await state.remoteCommitDiff(sessionId: tab.sessionId, sha: sha, path: "b.txt")
+            == .failure(reason: .pathRejected, message: nil))
+        #expect(await state.remoteCommitFiles(sessionId: tab.sessionId, sha: "--all")
+            == .failure(reason: .pathRejected, message: nil))
+    }
+
     @Test func remoteChangeListReportsUnstagedCountsAgainstTheIndex() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
