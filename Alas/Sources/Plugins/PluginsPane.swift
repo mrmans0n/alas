@@ -29,8 +29,17 @@ struct PluginsPane: View {
                 Text("Plugins run sandboxed, with only the capabilities you approve.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
+                SettingsRow(name: "Enable plugins", desc: "Runs approved plugins. Turning this off stops them all.") {
+                    AlasToggle(on: Binding(
+                        get: { state.config.pluginsEnabled },
+                        set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }))
+                }
+                .padding(.bottom, 12)
                 if let manager = state.pluginManager {
                     content(manager)
+                } else {
+                    Text("Plugins are off. Nothing is loaded or run, and the plugin catalog is not fetched.")
+                        .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)

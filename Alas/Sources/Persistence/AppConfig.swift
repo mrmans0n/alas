@@ -52,8 +52,8 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
-    /// Opt-in gate for plugins. Off: nothing is scanned, loaded or run.
-    var pluginsEnabled: Bool = false
+    /// Gate for plugins. Off: nothing is scanned, loaded or run. On, a plugin still runs only once approved.
+    var pluginsEnabled: Bool = true
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -602,7 +602,7 @@ struct AppConfig: Codable, Equatable {
         localTextModelEnabled: false,
         issueWorktreeNameSuggestionsEnabled: true,
         needsAttentionEnabled: false,
-        pluginsEnabled: false,
+        pluginsEnabled: true,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -956,7 +956,7 @@ extension AppConfig {
             ?? (harness.acpLocalTitlesEnabled || priorModelConsent)
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
-        pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? false
+        pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? true
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

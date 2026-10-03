@@ -26,10 +26,9 @@ This copies two files into Alas's plugins folder:
 
 ## 2. Approve and run it
 
-1. Turn on **Settings → Advanced → Experimental → Plugins**. The Advanced
-   section appears as **Debug** in the settings sidebar and shows only when
-   `~/.alas/.debug` exists.
-2. Open **Settings → Plugins** and find **Hello Workspace 0.2.0**. It asks for one capability:
+1. Open **Settings → Plugins** and check that **Enable plugins** is on (it is
+   by default).
+2. Find **Hello Workspace 0.2.0**. It asks for one capability:
    *Read this project's worktrees and what their agent sessions are doing*.
 3. Click **Approve…**.
 

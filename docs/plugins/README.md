@@ -4,11 +4,10 @@ Alas plugins are JavaScript files that extend Alas without changing or
 rebuilding the app. A plugin never touches Alas's internals. It exchanges small
 JSON messages with Alas, and Alas answers only the requests the user approved.
 
-> **Status: experimental.** Plugins are off by default. Turn them on in
-> **Settings → Advanced → Experimental → Plugins**; the Advanced section appears
-> as **Debug** in the settings sidebar and shows only when `~/.alas/.debug`
-> exists. **Settings → Plugins** then lists installed plugins, where you approve,
-> enable, revoke and restart them and read their logs. Its **Available** section
+> Plugins are on by default, but none runs until you approve it. **Settings →
+> Plugins** lists installed plugins, where you approve, enable, revoke and
+> restart them and read their logs; its **Enable plugins** switch turns plugins
+> off altogether. Its **Available** section
 > lists the plugins published in
 > [alas-plugins](https://github.com/mrmans0n/alas-plugins) and installs, updates
 > and removes them; a download is checked against the catalog's hash and still
