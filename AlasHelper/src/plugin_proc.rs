@@ -31,6 +31,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// A manifest command (at most 32 entries) plus the 32 arguments a plugin may append.
 const MAX_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 4096;
 const MAX_STDIN_BYTES: usize = 256 * 1024;
@@ -505,9 +506,11 @@ fn resolve_executable(name: &str, cwd: &Path, path: &str) -> Option<PathBuf> {
 fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        use std::os::unix::ffi::OsStrExt;
+        // Executable by this user, not merely by someone: a root-only 0700 file earlier on PATH is skipped.
+        std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+            && std::ffi::CString::new(path.as_os_str().as_bytes())
+                .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0)
     }
     #[cfg(not(unix))]
     {
@@ -1457,6 +1460,21 @@ mod tests {
         );
         assert_eq!(resolve_executable("plain", Path::new("/"), &path), None);
         assert_eq!(resolve_executable("missing", Path::new("/"), &path), None);
+        // An execute bit for someone else (group only) doesn't make it ours: the later candidate wins. Root may
+        // execute anything with an execute bit, so this only holds for an ordinary user.
+        if unsafe { libc::geteuid() } != 0 {
+            let other = root.join("other");
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(other.join("tool"), "#!/bin/sh\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(other.join("tool"), std::fs::Permissions::from_mode(0o010))
+                .unwrap();
+            let path = format!("{}:{}", other.display(), bin.display());
+            assert_eq!(
+                resolve_executable("tool", Path::new("/"), &path),
+                Some(bin.join("tool"))
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

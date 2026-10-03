@@ -77,6 +77,7 @@ struct PluginManifestTests {
         (manifest(api: 6, #","capabilities":["process.exec"]"#), .invalidProcess(#"capability "process.exec" needs at least one process"#)),
         (manifest(api: 6, processes(#"{"id":"a","command":[]}"#)), .invalidProcess(#"process "a" needs a command"#)),
         (manifest(api: 6, processes(#"{"id":"a","command":["ls","\#(String(repeating: "x", count: 1025))"]}"#)), .invalidProcess(#"process "a" has an argument longer than 1024 bytes"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":[\#((0...32).map { "\"a\($0)\"" }.joined(separator: ","))]}"#)), .invalidProcess(#"process "a" has more than 32 command entries"#)),
         (manifest(api: 6, processes(#"{"id":"a","command":["ls"]},{"id":"a","command":["pwd"]}"#)), .invalidProcess(#"duplicate process id "a""#)),
         (manifest(api: 6, processes(#"{"id":"A!","command":["ls"]}"#)), .invalidProcess(#"invalid process id "A!""#)),
         (manifest(api: 6, processes((0...16).map { #"{"id":"p\#($0)","command":["ls"]}"# }.joined(separator: ","))), .invalidProcess("at most 16 processes")),
