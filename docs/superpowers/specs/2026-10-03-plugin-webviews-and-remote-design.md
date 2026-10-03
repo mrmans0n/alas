@@ -160,6 +160,11 @@ Same messages, limits and error codes as API 6. Differences:
   `spawnProc`/`attachProc`/`killProc`. Without the helper they answer `-32003`
   with the reason. One-shot `RemoteExec` can't reliably kill a process tree
   when the plugin stops, and "no daemons left behind" is an API 6 guarantee.
+- Helper process ids are opaque and owned: Alas derives each from the plugin,
+  the project, the instance's lease and the run, so two instances on one host
+  never share one, and the public `pN` run id maps to it only inside the
+  instance that started it. A helper call for an id owned by another lease is
+  refused rather than attached to.
 - The argv is the manifest's exact prefix plus `appendArgs`, quoted by
   `SSHCommand`, never joined into a shell string. The working directory is
   the worktree's real path.
@@ -182,8 +187,10 @@ Same messages, limits and error codes as API 6. Differences:
   (`SIGTERM`, then `SIGKILL` after the grace), and makes `killProc` signal the
   recorded process group even when the leader is gone. The group id can't be
   reused while any member is alive, but it can once all have exited, so the
-  group is signalled only if at least one tracked member still matches its
-  recorded start time; otherwise the group signal is skipped.
+  group is signalled only if at least one tracked process still matches its
+  recorded start time and is still in the recorded group; otherwise the group
+  signal is skipped. Descendants that left the group are signalled one by
+  one.
 - Leaving the group doesn't escape cleanup. A child that calls `setsid` or
   daemonizes is out of the recorded group, so R3 adds descendant tracking to
   the helper as the local launcher does: sample the tree while the root runs,
@@ -192,9 +199,9 @@ Same messages, limits and error codes as API 6. Differences:
   misses a child that double-forks and is orphaned before the first sample.
   On Linux the supervisor makes itself a child subreaper
   (`PR_SET_CHILD_SUBREAPER`), so orphans reparent to it and stay findable;
-  cgroups are not required. macOS hosts have no subreaper and keep sampling,
-  with the same documented window as the local launcher (whose `ponytail:`
-  names the shared `posix_spawn` upgrade).
+  cgroups are not required. macOS has no subreaper, so remote `process.*` is
+  refused on macOS SSH hosts until a race-free mechanism exists; remote
+  `file/*` still works there.
 - One-shot runs see EOF. Today `proc/write` only appends to `stdin.log` and
   the child's stdin stays open until it exits, so `cat` or a formatter waits
   for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`
