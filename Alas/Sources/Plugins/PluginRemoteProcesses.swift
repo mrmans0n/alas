@@ -82,6 +82,17 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
         output = PluginProcessOutput(keep: keep, limit: limit)
     }
 
+    /// The helper's argv bounds: far beyond any declared command, below what Linux takes.
+    static let maxArgs = 4096
+    static let maxArgvBytes = 1 << 20
+
+    /// Why `argv` can't run on a remote host, or nil when it can. Each entry counts with its terminating NUL.
+    static func argvRefusal(_ argv: [String], process: String) -> String? {
+        let bytes = argv.reduce(0) { $0 + $1.utf8.count + 1 }
+        let fits = argv.count <= maxArgs && bytes <= maxArgvBytes && !argv.contains { $0.contains("\u{0}") }
+        return fits ? nil : "process \(process) has too many arguments to run on a remote host"
+    }
+
     /// An id no other plugin, project, instance or run shares, and that names none of them.
     static func procId(plugin: String, project: String, lease: String, run: String) -> String {
         let digest = SHA256.hash(data: Data([plugin, project, lease, run].joined(separator: "\u{0}").utf8))

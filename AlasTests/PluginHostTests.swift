@@ -1333,6 +1333,19 @@ struct PluginHostTests {
         #expect(RemotePluginProcess.unseen(Data("abcd".utf8), at: offset, after: next) == unseen.map { Data($0.utf8) })
     }
 
+    /// A remote argv stays within the helper's bounds, checked before anything is sent.
+    @Test(arguments: [
+        (Array(repeating: "x", count: 4096), true),
+        (Array(repeating: "x", count: 4097), false),
+        (Array(repeating: String(repeating: "x", count: 1023), count: 1024), true),
+        (Array(repeating: String(repeating: "x", count: 1024), count: 1024), false),
+        (["ls", "a\u{0}b"], false),
+    ] as [([String], Bool)])
+    func remoteArgvFitsTheHelper(argv: [String], fits: Bool) {
+        let refusal = RemotePluginProcess.argvRefusal(argv, process: "big")
+        #expect(refusal == (fits ? nil : "process big has too many arguments to run on a remote host"))
+    }
+
     /// A spawn whose answer was lost is sent again under the same id, which the helper only reports; a refusal is
     /// final at once.
     @Test(arguments: [

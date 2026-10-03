@@ -32,8 +32,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// A manifest command (at most 32 entries) plus the 32 arguments a plugin may append.
-const MAX_ARGS: usize = 64;
-const MAX_ARG_BYTES: usize = 4096;
+/// Far beyond any declared command, and below what Linux takes for an
+/// argv. Alas checks the same bounds before it asks.
+const MAX_ARGS: usize = 4096;
+const MAX_ARGV_BYTES: usize = 1024 * 1024;
 const MAX_STDIN_BYTES: usize = 256 * 1024;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LEASE_MS: u64 = 10 * 60 * 1000;
@@ -174,14 +176,7 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
     }
     validate_proc_id(&params.proc_id)?;
     validate_lease(&params.lease)?;
-    if params.argv.is_empty()
-        || params.argv[0].is_empty()
-        || params.argv.len() > MAX_ARGS
-        || params
-            .argv
-            .iter()
-            .any(|arg| arg.len() > MAX_ARG_BYTES || arg.contains('\0'))
-    {
+    if !argv_valid(&params.argv) {
         return Err(jsonrpc_error(-32602, "invalid argv"));
     }
     let stdin = params
@@ -210,8 +205,13 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
 
     if let Some(dir) = owned_dir(&params.proc_id, &params.lease)? {
         // A retried spawn: the first one went through if it started the
-        // process, or still may if its supervisor lives.
-        if read_exit(&dir).is_some() || (supervisor_alive(&dir) && await_start(&dir)?) {
+        // process, whose end `settled_exit` records if its supervisor is
+        // gone, or still may if its supervisor lives. Not run twice.
+        if dir.join("started").is_file() || read_exit(&dir).is_some() {
+            settled_exit(&dir);
+            return Ok(json!({ "procId": params.proc_id, "spawned": false }));
+        }
+        if supervisor_alive(&dir) && await_start(&dir)? {
             return Ok(json!({ "procId": params.proc_id, "spawned": false }));
         }
         // An earlier helper died before anything started it: nothing owns
@@ -270,6 +270,15 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
     Ok(json!({ "procId": params.proc_id, "spawned": true }))
 }
 
+/// A program name, at most `MAX_ARGS` entries of at most `MAX_ARGV_BYTES`
+/// together, each counted with its terminating NUL, and none holding one.
+fn argv_valid(argv: &[String]) -> bool {
+    argv.first().is_some_and(|name| !name.is_empty())
+        && argv.len() <= MAX_ARGS
+        && argv.iter().map(|arg| arg.len() + 1).sum::<usize>() <= MAX_ARGV_BYTES
+        && !argv.iter().any(|arg| arg.contains('\0'))
+}
+
 fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
     let exe = std::env::current_exe()
         .map_err(|error| jsonrpc_error(-32050, format!("helper path failed: {error}")))?;
@@ -321,14 +330,52 @@ fn await_start(dir: &Path) -> Result<bool, HelperError> {
     Ok(false)
 }
 
-/// Whether the supervisor recorded for `dir` still runs. A reused pid only
-/// makes a retry wait for `started` until it gives up.
+/// Whether the supervisor recorded for `dir` still runs. It records its pid
+/// with its start time, so a reused pid doesn't pass; until it does, the
+/// helper's pid-only record covers its first moments.
 fn supervisor_alive(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("supervisor"))
-        .ok()
-        .and_then(|pid| pid.trim().parse::<i32>().ok())
+    let Ok(record) = std::fs::read_to_string(dir.join("supervisor")) else {
+        return false;
+    };
+    let mut fields = record.split_whitespace().map(str::parse::<u64>);
+    let Some(Ok(pid)) = fields.next() else {
+        return false;
+    };
+    match fields.next() {
+        #[cfg(target_os = "linux")]
+        Some(Ok(start)) => {
+            linux::stat(pid as i32).is_some_and(|stat| stat.start == start && !stat.dead)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Some(Ok(_)) => false,
+        Some(Err(_)) => false,
         // SAFETY: signal 0 only checks that the pid exists.
-        .is_some_and(|pid| unsafe { libc::kill(pid, 0) } == 0)
+        None => (unsafe { libc::kill(pid as i32, 0) }) == 0,
+    }
+}
+
+/// The run's exit; for a started run whose supervisor is gone, which nothing
+/// will ever end, a recorded -1, so no caller waits for it forever.
+fn settled_exit(dir: &Path) -> Option<ExitRecord> {
+    if let Some(exit) = read_exit(dir) {
+        return Some(exit);
+    }
+    if !dir.join("started").is_file() || supervisor_alive(dir) {
+        return None;
+    }
+    // The supervisor may have written its exit just before it left.
+    if let Some(exit) = read_exit(dir) {
+        return Some(exit);
+    }
+    let record = ExitRecord {
+        exit: -1,
+        timed_out: false,
+    };
+    let _ = write_atomic(
+        &dir.join("exit.json"),
+        &serde_json::to_vec(&record).expect("exit serializes"),
+    );
+    Some(record)
 }
 
 /// Replays the journal from `offset`, or from its retained base when `offset`
@@ -341,7 +388,7 @@ fn attach(
     let params: OwnedParams = decode_params(params)?;
     let dir = owned_dir(&params.proc_id, &params.lease)?
         .ok_or_else(|| jsonrpc_error(-32051, "process not found"))?;
-    let exit = read_exit(&dir);
+    let exit = settled_exit(&dir);
     let journal = Journal::read(&dir.join("journal"));
     let chunks = journal.replay(params.offset);
     if let (None, Some(events)) = (exit, events) {
@@ -394,7 +441,7 @@ fn start_tailer(proc_id: String, dir: PathBuf, mut next: u64, events: Sender<Ser
         let mut seen = None;
         loop {
             // Read the exit first: a journal read after it holds everything.
-            let exit = read_exit(&dir);
+            let exit = settled_exit(&dir);
             // The supervisor replaces the file on every change, so an
             // unchanged one is not decoded again.
             let stamp = journal_stamp(&path);
@@ -1136,6 +1183,14 @@ mod linux {
         // SAFETY: plain prctl. Orphans of the run reparent here, so they stay
         // findable however they detach.
         unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) };
+        // With its start time, so a retry can tell it from a reused pid.
+        let me = std::process::id() as i32;
+        if let Some(stat) = stat(me) {
+            let _ = write_atomic(
+                &dir.join("supervisor"),
+                format!("{me} {}", stat.start).as_bytes(),
+            );
+        }
         let launch: Launch = match std::fs::read(dir.join("launch.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -1457,6 +1512,18 @@ mod tests {
                 .iter()
                 .all(|(key, _)| !key.starts_with("ALAS_"))
         );
+    }
+
+    #[test]
+    fn argv_bounds_leave_room_for_any_declared_command() {
+        let args = |count: usize, size: usize| vec!["x".repeat(size); count];
+        assert!(argv_valid(&args(MAX_ARGS, 1)));
+        assert!(!argv_valid(&args(MAX_ARGS + 1, 1)));
+        // Each entry counts with its NUL: 1024 entries of 1023 bytes fill it.
+        assert!(argv_valid(&args(1024, 1023)));
+        assert!(!argv_valid(&args(1024, 1024)));
+        assert!(!argv_valid(&["".into()]));
+        assert!(!argv_valid(&["ls".into(), "a\0b".into()]));
     }
 
     #[test]

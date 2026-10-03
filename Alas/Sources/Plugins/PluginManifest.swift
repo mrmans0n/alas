@@ -243,8 +243,6 @@ struct PluginManifest: Equatable, Sendable {
     static let maxPanelsAPI6 = 4
     static let maxProcesses = 16
     static let maxArgBytes = 1024
-    /// A declared command's entries; with the 32 a plugin may append, every argv fits the remote helper's 64.
-    static let maxCommandArgs = 32
     static let maxPrompts = 16
     /// Prompts an instance sets with `prompts/set` (API 9).
     static let maxRuntimePrompts = 32
@@ -414,9 +412,6 @@ struct PluginManifest: Equatable, Sendable {
             let command = entry.command ?? []
             guard let executable = command.first, !executable.isEmpty else {
                 throw .invalidProcess("process \"\(id)\" needs a command")
-            }
-            guard command.count <= maxCommandArgs else {
-                throw .invalidProcess("process \"\(id)\" has more than \(maxCommandArgs) command entries")
             }
             guard command.allSatisfy({ $0.utf8.count <= maxArgBytes }) else {
                 throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxArgBytes) bytes")

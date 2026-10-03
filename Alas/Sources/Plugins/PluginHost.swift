@@ -929,7 +929,11 @@ final class PluginHost {
         case .refused(let reason): return errorReply(id, code: -32003, reason)
         case .remote where longRunning:
             return errorReply(id, code: -32003, "process/start can't run on remote hosts yet; process/run can")
-        case .local, .remote: break
+        case .remote:
+            if let refusal = RemotePluginProcess.argvRefusal(entry.command + args, process: entry.id) {
+                return errorReply(id, code: -32003, refusal)
+            }
+        case .local: break
         }
         guard processes.count < Self.maxProcessesRunning else {
             return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")

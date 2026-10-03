@@ -476,3 +476,36 @@ fn a_spawn_an_earlier_helper_left_unstarted_runs_again() {
     let retried = helper.spawn("again", &["/bin/sh", "-c", "printf twice"], json!({}));
     assert_eq!(retried["spawned"], false);
 }
+
+#[test]
+fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
+    let mut helper = Helper::start();
+    // A run that started, whose supervisor died and whose pid now belongs to
+    // another live process: the recorded start time no longer matches.
+    let mut stranger = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = stranger.id();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let start: u64 = stat[stat.rfind(')').unwrap() + 2..]
+        .split(' ')
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let dir = helper.dir("orphan");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner"), LEASE).unwrap();
+    std::fs::write(dir.join("started"), "").unwrap();
+    std::fs::write(dir.join("supervisor"), format!("{pid} {}", start + 1)).unwrap();
+    let retried = helper.spawn("orphan", &["sleep", "300"], json!({}));
+    assert_eq!(retried["spawned"], false);
+    let attached = helper.request(
+        "pproc/attach",
+        json!({ "procId": "orphan", "lease": LEASE }),
+    );
+    assert_eq!(
+        (attached["running"].clone(), attached["exit"].clone()),
+        (json!(false), json!(-1))
+    );
+    let _ = stranger.kill();
+    let _ = stranger.wait();
+}
