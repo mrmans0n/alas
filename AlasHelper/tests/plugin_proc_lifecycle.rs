@@ -509,3 +509,21 @@ fn a_retry_never_reports_a_run_whose_supervisor_is_gone() {
     let _ = stranger.kill();
     let _ = stranger.wait();
 }
+
+#[test]
+fn a_retry_overlapping_the_original_spawn_joins_its_claim() {
+    let mut helper = Helper::start();
+    // The original spawn created the directory and is still writing its claim
+    // when the retry after a dropped connection arrives.
+    let dir = helper.dir("overlap");
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = dir.clone();
+    let original = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(claim.join("owner"), LEASE).unwrap();
+        std::fs::write(claim.join("started"), "").unwrap();
+    });
+    let retried = helper.spawn("overlap", &["/bin/sh", "-c", "printf twice"], json!({}));
+    original.join().unwrap();
+    assert_eq!(retried["spawned"], false);
+}

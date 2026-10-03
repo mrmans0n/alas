@@ -204,15 +204,8 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
         .ok_or_else(|| jsonrpc_error(-32003, format!("worktree {} does not exist", params.cwd)))?;
 
     if let Some(dir) = owned_dir(&params.proc_id, &params.lease)? {
-        // A retried spawn: the first one went through if it started the
-        // process, whose end `settled_exit` records if its supervisor is
-        // gone, or still may if its supervisor lives. Not run twice.
-        if dir.join("started").is_file() || read_exit(&dir).is_some() {
-            settled_exit(&dir);
-            return Ok(json!({ "procId": params.proc_id, "spawned": false }));
-        }
-        if supervisor_alive(&dir) && await_start(&dir)? {
-            return Ok(json!({ "procId": params.proc_id, "spawned": false }));
+        if let Some(joined) = join_claim(&dir, &params.proc_id)? {
+            return Ok(joined);
         }
         // An earlier helper died before anything started it: nothing owns
         // this directory but its owner file, so it goes and the spawn runs.
@@ -232,9 +225,33 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
     let root = root_dir()?;
     create_private_dir_all(&root)?;
     let dir = root.join(&params.proc_id);
-    // `create_dir` fails if it exists, so two racing spawns can't share it.
-    std::fs::create_dir(&dir)
-        .map_err(|error| jsonrpc_error(-32050, format!("process directory failed: {error}")))?;
+    // `create_dir` fails if it exists, so two racing spawns can't share it. A retry that overlaps the original
+    // spawn (the connection dropped while it ran) finds the directory here: it joins that claim once its owner is
+    // written, rather than reporting a failure while the original starts the command.
+    match std::fs::create_dir(&dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !dir.join("owner").is_file() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if owned_dir(&params.proc_id, &params.lease)?.is_some() {
+                if let Some(joined) = join_claim(&dir, &params.proc_id)? {
+                    return Ok(joined);
+                }
+            }
+            return Err(jsonrpc_error(
+                -32050,
+                "another spawn of this process is still starting",
+            ));
+        }
+        Err(error) => {
+            return Err(jsonrpc_error(
+                -32050,
+                format!("process directory failed: {error}"),
+            ));
+        }
+    }
     let launch = Launch {
         executable: executable.display().to_string(),
         argv: params.argv,
@@ -314,6 +331,21 @@ fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
         -32050,
         "supervisor did not start the process",
     ))
+}
+
+/// A retried spawn's answer when an earlier one owns the claim: it went
+/// through if it started the process, whose end `settled_exit` records if its
+/// supervisor is gone, or still may if its supervisor lives. Not run twice.
+/// None when nothing started it and nothing will.
+fn join_claim(dir: &Path, proc_id: &str) -> Result<Option<Value>, HelperError> {
+    if dir.join("started").is_file() || read_exit(dir).is_some() {
+        settled_exit(dir);
+        return Ok(Some(json!({ "procId": proc_id, "spawned": false })));
+    }
+    if supervisor_alive(dir) && await_start(dir)? {
+        return Ok(Some(json!({ "procId": proc_id, "spawned": false })));
+    }
+    Ok(None)
 }
 
 /// True once the supervisor started the process, false when it hasn't in
