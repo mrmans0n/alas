@@ -540,10 +540,13 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
             withAnimation(.snappy(duration: 0.2)) { position.scrollTo(id: id, anchor: .center) }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
-            if !parked, viewportHeight > 0,
-               new.contentSize.height >= new.containerSize.height + SidebarFilterRowMetrics.parkedOffset {
+            if !parked, let initialOffset = WorktreeSidebarFilter.initialParkingOffset(
+                contentHeight: new.contentSize.height,
+                viewportHeight: new.containerSize.height,
+                slot: SidebarFilterRowMetrics.parkedOffset
+            ) {
                 parked = true
-                position.scrollTo(y: SidebarFilterRowMetrics.parkedOffset)
+                position.scrollTo(y: initialOffset)
             }
             onScroll(new.contentOffset.y + new.contentInsets.top)
         }
@@ -671,7 +674,7 @@ private struct SidebarWorktreeFilterField: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 24)
-        .background(theme.color("bg-1"), in: RoundedRectangle(cornerRadius: 6))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color(focused.wrappedValue ? "accent" : "line"), lineWidth: 0.5)
