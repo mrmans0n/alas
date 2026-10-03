@@ -77,7 +77,7 @@ respond when it needs you.
   OpenCode, OMP, and Pi, **Settings → Agents → Disable native subagents** removes
   the agent's own subagent tool (Claude's Agent/Task and Workflow tools, plus
   SendMessage and ListAgents, which reach other Claude Code sessions; Codex's
-  multi-agent tools; OpenCode's task tool; OMP's task tool and eval `agent()`;
+  multi-agent tools; OpenCode 1.x's task tool; OMP's task tool and eval `agent()`;
   the tools of known Pi subagent extensions, starting with `pi-subagents`;
   Codex, OpenCode, OMP, and Pi in local sessions only) so it delegates through Alas
   child sessions instead. It applies to sessions created after you change it,
