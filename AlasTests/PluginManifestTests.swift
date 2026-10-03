@@ -109,6 +109,25 @@ struct PluginManifestTests {
         #expect(throws: expected) { try PluginManifest.parse(Data(json.utf8)) }
     }
 
+    /// `remote` is API 11, which this Alas does not advertise yet, so the test widens the supported range.
+    @Test(arguments: [
+        (manifest(api: 10, #","capabilities":["files.read"],"remote":true"#), PluginManifestError?.some(.needsNewerAPI(#""remote""#, api: 11))),
+        (manifest(api: 11, #","capabilities":["network"],"network":["a.com"],"remote":true"#), .invalidRemote),
+        (manifest(api: 11, #","remote":"yes""#), .malformed),
+        (manifest(api: 11, #","capabilities":["files.read"],"remote":true"#), nil),
+        (manifest(api: 11, processes(#"{"id":"a","command":["ls"]}"#) + #","remote":true"#), nil),
+        (manifest(api: 10, #","remote":false"#), nil),
+    ])
+    func remoteNeedsAPI11AndAFileOrProcessCapability(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8), supportedAPIs: 4...11)
+            #expect(expected == nil)
+            #expect(parsed.remote == json.contains(#""remote":true"#))
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {
         let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"a","title":"A","kind":"view"},{"id":"b","title":"B"}]}}"#.utf8))
         #expect(manifest.tabs.map(\.kind) == [.view, .canvas])

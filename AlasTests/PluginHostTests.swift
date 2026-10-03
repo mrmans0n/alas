@@ -147,7 +147,7 @@ struct PluginHostTests {
                 worktreeLocation: { id in
                     switch id {
                     case "wt": .local(worktreeRoot ?? URL(fileURLWithPath: "/tmp/wt"))
-                    case "far": .remote(host: "devbox")
+                    case "far": .remote(host: "devbox", root: "/srv/wt")
                     default: nil
                     }
                 }),

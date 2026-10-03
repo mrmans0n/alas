@@ -93,9 +93,10 @@ struct PluginHostActions {
     }
 }
 
-enum PluginWorktreeLocation: Equatable {
+enum PluginWorktreeLocation: Equatable, Sendable {
     case local(URL)
-    case remote(host: String)
+    /// `root` is the worktree's real path on `host`.
+    case remote(host: String, root: String)
 }
 
 /// Runs one plugin in one project.
@@ -800,19 +801,17 @@ final class PluginHost {
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) { PluginFiles.read(params.path, in: $0).map(PluginFileReadResult.init) }
+            return fileReply(id, params.worktree, .read(path: params.path))
         case "file/list":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileListParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) { PluginFiles.list(params.dir ?? "", in: $0) }
+            return fileReply(id, params.worktree, .list(dir: params.dir ?? ""))
         case "file/write":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileWriteParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) {
-                PluginFiles.write(params.path, content: params.content, in: $0).map { PluginEmptyPayload() }
-            }
+            return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -880,13 +879,18 @@ final class PluginHost {
     }
 
     /// The filesystem work runs off the main actor, so a large folder or a slow disk does not stall the app; the
-    /// answer comes in a later delivery.
-    private func fileReply<Result: Encodable & Sendable>(
-        _ id: JSONRPCID, _ worktree: String, _ work: @escaping @Sendable (URL) -> Swift.Result<Result, PluginFilesError>
-    ) -> Data? {
-        guard case .local(let root)? = actions.worktreeLocation(worktree) else { return worktreeRefusal(id, worktree) }
+    /// answer comes in a later delivery. A remote request holds an SSH round trip, so it counts as one in flight too.
+    private func fileReply(_ id: JSONRPCID, _ worktree: String, _ request: PluginFileRequest) -> Data? {
+        let work: @Sendable () async -> Result<PluginFileReply, PluginFilesError>
+        switch PluginFiles.route(actions.worktreeLocation(worktree), worktree: worktree, remote: manifest.remote) {
+        case .refused(let reason): return errorReply(id, code: -32003, reason)
+        case .local(let root):
+            work = { await Task.detached(priority: .userInitiated) { PluginFiles.perform(request, in: root) }.value }
+        case .remote(let host, let root):
+            work = { await PluginFiles.remote(request, host: host, root: root) }
+        }
         return replyLater(id) { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { work(root) }.value
+            let outcome = await work()
             guard let self else { return Data() }
             switch outcome {
             case .success(let result): return self.encode(PluginResponse(id: id, result: result, error: nil))
@@ -895,13 +899,12 @@ final class PluginHost {
         }
     }
 
-    /// Processes and files run on this Mac, so a worktree on a remote host is out of reach.
+    /// Processes run on this Mac, so a worktree on a remote host is out of reach.
     private func worktreeRefusal(_ id: JSONRPCID, _ worktree: String) -> Data? {
-        guard case .remote(let host)? = actions.worktreeLocation(worktree) else {
+        guard case .remote(let host, _)? = actions.worktreeLocation(worktree) else {
             return errorReply(id, code: -32003, "unknown worktree \(worktree)")
         }
-        return errorReply(
-            id, code: -32003, "worktree \(worktree) is on remote host \(host); plugins can't run commands or use files there yet")
+        return errorReply(id, code: -32003, PluginFiles.remoteRefusal(worktree, host: host))
     }
 
     // MARK: - Processes

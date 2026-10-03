@@ -188,6 +188,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case invalidPanel(String)
     case invalidProcess(String)
     case invalidPrompt(String)
+    case invalidRemote
 
     var description: String {
         switch self {
@@ -225,6 +226,8 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "invalid process: \(reason)"
         case .invalidPrompt(let reason):
             "invalid prompt contribution: \(reason)"
+        case .invalidRemote:
+            "\"remote\" needs capability \"files.read\", \"files.write\" or \"process.exec\""
         }
     }
 }
@@ -262,11 +265,16 @@ struct PluginManifest: Equatable, Sendable {
     var processes: [PluginProcessContribution] = []
     /// Slash commands for the agent composer.
     var prompts: [PluginPromptContribution] = []
+    /// `process.*` and `file/*` also work on worktrees of SSH projects, run on that host (API 11).
+    var remote = false
 
     /// The panel Settings → Plugins opens with Configure… (API 9).
     var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
 
-    static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
+    /// `supportedAPIs` is wider only in tests, for API 11 features Alas does not advertise until all of them land.
+    static func parse(
+        _ data: Data, supportedAPIs: ClosedRange<Int> = supportedAPIVersions
+    ) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
         do {
             raw = try JSONDecoder().decode(Raw.self, from: data)
@@ -287,7 +295,7 @@ struct PluginManifest: Equatable, Sendable {
         let entry = try required(raw.entry, "entry")
 
         guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil else { throw .invalidID(id) }
-        guard supportedAPIVersions.contains(api) else { throw .unsupportedAPI(api) }
+        guard supportedAPIs.contains(api) else { throw .unsupportedAPI(api) }
         // Features newer than the manifest's API are refused, so a plugin never half-works on an older Alas.
         var capabilities: [PluginCapability] = []
         for name in raw.capabilities ?? [] {
@@ -334,10 +342,17 @@ struct PluginManifest: Equatable, Sendable {
         } else if !processes.isEmpty {
             throw .invalidProcess("\"processes\" needs capability \"process.exec\"")
         }
+        let remote = raw.remote ?? false
+        if remote {
+            guard api >= 11 else { throw .needsNewerAPI("\"remote\"", api: 11) }
+            guard capabilities.contains(where: { [.filesRead, .filesWrite, .processExec].contains($0) }) else {
+                throw .invalidRemote
+            }
+        }
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network, processes: processes, prompts: prompts)
+            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote)
     }
 
     static func isValidHost(_ host: String) -> Bool {
@@ -572,10 +587,11 @@ private struct Raw: Decodable {
     let settings: [RawSetting]?
     let network: [String]?
     let processes: [RawProcess]?
+    let remote: Bool?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, contributes }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -591,6 +607,7 @@ private struct Raw: Decodable {
         settings = container.contains(.settings) ? try container.decode([RawSetting].self, forKey: .settings) : nil
         network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
         processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
+        remote = container.contains(.remote) ? try container.decode(Bool.self, forKey: .remote) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)
