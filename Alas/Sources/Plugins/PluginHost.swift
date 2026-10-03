@@ -1001,6 +1001,7 @@ final class PluginHost {
             var stderr = Data()
             var truncated = false
             var exit: Int32 = -1
+            var stoppedAtLimit = false
             for await event in handle.events {
                 switch event {
                 case .stdout(let chunk), .stderr(let chunk):
@@ -1009,12 +1010,15 @@ final class PluginHost {
                     if case .stdout = event { stdout.append(chunk.prefix(room)) } else { stderr.append(chunk.prefix(room)) }
                 case .truncated:
                     truncated = true
+                case .timedOut:
+                    stoppedAtLimit = true
                 case .exit(let code):
                     exit = code
                 }
             }
             timeout.cancel()
-            let timedOut = await timeout.value
+            // A remote helper may reach the limit first: its clock starts before the run is answered here.
+            let timedOut = await timeout.value || stoppedAtLimit
             guard let self else { return Data() }
             if self.instance == instance { self.processes[run] = nil }
             return self.processRunReply(
@@ -1055,7 +1059,7 @@ final class PluginHost {
             case .stdout(let chunk), .stderr(let chunk):
                 guard let index else { continue }
                 processRuns[index].append(chunk, keeping: Self.processRunOutputBytes)
-            case .truncated:
+            case .truncated, .timedOut:
                 break
             case .exit(let code):
                 exit = code

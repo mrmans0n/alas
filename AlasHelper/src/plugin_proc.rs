@@ -537,7 +537,10 @@ fn login_env() -> &'static [(String, String)] {
 /// and values holding newlines can't corrupt what's read back.
 fn capture_login_env(shell: &Path, home: &Path) -> Option<Vec<(String, String)>> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     let script = format!("printf '%s' '{ENV_BEGIN}'; env -0; printf '%s' '{ENV_END}'");
+    // Its own group, so whatever a startup file leaves running, holding the
+    // pipe open, goes with it.
     let mut child = Command::new(shell)
         .args(["-l", "-c", &script])
         .current_dir(home)
@@ -545,27 +548,49 @@ fn capture_login_env(shell: &Path, home: &Path) -> Option<Vec<(String, String)>>
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
+    let (sender, output) = std::sync::mpsc::channel();
+    thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stdout.read_to_end(&mut bytes);
-        bytes
+        let _ = sender.send(bytes);
     });
+    let pid = child.id() as i32;
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
+    let exited = loop {
+        // Not reaped yet: until it is, its pid, and so its group id, stays ours.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: waitid with a valid out pointer, on our own child.
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        // SAFETY: reading the pid field waitid filled in, zero when nothing exited.
+        if waited == 0 && unsafe { info.si_pid() } == pid {
+            break true;
         }
+        if waited != 0 || Instant::now() >= deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    // SAFETY: plain kill of the group the unreaped shell still leads.
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    let _ = child.wait();
+    // ponytail: a process that left the group keeps the pipe; the capture then
+    // gives up after a second and the helper's own environment is used.
+    let bytes = output.recv_timeout(Duration::from_secs(1)).ok()?;
+    if !exited {
+        return None;
     }
-    parse_env_block(&reader.join().ok()?)
+    parse_env_block(&bytes)
 }
 
 fn parse_env_block(bytes: &[u8]) -> Option<Vec<(String, String)>> {
@@ -1381,6 +1406,26 @@ mod tests {
                 .iter()
                 .all(|(key, _)| !key.starts_with("ALAS_"))
         );
+    }
+
+    #[test]
+    fn a_profile_that_leaves_a_process_holding_stdout_does_not_hold_the_capture() {
+        let home = std::env::temp_dir().join(format!("alas-pproc-bg-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join(".profile"),
+            "sleep 300 &\nexport ALAS_TEST_BG=yes\n",
+        )
+        .unwrap();
+        let started = Instant::now();
+        let env = capture_login_env(Path::new("/bin/sh"), &home).expect("captures");
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(env.contains(&("ALAS_TEST_BG".into(), "yes".into())));
     }
 
     #[cfg(unix)]

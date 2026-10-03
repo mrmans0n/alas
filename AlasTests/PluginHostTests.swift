@@ -1244,6 +1244,24 @@ struct PluginHostTests {
         #expect(launcher.handles.allSatisfy { $0.directory.path == "/tmp/wt" })
     }
 
+    /// A run the remote helper stopped at the time limit, before Alas's own clock got there, still says it timed out.
+    @Test(arguments: [true, false])
+    func processRunReportsAHelperTimeout(timedOut: Bool) async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1))]], grants: [.processExec], manifest: Self.processManifest,
+            launcher: launcher)
+        await host.activate()
+        let output = PluginProcessOutput(keep: .head, limit: 16, interval: .zero)
+        if timedOut { output.markTimedOut() }
+        output.finish(exit: 143)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        for event in events { launcher.handles[0].emit(event) }
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":143"#) == true })
+        #expect(lastReply(host)?.contains(#""timedOut":\#(timedOut)"#) == true)
+    }
+
     /// Two at a time, output capped, and an instance that ends stops its processes and never hears from them.
     @Test func processRunRepliesWithCappedOutputOnlyToItsInstance() async throws {
         let launcher = FakeLauncher()

@@ -42,6 +42,7 @@ struct RemotePluginProcAttachResult: Decodable, Sendable {
     let truncated: Bool
     let chunks: [RemotePluginProcChunk]
     let exit: Int32?
+    let timedOut: Bool?
 }
 
 struct RemotePluginProcExit: Codable, Equatable, Sendable {
@@ -166,18 +167,20 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
                 // ponytail: a dropped connection is retried for about two minutes; the helper's lease stops the
                 // process once Alas gives up.
                 failures += 1
-                if case .jsonrpc? = error as? RemoteHelperClientError { return finish(exit: -1, truncated: false) }
-                if failures > 60 { return finish(exit: -1, truncated: false) }
+                if case .jsonrpc? = error as? RemoteHelperClientError { return finish(exit: -1) }
+                if failures > 60 { return finish(exit: -1) }
                 try? await Task.sleep(for: .seconds(2))
                 continue
             }
             let (result, stream) = attached
             for chunk in result.chunks { append(chunk, next: &next) }
-            if let exit = result.exit { return finish(exit: exit, truncated: result.truncated) }
+            if let exit = result.exit {
+                return finish(exit: exit, truncated: result.truncated, timedOut: result.timedOut == true)
+            }
             for await event in stream {
                 switch event {
                 case .output(let chunk): append(chunk, next: &next)
-                case .exit(let exit): return finish(exit: exit.exit, truncated: exit.truncated)
+                case .exit(let exit): return finish(exit: exit.exit, truncated: exit.truncated, timedOut: exit.timedOut)
                 }
             }
         }
@@ -198,8 +201,9 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
         return data.suffix(Int(end - max(offset, next)))
     }
 
-    private func finish(exit: Int32, truncated: Bool) {
+    private func finish(exit: Int32, truncated: Bool = false, timedOut: Bool = false) {
         if truncated { output.markTruncated() }
+        if timedOut { output.markTimedOut() }
         output.finish(exit: exit)
         let client = lock.withLock { self.client }
         Task { [procId, lease] in try? await client?.releasePluginProc(procId: procId, lease: lease) }
