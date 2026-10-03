@@ -38,12 +38,21 @@ struct CommitMessageSuggestionInput: Equatable, Sendable {
             ["diff", "--cached", "--stat", "--no-color"],
             worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.statOutputByteLimit
         )
+        // Renames and copies are read as pairs first: split across tier reads,
+        // Git would report a moved file as a full addition plus a deletion.
+        let renames = try await capped(
+            ["diff", "--cached", "--name-status", "-z", "-M", "--diff-filter=RC"],
+            worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.renameInventoryByteLimit
+        )
+        let pairedPaths = CommitMessageSuggestionPolicy.renamedPaths(nameStatus: renames.stdout, truncated: renames.truncated)
+        var reads = CommitMessageSuggestionPolicy.tierPathspecs.map { $0 + pairedPaths.map { ":(exclude,literal)\($0)" } }
+        if !pairedPaths.isEmpty { reads.insert(pairedPaths.map { ":(literal)\($0)" }, at: 0) }
         // One capped read per priority tier, selected by pathspec, so noisy
         // files that sort first cannot spend the cap before source changes.
         var diffs: [String] = []
-        for pathspecs in CommitMessageSuggestionPolicy.tierPathspecs {
+        for pathspecs in reads {
             let diff = try await capped(
-                ["diff", "--cached", "--no-color", "--no-ext-diff", "--"] + pathspecs,
+                ["diff", "--cached", "--no-color", "--no-ext-diff", "-M", "--"] + pathspecs,
                 worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.diffOutputByteLimit
             )
             diffs.append(diff.truncated ? CommitMessageSuggestionPolicy.droppingPartialTail(diff.stdout) : diff.stdout)
@@ -88,6 +97,9 @@ enum CommitMessageSuggestionPolicy {
     static let diffCharacterBudgets = [24_000, 5_000, 0]
     static let diffOutputByteLimit = 512_000
     static let logOutputByteLimit = 16_000
+    static let renameInventoryByteLimit = 64_000
+    /// Rename pairs beyond this are left to the tier reads.
+    static let maximumRenamePairs = 100
     static let statOutputByteLimit = 64_000
     private static let statCharacterLimit = 2_000
     private static let contextCharacterLimit = 300
@@ -242,6 +254,25 @@ enum CommitMessageSuggestionPolicy {
         }
         flushFile()
         return files
+    }
+
+    /// Both paths of every rename or copy in `git diff --name-status -z`
+    /// output, up to `maximumRenamePairs`. An entry cut short by a byte cap is
+    /// dropped.
+    static func renamedPaths(nameStatus: String, truncated: Bool) -> [String] {
+        var fields = nameStatus.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
+        if fields.last == "" { fields.removeLast() }
+        var pairs: [[String]] = []
+        var index = 0
+        while index < fields.count {
+            let pathCount = fields[index].hasPrefix("R") || fields[index].hasPrefix("C") ? 2 : 1
+            guard index + pathCount < fields.count else { break }
+            if pathCount == 2 { pairs.append([fields[index + 1], fields[index + 2]]) }
+            index += pathCount + 1
+        }
+        // A capped read may end exactly on a field boundary of a cut entry.
+        if truncated, !pairs.isEmpty { pairs.removeLast() }
+        return pairs.prefix(maximumRenamePairs).flatMap { $0 }
     }
 
     /// Cuts a diff read through a byte cap back to its last complete hunk or

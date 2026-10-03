@@ -113,24 +113,32 @@ struct CommitMessageSuggestionTests {
     }
 
     /// Git selects each tier itself, so a large noisy file that sorts first
-    /// cannot crowd source changes out of the capped reads.
+    /// cannot crowd source changes out of the capped reads. A move across
+    /// tiers still reads as a rename, not as an addition plus a deletion.
     @Test func stagedDiffIsReadSourceFirstByPathspecTier() async throws {
         let repository = try await CheckpointTestRepository.make()
         defer { repository.remove() }
+        try repository.write((1...20).map { "let line\($0) = \($0)" }.joined(separator: "\n"), to: "Vendor/Move.swift")
+        try await repository.git(["add", "-A"])
+        try await repository.git(["commit", "-q", "-m", "vendor"])
         for (path, text) in [
             ("Alpha/yarn.lock", "lock\n"), ("Vendor/lib/Thing.go", "package lib\n"),
             ("Docs/guide.md", "Guide\n"), (".gitignore", "build\n"), ("Sources/Sync.swift", "let sync = 1\n"),
         ] {
             try repository.write(text, to: path)
         }
+        try await repository.git(["mv", "Vendor/Move.swift", "Sources/Move.swift"])
         try await repository.git(["add", "-A"])
 
         let input = try await CommitMessageSuggestionInput.load(worktreePath: repository.root, ticketTitle: nil)
 
         let order = CommitMessageSuggestionPolicy.fileDiffs(input.diff).map(\.path)
-        #expect(order == ["Sources/Sync.swift", ".gitignore", "Docs/guide.md", "Alpha/yarn.lock", "Vendor/lib/Thing.go"])
+        #expect(order == [
+            "Sources/Move.swift", "Sources/Sync.swift", ".gitignore", "Docs/guide.md", "Alpha/yarn.lock", "Vendor/lib/Thing.go",
+        ])
         #expect(order.map(CommitMessageSuggestionPolicy.priority(forPath:))
-            == [.source, .docsOrConfig, .docsOrConfig, .noisy, .noisy])
+            == [.source, .source, .docsOrConfig, .docsOrConfig, .noisy, .noisy])
+        #expect(input.diff.contains("rename from Vendor/Move.swift"))
     }
 
     @Test func cappedDiffIsCutBackToTheLastCompleteHunk() {
