@@ -18,6 +18,7 @@ struct PluginsPane: View {
     let state: AppState
     @Environment(\.theme) var theme
     @State private var approving: PluginManager.Plugin?
+    @State private var configuring: PluginPanelTarget?
     /// Install or update failures, by catalog entry id, until the next attempt.
     @State private var installFailures: [String: String] = [:]
     @State private var busy: Set<String> = []
@@ -52,6 +53,9 @@ struct PluginsPane: View {
                 }
             }
         }
+        .sheet(item: $configuring) { target in
+            PluginConfigureSheet(target: target) { configuring = nil }
+        }
     }
 
     @ViewBuilder
@@ -78,6 +82,14 @@ struct PluginsPane: View {
                         AlasToggle(on: Binding(
                             get: { manager.isEnabled(plugin) },
                             set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
+                        if let panel = plugin.manifest.configurePanel {
+                            let host = state.pluginConfigureHost(plugin)
+                            AlasButton(title: "Configure…", style: .normal) {
+                                if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
+                            }
+                            .disabled(host == nil)
+                            .help(host == nil ? "Open a project to configure this plugin" : "")
+                        }
                         AlasButton(title: "Revoke Approval", style: .normal) { Task { await manager.revoke(plugin) } }
                     } else {
                         AlasButton(title: "Approve…", style: .normal) { approving = plugin }
@@ -269,6 +281,43 @@ private struct PluginSecretSetting: View {
     private func commit() {
         guard !draft.isEmpty, settings.setSecret(key, draft) else { return }
         draft = ""
+    }
+}
+
+/// A plugin's configure panel (API 9), rendered by one of its running instances, which hears `panel/visible` while
+/// the sheet is open.
+private struct PluginConfigureSheet: View {
+    let target: PluginPanelTarget
+    let done: () -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        let host = target.host
+        VStack(spacing: 0) {
+            Text(target.title).font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            Divider()
+            Group {
+                if case .failed(let reason) = host.state {
+                    Text("Plugin stopped: \(reason)").foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center)
+                } else if host.state == .active, host.panelTree(for: target.place) != nil {
+                    PluginViewTabView(host: host, panel: target.place.panel)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            HStack {
+                Spacer()
+                // Escape, not Return: Return belongs to the panel's text fields.
+                Button("Done", action: done).keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+        }
+        .frame(minWidth: 400, idealWidth: 560, maxWidth: .infinity, minHeight: 300, idealHeight: 480, maxHeight: .infinity)
+        .pluginPanelsVisible([target])
     }
 }
 

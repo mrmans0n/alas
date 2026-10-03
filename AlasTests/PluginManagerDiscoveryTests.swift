@@ -92,13 +92,13 @@ struct PluginManagerDiscoveryTests {
     }
 
     @MainActor
-    func approvedManager(projects: ProjectList) async throws -> (PluginManager, cleanup: () -> Void) {
+    func approvedManager(projects: ProjectList, api: Int = 4) async throws -> (PluginManager, cleanup: () -> Void) {
         let root = FileManager.default.temporaryDirectory.appending(path: "PluginReconcile-\(UUID().uuidString)")
         let suite = "PluginManagerTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         let dir = root.appending(path: "p")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(#"{"id":"io.x.p","name":"P","version":"1","api":4,"entry":"plugin.js"}"#.utf8)
+        try Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(api),"entry":"plugin.js"}"#.utf8)
             .write(to: dir.appending(path: "plugin.json"))
         try PluginJSFixture.source([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]])
             .write(to: dir.appending(path: "plugin.js"))
@@ -123,6 +123,23 @@ struct PluginManagerDiscoveryTests {
         await manager.reconcile()
         #expect(manager.hostsByKey.keys.map(\.projectID) == ["b"])
         #expect(first.state == .stopped)
+        await manager.shutdown()
+    }
+
+    /// A plugin-scoped write reaches the plugin's other instances, not the one that wrote it.
+    @MainActor
+    @Test func pluginStorageChangesReachEveryOtherInstance() async throws {
+        let projects = ProjectList([Self.project("a"), Self.project("b"), Self.project("c")])
+        let (manager, cleanup) = try await approvedManager(projects: projects, api: 9)
+        defer { cleanup() }
+        let writer = try #require(manager.host(pluginID: "io.x.p", projectID: "a"))
+        await manager.pluginStorageChanged("k", by: writer)
+        let told = ["a", "b", "c"].map { project in
+            manager.host(pluginID: "io.x.p", projectID: project)?.trace.contains {
+                $0.text.contains(#""method":"storage/changed""#) && $0.text.contains(#""scope":"plugin""#) && $0.text.contains(#""key":"k""#)
+            } == true
+        }
+        #expect(told == [false, true, true])
         await manager.shutdown()
     }
 

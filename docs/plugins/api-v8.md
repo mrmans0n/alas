@@ -7,6 +7,8 @@
 
 API 8 lets a command open the plugin's tab, and adds two view nodes: a spinner
 for loading states and a link that opens in the browser.
+[API 9](api-v9.md) adds configure screens, plugin-scoped storage, runtime
+prompts and tab visibility.
 
 ## The `api` field
 

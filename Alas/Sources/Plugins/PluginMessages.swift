@@ -84,6 +84,11 @@ struct PluginPanelVisibleParams: Codable, Equatable, Sendable {
     let visible: Bool
 }
 
+struct PluginTabVisibleParams: Codable, Equatable, Sendable {
+    let tab: Int
+    let visible: Bool
+}
+
 struct PluginClickParams: Codable, Equatable, Sendable {
     let tab: Int
     let region: String
@@ -188,6 +193,22 @@ struct PluginStorageKeyParams: Codable, Sendable {
 
 struct PluginStorageKeysResult: Codable, Equatable, Sendable {
     let keys: [String]
+}
+
+// API 9.
+
+struct PluginStorageChangedParams: Codable, Equatable, Sendable {
+    let scope: String
+    let key: String
+}
+
+struct PluginPromptsSetParams: Decodable, Sendable {
+    struct Prompt: Decodable, Sendable {
+        let name: String?
+        let description: String?
+    }
+
+    let prompts: [Prompt]
 }
 
 // API 5.

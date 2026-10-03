@@ -31,7 +31,7 @@ struct PluginWorkspaceSnapshotTests {
             .init(worktree: worktree("a", "main"), dirty: .dirty(fileCount: 3, conflictCount: 1), sessions: [
                 .init(id: "s1", agent: "claude", title: "Fix bug", state: .running,
                       plan: AgentSidebarPlanProgress(completed: 2, total: 5, currentStep: "Write test")),
-            ]),
+            ], isMain: true),
             .init(worktree: worktree("b", "feature"), dirty: .unknown, sessions: [
                 .init(id: "s2", agent: "codex", title: "Review", state: .permissionRequest, plan: nil),
             ]),
@@ -40,7 +40,7 @@ struct PluginWorkspaceSnapshotTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(snapshot), as: UTF8.self)
-        #expect(json == #"{"worktrees":[{"branch":"main","current":true,"dirty":{"conflicts":1,"files":3},"id":"a","sessions":[{"agent":"claude","id":"s1","plan":{"completed":2,"total":5},"state":"running","title":"Fix bug"}]},{"branch":"feature","current":false,"id":"b","sessions":[{"agent":"codex","id":"s2","state":"permission_request","title":"Review"}]}]}"#)
+        #expect(json == #"{"worktrees":[{"branch":"main","current":true,"dirty":{"conflicts":1,"files":3},"id":"a","main":true,"sessions":[{"agent":"claude","id":"s1","plan":{"completed":2,"total":5},"state":"running","title":"Fix bug"}]},{"branch":"feature","current":false,"id":"b","sessions":[{"agent":"codex","id":"s2","state":"permission_request","title":"Review"}]}]}"#)
     }
 
     struct EventCase: Sendable {

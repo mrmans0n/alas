@@ -6,9 +6,17 @@ struct PluginViewNode: Equatable, Sendable {
         case vstack, hstack, scroll, text, badge, button, textField, menu, card, divider, spacer
         // API 8.
         case progress, link
+        // API 9.
+        case markdown
 
         /// The plugin API that introduced the kind; an older plugin that sends it renders an invalid tree.
-        var api: Int { self == .progress || self == .link ? 8 : 4 }
+        var api: Int {
+            switch self {
+            case .progress, .link: 8
+            case .markdown: 9
+            default: 4
+            }
+        }
     }
     enum Tone: String, Sendable { case normal, dim, accent, warn, danger }
     struct MenuItem: Equatable, Sendable {
@@ -18,7 +26,7 @@ struct PluginViewNode: Equatable, Sendable {
     let id: String
     let kind: Kind
     var children: [PluginViewNode] = []   // stacks, card; scroll has exactly one
-    var text: String? = nil               // text, badge, progress
+    var text: String? = nil               // text, badge, progress, markdown
     var label: String? = nil              // button, menu, link
     var url: URL? = nil                   // link: absolute https
     var value: String? = nil              // textField
@@ -46,6 +54,8 @@ struct PluginViewTreeError: Error, Equatable, CustomStringConvertible {
 /// Decodes and validates the untrusted `root` JSON a plugin sends with `view/render`.
 enum PluginViewTree {
     static let maxNodes = 2_000, maxDepth = 16, maxString = 4_000, maxIDBytes = 64, maxMenuItems = 64, maxURLBytes = 2_048
+    /// A markdown node's text has its own bound, above `maxString` (API 9).
+    static let maxMarkdownBytes = 32 * 1024
 
     /// Decodes and validates `root` (the raw JSON of the `root` field) from a plugin of manifest `api`. Returns the
     /// reason on failure.
@@ -171,6 +181,10 @@ enum PluginViewTree {
         case .text, .badge: node.text = try string(raw.text, required: "text")
         case .button: node.label = try string(raw.label, required: "label")
         case .progress: node.text = try string(raw.text)
+        case .markdown:
+            guard let text = raw.text else { throw err("\(prefix) needs text") }
+            guard text.utf8.count <= maxMarkdownBytes else { throw err("\(prefix) text is longer than \(maxMarkdownBytes) bytes") }
+            node.text = text
         case .link:
             node.label = try string(raw.label, required: "label")
             guard let rawURL = raw.url else { throw err("\(prefix) needs url") }

@@ -10,6 +10,8 @@ struct PluginWorkspaceSnapshot: Codable, Equatable, Sendable {
         /// Omitted until the first status scan finishes.
         let dirty: Dirty?
         let sessions: [Session]
+        /// True on the project's main worktree, omitted on the others.
+        var main: Bool?
     }
 
     struct Dirty: Codable, Equatable, Sendable {
@@ -46,6 +48,7 @@ extension PluginWorkspaceSnapshot {
         let worktree: Worktree
         let dirty: WorktreeDirtyState
         let sessions: [SessionInput]
+        var isMain = false
     }
 
     init(worktrees: [WorktreeInput], selectedWorktreeId: String?) {
@@ -65,7 +68,8 @@ extension PluginWorkspaceSnapshot {
                         id: session.id, agent: session.agent, title: session.title,
                         state: Self.wireName(session.state),
                         plan: session.plan.map { Plan(completed: $0.completed, total: $0.total) })
-                })
+                },
+                main: input.isMain ? true : nil)
         })
     }
 
