@@ -225,6 +225,20 @@ struct CommitMessageSuggestionTests {
         #expect(result == expected)
     }
 
+    /// A reopened draft still holds Alas's text, so a restage can withdraw it.
+    @Test func restoredSuggestionStaysAlasToWithdraw() {
+        var state = CommitMessageSuggestionState(
+            restoring: .init(subject: Self.suggestion.subject, body: Self.suggestion.body, indexKey: "a")
+        )
+
+        let withdrawn = state.withdrawStale(
+            indexKey: "b", subject: Self.suggestion.subject, body: Self.suggestion.body ?? ""
+        )
+
+        #expect(withdrawn)
+        #expect(state.applied == nil)
+    }
+
     @Test func supersededRequestCannotApply() throws {
         var state = CommitMessageSuggestionState()
         let oldRequest = state.begin(indexKey: "a", subject: "", body: "")

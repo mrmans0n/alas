@@ -314,13 +314,13 @@ struct DraftCommitTabView: View {
             }
         }
         .onChange(of: subject) { _, new in
-            persist(subject: new)
             messageSuggestion.recordEdit(subject: new, body: bodyText)
+            persist(subject: new, suggestion: .some(messageSuggestion.applied))
             releaseMessageSuggestionIfIdle()
         }
         .onChange(of: bodyText) { _, new in
-            persist(body: new)
             messageSuggestion.recordEdit(subject: subject, body: new)
+            persist(body: new, suggestion: .some(messageSuggestion.applied))
             releaseMessageSuggestionIfIdle()
         }
         .onChange(of: amend) { _, new in
@@ -400,6 +400,8 @@ struct DraftCommitTabView: View {
         case .fill(let suggestion):
             subject = suggestion.subject
             bodyText = suggestion.body ?? ""
+            // Covers a refresh that yields the same text, which fires no change handler.
+            persist(suggestion: .some(messageSuggestion.applied))
         case .clear:
             subject = ""
             bodyText = ""
@@ -442,6 +444,8 @@ struct DraftCommitTabView: View {
     }
 
     private func hydrateFromTabState() {
+        // Before the fields, so their change handlers see Alas's own draft.
+        messageSuggestion = CommitMessageSuggestionState(restoring: tabState.messageSuggestion)
         subject = tabState.subject
         bodyText = tabState.bodyText
         amend = tabState.amend
@@ -449,8 +453,12 @@ struct DraftCommitTabView: View {
         selectedFileID = tabState.selectedPath.map { DiffReviewFileID(namespace: "staged", path: $0) }
     }
 
-    private func persist(subject: String? = nil, body: String? = nil, amend: Bool? = nil, selectedPath: String?? = nil) {
+    private func persist(
+        subject: String? = nil, body: String? = nil, amend: Bool? = nil, selectedPath: String?? = nil,
+        suggestion: CommitMessageSuggestionRecord?? = nil
+    ) {
         appState.tabs.updateDraftCommit(worktreeId: worktreeId, tabId: tabState.id) { s in
+            if let suggestion { s.messageSuggestion = suggestion }
             if let subject { s.subject = subject }
             if let body { s.bodyText = body }
             if let amend { s.amend = amend }

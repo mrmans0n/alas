@@ -5,6 +5,14 @@ struct CommitMessageSuggestion: Equatable, Sendable {
     let body: String?
 }
 
+/// An untouched suggestion and the staged index it describes. Saved with the
+/// draft so a reopened or restored tab still knows the text is Alas's.
+struct CommitMessageSuggestionRecord: Codable, Equatable, Sendable {
+    let subject: String
+    let body: String?
+    let indexKey: String
+}
+
 /// What the local model sees about the staged change. Built in Alas from git
 /// output so the prompt stays bounded no matter how large the index is.
 struct CommitMessageSuggestionInput: Equatable, Sendable {
@@ -443,13 +451,18 @@ struct CommitMessageSuggestionState {
 
     private var generation: UInt64 = 0
     private var pending: Pending?
-    private var applied: (suggestion: CommitMessageSuggestion, indexKey: String)?
+    /// The untouched suggestion in the fields, if any.
+    private(set) var applied: CommitMessageSuggestionRecord?
+
+    init(restoring applied: CommitMessageSuggestionRecord? = nil) {
+        self.applied = applied
+    }
 
     var isSuggesting: Bool { pending != nil }
 
     /// True while the fields show an untouched suggestion.
     func isShowingSuggestion(subject: String, body: String) -> Bool {
-        applied.map { $0.suggestion.subject == subject && ($0.suggestion.body ?? "") == body } ?? false
+        applied.map { $0.subject == subject && ($0.body ?? "") == body } ?? false
     }
 
     /// Starts a request for the staged index identified by `indexKey`, or
@@ -499,7 +512,7 @@ struct CommitMessageSuggestionState {
         guard let request = pending, request.id == id else { return nil }
         pending = nil
         if let suggestion, request.indexKey == indexKey, canFill(subject: subject, body: body) {
-            applied = (suggestion, indexKey)
+            applied = .init(subject: suggestion.subject, body: suggestion.body, indexKey: indexKey)
             return .fill(suggestion)
         }
         return withdrawStale(indexKey: indexKey, subject: subject, body: body) ? .clear : nil
