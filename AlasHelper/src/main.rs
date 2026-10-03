@@ -1,3 +1,4 @@
+mod plugin_proc;
 mod watch;
 
 use alas_helper::acp_broker_process;
@@ -289,6 +290,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("plugin-proc-supervise") => plugin_proc::supervise_main(args.next()),
+        Some("plugin-proc-anchor") => plugin_proc::anchor_main(),
         Some("acp-broker-supervise") => {
             let Some(dir) = args.next() else {
                 eprintln!("usage: alas-helper acp-broker-supervise <broker-dir>");
@@ -724,6 +727,9 @@ fn handle_request(
         "proc/attach" => proc_attach(state, params),
         "proc/write" | "proc/kill" => fenced_proc_request(state, method, params),
         "proc/list" => proc_list(),
+        method if method.starts_with("pproc/") => {
+            plugin_proc::handle(method, params, state.event_sender.clone())
+        }
         method if method.starts_with("lease/") || method.starts_with("replica/") => {
             remote_session_store(state)?
                 .handle(method, params, alas_helper::remote_sessions::now(), |proc_id| {
