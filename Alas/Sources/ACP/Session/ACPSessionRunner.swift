@@ -2755,7 +2755,10 @@ extension ACPSessionRunner {
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil,
-              !head.deliveryUncertain
+              !head.deliveryUncertain,
+              // Sending a pre-limit item into the limit would consume it.
+              // It drains once a successful turn clears `usageLimit`.
+              !head.isHeld(by: session.usageLimit)
         else { return }
         if case .needsAuth = session.setupState { return }
         guard head.isReady() else {

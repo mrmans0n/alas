@@ -465,6 +465,21 @@ struct ACPSessionQueueAPITests {
         #expect(session.queue.map(\.blocks) == [[.text("later")]])
     }
 
+    @Test("forcing an item the usage limit holds releases it; the rest stay held")
+    func forceReleasesUsageLimitHold() throws {
+        let session = mkSession()
+        session.enqueue(blocks: [.text("a")])
+        session.enqueue(blocks: [.text("b")])
+        session.usageLimit = ACPUsageLimit(detectedAt: Date(), resetsAt: nil, resetSource: .unknown,
+                                           probeAttempt: 0, resettable: true)
+        let b = try #require(session.queue.last)
+        #expect(b.isHeld(by: session.usageLimit))
+
+        #expect(session.forceQueueItem(id: b.id))
+        #expect(session.queue.map(\.blocks) == [[.text("b")], [.text("a")]])
+        #expect(session.queue.map { $0.isHeld(by: session.usageLimit) } == [false, true])
+    }
+
     @Test("restoring a queue with a resume item restores the Limited state")
     func restoreQueueRestoresUsageLimitFromResumeItem() throws {
         let limit = ACPUsageLimit(detectedAt: Date(), resetsAt: Date().addingTimeInterval(600),

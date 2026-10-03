@@ -16,6 +16,9 @@ struct ACPQueueItemRow: View {
     let typography: ACPChatTypography
     let canMoveUp: Bool
     let canMoveDown: Bool
+    /// Queued before a usage limit stopped the session; the flusher holds it
+    /// until the limit clears. See `QueuedPrompt.isHeld(by:)`.
+    let isHeldByUsageLimit: Bool
     /// Reorder to the front of the queue without interrupting a running
     /// turn. Clears a previous send error.
     let onPromote: () -> Void
@@ -116,6 +119,8 @@ struct ACPQueueItemRow: View {
             Text("Resume after usage limit · \(scheduledAt, format: .dateTime.hour().minute())")
         } else if let scheduledAt = item.scheduledAt {
             Text("Scheduled for \(scheduledAt, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())")
+        } else if isHeldByUsageLimit {
+            Text("Waiting for usage limit")
         } else if position == 1 {
             Text("Next")
         } else {
@@ -124,7 +129,7 @@ struct ACPQueueItemRow: View {
     }
 
     private var statusColor: Color {
-        (item.status == .pending && item.scheduledAt == nil && position == 1)
+        (item.status == .pending && item.scheduledAt == nil && position == 1 && !isHeldByUsageLimit)
             ? theme.color("accent")
             : theme.color("fg-faint")
     }
@@ -195,12 +200,16 @@ struct ACPQueueItemRow: View {
                         action: onRetry
                     )
                 }
-                actionButton(
-                    systemName: "pencil",
-                    foreground: theme.color("fg-muted"),
-                    help: "Edit",
-                    action: onEdit
-                )
+                // Editing the resume item would pull it out of the queue and
+                // silently drop auto-resume.
+                if item.usageLimit == nil {
+                    actionButton(
+                        systemName: "pencil",
+                        foreground: theme.color("fg-muted"),
+                        help: "Edit",
+                        action: onEdit
+                    )
+                }
                 actionButton(
                     systemName: "xmark",
                     foreground: theme.color("fg-muted"),
@@ -249,7 +258,9 @@ struct ACPQueueItemRow: View {
             if item.lastError != nil {
                 Button("Retry", action: onRetry)
             }
-            Button("Edit", action: onEdit)
+            if item.usageLimit == nil {
+                Button("Edit", action: onEdit)
+            }
             Button("Remove from queue", role: .destructive, action: onRemove)
         }
     }

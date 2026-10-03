@@ -150,36 +150,77 @@ struct ACPSessionRunnerQueueTests {
         #expect(next > Date().addingTimeInterval(29 * 60))
     }
 
-    @Test("a message sent while Limited goes first, and its success clears the resume")
-    func manualSuccessClearsLimitAndResumeItem() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+    private static func sentPromptTexts(_ mock: ACPMockClient) -> [String] {
+        mock.sent.compactMap { request in
+            guard request.method == "session/prompt",
+                  let params = request.params as? ACPSessionPromptParams else { return nil }
+            return params.prompt.compactMap { block -> String? in
+                if case .text(let text) = block { return text }
+                return nil
+            }.joined()
+        }
+    }
+
+    @Test("a message sent while Limited goes first, clears the limit, and the held queue drains after it",
+          arguments: [true, false])
+    func manualSuccessClearsLimitAndResumeItem(autoResume: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner(autoResumeAfterUsageLimit: { autoResume })
         mock.script(method: "session/prompt") { _ in
             throw Self.codexLimitError("You've hit your usage limit.")
         }
         session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("queued before limit")])
         runner.persistQueue()
         runner.flushQueueIfIdle()
-        try await waitUntil { session.usageLimitResumeItem != nil }
+        try await waitUntil { session.usageLimit != nil }
 
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.enqueue(blocks: [.text("typed while limited")])
         runner.persistQueue()
         runner.flushQueueIfIdle()
-        try await waitUntil { session.usageLimit == nil }
-        #expect(session.usageLimitResumeItem == nil)
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit == nil)
+        #expect(Self.sentPromptTexts(mock) == ["first", "typed while limited", "queued before limit"])
     }
 
-    @Test("with auto-resume off a limit shows Limited without a resume item")
+    @Test("with auto-resume off a limit shows Limited and holds the rest of the queue")
     func usageLimitWithoutAutoResume() async throws {
         let (runner, mock, session, _) = try mkRunner(autoResumeAfterUsageLimit: { false })
         mock.script(method: "session/prompt") { _ in
             throw Self.codexLimitError("You've hit your usage limit.")
         }
         session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
         runner.persistQueue()
         runner.flushQueueIfIdle()
         try await waitUntil { session.usageLimit != nil }
-        #expect(session.queue.isEmpty)
+
+        runner.flushQueueIfIdle()
+        #expect(session.usageLimitResumeItem == nil)
+        #expect(session.queue.map(\.blocks) == [[.text("second")]])
+        #expect(session.queue.map(\.status) == [.pending])
+        #expect(Self.sentPromptTexts(mock) == ["first"])
+    }
+
+    @Test("cancelling auto-resume leaves the session Limited with the queue held")
+    func cancelAutoResumeHoldsQueue() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+
+        #expect(session.removeUsageLimitResume())
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        #expect(session.usageLimit != nil)
+        #expect(session.queue.map(\.blocks) == [[.text("second")]])
+        #expect(session.queue.map(\.status) == [.pending])
+        #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
     @Test("an unrelated prompt error keeps today's failed-item behavior")

@@ -2313,8 +2313,10 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Append a new pending item to the tail of the queue. Used by the
     /// runner when the user submits while the agent is busy (or while
-    /// the queue is already non-empty — see ACPSubmitRoute). `ahead` puts it
-    /// before every item that has not gone out yet instead.
+    /// the queue is already non-empty — see ACPSubmitRoute). It still goes
+    /// ahead of scheduled items and of items held by a usage limit, so a
+    /// message sent while Limited goes out first. `ahead` puts it before
+    /// every item that has not gone out yet instead.
     func enqueue(
         id: UUID = UUID(),
         blocks: [ACPContentBlock],
@@ -2325,7 +2327,9 @@ final class ACPSession: ObservableObject, Identifiable {
         let item = QueuedPrompt(id: id, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
         let insertAt = ahead
             ? queue.firstIndex { $0.status == .pending } ?? queue.endIndex
-            : queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
+            : queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: usageLimit))
+            } ?? queue.endIndex
         queue.insert(item, at: insertAt)
     }
 
@@ -2433,6 +2437,11 @@ final class ACPSession: ObservableObject, Identifiable {
             item.lastError = nil
         }
         item.scheduledAt = nil
+        // Forcing an item the usage limit holds is the user choosing to send
+        // it while Limited, like typing a new message.
+        if item.isHeld(by: usageLimit) {
+            item.enqueuedAt = Date()
+        }
 
         let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))

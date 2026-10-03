@@ -5,7 +5,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     let id: UUID
     var blocks: [ACPContentBlock]
-    let enqueuedAt: Date
+    /// Reset to now when the user forces a held item out (`forceQueueItem`),
+    /// so it stops counting as queued before a usage limit.
+    var enqueuedAt: Date
     var scheduledAt: Date?
     var status: Status
     var lastError: String?
@@ -132,6 +134,14 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         if lastError == nil {
             lastError = Self.deliveryUncertaintyMessage
         }
+    }
+
+    /// Whether a usage limit holds this item back from the flusher: it was
+    /// queued at or before `limit` stopped the session, and is not the
+    /// resume item itself. Held items wait until the Limited state clears.
+    func isHeld(by limit: ACPUsageLimit?) -> Bool {
+        guard let limit, usageLimit == nil else { return false }
+        return enqueuedAt <= limit.detectedAt
     }
 
     func isReady(at date: Date = Date()) -> Bool {
