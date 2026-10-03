@@ -265,6 +265,35 @@ struct ACPRemoteSessionCoordinatorTests {
         }
     }
 
+    @Test("foreign mirrors follow sign-in, sign-out and cleared authentication status")
+    func authenticationStatusRoundTripsIntoAnExistingMirror() async throws {
+        let endpoint = ReplicaEndpoint()
+        let writer = coordinator(endpoint, server: "writer")
+        let reader = coordinator(endpoint, server: "reader")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            writer.shutdown()
+            reader.shutdown()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let store = try ACPSessionStore(path: folder.appendingPathComponent("local.sqlite").path)
+        try store.upsertSession(row("writer"))
+        let local = ACPSessionPersistence(path: store.path)
+        let mirror = ACPSessionPersistence(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try await mirror.upsertSession(row("mirror"))
+        _ = try await writer.claim(sessionId: "writer", key: key, proposedProcId: "writer", requestedToken: "writer")
+        try await writer.startPublishing(sessionId: "writer", persistence: local, status: { "idle" }, onLeaseLost: {})
+        await writer.flush(sessionId: "writer")
+        let statuses: [ACPAuthStatus?] = [.init(kind: .none, label: "Signed out"), .init(kind: .account, label: "Signed in"), nil]
+        for status in statuses {
+            try store.setAuthStatus(sessionId: "writer", status: status)
+            await writer.flush(sessionId: "writer")
+            let observed = try #require(try await reader.observe(sessionId: "mirror", key: key))
+            try await reader.syncMirror(sessionId: "mirror", lease: observed, persistence: mirror, isCurrent: { true })
+            #expect(try await mirror.loadSession(id: "mirror")?.authStatus == status)
+        }
+    }
+
     @Test("foreign busy activity ends when the remote lease expires")
     func expiredBusyLeaseDoesNotReportForeignActivity() async throws {
         let endpoint = ReplicaEndpoint()

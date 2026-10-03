@@ -108,12 +108,61 @@ import Foundation
         #expect(acquired.fence != nil)
     }
 
-    private func remoteWriter(in folder: URL) async throws -> (
+    @Test("SSH takeover preserves queued or already-sent delegation guidance", arguments: [false, true])
+    func remoteTakeoverPreservesOneTimePreamble(sent: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (writer, source, store, publisher, _, endpoint) = try await remoteWriter(in: folder, nativeSubagentsDisabled: true)
+        defer {
+            writer.shutdownBackgroundTasks()
+            publisher.shutdown()
+        }
+        let pending: String? = sent ? nil : "Queued delegation guidance"
+        try store.setMCPPreamble(sessionId: source.id, pendingText: pending, sent: sent)
+        await publisher.flush(sessionId: source.id)
+        publisher.stopPublishing(sessionId: source.id)
+        let mirrorStore = try ACPSessionStore(path: folder.appendingPathComponent("mirror.sqlite").path)
+        try mirrorStore.upsertSession(.init(id: "mirror", agentId: "claude", title: "Mirror",
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-b", instanceId: "B")) {
+            method, data in try await endpoint.request(method, data)
+        }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+        }
+        client.script(method: "session/load") { _ in Data("{}".utf8) }
+        let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: mirrorStore,
+            instanceId: "B", remoteHost: "fixture", remoteSessionCoordinator: coordinator,
+            setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in .ready(.init(adapterPath: "/fixture/claude-agent-acp", nodeBinDirectory: "")) },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let ready = AsyncStream<Void>.makeStream()
+        defer {
+            reader.shutdownBackgroundTasks()
+            coordinator.shutdown()
+            ready.continuation.finish()
+        }
+        reader.afterRunnerRegistrationForTesting = { _ in ready.continuation.yield(()) }
+        let session = try #require(reader.placeholderSession(id: "mirror"))
+        await reader.hydrateIfNeeded(id: session.id)
+        try #require(await reader.takeOver(sessionId: session.id))
+        for await _ in ready.stream { break }
+        await reader.attach(to: session.id, freshlyCreated: false)
+        _ = try #require(reader.runners[session.id], "Attach state: \(session.agentState)")
+        #expect(session.mcpPreambleSent == sent)
+        #expect(session.pendingMCPPreamble == pending)
+    }
+
+    private func remoteWriter(in folder: URL, nativeSubagentsDisabled: Bool? = nil) async throws -> (
         ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
     ) {
         let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
         try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session",
-            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, autoRun: false,
+            remoteSessionId: "conversation", currentModel: nil, currentMode: nil, nativeSubagentsDisabled: nativeSubagentsDisabled, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         let endpoint = ReplicaEndpoint()
         let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
@@ -122,7 +171,8 @@ import Foundation
         let client = ACPMockClient()
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
-                agentCapabilities: .init(loadSession: true), authMethods: []))
+                agentCapabilities: .init(loadSession: true), authMethods: [],
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
         }
         client.script(method: "session/load") { _ in Data("{}".utf8) }
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,

@@ -5100,6 +5100,8 @@ extension ACPSessionManager {
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
         session.authStatus = row.authStatus
+        session.pendingMCPPreamble = row.mcpPreamblePending
+        session.mcpPreambleSent = row.mcpPreambleSent
         // Mirrors never run their own attach, so the persisted suggestions
         // list is the ONLY source for their pills and chips. A fresh list
         // wins over an empty one; the writer's newer list replaces the old.

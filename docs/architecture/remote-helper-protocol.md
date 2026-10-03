@@ -256,6 +256,10 @@ Replicated recovery state is authoritative on both initial and subsequent
 imports. A mirror remains recovery-pending until the writer publishes completion;
 takeover must not release queued prompts while that state is pending.
 
+One-time MCP guidance is portable conversation state: queued text and the sent
+flag survive takeover. Agent-reported authentication status is also replicated,
+including clearing it, so mirrors refresh sign-in state without their own attach.
+
 On writer stand-down, Alas stops the runner and flushes its queued writes
 before retiring the local lease fence. It cannot publish under a lost remote
 fence. During manager disposal, remote publication stays alive until stopped
