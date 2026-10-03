@@ -13,6 +13,8 @@ private func panels(_ list: String, tabs: String = "") -> String {
     #","contributes":{"tabs":[\#(tabs)],"panels":[\#(list)]}"#
 }
 
+private func prompts(_ list: String) -> String { #","contributes":{"prompts":[\#(list)]}"# }
+
 private func network(_ hosts: String) -> String { #","capabilities":["network"],"network":[\#(hosts)]"# }
 
 private func processes(_ list: String) -> String { #","capabilities":["process.exec"],"processes":[\#(list)]"# }
@@ -34,7 +36,13 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 7), .unsupportedAPI(7)),
+        (manifest(api: 8), .unsupportedAPI(8)),
+        (manifest(api: 6, #","capabilities":["session.context"]"#), .needsNewerAPI(#"capability "session.context""#, api: 7)),
+        (manifest(api: 6, prompts(#"{"name":"a"}"#)), .needsNewerAPI(#""contributes.prompts""#, api: 7)),
+        (manifest(api: 7, prompts(#"{"name":"Fix it"}"#)), .invalidPrompt(#"invalid prompt name "Fix it""#)),
+        (manifest(api: 7, prompts(#"{"name":"a"},{"name":"a"}"#)), .invalidPrompt(#"duplicate prompt name "a""#)),
+        (manifest(api: 7, prompts(#"{"name":"a","description":"\#(String(repeating: "x", count: 201))"}"#)), .invalidPrompt(#"prompt "a" has a description longer than 200 characters"#)),
+        (manifest(api: 7, prompts((0...16).map { #"{"name":"p\#($0)"}"# }.joined(separator: ","))), .invalidPrompt("at most 16 prompts")),
         (manifest(api: 4, commands(#"{"id":"a","title":"A","slots":["palette"]}"#)), .needsNewerAPI(#""contributes.commands""#)),
         (manifest(api: 4, #","capabilities":["notify"]"#), .needsNewerAPI(#"capability "notify""#)),
         (manifest(api: 4, #","capabilities":["session.read"],"events":["session.finished"]"#), .needsNewerAPI(#""events""#)),
@@ -101,10 +109,12 @@ struct PluginManifestTests {
     }
 
     /// Unknown slots, and slots newer than the manifest's API, are skipped rather than refused, because slots keep growing.
-    @Test(arguments: [(5, [PluginCommandSlot.worktreeMenu]), (6, [.worktreeMenu, .changesToolbar])])
+    @Test(arguments: [
+        (5, [PluginCommandSlot.worktreeMenu]), (6, [.worktreeMenu, .changesToolbar]), (7, [.worktreeMenu, .changesToolbar, .messageMenu]),
+    ])
     func commandsKeepKnownSlotsAndEventsNeedTheirCapability(api: Int, slots: [PluginCommandSlot]) throws {
         let parsed = try PluginManifest.parse(Data(manifest(api: api,
-            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar","nope"]}]}"#).utf8))
+            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar","message.menu","nope"]}]}"#).utf8))
         #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: slots)])
         #expect(parsed.events == [.sessionFinished])
     }
@@ -128,14 +138,21 @@ struct PluginManifestTests {
         ])
     }
 
+    @Test func promptsKeepTheirNameAndOptionalDescription() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 7, prompts(#"{"name":"linear","description":" Issue "},{"name":"todo","description":""}"#)).utf8))
+        #expect(parsed.prompts == [
+            PluginPromptContribution(name: "linear", description: "Issue"), PluginPromptContribution(name: "todo"),
+        ])
+    }
+
     @Test func eventNeedsCapabilityNamesTheEventsOwnCapability() {
         #expect(PluginManifestError.eventNeedsCapability("review.changed").description
             == #"event "review.changed" needs capability "review.read""#)
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 6"),
-        (7, "requires plugin API 7; this Alas supports up to 6"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 7"),
+        (8, "requires plugin API 8; this Alas supports up to 7"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

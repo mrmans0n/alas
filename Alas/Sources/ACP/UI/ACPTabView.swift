@@ -670,6 +670,15 @@ private struct ACPSessionView: View {
                     }
                 }
             },
+            messageMenuItems: { [isWorkspaceCheckoutOwner] in
+                // Plugins run per project, so a workspace checkout's sessions have none.
+                guard !isWorkspaceCheckoutOwner else { return [] }
+                return state.pluginCommands(.messageMenu, projectID: worktree.projectId).map { item in
+                    ACPMessageMenuItem(title: item.command.title, icon: item.command.icon) { markdown in
+                        state.runPluginCommand(item, slot: .messageMenu, worktreeID: worktree.id, detail: sessionId, text: markdown)
+                    }
+                }
+            },
             // Nil in a mirror so the row never draws a Cancel the reader
             // cannot use. The closure ALSO re-reads `isMirror` when it
             // fires, for the same reason the queue callbacks above do: a
@@ -769,7 +778,9 @@ private struct ACPSessionView: View {
             takeNextPromptOffer: takeNextPromptOffer,
             dismissNextPromptOffer: dismissNextPromptOffer,
             onNextPromptStateChange: onNextPromptStateChange,
-            nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput }
+            nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput },
+            pluginPrompts: pluginPrompts.map(\.suggestion),
+            contextProviders: isWorkspaceCheckoutOwner ? [] : state.pluginContextProviders(projectID: worktree.projectId)
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard
@@ -810,6 +821,26 @@ private struct ACPSessionView: View {
                     }
                 }
                 return true
+            }
+            // A plugin's slash prompt is expanded by its plugin into the draft, so the user sees what would go out.
+            if !isMirror, !session.readOnlyRestricted, let match = PluginPromptItem.match(text, in: pluginPrompts) {
+                guard attachments.isEmpty else {
+                    session.lastError = "/\(match.item.prompt.name) doesn't take attachments. Remove them to expand it."
+                    return false
+                }
+                let revision = session.composerDraftRevision
+                Task { @MainActor in
+                    switch await state.expandPluginPrompt(
+                        match.item, projectID: worktree.projectId, args: match.args, session: sessionId) {
+                    case .text(let expanded):
+                        // Only over the draft it came from: someone who kept typing keeps their text.
+                        guard session.composerDraftRevision == revision else { return }
+                        manager.persistComposerDraft(ACPComposerDraft(segments: [.text(expanded)]), for: session)
+                    case .failed(let reason):
+                        session.lastError = reason
+                    }
+                }
+                return false
             }
             let suspendedRevision = ACPSuspendedRevisionBox()
             let accepted = manager.submit(
@@ -877,6 +908,12 @@ private struct ACPSessionView: View {
                 )
             }
         }
+    }
+
+    /// Slash prompts of the plugins running in this session's project; plugins run per project, so a workspace
+    /// checkout has none.
+    private var pluginPrompts: [PluginPromptItem] {
+        isWorkspaceCheckoutOwner ? [] : state.pluginPrompts(projectID: worktree.projectId)
     }
 
     private var isWorkspaceCheckoutOwner: Bool {

@@ -194,6 +194,10 @@ struct ACPComposer: View {
     let dismissNextPromptOffer: () -> Void
     let onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void
     let nextPromptInputBlocked: () -> Bool
+    /// Slash prompts plugins add, offered after Alas's own commands.
+    let pluginPrompts: [ACPPromptSuggestion]
+    /// Plugins that add context to every prompt; named in a chip so the context is never invisible.
+    let contextProviders: [String]
 
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
@@ -224,6 +228,8 @@ struct ACPComposer: View {
         dismissNextPromptOffer: @escaping () -> Void = {},
         onNextPromptStateChange: @escaping (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in },
         nextPromptInputBlocked: @escaping () -> Bool = { false },
+        pluginPrompts: [ACPPromptSuggestion] = [],
+        contextProviders: [String] = [],
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -246,6 +252,8 @@ struct ACPComposer: View {
         self.dismissNextPromptOffer = dismissNextPromptOffer
         self.onNextPromptStateChange = onNextPromptStateChange
         self.nextPromptInputBlocked = nextPromptInputBlocked
+        self.pluginPrompts = pluginPrompts
+        self.contextProviders = contextProviders
     }
 
     var body: some View {
@@ -343,6 +351,16 @@ struct ACPComposer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
             }
+            if !contextProviders.isEmpty {
+                Label("Context from \(contextProviders.joined(separator: ", "))", systemImage: "puzzlepiece.extension")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(theme.color("bg-3").opacity(0.85), in: Capsule())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help("These plugins add text to every prompt you send. The agent sees it; the transcript doesn't.")
+            }
             ACPInputField(
                 session: session,
                 composer: composer,
@@ -379,7 +397,7 @@ struct ACPComposer: View {
                 upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot),
                 alasCommands: manager.isMirror(sessionId: session.id) || session.readOnlyRestricted
                     ? []
-                    : [ACPAlasSlashCommand.btwSuggestion]
+                    : [ACPAlasSlashCommand.btwSuggestion] + pluginPrompts
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {

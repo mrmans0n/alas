@@ -11,6 +11,7 @@ send to agent sessions, start runs, read their output and add review comments.
 For plugins that need more, it adds two high-trust capabilities: running the
 commands a plugin declares, and reading and writing files in the project's
 worktrees. See [Processes and files](#processes-and-files).
+[API 7](api-v7.md) adds message commands, slash prompts and prompt context.
 
 ## The `api` field
 

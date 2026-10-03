@@ -50,6 +50,8 @@ or environment access, and the network only through `http/fetch`.
   **act** on them: send to an agent, start a run, add a review comment (API 6).
 - **Make web requests** to listed hosts, keep **settings and secrets**, and run
   on **timers** (API 5).
+- **Join the agent conversation**: commands in a message's menu, slash prompts
+  it expands in the composer, and context it adds to every prompt (API 7).
 
 ## What it cannot do yet
 
@@ -65,6 +67,7 @@ Run processes or read and write files. These are planned; see the roadmap in
 | Look up the runtime, limits, and every method | [API v4 reference](api-v4.md) |
 | Add commands, notifications and session events | [API v5](api-v5.md) |
 | Add badges, Changes and Run commands and panels, git/run/review events, and act on sessions and runs | [API v6](api-v6.md) |
+| Add message commands, slash prompts and prompt context | [API v7](api-v7.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
