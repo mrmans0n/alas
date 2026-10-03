@@ -56,10 +56,25 @@ struct PluginViewTreeTests {
         #expect(tree.children[2].url?.host == "github.com")
     }
 
-    @Test(arguments: [#"{"id":"a","kind":"progress"}"#, #"{"id":"a","kind":"link","label":"PR","url":"https://a.com"}"#])
-    func api8KindsNeedAPI8(json: String) {
-        let kind = json.contains("link") ? "link" : "progress"
-        #expect(throws: PluginViewTreeError(reason: "kind \"\(kind)\" needs \"api\": 8")) { try decode(json, api: 7).get() }
+    @Test(arguments: [
+        (#"{"id":"a","kind":"progress"}"#, "progress", 8),
+        (#"{"id":"a","kind":"link","label":"PR","url":"https://a.com"}"#, "link", 8),
+        (#"{"id":"a","kind":"markdown","text":"**Hi**"}"#, "markdown", 9),
+    ])
+    func newerKindsNeedTheirAPI(json: String, kind: String, api: Int) {
+        #expect(throws: PluginViewTreeError(reason: "kind \"\(kind)\" needs \"api\": \(api)")) { try decode(json, api: api - 1).get() }
+    }
+
+    /// Markdown has its own 32 KiB bound, in bytes, above the 4,000-character cap on other strings.
+    @Test(arguments: [(32 * 1024, nil), (32 * 1024 + 1, "markdown \"m\" text is longer than 32768 bytes"), (nil, "markdown \"m\" needs text")] as [(Int?, String?)])
+    func markdownTextIsRequiredAndBounded(bytes: Int?, reason: String?) {
+        let text = bytes.map { #","text":"\#(String(repeating: "x", count: $0))""# } ?? ""
+        let result = decode(#"{"id":"m","kind":"markdown"\#(text)}"#, api: 9)
+        if let reason {
+            #expect(throws: PluginViewTreeError(reason: reason)) { try result.get() }
+        } else {
+            #expect((try? result.get())?.text?.utf8.count == bytes)
+        }
     }
 
     @Test(arguments: [(17, "tree is deeper than 16 levels"), (2_001, "tree has more than 2000 nodes")])

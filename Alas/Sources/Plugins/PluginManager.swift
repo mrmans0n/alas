@@ -395,6 +395,13 @@ final class PluginManager {
         await start(plugin)
     }
 
+    /// Tells every other instance of the writer's plugin that it stored `key` in plugin-scoped storage (API 9).
+    func pluginStorageChanged(_ key: String, by writer: PluginHost) async {
+        for (hostKey, host) in hostsByKey where hostKey.pluginID == writer.manifest.id && host !== writer {
+            await host.pluginStorageChanged(key)
+        }
+    }
+
     private func performRestart(_ key: HostKey) async {
         guard let host = hostsByKey[key] else { return }
         await host.deactivate()
@@ -412,7 +419,12 @@ final class PluginManager {
                 project: PluginProjectRef(id: project.id, name: project.name),
                 grants: Set(approval.capabilities), actions: actions(project),
                 storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)),
+                pluginStorage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id)),
                 settings: settings(for: plugin))
+            host.pluginStorageSet = { [weak self, weak host] key in
+                guard let self, let host else { return }
+                Task { await self.pluginStorageChanged(key, by: host) }
+            }
             hostsByKey[key] = host
             await host.activate()
         }

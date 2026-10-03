@@ -81,8 +81,9 @@ struct PluginTabView: View {
                 }
             }
         }
-        // The host ticks only while a canvas for it is on screen; a view tab never reports, so it never ticks.
-        .background(PluginVisibilityReporter(host: !isView && (content == .content || content == .loading) ? host : nil))
+        // Canvas tabs tick only while on screen; API 9 plugins hear when any of their tabs shows or hides.
+        .background(PluginVisibilityReporter(
+            target: (content == .content || content == .loading) ? host.flatMap { host in tabIndex.map { (host, $0) } } : nil))
     }
 
     private func placeholder(_ text: String, button: String, action: @escaping () -> Void) -> some View {
@@ -158,20 +159,20 @@ private struct PluginCanvasView: View {
 
 /// Reports the tab as visible while it is in a window that is not occluded.
 private struct PluginVisibilityReporter: NSViewRepresentable {
-    let host: PluginHost?
+    let target: (host: PluginHost, tab: Int)?
 
     func makeNSView(context: Context) -> ReporterView { ReporterView() }
 
-    func updateNSView(_ view: ReporterView, context: Context) { view.host = host }
+    func updateNSView(_ view: ReporterView, context: Context) { view.target = target }
 
-    static func dismantleNSView(_ view: ReporterView, coordinator: ()) { view.host = nil }
+    static func dismantleNSView(_ view: ReporterView, coordinator: ()) { view.target = nil }
 
     @MainActor
     final class ReporterView: NSView {
-        private var reported: PluginHost?
+        private var reported: (host: PluginHost, tab: Int)?
         private var observer: NSObjectProtocol?
 
-        var host: PluginHost? { didSet { update() } }
+        var target: (host: PluginHost, tab: Int)? { didSet { update() } }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -185,10 +186,10 @@ private struct PluginVisibilityReporter: NSViewRepresentable {
         }
 
         private func update() {
-            let visible = window?.occlusionState.contains(.visible) == true ? host : nil
-            guard visible !== reported else { return }
-            reported?.setViewVisible(false)
-            visible?.setViewVisible(true)
+            let visible = window?.occlusionState.contains(.visible) == true ? target : nil
+            guard visible?.host !== reported?.host || visible?.tab != reported?.tab else { return }
+            if let reported { reported.host.setTabVisible(reported.tab, false) }
+            if let visible { visible.host.setTabVisible(visible.tab, true) }
             reported = visible
         }
     }
