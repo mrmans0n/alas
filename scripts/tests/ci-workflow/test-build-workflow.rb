@@ -174,7 +174,8 @@ shell_steps = builder_steps.map { |step| step["run"] }
   "bash scripts/tests/build-treesitter-pack/run.sh",
   "bash scripts/tests/embed-ghostty-resources/run.sh",
   "bash scripts/tests/xcode-state/run.sh",
-  "bash scripts/tests/alas-build/run.sh"
+  "bash scripts/tests/alas-build/run.sh",
+  "bash scripts/tests/verify-release-architecture/run.sh"
 ].each do |command|
   raise "builder must run #{command}" unless shell_steps.include?(command)
 end
@@ -183,5 +184,20 @@ end
 # would silently remove the time limit on plugins. See docs/plugins/concepts.md.
 entitlements = File.read(File.expand_path("../../../Alas/Resources/Alas.entitlements", __dir__))
 raise "Alas.entitlements must not allow JIT: it disables the plugin time limit" if entitlements.include?("allow-jit")
+
+release_path = File.expand_path("../../../.github/workflows/release.yml", __dir__)
+release_workflow = YAML.safe_load(File.read(release_path), aliases: true)
+release_steps = release_workflow.fetch("jobs").fetch("macos-app").fetch("steps")
+release_build = release_steps.find { |step| step["name"] == "Build release app (${{ matrix.arch }})" }
+raise "release workflow must build each matrix destination" unless
+  release_build&.fetch("run", "")&.include?("-destination 'platform=macOS,arch=${{ matrix.arch }}'")
+raise "release build must not force ARCHS globally because host macro targets need the runner architecture" if
+  release_build.fetch("run").include?("ARCHS=${{ matrix.arch }}")
+raise "release build must not force ONLY_ACTIVE_ARCH globally because it also affects host build tools" if
+  release_build.fetch("run").include?("ONLY_ACTIVE_ARCH=YES")
+release_architecture = release_steps.find { |step| step["name"] == "Verify release architecture (${{ matrix.arch }})" }
+raise "release workflow must use the tested architecture verifier" unless
+  release_architecture&.fetch("run", "") ==
+    'scripts/verify-release-architecture.sh build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"'
 
 puts "ci workflow contract: ok"

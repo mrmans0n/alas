@@ -211,8 +211,6 @@ jobs:
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=${{ matrix.arch }}' \
             -skipMacroValidation -skipPackagePluginValidation \
-            ARCHS=${{ matrix.arch }} \
-            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -222,21 +220,7 @@ jobs:
       - name: Verify release architecture (${{ matrix.arch }})
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
-        run: |
-          app=build/Build/Products/Release/Alas.app
-          verify_arch() {
-            actual="$(lipo -archs "$1")"
-            if [ "$actual" != "$EXPECTED_ARCH" ]; then
-              echo "::error::$1 has architectures '$actual'; expected '$EXPECTED_ARCH'"
-              return 1
-            fi
-          }
-          verify_arch "$app/Contents/MacOS/Alas"
-          verify_arch "$app/Contents/Resources/zmx/zmx"
-          verify_arch "$app/Contents/Frameworks/libfff_c.dylib"
-          while IFS= read -r -d '' library; do
-            verify_arch "$library"
-          done < <(find "$app/Contents/Frameworks" -type f -name '*.dylib' -print0)
+        run: scripts/verify-release-architecture.sh build/Build/Products/Release/Alas.app "$EXPECTED_ARCH"
 
       - name: Sign + notarize + staple .app (${{ matrix.arch }})
         env:
