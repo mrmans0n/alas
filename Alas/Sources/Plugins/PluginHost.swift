@@ -390,10 +390,16 @@ final class PluginHost {
         let sleep = sleep
         let data = await withCheckedContinuation { continuation in
             hostRequests[token] = continuation
+            // The deadline runs from the send, so round trips the plugin makes while handling it count against it.
+            if let wait {
+                Task { [weak self] in
+                    try? await sleep(wait)
+                    self?.answer(token, nil)
+                }
+            }
             Task { [weak self] in
                 await self?.deliver(message)
-                if let wait, self?.hostRequests[token] != nil { try? await sleep(wait) }
-                self?.answer(token, nil)
+                if wait == nil { self?.answer(token, nil) }
             }
         }
         guard let data else { return nil }
