@@ -1304,15 +1304,15 @@ private struct ACPSessionView: View {
     }
 
     private func usageLimitBanner(_ limit: ACPUsageLimit, resumeAt: Date?) -> some View {
-        let time = Date.FormatStyle.dateTime.hour().minute()
+        func time(_ date: Date) -> String { date.formatted(ACPUsageLimit.resetTimeFormat(for: date)) }
         let detail: String = if let resumeAt {
             if let resetsAt = limit.resetsAt {
-                "resets \(resetsAt.formatted(time)) · resuming automatically"
+                "resets \(time(resetsAt)) · resuming automatically"
             } else {
-                "checking again at \(resumeAt.formatted(time))"
+                "checking again at \(time(resumeAt))"
             }
         } else if let resetsAt = limit.resetsAt {
-            "resets \(resetsAt.formatted(time))"
+            "resets \(time(resetsAt))"
         } else {
             ""
         }

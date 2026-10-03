@@ -116,7 +116,7 @@ struct ACPQueueItemRow: View {
         if item.status == .sending {
             Text("Sending")
         } else if item.usageLimit != nil, let scheduledAt = item.scheduledAt {
-            Text("Resume after usage limit · \(scheduledAt, format: .dateTime.hour().minute())")
+            Text("Resume after usage limit · \(scheduledAt, format: ACPUsageLimit.resetTimeFormat(for: scheduledAt))")
         } else if let scheduledAt = item.scheduledAt {
             Text("Scheduled for \(scheduledAt, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())")
         } else if isHeldByUsageLimit {

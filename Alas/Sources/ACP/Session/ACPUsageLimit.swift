@@ -24,6 +24,19 @@ struct ACPUsageLimit: Codable, Equatable, Sendable {
     var resettable: Bool
 }
 
+extension ACPUsageLimit {
+    /// How to show a reset or resume time: the time alone when it falls
+    /// today, with the weekday otherwise, so a weekly reset days out does
+    /// not read as today.
+    static func resetTimeFormat(
+        for date: Date, now: Date = Date(), calendar: Calendar = .current
+    ) -> Date.FormatStyle {
+        calendar.isDate(date, inSameDayAs: now)
+            ? .dateTime.hour().minute()
+            : .dateTime.weekday(.abbreviated).hour().minute()
+    }
+}
+
 /// Claude's `rate_limit_event` info, forwarded by claude-agent-acp as
 /// `usage_update._meta["_claude/rateLimit"]` (`SDKRateLimitInfo`).
 struct ACPClaudeRateLimit: Codable, Equatable, Sendable {
