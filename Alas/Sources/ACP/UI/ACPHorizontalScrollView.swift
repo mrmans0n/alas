@@ -55,6 +55,16 @@ private final class ACPHorizontalHostingView: NSHostingView<AnyView> {
         super.invalidateIntrinsicContentSize()
         onIntrinsicSizeInvalidated?()
     }
+
+    #if DEBUG
+    /// Every read of the expensive measurement, wherever it comes from.
+    private(set) var fittingSizeReadCount = 0
+
+    override var fittingSize: NSSize {
+        fittingSizeReadCount += 1
+        return super.fittingSize
+    }
+    #endif
 }
 
 /// Routing owner of one phased wheel gesture over the table.
@@ -68,6 +78,15 @@ final class ACPHorizontalNSScrollView: NSScrollView {
     private let hostingView = ACPHorizontalHostingView(rootView: AnyView(EmptyView()))
     private var lastFittingSize: CGSize = .zero
     private var isRefreshingFittingSize = false
+    /// Whether `layout()` must re-measure the hosted content rather than reuse
+    /// `lastFittingSize`; see `layout()`.
+    private var fittingNeedsRefresh = true
+    private var lastRefreshWidth: CGFloat?
+    private var lastRefreshIntrinsicSize: NSSize?
+    #if DEBUG
+    /// How many times the hosted content was measured through `fittingSize`.
+    var contentFittingSizeReadCountForTesting: Int { hostingView.fittingSizeReadCount }
+    #endif
 
     init() {
         super.init(frame: .zero)
@@ -99,9 +118,35 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         NSSize(width: NSView.noIntrinsicMetric, height: lastFittingSize.height)
     }
 
+    /// An enclosing scroll view marks this one for layout every time it moves
+    /// it (`-[NSScrollView geometryInWindowDidChange]`), i.e. on every
+    /// transcript scroll tick. Measuring the hosted table there rebuilt a
+    /// constraint engine over its whole subtree each time. Layout now
+    /// re-measures only when the content's SwiftUI ideal size moved (cheap to
+    /// read, and the only signal a model-driven update gives), or after a
+    /// window, backing-scale or width change, and otherwise just refits the
+    /// document.
     override func layout() {
         super.layout()
-        sizeDocumentToContent()
+        if fittingNeedsRefresh
+            || lastRefreshWidth != contentView.bounds.width
+            || lastRefreshIntrinsicSize != hostingView.intrinsicContentSize {
+            refreshFittingSize()
+        } else {
+            sizeDocument(to: lastFittingSize)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        fittingNeedsRefresh = true
+        needsLayout = true
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        fittingNeedsRefresh = true
+        needsLayout = true
     }
 
     private var gestureOwner = GestureOwner.undecided
@@ -210,15 +255,14 @@ final class ACPHorizontalNSScrollView: NSScrollView {
         guard !isRefreshingFittingSize else { return }
         isRefreshingFittingSize = true
         defer { isRefreshingFittingSize = false }
+        fittingNeedsRefresh = false
         let fitting = hostingView.fittingSize
+        lastRefreshWidth = contentView.bounds.width
+        lastRefreshIntrinsicSize = hostingView.intrinsicContentSize
         sizeDocument(to: fitting)
         guard fitting != lastFittingSize else { return }
         lastFittingSize = fitting
         invalidateIntrinsicContentSize()
-    }
-
-    private func sizeDocumentToContent() {
-        refreshFittingSize()
     }
 
     private func sizeDocument(to fitting: CGSize) {
