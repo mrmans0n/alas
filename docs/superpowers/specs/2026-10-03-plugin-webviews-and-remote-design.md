@@ -192,7 +192,11 @@ Same messages, limits and error codes as API 6. Differences:
   reused while any member is alive, but it can once all have exited, so the
   group is signalled only if at least one tracked process still matches its
   recorded start time and is still in the recorded group; otherwise the group
-  signal is skipped. Descendants that left the group are signalled one by
+  signal is skipped. A check followed by `kill(-pgid)` still has a window, so
+  the supervisor starts the run under an anchor: a tiny process of its own
+  that leads the group and stays alive until cleanup has signalled the group
+  and the kill grace has passed. While it lives the group id can't be reused,
+  and the check becomes a safeguard rather than the guarantee. Descendants that left the group are signalled one by
   one.
 - Leaving the group doesn't escape cleanup. A child that calls `setsid` or
   daemonizes is out of the recorded group, so R3 adds descendant tracking to
@@ -315,8 +319,9 @@ reference plugin committed (likely a usage dashboard or a stack graph).
   because the JSON manifest can't hold a raw NUL; two JavaScript files can, so
   bytes could move across their boundary without changing the digest. The
   hash gets a new version that frames each field with its name and length
-  (`alas-plugin-trust-v2`), and both approvals and catalog records move to
-  it. The catalog publishes `ui.js` as a third asset and
+  (`alas-plugin-trust-v2`), used only for releases that ship `ui.js`. Releases
+  without one keep v1, so existing catalog records and approvals stay valid in
+  older and newer Alas alike; a record says which version it carries. The catalog publishes `ui.js` as a third asset and
   verifies it like the other two. The repository spec's "two files" rule
   becomes "two or three".
 
