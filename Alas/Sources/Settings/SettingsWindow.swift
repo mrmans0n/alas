@@ -80,7 +80,6 @@ struct SettingsWindow: View {
             if !showsDebug, section == .debug {
                 section = .agents
             }
-            if state.pluginManager == nil, section == .plugins { section = .agents }
             state.rescanAgents()
         }
         .onChange(of: state.pendingSettingsSection) {

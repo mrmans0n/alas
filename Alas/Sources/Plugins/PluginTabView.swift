@@ -77,9 +77,7 @@ struct PluginTabView: View {
                 }
             case .unavailable:
                 placeholder("\(tab.title) isn't available", button: "Open Plugin Settings") {
-                    NotificationCenter.default.post(
-                        name: .alasOpenSettings,
-                        object: manager == nil ? SettingsSection.debug : SettingsSection.plugins)
+                    NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.plugins)
                 }
             }
         }
