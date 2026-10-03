@@ -201,6 +201,13 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
     if params.output_limit == 0 || params.output_limit > MAX_OUTPUT_BYTES {
         return Err(jsonrpc_error(-32602, "invalid outputLimit"));
     }
+    // A retry joins its claim before the launch is checked again: the run it
+    // started may since have moved its worktree or its executable.
+    if let Some(existing) = owned_dir(&params.proc_id, &params.lease)? {
+        if let Some(joined) = join_claim(&existing, &params.proc_id)? {
+            return Ok(joined);
+        }
+    }
     let cwd = std::fs::canonicalize(&params.cwd)
         .ok()
         .filter(|path| path.is_dir())

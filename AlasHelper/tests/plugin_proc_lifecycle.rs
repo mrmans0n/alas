@@ -569,3 +569,18 @@ fn a_retry_after_the_launcher_died_unstarted_runs_again() {
     let _ = stranger.kill();
     let _ = stranger.wait();
 }
+
+#[test]
+fn a_retry_joins_a_started_run_whose_worktree_is_gone() {
+    let mut helper = Helper::start();
+    // The run moves its own worktree away, as a command may, before the retry
+    // of its lost spawn arrives: the retry still finds the run.
+    let spawned = helper.spawn_script("moved", "mv \"$PWD\" \"$PWD.moved\"; sleep 30\n", json!({}));
+    assert_eq!(spawned["spawned"], true);
+    let worktree = helper.worktree.clone();
+    wait_until(|| !worktree.exists());
+    let retried = helper.spawn("moved", &["/bin/sh", "moved.sh"], json!({}));
+    assert_eq!(retried["spawned"], false);
+    helper.request("pproc/kill", json!({ "procId": "moved", "lease": LEASE }));
+    let _ = std::fs::rename(format!("{}.moved", worktree.display()), &worktree);
+}
