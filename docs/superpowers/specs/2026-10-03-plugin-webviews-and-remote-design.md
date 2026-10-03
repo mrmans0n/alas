@@ -179,8 +179,10 @@ Same messages, limits and error codes as API 6. Differences:
   helper starts through `SSHCommand.remoteScript`, whose prelude adds a fixed
   set of directories and never runs a login shell, so tools that `.profile`,
   nvm, mise or asdf add (`pnpm`) would be missing. R3 captures the login
-  environment once per connection, by running the user's shell with `-l -c
-  env`, and spawns plugin processes with it. The environment is the remote
+  environment once per connection by running the user's shell with `-l -c`
+  around `env -0` between two sentinels, as `ShellEnvResolver` does locally,
+  so banners from startup files and values holding newlines can't corrupt
+  it; plugin processes are spawned with it. The environment is the remote
   user's; nothing from the Mac's environment is forwarded.
 - The 10-minute limit, `stdin` and the 2-per-instance cap are unchanged. On
   stop, the helper sends `SIGTERM` to the process group, then `SIGKILL` after
@@ -213,11 +215,11 @@ Same messages, limits and error codes as API 6. Differences:
   cgroups are not required. macOS has no subreaper, so remote `process.*` is
   refused on macOS SSH hosts until a race-free mechanism exists; remote
   `file/*` still works there.
-- One-shot runs see EOF. Today `proc/write` only appends to `stdin.log` and
+- Processes see EOF. Today `proc/write` only appends to `stdin.log` and
   the child's stdin stays open until it exits, so `cat` or a formatter waits
   for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`
-  payload and closes the pipe, and gives runs without `stdin` `/dev/null`, as
-  the local launcher does.
+  payload and closes the pipe, and gives runs without `stdin`, and every
+  `process/start`, `/dev/null`, as the local launcher does.
 - Output is a raw byte stream. `attachProc` was built for newline-framed ACP
   traffic: it strips newlines and drops a final unterminated fragment, so
   `printf result` would come back empty. R3 adds a raw attach mode that
@@ -468,7 +470,7 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
 | R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
-| R3 | 10 | Helper: raw output mode, one-shot stdin with EOF (and `/dev/null`), descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
+| R3 | 10 | Helper: raw output mode, stdin with EOF (`/dev/null` for starts and runs without input), a framed login environment, descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
 | R4 | 10 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
 | W1 | 11 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
@@ -502,7 +504,9 @@ Per the testing policy, pin the decisions:
   cases.
 - Remote argv reaches the program unchanged: `appendArgs` with spaces and
   quotes arrive as the same strings, quoted only once, in the helper.
-- Helper lifecycle, in the helper's own Rust tests: a backgrounded child is
+- Helper lifecycle, in the helper's own Rust tests: a long-running start sees
+  EOF on stdin; the login environment survives a noisy profile and a value
+  with a newline; a backgrounded child is
   stopped when the root exits; a `setsid` descendant is stopped by identity;
   the group is not signalled once no member matches; the anchor ignores the
   group's `SIGTERM` and outlives it, and is removed only after the final
