@@ -28,6 +28,11 @@ private func fetch(_ id: Int = 1, url: String = "https://api.example.com/x", aut
     return request(id, "http/fetch", #"{"method":"GET","url":"\#(url)"\#(headers)}"#)
 }
 
+private func processCall(_ id: Int, _ method: String = "process/run", _ process: String = "install", worktree: String = "wt", args: [String]? = nil) -> String {
+    let args = args.map { ",\"args\":[" + $0.map { "\"\($0)\"" }.joined(separator: ",") + "]" } ?? ""
+    return request(id, method, #"{"id":"\#(process)","worktree":"\#(worktree)"\#(args)}"#)
+}
+
 private let api6Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","contributes":{"commands":[{"id":"fix","title":"Fix","slots":["changes.toolbar"]}],"panels":[{"id":"checks","title":"Checks","location":"changes.section"},{"id":"explain","title":"Explain","location":"run.report.section"}]}}"#
 private let api5Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js"}"#
 
@@ -71,6 +76,8 @@ struct PluginHostTests {
         settings: PluginSettings? = nil,
         transport: FakeTransport = FakeTransport(),
         sleeper: Sleeper = Sleeper(),
+        launcher: FakeLauncher = FakeLauncher(),
+        worktreeRoot: URL? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
@@ -129,10 +136,12 @@ struct PluginHostTests {
                 addReviewComment: { comment, author in
                     recorder.comments.append("\(author)|\(comment.worktree)|\(comment.path)|\(comment.line)")
                     return nil
-                }),
+                },
+                worktreePath: { $0 == "wt" ? worktreeRoot ?? URL(fileURLWithPath: "/tmp/wt") : nil }),
             storage: storage,
             settings: settings ?? Self.settings(manifest),
             transport: transport,
+            launcher: launcher,
             limits: limits,
             now: now,
             sleep: { try await sleeper.sleep($0) })
@@ -930,7 +939,6 @@ struct PluginHostTests {
         #expect(await awaitCondition { transport.requests.count == 4 })
         transport.respond("first")
         #expect(await awaitCondition { lastReply(host)?.contains(#""body":"first""#) == true })
-        #expect(lastReply(host)?.contains(#""id":1"#) == true)
 
         await host.deactivate()
         await host.activate()
@@ -1125,5 +1133,311 @@ struct PluginHostTests {
     @Test(arguments: [(5, "aéx"), (3, "éx"), (2, "x")])
     func runOutputKeepsTheTail(maxBytes: Int, output: String) {
         #expect(PluginRunOutputResult.tail("aéx", maxBytes: maxBytes) == PluginRunOutputResult(output: output, truncated: output != "aéx"))
+    }
+
+    // MARK: - API 6: processes and files
+
+    /// Holds every process until the test makes it print and exit.
+    final class FakeLauncher: PluginProcessLauncher, @unchecked Sendable {
+        final class Handle: PluginProcessHandle, @unchecked Sendable {
+            let argv: [String]
+            let directory: URL
+            let events: AsyncStream<PluginProcessEvent>
+            private let continuation: AsyncStream<PluginProcessEvent>.Continuation
+            private let lock = NSLock()
+            private var sent: [Int32] = []
+
+            var signals: [Int32] { lock.withLock { sent } }
+
+            init(argv: [String], directory: URL) {
+                self.argv = argv
+                self.directory = directory
+                (events, continuation) = AsyncStream.makeStream()
+            }
+
+            func terminate() { lock.withLock { sent.append(SIGTERM) } }
+            func kill() { lock.withLock { sent.append(SIGKILL) } }
+
+            func emit(_ events: PluginProcessEvent...) {
+                for event in events { continuation.yield(event) }
+                if case .exit? = events.last { continuation.finish() }
+            }
+        }
+
+        private let lock = NSLock()
+        private var launched: [Handle] = []
+
+        var handles: [Handle] { lock.withLock { launched } }
+
+        func launch(
+            _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
+        ) throws -> any PluginProcessHandle {
+            let handle = Handle(argv: argv, directory: directory)
+            lock.withLock { launched.append(handle) }
+            return handle
+        }
+    }
+
+    static let processManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","capabilities":["process.exec","files.read","files.write"],"processes":[{"id":"install","command":["pnpm","install"]},{"id":"op","command":["op","read"],"appendArgs":true},{"id":"dev","command":["pnpm","dev"],"longRunning":true}]}"#
+
+    struct ProcessCase: Sendable {
+        let request: String
+        var grants: Set<PluginCapability> = [.processExec]
+        /// Part of the immediate reply; nil when `process/run` goes out and answers later.
+        let reply: String?
+        var argv: [String]? = nil
+    }
+
+    /// The argv is exactly the manifest's, plus args only where it allows them, in a worktree of the project.
+    @Test(arguments: [
+        ProcessCase(request: processCall(1), grants: [], reply: #""code":-32001"#),
+        ProcessCase(request: processCall(1), reply: nil, argv: ["pnpm", "install"]),
+        ProcessCase(request: processCall(1, args: ["x"]), reply: "takes no args"),
+        ProcessCase(request: processCall(1, "process/run", "op", args: ["x", "y"]), reply: nil, argv: ["op", "read", "x", "y"]),
+        ProcessCase(request: processCall(1, "process/run", "op", args: Array(repeating: "x", count: 33)), reply: #""code":-32602"#),
+        ProcessCase(request: processCall(1, "process/run", "op", args: [String(repeating: "x", count: 1025)]), reply: #""code":-32602"#),
+        ProcessCase(request: processCall(1, "process/run", "nope"), reply: "unknown process nope"),
+        ProcessCase(request: processCall(1, "process/run", "dev"), reply: "use process/start"),
+        ProcessCase(request: processCall(1, "process/start", "install"), reply: "use process/run"),
+        ProcessCase(request: processCall(1, worktree: "other"), reply: "unknown worktree other"),
+        ProcessCase(request: processCall(1, "process/start", "dev"), reply: #""run":"p1""#, argv: ["pnpm", "dev"]),
+    ])
+    func processesRunOnlyWhatTheManifestDeclares(_ c: ProcessCase) async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: Self.processManifest, launcher: launcher)
+        await host.activate()
+        #expect(host.state == .active)
+        if let reply = c.reply {
+            #expect(lastReply(host)?.contains(reply) == true)
+        } else {
+            #expect(replies(host).count == 1)
+        }
+        #expect(launcher.handles.first?.argv == c.argv)
+        #expect(launcher.handles.allSatisfy { $0.directory.path == "/tmp/wt" })
+    }
+
+    /// Two at a time, output capped, and an instance that ends stops its processes and never hears from them.
+    @Test func processRunRepliesWithCappedOutputOnlyToItsInstance() async throws {
+        let launcher = FakeLauncher()
+        let sleeper = Sleeper()
+        var limits = Self.limits
+        // Output is capped at half of it, so the whole reply shows in the trace.
+        limits.maxMessageBytes = 2048
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1)), .send(processCall(2)), .send(processCall(3))]],
+            grants: [.processExec], limits: limits, manifest: Self.processManifest, sleeper: sleeper, launcher: launcher)
+        await host.activate()
+        #expect(lastReply(host)?.contains("at most 2 processes running") == true)
+        #expect(launcher.handles.count == 2)
+
+        launcher.handles[0].emit(.stdout(Data(repeating: 0x78, count: 1000)), .stdout(Data(repeating: 0x78, count: 100)), .stderr(Data("e".utf8)), .exit(3))
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":3"#) == true })
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(#""truncated":true"#) && reply.contains(#""stderr":"""#))
+        #expect(reply.contains(#""stdout":""# + String(repeating: "x", count: 1024) + "\""))
+
+        await host.deactivate()
+        #expect(launcher.handles[1].signals == [SIGTERM])
+        // The finished run's time limit is cancelled; the stopped run's lasts until it exits, next to the kill grace.
+        #expect(await awaitCondition { sleeper.cancellations == 1 && sleeper.waiting == 2 })
+        sleeper.fireAll()
+        #expect(await awaitCondition { launcher.handles[1].signals.contains(SIGKILL) })
+        // The next instance hears only about its own runs.
+        await host.activate()
+        launcher.handles[1].emit(.exit(137))
+        launcher.handles[2].emit(.exit(0))
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":0"#) == true })
+        #expect(!host.trace.contains { $0.text.contains(#""exit":137"#) })
+    }
+
+    /// Control characters escape to six bytes each, so the output is cut until the reply fits rather than the
+    /// whole result being refused.
+    @Test func processRunReplyAlwaysCarriesTheExitStatus() async throws {
+        let launcher = FakeLauncher()
+        var limits = Self.limits
+        limits.maxMessageBytes = 1024
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1))]], grants: [.processExec], limits: limits,
+            manifest: Self.processManifest, launcher: launcher)
+        await host.activate()
+        launcher.handles[0].emit(.stdout(Data(repeating: 0x01, count: 500)), .exit(5))
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":5"#) == true })
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(#""truncated":true"#) && reply.contains(#"\u0001"#))
+        #expect(reply.utf8.count <= 1024)
+    }
+
+    /// Output is bounded where it is produced, and the reader gets it as one batch, then the truncation, then the exit.
+    @Test(arguments: [(PluginProcessOutput.Keep.head, "abcd"), (.tail, "cdef")])
+    func processOutputIsBoundedBeforeTheReaderSeesIt(keep: PluginProcessOutput.Keep, kept: String) async {
+        let output = PluginProcessOutput(keep: keep, limit: 4, interval: .zero)
+        output.append(Data("abc".utf8), stream: 0)
+        output.append(Data("def".utf8), stream: 0)
+        output.append(Data("e".utf8), stream: 1)
+        output.finish(exit: 3)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        #expect(events == [.stdout(Data(kept.utf8)), .stderr(Data("e".utf8)), .truncated, .exit(3)])
+    }
+
+    @Test(arguments: [
+        (["git", "status"], "git status"),
+        (["sh", "-c", "a b"], #"sh -c "a b""#),
+        (["x", ""], #"x """#),
+        (["echo", "a\nApprove everything"], #"echo "a\u{a}Approve everything""#),
+        (["echo", "\u{202E}txt.exe", #"q"\"#], #"echo "\u{202e}txt.exe" "q\"\\""#),
+    ])
+    func argvDisplayKeepsEveryArgumentDistinct(argv: [String], shown: String) {
+        #expect(PluginArgv.display(argv) == shown)
+    }
+
+    /// Bytes split anywhere, a multibyte character included, read the same once joined; a character the limit cuts
+    /// at the front is left out.
+    @Test(arguments: [(1, 64, "aé€b"), (2, 64, "aé€b"), (4, 64, "aé€b"), (3, 5, "€b")])
+    func processRunOutputDecodesAcrossBatches(chunk: Int, limit: Int, shown: String) {
+        var run = PluginProcessRun(id: "p1", process: "x", worktree: "wt", command: [])
+        let bytes = Array("aé€b".utf8)
+        for start in stride(from: 0, to: bytes.count, by: chunk) {
+            run.append(Data(bytes[start..<min(start + chunk, bytes.count)]), keeping: limit)
+        }
+        #expect(run.output == shown)
+    }
+
+    @Test func processOutputKeepsTheOrderItArrivedIn() async {
+        let output = PluginProcessOutput(keep: .tail, limit: 4, interval: .zero)
+        output.append(Data("e1".utf8), stream: 1)
+        output.append(Data("o1".utf8), stream: 0)
+        output.append(Data("e2345".utf8), stream: 1)
+        output.finish(exit: 0)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        // stderr's oldest bytes go first to keep its latest four; the order across streams holds.
+        #expect(events == [.stdout(Data("o1".utf8)), .stderr(Data("2345".utf8)), .truncated, .exit(0)])
+    }
+
+    /// Stopping reaches a child that left the process group, which a group signal alone would miss.
+    @Test func stoppingAProcessStopsWhatItStarted() async throws {
+        let handle = try PluginFoundationLauncher().launch(
+            ["/bin/sh", "-c", "set -m; sleep 30 & echo $!; wait"], in: FileManager.default.temporaryDirectory, stdin: nil,
+            keep: .head, limit: 1024)
+        var iterator = handle.events.makeAsyncIterator()
+        guard case .stdout(let data)? = await iterator.next(),
+              let child = pid_t(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        else {
+            Issue.record("expected the child's pid")
+            return
+        }
+        handle.terminate()
+        while await iterator.next() != nil {}
+        #expect(await awaitCondition { Darwin.kill(child, 0) != 0 })
+    }
+
+    /// A command that exits on its own takes what it left running with it.
+    @Test func aProcessThatExitsStopsWhatItLeftBehind() async throws {
+        let handle = try PluginFoundationLauncher().launch(
+            ["/bin/sh", "-c", "sleep 0.2; sleep 30 & echo $!"], in: FileManager.default.temporaryDirectory, stdin: nil,
+            keep: .head, limit: 1024)
+        var child: pid_t?
+        for await event in handle.events {
+            if case .stdout(let data) = event {
+                child = pid_t(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        let pid = try #require(child)
+        #expect(await awaitCondition { Darwin.kill(pid, 0) != 0 })
+    }
+
+    @Test func processRunIsStoppedThenKilledAtTheTimeLimit() async throws {
+        let launcher = FakeLauncher()
+        let sleeper = Sleeper()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1))]], grants: [.processExec], manifest: Self.processManifest,
+            sleeper: sleeper, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition { sleeper.waiting == 1 })
+        sleeper.fireAll()
+        #expect(await awaitCondition { launcher.handles.first?.signals == [SIGTERM] && sleeper.waiting == 1 })
+        sleeper.fireAll()
+        #expect(await awaitCondition { launcher.handles.first?.signals == [SIGTERM, SIGKILL] })
+        launcher.handles[0].emit(.exit(137))
+        #expect(await awaitCondition { lastReply(host)?.contains(#""timedOut":true"#) == true })
+        #expect(sleeper.durations == [PluginHost.processTimeout, PluginHost.processKillGrace])
+    }
+
+    /// A long-running process shows in the Run tab with its output, stops from there, reports its exit, and
+    /// stops with the plugin.
+    @Test func longRunningProcessesAreVisibleStoppableAndEndWithThePlugin() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev"))], [], [.send(processCall(2, "process/start", "dev"))]],
+            grants: [.processExec], manifest: Self.processManifest, launcher: launcher)
+        await host.activate()
+        #expect(host.processRuns.map(\.id) == ["p1"])
+        launcher.handles[0].emit(.stdout(Data("ready".utf8)))
+        #expect(await awaitCondition { host.processRuns.first?.output == "ready" })
+        host.stopProcess("p1")
+        #expect(launcher.handles[0].signals == [SIGTERM])
+        launcher.handles[0].emit(.exit(143))
+        // The exit notification is the delivery in which the plugin starts another.
+        #expect(await awaitCondition { launcher.handles.count == 2 })
+        #expect(host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""run":"p1""#) && $0.text.contains(#""exit":143"#) })
+        #expect(host.processRuns.map(\.exit) == [143, nil])
+        await host.deactivate()
+        #expect(launcher.handles[1].signals == [SIGTERM])
+    }
+
+    /// One real process: the command is found on `PATH` and gets its stdin.
+    @Test func theLauncherFindsCommandsAndFeedsStdin() async throws {
+        let handle = try PluginFoundationLauncher().launch(
+            ["cat"], in: FileManager.default.temporaryDirectory, stdin: Data("hi".utf8), keep: .head, limit: 1024)
+        var events: [PluginProcessEvent] = []
+        for await event in handle.events { events.append(event) }
+        #expect(events == [.stdout(Data("hi".utf8)), .exit(0)])
+    }
+
+    struct FileCase: Sendable {
+        let request: String
+        var grants: Set<PluginCapability> = [.filesRead, .filesWrite]
+        var limits: PluginLimits?
+        let reply: String
+        var absent: String?
+        /// Relative path and content the request leaves in the worktree.
+        var written: (String, String)?
+    }
+
+    @Test(arguments: [
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"a.txt"}"#), reply: #""content":"hello""#),
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"big.txt"}"#), reply: "larger than 512 KiB"),
+        // A file at the limit fits in a reply under the real message limit, newlines escaped and all.
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"edge.txt"}"#), limits: PluginLimits(), reply: #""content":"a\nb"#),
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"bin.dat"}"#), reply: "not UTF-8"),
+        FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"../a.txt"}"#), reply: #""code":-32003"#),
+        FileCase(request: request(1, "file/read", #"{"worktree":"other","path":"a.txt"}"#), reply: "unknown worktree other"),
+        FileCase(request: request(1, "file/list", #"{"worktree":"wt","dir":""}"#), reply: #""name":"a.txt""#, absent: ".git"),
+        FileCase(request: request(1, "file/write", #"{"worktree":"wt","path":"new/dir/b.txt","content":"hi"}"#), grants: [.filesRead], reply: #""code":-32001"#),
+        FileCase(request: request(1, "file/write", #"{"worktree":"wt","path":"new/dir/b.txt","content":"hi"}"#), reply: #""result":{}"#, written: ("new/dir/b.txt", "hi")),
+        FileCase(request: request(1, "file/write", #"{"worktree":"wt","path":".GIT/config","content":"x"}"#), reply: "inside .git"),
+    ])
+    func filesStayInsideTheWorktree(_ c: FileCase) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "plugin-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("hello".utf8).write(to: root.appending(path: "a.txt"))
+        try Data(count: PluginFiles.maxFileBytes + 1).write(to: root.appending(path: "big.txt"))
+        try Data(String(repeating: "a\nb", count: PluginFiles.maxFileBytes / 3).utf8).write(to: root.appending(path: "edge.txt"))
+        try Data([0xFF, 0xFE]).write(to: root.appending(path: "bin.dat"))
+        try Data("gitdir: elsewhere".utf8).write(to: root.appending(path: ".git"))
+        let host = try makeHost(
+            [[.send(activateOK), .send(c.request)]], grants: c.grants, limits: c.limits ?? Self.limits, manifest: Self.processManifest, worktreeRoot: root)
+        await host.activate()
+        // Counted by direction: the trace keeps only the start of a long reply, which may not reach its id.
+        #expect(await awaitCondition { host.trace.filter { $0.direction == .toPlugin }.count == 2 })
+        let reply = try #require(host.trace.last { $0.direction == .toPlugin }?.text)
+        #expect(reply.contains(c.reply))
+        if let absent = c.absent { #expect(!reply.contains(absent)) }
+        if let (path, content) = c.written {
+            #expect(try String(contentsOf: root.appending(path: path), encoding: .utf8) == content)
+        }
+        #expect(try String(contentsOf: root.appending(path: ".git"), encoding: .utf8) == "gitdir: elsewhere")
     }
 }

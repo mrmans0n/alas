@@ -14,12 +14,15 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case runsStart = "runs.start"
     case reviewRead = "review.read"
     case reviewWrite = "review.write"
+    case processExec = "process.exec"
+    case filesRead = "files.read"
+    case filesWrite = "files.write"
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
     var api: Int {
         switch self {
         case .notify, .network, .timers: 5
-        case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite: 6
+        case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
         default: 4
         }
     }
@@ -40,8 +43,22 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .runsStart: "Start run scripts in this project"
         case .reviewRead: "Read the pull request state and checks of this project's worktrees"
         case .reviewWrite: "Add review comments to changes in this project"
+        case .processExec: "Run the commands listed below in this project's worktrees"
+        case .filesRead: "Read files in this project's worktrees"
+        case .filesWrite: "Create and change files in this project's worktrees"
         }
     }
+
+    /// Acts with the user's permissions outside the sandbox, so approving it takes a separate confirmation.
+    var isFullAccess: Bool { self == .processExec || self == .filesWrite }
+}
+
+/// A command the plugin may run with `process.exec`: an exact argv prefix (API 6).
+struct PluginProcessContribution: Equatable, Sendable {
+    let id: String
+    let command: [String]
+    var appendArgs = false
+    var longRunning = false
 }
 
 /// Changes a plugin can subscribe to with the manifest's `events`.
@@ -152,6 +169,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case invalidSetting(String)
     case invalidNetwork(String)
     case invalidPanel(String)
+    case invalidProcess(String)
 
     var description: String {
         switch self {
@@ -185,6 +203,8 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "invalid network list: \(reason)"
         case .invalidPanel(let reason):
             "invalid panel contribution: \(reason)"
+        case .invalidProcess(let reason):
+            "invalid process: \(reason)"
         }
     }
 }
@@ -198,6 +218,8 @@ struct PluginManifest: Equatable, Sendable {
     static let maxSettings = 16
     static let maxPanels = 2
     static let maxPanelsAPI6 = 4
+    static let maxProcesses = 16
+    static let maxArgBytes = 1024
 
     let id: String
     let name: String
@@ -212,6 +234,8 @@ struct PluginManifest: Equatable, Sendable {
     var settings: [PluginSetting] = []
     /// Hosts `http/fetch` may reach: exact, lowercase names.
     var network: [String] = []
+    /// Commands `process.exec` may run.
+    var processes: [PluginProcessContribution] = []
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -272,10 +296,17 @@ struct PluginManifest: Equatable, Sendable {
             throw .invalidNetwork("\"\(host)\" is not a lowercase hostname; no schemes, ports or wildcards")
         }
         let settings = try parseSettings(raw.settings ?? [], network: network)
+        if raw.processes != nil, api < 6 { throw .needsNewerAPI("\"processes\"", api: 6) }
+        let processes = try parseProcesses(raw.processes ?? [])
+        if capabilities.contains(.processExec) {
+            guard !processes.isEmpty else { throw .invalidProcess("capability \"process.exec\" needs at least one process") }
+        } else if !processes.isEmpty {
+            throw .invalidProcess("\"processes\" needs capability \"process.exec\"")
+        }
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network)
+            settings: settings, network: network, processes: processes)
     }
 
     static func isValidHost(_ host: String) -> Bool {
@@ -323,6 +354,26 @@ struct PluginManifest: Equatable, Sendable {
             settings.append(PluginSetting(key: key, title: title, kind: kind, defaultValue: entry.defaultValue, hosts: hosts))
         }
         return settings
+    }
+
+    private static func parseProcesses(_ raw: [Raw.RawProcess]) throws(PluginManifestError) -> [PluginProcessContribution] {
+        guard raw.count <= maxProcesses else { throw .invalidProcess("at most \(maxProcesses) processes") }
+        var processes: [PluginProcessContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidProcess("invalid process id \"\(id)\"") }
+            guard !processes.contains(where: { $0.id == id }) else { throw .invalidProcess("duplicate process id \"\(id)\"") }
+            let command = entry.command ?? []
+            guard let executable = command.first, !executable.isEmpty else {
+                throw .invalidProcess("process \"\(id)\" needs a command")
+            }
+            guard command.allSatisfy({ $0.utf8.count <= maxArgBytes }) else {
+                throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxArgBytes) bytes")
+            }
+            processes.append(PluginProcessContribution(
+                id: id, command: command, appendArgs: entry.appendArgs ?? false, longRunning: entry.longRunning ?? false))
+        }
+        return processes
     }
 
     private static func parseCommands(_ raw: [Raw.RawCommand], api: Int) throws(PluginManifestError) -> [PluginCommandContribution] {
@@ -428,6 +479,12 @@ private struct Raw: Decodable {
         let icon: String?
         let location: String?
     }
+    struct RawProcess: Decodable {
+        let id: String?
+        let command: [String]?
+        let appendArgs: Bool?
+        let longRunning: Bool?
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
@@ -443,10 +500,11 @@ private struct Raw: Decodable {
     let events: [String]?
     let settings: [RawSetting]?
     let network: [String]?
+    let processes: [RawProcess]?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, contributes }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -461,6 +519,7 @@ private struct Raw: Decodable {
         events = container.contains(.events) ? try container.decode([String].self, forKey: .events) : nil
         settings = container.contains(.settings) ? try container.decode([RawSetting].self, forKey: .settings) : nil
         network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
+        processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)

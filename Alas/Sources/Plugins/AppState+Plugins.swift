@@ -149,6 +149,13 @@ extension AppState {
                 case .error(let message), .errorWithExitCode(let message, _): return message
                 case .ok, .text: return nil
                 }
+            },
+            worktreePath: { [weak self] id in
+                // Processes and files run on this Mac, so remote worktrees are out of reach.
+                guard let worktree = self?.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == id }),
+                      RemoteHostRegistry.shared.host(forPath: worktree.path.path) == nil
+                else { return nil }
+                return worktree.path
             })
     }
 
@@ -373,6 +380,21 @@ extension AppState {
               let target = PluginCommandRouting.target(for: item.key)
         else { return }
         Task { await host.runCommand(command, target: target) }
+    }
+
+    /// Long-running plugin processes in `worktreeID`, for the Run tab.
+    func pluginProcessRuns(projectID: String, worktreeID: String) -> [PluginProcessItem] {
+        guard let manager = pluginManager else { return [] }
+        return manager.plugins.flatMap { plugin -> [PluginProcessItem] in
+            guard let host = manager.host(pluginID: plugin.id, projectID: projectID) else { return [] }
+            return host.processRuns.filter { $0.worktree == worktreeID }.map {
+                PluginProcessItem(pluginID: plugin.id, projectID: projectID, pluginName: plugin.manifest.name, run: $0)
+            }
+        }
+    }
+
+    func stopPluginProcess(_ item: PluginProcessItem) {
+        pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID)?.stopProcess(item.run.id)
     }
 
     func openPluginTab(_ tab: PluginTabState) {

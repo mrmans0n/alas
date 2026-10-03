@@ -69,6 +69,8 @@ struct PluginHostActions {
     var addReviewComment: @MainActor (_ comment: PluginReviewCommentParams, _ author: String) async -> String? = { _, _ in
         "review comments are not available"
     }
+    /// The folder of a local worktree of this project; nil for any other id and for remote worktrees.
+    var worktreePath: (_ worktree: String) -> URL? = { _ in nil }
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
@@ -107,9 +109,28 @@ final class PluginHost {
         "run/start": .runsStart,
         "run/output": .runsRead,
         "review/comment": .reviewWrite,
+        "process/run": .processExec,
+        "process/start": .processExec,
+        "process/stop": .processExec,
+        "file/read": .filesRead,
+        "file/list": .filesRead,
+        "file/write": .filesWrite,
     ]
     /// Methods a manifest for an older API does not know.
-    private static let api6Methods: Set<String> = ["session/send", "run/start", "run/output", "review/comment"]
+    private static let api6Methods: Set<String> = [
+        "session/send", "run/start", "run/output", "review/comment",
+        "process/run", "process/start", "process/stop", "file/read", "file/list", "file/write",
+    ]
+    static let maxProcessesRunning = 2
+    static let maxProcessArgs = 32
+    static let maxProcessStdinBytes = 256 << 10
+    static let processTimeout: Duration = .seconds(600)
+    /// Between asking a process to stop and killing it.
+    static let processKillGrace: Duration = .seconds(5)
+    /// Output the Run tab keeps for a long-running process.
+    static let processRunOutputBytes = 64 << 10
+    /// Long-running processes listed in the Run tab, exited ones included; the oldest exited go first.
+    static let maxProcessRuns = 8
     static let maxRunOutputBytes = 64 * 1024
     static let maxRequestsInFlight = 4
     static let maxPromptBytes = 32 * 1024
@@ -144,6 +165,8 @@ final class PluginHost {
     private(set) var panelPlaces: [String: PluginPanelPlace] = [:]
     /// Badges the plugin put on rows with `decorations/set`. Cleared whenever the instance ends.
     private(set) var decorations: [PluginDecorationKey: [PluginDecoration]] = [:]
+    /// Long-running processes this instance started, shown in the Run tab; kept after they exit until the next start.
+    private(set) var processRuns: [PluginProcessRun] = []
     @ObservationIgnored private var visibleViews = 0
     /// How many views show each panel in each place. Owned by the UI, so it outlives a restart.
     @ObservationIgnored private var visiblePanels: [PluginPanelPlace: Int] = [:]
@@ -165,6 +188,9 @@ final class PluginHost {
     /// Requests answered in a later delivery (`run/start`, `run/output`, `review/comment`), by token.
     @ObservationIgnored private var requests: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
+    /// Running processes of this instance, by run id. Ending the instance stops them.
+    @ObservationIgnored private var processes: [String: any PluginProcessHandle] = [:]
+    @ObservationIgnored private var nextProcess = 0
 
     @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
@@ -174,6 +200,7 @@ final class PluginHost {
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
     @ObservationIgnored private let settings: PluginSettings
     @ObservationIgnored private let transport: any PluginHTTPTransport
+    @ObservationIgnored private let launcher: any PluginProcessLauncher
     @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
 
     init(
@@ -185,6 +212,7 @@ final class PluginHost {
         storage: PluginStorage,
         settings: PluginSettings,
         transport: any PluginHTTPTransport = PluginURLSessionTransport(),
+        launcher: any PluginProcessLauncher = PluginFoundationLauncher(),
         limits: PluginLimits = PluginLimits(),
         now: @escaping () -> ContinuousClock.Instant = { .now },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
@@ -199,6 +227,7 @@ final class PluginHost {
         self.now = now
         self.settings = settings
         self.transport = transport
+        self.launcher = launcher
         self.sleep = sleep
     }
 
@@ -215,6 +244,7 @@ final class PluginHost {
         taskGeneration += 1
         warnedNotifyNotGranted = false
         endInstance()
+        processRuns = []
         do {
             let loaded = try await PluginRuntime.load(
                 source: source, limits: limits, tabCount: manifest.tabs.count)
@@ -637,8 +667,197 @@ final class PluginHost {
                 }
                 return self.encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
             }
+        case "process/run", "process/start":
+            return startProcess(method, id: id, data: data)
+        case "process/stop":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginProcessStopParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            guard processes[params.run] != nil else { return errorReply(id, code: -32003, "no running process \(params.run)") }
+            stopProcess(params.run)
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "file/read":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginFileParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            return fileReply(id, params.worktree) { PluginFiles.read(params.path, in: $0).map(PluginFileReadResult.init) }
+        case "file/list":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginFileListParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            return fileReply(id, params.worktree) { PluginFiles.list(params.dir ?? "", in: $0) }
+        case "file/write":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginFileWriteParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            return fileReply(id, params.worktree) {
+                PluginFiles.write(params.path, content: params.content, in: $0).map { PluginEmptyPayload() }
+            }
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
+        }
+    }
+
+    /// The filesystem work runs off the main actor, so a large folder or a slow disk does not stall the app; the
+    /// answer comes in a later delivery.
+    private func fileReply<Result: Encodable & Sendable>(
+        _ id: JSONRPCID, _ worktree: String, _ work: @escaping @Sendable (URL) -> Swift.Result<Result, PluginFilesError>
+    ) -> Data? {
+        guard let root = actions.worktreePath(worktree) else { return errorReply(id, code: -32003, "unknown worktree \(worktree)") }
+        return replyLater(id) { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { work(root) }.value
+            guard let self else { return Data() }
+            switch outcome {
+            case .success(let result): return self.encode(PluginResponse(id: id, result: result, error: nil))
+            case .failure(let error): return self.errorReply(id, code: -32003, error.message)
+            }
+        }
+    }
+
+    // MARK: - Processes
+
+    /// Runs a command the manifest declares, as declared, with args appended only where it allows them.
+    /// `process/run` answers with the output in a later delivery; `process/start` answers with the run at once.
+    private func startProcess(_ method: String, id: JSONRPCID, data: Data) -> Data? {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginProcessRunParams>.self, from: data).params else {
+            return errorReply(id, code: -32602, "invalid params for \(method)")
+        }
+        guard let entry = manifest.processes.first(where: { $0.id == params.id }) else {
+            return errorReply(id, code: -32602, "unknown process \(params.id)")
+        }
+        let longRunning = method == "process/start"
+        guard entry.longRunning == longRunning else {
+            return errorReply(id, code: -32602, "process \(entry.id) is \(entry.longRunning ? "" : "not ")longRunning; use \(entry.longRunning ? "process/start" : "process/run")")
+        }
+        let args = params.args ?? []
+        guard args.isEmpty || entry.appendArgs else { return errorReply(id, code: -32602, "process \(entry.id) takes no args") }
+        guard args.count <= Self.maxProcessArgs, args.allSatisfy({ $0.utf8.count <= PluginManifest.maxArgBytes }) else {
+            return errorReply(id, code: -32602, "at most \(Self.maxProcessArgs) args of up to 1 KiB each")
+        }
+        guard (params.stdin?.utf8.count ?? 0) <= Self.maxProcessStdinBytes, !(longRunning && params.stdin != nil) else {
+            return errorReply(id, code: -32602, "stdin is up to 256 KiB, and only for process/run")
+        }
+        guard let directory = actions.worktreePath(params.worktree) else {
+            return errorReply(id, code: -32003, "unknown worktree \(params.worktree)")
+        }
+        guard processes.count < Self.maxProcessesRunning else {
+            return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")
+        }
+        // Checked before launching, so a refused reply never leaves a process behind.
+        guard longRunning || requests.count < Self.maxRequestsInFlight else {
+            return errorReply(id, code: -32003, "too many requests in flight")
+        }
+        let argv = entry.command + args
+        // stdout and stderr together, half the message limit, so the reply usually fits as it is; the Run tab keeps
+        // the latest output.
+        let maxOutput = limits.maxMessageBytes / 2
+        let handle: any PluginProcessHandle
+        do {
+            handle = try launcher.launch(
+                argv, in: directory, stdin: params.stdin.map { Data($0.utf8) },
+                keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
+        } catch {
+            return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+        }
+        nextProcess += 1
+        let run = "p\(nextProcess)"
+        processes[run] = handle
+        let instance = instance
+        if longRunning {
+            processRuns.append(PluginProcessRun(id: run, process: entry.id, worktree: params.worktree, command: argv))
+            if processRuns.count > Self.maxProcessRuns, let oldest = processRuns.firstIndex(where: { $0.exit != nil }) {
+                processRuns.remove(at: oldest)
+            }
+            // Not tied to the instance: the Run tab shows the exit even after the plugin stops.
+            Task { [weak self] in await self?.follow(run, handle, instance: instance) }
+            return encode(PluginResponse(id: id, result: PluginProcessStartResult(run: run), error: nil))
+        }
+        let sleep = sleep
+        return replyLater(id) { [weak self] in
+            let timeout = Task { () -> Bool in
+                do { try await sleep(Self.processTimeout) } catch { return false }
+                handle.terminate()
+                if (try? await sleep(Self.processKillGrace)) != nil { handle.kill() }
+                return true
+            }
+            var stdout = Data()
+            var stderr = Data()
+            var truncated = false
+            var exit: Int32 = -1
+            for await event in handle.events {
+                switch event {
+                case .stdout(let chunk), .stderr(let chunk):
+                    let room = max(0, maxOutput - stdout.count - stderr.count)
+                    if chunk.count > room { truncated = true }
+                    if case .stdout = event { stdout.append(chunk.prefix(room)) } else { stderr.append(chunk.prefix(room)) }
+                case .truncated:
+                    truncated = true
+                case .exit(let code):
+                    exit = code
+                }
+            }
+            timeout.cancel()
+            let timedOut = await timeout.value
+            guard let self else { return Data() }
+            if self.instance == instance { self.processes[run] = nil }
+            return self.processRunReply(
+                id, exit: exit, stdout: stdout, stderr: stderr, truncated: truncated, timedOut: timedOut)
+        }
+    }
+
+    /// The run's result, its output cut until the encoded reply fits in a message: control characters escape to six
+    /// bytes, so the raw size does not tell. The exit status always gets through.
+    private func processRunReply(
+        _ id: JSONRPCID, exit: Int32, stdout: Data, stderr: Data, truncated: Bool, timedOut: Bool
+    ) -> Data {
+        var stdout = stdout
+        var stderr = stderr
+        var truncated = truncated
+        while true {
+            let reply = encode(PluginResponse(id: id, result: PluginProcessRunResult(
+                exit: exit, stdout: String(decoding: stdout, as: UTF8.self), stderr: String(decoding: stderr, as: UTF8.self),
+                truncated: truncated, timedOut: timedOut), error: nil))
+            let excess = reply.count - limits.maxMessageBytes
+            guard excess > 0, !(stdout.isEmpty && stderr.isEmpty) else { return reply }
+            // Cuts the longer stream by its share of the excess, at its own escaping rate, so little more than
+            // needed goes and a few passes settle it.
+            truncated = true
+            let longer = stdout.count >= stderr.count ? stdout : stderr
+            let escaped = max(1, encode(String(decoding: longer, as: UTF8.self)).count)
+            let kept = longer.prefix(max(0, longer.count - max(1, (longer.count * excess + escaped - 1) / escaped)))
+            if stdout.count >= stderr.count { stdout = kept } else { stderr = kept }
+        }
+    }
+
+    /// Keeps a long-running process's latest output for the Run tab and tells the plugin when it exits.
+    private func follow(_ run: String, _ handle: any PluginProcessHandle, instance: Int) async {
+        var exit: Int32?
+        for await event in handle.events {
+            let index = processRuns.firstIndex { $0.id == run }
+            switch event {
+            case .stdout(let chunk), .stderr(let chunk):
+                guard let index else { continue }
+                processRuns[index].append(chunk, keeping: Self.processRunOutputBytes)
+            case .truncated:
+                break
+            case .exit(let code):
+                exit = code
+                if let index { processRuns[index].exit = code }
+            }
+        }
+        guard self.instance == instance else { return }
+        processes[run] = nil
+        guard let exit, state == .active else { return }
+        await deliver(encode(JSONRPCEnvelope(id: nil, method: "process/exited", params: PluginProcessExitedParams(run: run, exit: exit))))
+    }
+
+    /// Asks the process to stop and kills it if it has not after the grace period. Also the Run tab's Stop.
+    func stopProcess(_ run: String) {
+        guard let handle = processes[run] else { return }
+        handle.terminate()
+        let sleep = sleep
+        Task {
+            if (try? await sleep(Self.processKillGrace)) != nil { handle.kill() }
         }
     }
 
@@ -821,9 +1040,12 @@ final class PluginHost {
         return nil
     }
 
-    /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled. Deferred
-    /// requests are only forgotten, so work the plugin asked for still finishes; their replies are discarded.
+    /// Drops what belongs to the instance that is ending: its timers and its fetches, which are cancelled, and its
+    /// processes, which are stopped. Deferred requests are only forgotten, so work the plugin asked for still
+    /// finishes; their replies are discarded.
     private func endInstance() {
+        for run in processes.keys { stopProcess(run) }
+        processes = [:]
         instance += 1
         for fetch in fetches.values { fetch.cancel() }
         fetches = [:]
