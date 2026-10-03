@@ -30,7 +30,11 @@ final class LSPTransport: @unchecked Sendable {
         let startedAt: String
     }
 
-    private let process = Process()
+    private let executable: URL
+    private let arguments: [String]
+    private let environment: [String: String]
+    /// Set by `start()`.
+    private var process: SpawnedProcess?
     private let stdin = Pipe()
     private let stdout = Pipe()
     private let stderr = Pipe()
@@ -58,21 +62,14 @@ final class LSPTransport: @unchecked Sendable {
         var cont: AsyncStream<Incoming>.Continuation!
         self.incoming = AsyncStream { c in cont = c }
         self.continuation = cont
-        process.executableURL = executable
-        process.arguments = arguments
+        self.executable = executable
+        self.arguments = arguments
         // Always inherit the parent environment, then overlay user values on
-        // top — assigning `process.environment` directly to the user's dict
-        // wipes `PATH`, `HOME`, developer-tool variables, etc., so a config
-        // that only sets one flag would also stop `/usr/bin/env` from
-        // resolving Homebrew-installed servers.
-        if let env = environment {
-            var merged = ProcessInfo.processInfo.environment
-            for (k, v) in env { merged[k] = v }
-            process.environment = merged
-        }
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
+        // top — using the user's dict alone would wipe `PATH`, `HOME`,
+        // developer-tool variables, etc., so a config that only sets one flag
+        // would also stop `/usr/bin/env` from resolving Homebrew-installed
+        // servers.
+        self.environment = ProcessInfo.processInfo.environment.merging(environment ?? [:]) { $1 }
     }
 
     func start() throws {
@@ -102,9 +99,13 @@ final class LSPTransport: @unchecked Sendable {
             if data.isEmpty { return }
             self?.continuation?.yield(.stderr(data))
         }
-        process.terminationHandler = { [weak self] p in
+        // The child leads its own process group from the spawn, so signals
+        // from `terminate()` reach the whole tree via `kill(-pid, …)`.
+        let process = try SpawnedProcess(
+            executable: executable, arguments: arguments, environment: environment,
+            stdin: stdin, stdout: stdout, stderr: stderr
+        ) { [weak self] pid, termination in
             guard let self else { return }
-            let pid = p.processIdentifier
             if pid > 0 {
                 // Last chance to reach same-group descendants that were
                 // spawned after the most recent tracker tick. Later shutdown
@@ -121,19 +122,11 @@ final class LSPTransport: @unchecked Sendable {
             for d in Self.currentlyMatching(cachedTargets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
-            self.continuation?.yield(.exited(p.terminationStatus))
+            self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
-        try process.run()
-        // Move the child into its own process group so signals from
-        // `terminate()` can be delivered to the whole tree via
-        // `kill(-pid, …)`. Foundation's Process doesn't expose
-        // POSIX_SPAWN_SETPGROUP, so we race the child via the parent —
-        // either side may EACCES once exec completes, but at least one
-        // of those two calls succeeds and the child ends up as group
-        // leader. Same pattern as `ACPTerminal`.
-        _ = setpgid(process.processIdentifier, process.processIdentifier)
-        startDescendantForkObserver(for: process.processIdentifier)
+        self.process = process
+        startDescendantForkObserver(for: process.pid)
         refreshOrphanSet()
         startDescendantTracker()
     }
@@ -150,8 +143,8 @@ final class LSPTransport: @unchecked Sendable {
     func terminate() {
         descendantTracker?.cancel()
         cancelDescendantForkObservers()
-        let pid = process.processIdentifier
-        guard pid > 0 else { return }
+        guard let process, process.pid > 0 else { return }
+        let pid = process.pid
         refreshLock.lock()
         lock.lock()
         let rootAlive = !rootHasExited
@@ -255,7 +248,7 @@ final class LSPTransport: @unchecked Sendable {
         for pid in descendants.map(\.pid) {
             startDescendantForkObserver(for: pid)
         }
-        let rootPid = process.processIdentifier
+        let rootPid = process?.pid ?? 0
         var watched = Set(descendants.map(\.pid))
         if rootPid > 0 { watched.insert(rootPid) }
         pruneDescendantForkObservers(keeping: watched)
@@ -267,9 +260,9 @@ final class LSPTransport: @unchecked Sendable {
         lock.lock()
         let shouldStop = rootHasExited
         lock.unlock()
-        guard !shouldStop, process.isRunning else { return }
+        guard !shouldStop, let process, process.isRunning else { return }
 
-        let pid = process.processIdentifier
+        let pid = process.pid
         guard pid > 0 else { return }
         let live = Set(Self.collectDescendants(of: pid))
         lock.lock()

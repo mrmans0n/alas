@@ -146,7 +146,7 @@ final class PluginProcessOutput: @unchecked Sendable {
     }
 }
 
-/// Runs processes with Foundation, in Alas's own login environment.
+/// Runs processes with `posix_spawn`, in Alas's own login environment.
 struct PluginFoundationLauncher: PluginProcessLauncher {
     func launch(
         _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
@@ -188,13 +188,16 @@ struct PluginFoundationLauncher: PluginProcessLauncher {
 private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sendable {
     var events: AsyncStream<PluginProcessEvent> { output.events }
     private let output: PluginProcessOutput
-    private let process = Process()
+    private var process: SpawnedProcess!
+    /// Held for as long as the handle: a pipe's read end closes when the pipe goes.
+    private let out = Pipe()
+    private let err = Pipe()
     private let lock = NSLock()
     private var openPipes = 2
     private var exitStatus: Int32?
     private var finished = false
-    /// Every descendant seen while the root ran, as `ACPTerminal` tracks them: the parent-side `setpgid` can lose
-    /// the race with `exec`, and once the root exits its children are reparented and no longer found from it.
+    /// Every descendant seen while the root ran, as `ACPTerminal` tracks them: children that leave the group, which
+    /// once the root exits are reparented and no longer found from it.
     private var descendants: Set<ACPTerminal.DescendantKey> = []
     private var tracker: Task<Void, Never>?
 
@@ -203,16 +206,7 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
         output: PluginProcessOutput
     ) throws {
         self.output = output
-        process.executableURL = executable
-        process.arguments = arguments
-        process.currentDirectoryURL = directory
-        process.environment = environment
-        let out = Pipe()
-        let err = Pipe()
-        let input = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        process.standardInput = stdin == nil ? FileHandle.nullDevice : input
+        let input = stdin == nil ? nil : Pipe()
         for (stream, pipe) in [out, err].enumerated() {
             pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
                 let data = handle.availableData
@@ -225,33 +219,30 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
                 }
             }
         }
-        process.terminationHandler = { [weak self] process in
-            let status = process.terminationReason == .uncaughtSignal
-                ? 128 + process.terminationStatus : process.terminationStatus
+        // Its own process group from the spawn, so one signal reaches what it started; the tracked descendants
+        // cover children that leave the group.
+        process = try SpawnedProcess(
+            executable: executable, arguments: arguments, environment: environment, directory: directory,
+            stdin: input, stdout: out, stderr: err
+        ) { [weak self] pid, termination in
             guard let self else { return }
-            settle { $0.exitStatus = status }
+            settle { $0.exitStatus = termination.shellStatus }
             // What it leaves running goes with it, killed if it outlasts the grace. Held until then: the reader may
             // let go of the handle as soon as the pipes close.
-            signalLeftovers(SIGTERM)
+            signalLeftovers(SIGTERM, of: pid)
             DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [self] in
-                signalLeftovers(SIGKILL)
+                signalLeftovers(SIGKILL, of: pid)
                 settle { $0.openPipes = 0 }
             }
         }
-        try process.run()
-        // Its own process group, so one signal reaches what it started. Foundation cannot spawn into one, so this
-        // races the exec; the tracked descendants cover a lost race and children that leave the group.
-        // ponytail: a child forked and orphaned before the first sample, after a lost race, escapes; a posix_spawn
-        // launcher with POSIX_SPAWN_SETPGROUP, shared with ACPTerminal, LSPTransport and JSONRPCStdioTransport, closes it.
-        let pid = process.processIdentifier
-        _ = setpgid(pid, pid)
+        let pid = process.pid
         tracker = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled, let self, self.lock.withLock({ self.exitStatus == nil }) {
                 self.track(ACPTerminal.collectChildDescendants(of: pid))
                 try? await Task.sleep(for: .seconds(1))
             }
         }
-        if let stdin {
+        if let stdin, let input {
             DispatchQueue.global().async {
                 try? input.fileHandleForWriting.write(contentsOf: stdin)
                 try? input.fileHandleForWriting.close()
@@ -282,7 +273,7 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
     /// The root and its group only while it runs, since afterwards its pid may belong to something else; every
     /// tracked descendant that is still the same process, whether or not the root has exited.
     private func signal(_ signal: Int32) {
-        let pid = process.processIdentifier
+        let pid = process.pid
         let rootRunning = lock.withLock { exitStatus == nil } && process.isRunning
         if rootRunning {
             track(ACPTerminal.collectChildDescendants(of: pid))
@@ -296,8 +287,8 @@ private final class FoundationPluginProcess: PluginProcessHandle, @unchecked Sen
 
     /// After the root exits: its group, whose id cannot be reused while any member is left, and every tracked
     /// descendant that is still the same process.
-    private func signalLeftovers(_ signal: Int32) {
-        _ = Darwin.kill(-process.processIdentifier, signal)
+    private func signalLeftovers(_ signal: Int32, of pid: pid_t) {
+        _ = Darwin.kill(-pid, signal)
         for descendant in ACPTerminal.currentlyMatching(lock.withLock { descendants }) {
             _ = Darwin.kill(descendant.pid, signal)
         }

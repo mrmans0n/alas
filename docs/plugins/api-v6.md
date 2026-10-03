@@ -292,7 +292,8 @@ or `process.exec` without `processes`, is refused.
   is not UTF-8, or a reply that does not fit in a message answers `-32003`.
 - `file/list` answers with up to 2000 entries sorted by name, fewer when their
   names would not fit in one reply, with `kind` `file`, `directory` or
-  `symlink`, and `truncated: true` when there were more.
+  `symlink`, and `truncated: true` when there were more. A very large folder
+  lists a sorted sample of its first 20,000 entries read, with `truncated: true`.
 - `file/write` writes `content`, up to 512 KiB and within the message limit,
   replacing the file and creating missing folders inside the worktree. Writes
   show up in the Changes tab like any other edit.

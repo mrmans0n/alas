@@ -51,7 +51,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let startedAt: ProcessStartTime
     }
 
-    private let process = Process()
+    private let executable: URL
+    private let arguments: [String]
+    private let environment: [String: String]
+    /// Set by `start()`.
+    private var process: SpawnedProcess?
     private let stdin = Pipe()
     private let stdout = Pipe()
     private let stderr = Pipe()
@@ -91,23 +95,16 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         var cont: AsyncStream<Incoming>.Continuation!
         self.incoming = AsyncStream { c in cont = c }
         self.continuation = cont
-        process.executableURL = executable
-        process.arguments = arguments
-        if let env = environment {
-            if replaceEnv {
-                // Use exactly what the caller provided — used by ACP where
-                // we explicitly need to *remove* env vars (CLAUDECODE etc.)
-                // that the parent would otherwise inherit.
-                process.environment = env
-            } else {
-                var merged = ProcessInfo.processInfo.environment
-                for (k, v) in env { merged[k] = v }
-                process.environment = merged
-            }
+        self.executable = executable
+        self.arguments = arguments
+        if let env = environment, replaceEnv {
+            // Use exactly what the caller provided — used by ACP where
+            // we explicitly need to *remove* env vars (CLAUDECODE etc.)
+            // that the parent would otherwise inherit.
+            self.environment = env
+        } else {
+            self.environment = ProcessInfo.processInfo.environment.merging(environment ?? [:]) { $1 }
         }
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
     }
 
     func start() throws {
@@ -140,9 +137,14 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             if d.isEmpty { return }
             self?.continuation?.yield(.stderr(d))
         }
-        process.terminationHandler = { [weak self] p in
+        // `.processTree` spawns the child as the leader of its own process
+        // group, so signals from `terminate()` reach the whole tree via
+        // `kill(-pid, …)`.
+        let process = try SpawnedProcess(
+            executable: executable, arguments: arguments, environment: environment,
+            newProcessGroup: terminationScope == .processTree, stdin: stdin, stdout: stdout, stderr: stderr
+        ) { [weak self] pid, termination in
             guard let self else { return }
-            let pid = p.processIdentifier
             if self.terminationScope == .processTree, pid > 0 {
                 // Last chance to reach same-group descendants that were
                 // spawned after the most recent tracker tick. Later shutdown
@@ -161,22 +163,14 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
                     _ = Darwin.kill(d.pid, SIGTERM)
                 }
             }
-            self.continuation?.yield(.exited(p.terminationStatus))
+            self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
-        try process.run()
+        self.process = process
         guard terminationScope == .processTree else { return }
-        // Move the child into its own process group so signals from
-        // `terminate()` can be delivered to the whole tree via
-        // `kill(-pid, …)`. Foundation's Process doesn't expose
-        // POSIX_SPAWN_SETPGROUP, so we race the child via the parent —
-        // either side may EACCES once exec completes, but at least one
-        // of those two calls succeeds and the child ends up as group
-        // leader. Same pattern as `ACPTerminal`.
-        _ = setpgid(process.processIdentifier, process.processIdentifier)
-        startDescendantForkObserver(for: process.processIdentifier)
+        startDescendantForkObserver(for: process.pid)
         refreshLock.lock()
-        let initialDescendants = Set(Self.collectChildDescendants(of: process.processIdentifier))
+        let initialDescendants = Set(Self.collectChildDescendants(of: process.pid))
         mergeInitialOrphanSet(initialDescendants)
         refreshLock.unlock()
         startDescendantTracker()
@@ -194,8 +188,8 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     func terminate() {
         descendantTracker?.cancel()
         cancelDescendantForkObservers()
-        let pid = process.processIdentifier
-        guard pid > 0 else { return }
+        guard let process, process.pid > 0 else { return }
+        let pid = process.pid
         refreshLock.lock()
         lock.lock()
         let rootAlive = !rootHasExited
@@ -306,7 +300,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         for pid in descendants.map(\.pid) {
             startDescendantForkObserver(for: pid)
         }
-        let rootPid = process.processIdentifier
+        let rootPid = process?.pid ?? 0
         var watched = Set(descendants.map(\.pid))
         if rootPid > 0 { watched.insert(rootPid) }
         pruneDescendantForkObservers(keeping: watched)
@@ -331,9 +325,9 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         lock.lock()
         let shouldStop = rootHasExited
         lock.unlock()
-        guard !shouldStop, process.isRunning else { return }
+        guard !shouldStop, let process, process.isRunning else { return }
 
-        let pid = process.processIdentifier
+        let pid = process.pid
         guard pid > 0 else { return }
         let live = Set(Self.collectDescendants(of: pid))
         lock.lock()
