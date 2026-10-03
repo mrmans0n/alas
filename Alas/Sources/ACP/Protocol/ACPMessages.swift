@@ -912,6 +912,11 @@ struct ACPSessionNewResult: Codable, Equatable {
         configOptions = (try? c.decode([ACPConfigOption].self, forKey: .configOptions)) ?? []
     }
 
+    /// Only an id: no models, modes, or config options came with it.
+    var isBareSessionID: Bool {
+        availableModels.isEmpty && availableModes.isEmpty && configOptions.isEmpty
+    }
+
     func withSessionId(_ sessionId: String) -> ACPSessionNewResult {
         ACPSessionNewResult(
             sessionId: sessionId,

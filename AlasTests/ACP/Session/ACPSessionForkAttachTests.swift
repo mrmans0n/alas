@@ -42,6 +42,32 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == false)
     }
 
+    @Test("a fork answered with a bare id is resumed so it is live with its modes")
+    func bareForkResultIsResumed() async throws {
+        let store = try seededForkStore()
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true, supportsResume: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
+        client.script(method: "session/resume") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "forked-remote",
+                availableModels: [],
+                availableModes: [ACPModeInfo(id: "plan", name: "Plan", description: nil)],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/fork", "session/resume"])
+        #expect(target.remoteSessionId == "forked-remote")
+        #expect(target.availableModes.map(\.id) == ["plan"])
+    }
+
     @Test("non-durable connection falls back without issuing session/fork")
     func nonDurableConnectionFallsBackWithoutForking() async throws {
         let store = try seededForkStore()
@@ -994,6 +1020,7 @@ struct ACPSessionForkAttachTests {
     private func scriptInitialize(
         _ client: ACPMockClient,
         supportsFork: Bool,
+        supportsResume: Bool = false,
         supportsClose: Bool = false,
         authMethods: [ACPInitializeResult.ACPAuthMethod] = []
     ) {
@@ -1002,6 +1029,7 @@ struct ACPSessionForkAttachTests {
                 protocolVersion: 1,
                 agentCapabilities: .init(
                     sessionCapabilities: .init(
+                        resume: supportsResume ? .init() : nil,
                         fork: supportsFork ? .init() : nil,
                         close: supportsClose ? .init() : nil
                     )

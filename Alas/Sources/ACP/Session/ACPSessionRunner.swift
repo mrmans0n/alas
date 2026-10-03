@@ -3295,6 +3295,7 @@ extension ACPSessionRunner {
                 if let pendingPreamble { privateBlocks.append(.text(pendingPreamble)) }
                 if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
                 for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
+                if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     onDispatchRegistered?()

@@ -1986,9 +1986,15 @@ final class ACPSessionManager: ObservableObject {
         // Attach enters the read-only mode before it marks the session ready;
         // a failed attach would otherwise queue the question for a later one.
         guard side.agentState == .ready, await enterSideSessionMode(side) else {
+            // A failed attach says why; only a live session refused the mode.
+            let error = if case .failed(let reason) = side.agentState {
+                ACPSideQuestionError.attachFailed(reason)
+            } else {
+                ACPSideQuestionError.unsafeMode
+            }
             await discardSideSession(id: side.id)
-            failSideQuestion(entry, parentID: parentID, error: ACPSideQuestionError.unsafeMode)
-            throw ACPSideQuestionError.unsafeMode
+            failSideQuestion(entry, parentID: parentID, error: error)
+            throw error
         }
         guard sideQuestions[parentID]?.id == entry.id else { return side }
         guard submit(sessionId: side.id, text: question, attachments: [], intent: .auto, onCompleted: { _ in }) else {
@@ -4080,7 +4086,7 @@ final class ACPSessionManager: ObservableObject {
                     using: connection,
                     sessionCapabilities: initialized.sessionCapabilities
                 ) {
-                    try await connection.forkSession(
+                    let forked = try await connection.forkSession(
                         cwd: worktreePath,
                         sessionId: sourceRemoteSessionID,
                         mcpServers: wireMCPServers,
@@ -4088,6 +4094,22 @@ final class ACPSessionManager: ObservableObject {
                             sessionId: session.id,
                             method: "session/fork",
                             remoteSessionId: sourceRemoteSessionID
+                        )
+                    )
+                    // Newer Claude adapters only copy the transcript and
+                    // answer with a bare id; the fork isn't live, and has no
+                    // modes or options, until it is resumed.
+                    guard forked.isBareSessionID, initialized.sessionCapabilities.supportsResume else {
+                        return forked
+                    }
+                    return try await connection.resumeSession(
+                        cwd: worktreePath,
+                        sessionId: forked.sessionId,
+                        mcpServers: wireMCPServers,
+                        brokerOperationKey: Self.brokerStartupOperationKey(
+                            sessionId: session.id,
+                            method: "session/resume",
+                            remoteSessionId: forked.sessionId
                         )
                     )
                 }
