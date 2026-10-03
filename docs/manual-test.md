@@ -568,6 +568,7 @@ remained on the isolated profile. It produced
 `NextPromptInferenceTests` passed. The probe was removed afterward. The
 focused coordinator and settings suites passed 26 and 14 tests respectively.
 
+
 ### On-device AI productionization verification, 2026-10-02
 
 The actual `SettingsWindow` and `OnDeviceAIPane` ran in Xcode's Debug app host

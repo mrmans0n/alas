@@ -12783,6 +12783,9 @@ final class AppState {
                     return nil
                 }
             },
+            pluginContext: { [weak self] sessionID in
+                await self?.pluginPromptContext(session: sessionID, worktree: worktree) ?? []
+            },
             launchSpecTransformer: { [weak self] spec, allowsPermissionBypass in
                 guard let self else { return spec }
                 let project = self.projects.first(where: { $0.id == worktree.projectId })

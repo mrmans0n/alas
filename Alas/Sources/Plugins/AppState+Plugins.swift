@@ -353,11 +353,51 @@ extension AppState {
 
     /// `worktreeID` is the worktree the slot acts on and `detail` what its row names (see `PluginCommandRouting.target`);
     /// slots that act on the project ignore both.
-    func runPluginCommand(_ item: PluginCommandItem, slot: PluginCommandSlot, worktreeID: String? = nil, detail: String? = nil) {
+    func runPluginCommand(
+        _ item: PluginCommandItem, slot: PluginCommandSlot, worktreeID: String? = nil, detail: String? = nil, text: String? = nil
+    ) {
         guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
-              let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID, detail: detail)
+              let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID, detail: detail, text: text)
         else { return }
         Task { await host.runCommand(item.command.id, target: target) }
+    }
+
+    /// Slash prompts of the plugins running in `projectID`, in plugin order.
+    func pluginPrompts(projectID: String) -> [PluginPromptItem] {
+        guard let manager = pluginManager else { return [] }
+        return PluginPromptItem.items(manager.plugins.map {
+            ($0.manifest, manager.host(pluginID: $0.id, projectID: projectID)?.state == .active)
+        })
+    }
+
+    func expandPluginPrompt(_ item: PluginPromptItem, projectID: String, args: String, session: String) async -> PluginPromptExpansion {
+        guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: projectID) else {
+            return .failed("The plugin that adds /\(item.prompt.name) is not running.")
+        }
+        return await host.expandPrompt(item.prompt.name, args: args, session: session)
+    }
+
+    /// Names of the plugins running in `projectID` that add context to its prompts, for the composer's chip.
+    func pluginContextProviders(projectID: String) -> [String] {
+        guard let manager = pluginManager else { return [] }
+        return manager.plugins.compactMap {
+            manager.host(pluginID: $0.id, projectID: projectID)?.providesContext == true ? $0.manifest.name : nil
+        }
+    }
+
+    /// Context the plugins running in `worktree`'s project add to a prompt of `session`, one block per plugin, each
+    /// naming its plugin so the agent can tell where it came from.
+    func pluginPromptContext(session: String, worktree: Worktree) async -> [String] {
+        guard let manager = pluginManager else { return [] }
+        var blocks: [String] = []
+        // ponytail: one provider after another; each is bounded by the per-call time limit, so a handful stays fast.
+        for plugin in manager.plugins {
+            guard let host = manager.host(pluginID: plugin.id, projectID: worktree.projectId), host.providesContext,
+                  let text = await host.provideContext(session: session, worktree: worktree.id)
+            else { continue }
+            blocks.append("Context from the Alas plugin \(plugin.manifest.name):\n\n\(text)")
+        }
+        return blocks
     }
 
     /// Badges plugins running in `projectID` put on one row, in plugin order.

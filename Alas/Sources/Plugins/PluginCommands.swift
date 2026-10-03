@@ -14,11 +14,14 @@ enum PluginCommandSlot: String, Sendable, Hashable {
     case runMenu = "run.menu"
     case runReport = "run.report"
     case sessionMenu = "session.menu"
+    // API 7.
+    case messageMenu = "message.menu"
 
     /// The plugin API that introduced the slot; an older manifest that names it has it skipped, as an older Alas would.
     var api: Int {
         switch self {
         case .palette, .menubar, .toolbar, .worktreeMenu, .repoMenu: 5
+        case .messageMenu: 7
         default: 6
         }
     }
@@ -42,6 +45,8 @@ struct PluginCommandTarget: Codable, Equatable, Sendable {
     var script: String?
     var run: String?
     var session: String?
+    /// The message's Markdown, for `message.menu`.
+    var text: String?
 
     static let project = PluginCommandTarget(kind: "project")
     static func worktree(_ id: String) -> PluginCommandTarget { PluginCommandTarget(kind: "worktree", worktree: id) }
@@ -74,9 +79,15 @@ enum PluginCommandRouting {
         }
     }
 
+    /// Message text beyond this is cut, so `command/run` always fits in a message.
+    static let maxMessageTextBytes = 32 * 1024
+
     /// `detail` is what the slot's row names besides the worktree: a file path, commit sha, run script key,
-    /// run id or session id. A slot has no target without the fields it needs.
-    static func target(for slot: PluginCommandSlot, worktreeID: String?, detail: String? = nil) -> PluginCommandTarget? {
+    /// run id or session id. `text` is the message a `message.menu` command acts on. A slot has no target without
+    /// the fields it needs.
+    static func target(
+        for slot: PluginCommandSlot, worktreeID: String?, detail: String? = nil, text: String? = nil
+    ) -> PluginCommandTarget? {
         func inWorktree(_ make: (String, String) -> PluginCommandTarget) -> PluginCommandTarget? {
             guard let worktreeID, let detail else { return nil }
             return make(worktreeID, detail)
@@ -85,6 +96,14 @@ enum PluginCommandRouting {
         case .palette, .menubar, .repoMenu: .project
         case .toolbar, .worktreeMenu, .changesToolbar: worktreeID.map(PluginCommandTarget.worktree)
         case .sessionMenu: detail.map { PluginCommandTarget(kind: "session", session: $0) }
+        case .messageMenu:
+            detail.flatMap { session in
+                text.map {
+                    PluginCommandTarget(
+                        kind: "message", session: session,
+                        text: PluginLastMessageText.bounded($0, maxBytes: maxMessageTextBytes))
+                }
+            }
         case .changesFileMenu: inWorktree { PluginCommandTarget(kind: "file", worktree: $0, path: $1) }
         case .changesCommitMenu: inWorktree { PluginCommandTarget(kind: "commit", worktree: $0, sha: $1) }
         case .runMenu: inWorktree { PluginCommandTarget(kind: "run", worktree: $0, script: $1) }
@@ -113,5 +132,33 @@ struct PluginCommandButtons: View {
                 }
             }
         }
+    }
+}
+
+/// One plugin slash prompt as offered in the agent composer.
+struct PluginPromptItem: Equatable, Sendable {
+    let pluginID: String
+    let prompt: PluginPromptContribution
+
+    var suggestion: ACPPromptSuggestion {
+        ACPPromptSuggestion(command: "/\(prompt.name)", description: prompt.description)
+    }
+
+    /// Prompts of the active plugins, in plugin order. A name already taken, by Alas's own commands or an earlier
+    /// plugin, is skipped, so a typed command always reaches one plugin.
+    static func items(_ plugins: [(manifest: PluginManifest, isActive: Bool)]) -> [PluginPromptItem] {
+        var taken = Set([ACPAlasSlashCommand.btwSuggestion.command])
+        return plugins.filter(\.isActive).flatMap { plugin in
+            plugin.manifest.prompts.map { PluginPromptItem(pluginID: plugin.manifest.id, prompt: $0) }
+        }.filter { taken.insert($0.suggestion.command).inserted }
+    }
+
+    /// The prompt a submitted draft starts with, and what follows it.
+    static func match(_ text: String, in items: [PluginPromptItem]) -> (item: PluginPromptItem, args: String)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let (suggestion, rest) = ACPSlashCommand.match(in: trimmed, suggestions: items.map(\.suggestion)),
+              let item = items.first(where: { $0.suggestion == suggestion })
+        else { return nil }
+        return (item, rest.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

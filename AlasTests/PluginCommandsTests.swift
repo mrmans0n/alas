@@ -28,6 +28,7 @@ struct PluginCommandsTests {
         let slot: PluginCommandSlot
         let worktreeID: String?
         var detail: String?
+        var text: String?
         let expected: String?
     }
 
@@ -46,11 +47,13 @@ struct PluginCommandsTests {
         TargetCase(slot: .runReport, worktreeID: nil, detail: "r1", expected: nil),
         TargetCase(slot: .runReport, worktreeID: "w1", detail: "r1", expected: #"{"kind":"runReport","run":"r1","worktree":"w1"}"#),
         TargetCase(slot: .sessionMenu, worktreeID: "w1", detail: "s1", expected: #"{"kind":"session","session":"s1"}"#),
+        TargetCase(slot: .messageMenu, worktreeID: "w1", detail: "s1", text: "**hi**", expected: #"{"kind":"message","session":"s1","text":"**hi**"}"#),
+        TargetCase(slot: .messageMenu, worktreeID: "w1", detail: "s1", expected: nil),
     ])
     func theTargetFollowsTheSlot(_ c: TargetCase) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let target = try PluginCommandRouting.target(for: c.slot, worktreeID: c.worktreeID, detail: c.detail).map {
+        let target = try PluginCommandRouting.target(for: c.slot, worktreeID: c.worktreeID, detail: c.detail, text: c.text).map {
             String(decoding: try encoder.encode($0), as: UTF8.self)
         }
         #expect(target == c.expected)
@@ -68,5 +71,26 @@ struct PluginCommandsTests {
         encoder.outputFormatting = .sortedKeys
         let target = try #require(PluginCommandRouting.target(for: key))
         #expect(String(decoding: try encoder.encode(target), as: UTF8.self) == expected)
+    }
+
+    /// A command name reaches one plugin: Alas's own `/btw` and an earlier plugin's prompt win.
+    @Test(arguments: [
+        ("/linear  ENG-123 ", "io.a", "ENG-123"),
+        ("/todo", "io.b", ""),
+        ("/btw why", nil, nil),
+        ("/linearx", nil, nil),
+    ] as [(String, String?, String?)])
+    func aPromptCommandMatchesTheFirstPluginThatOffersIt(text: String, pluginID: String?, args: String?) {
+        func plugin(_ id: String, _ names: [String], active: Bool = true) -> (manifest: PluginManifest, isActive: Bool) {
+            (PluginManifest(id: id, name: id, version: "1", api: 7, entry: "p.js", capabilities: [],
+                            prompts: names.map { PluginPromptContribution(name: $0) }), active)
+        }
+        let items = PluginPromptItem.items([
+            plugin("io.off", ["todo"], active: false), plugin("io.a", ["linear", "btw"]), plugin("io.b", ["linear", "todo"]),
+        ])
+        #expect(items.map(\.suggestion.command) == ["/linear", "/todo"])
+        let match = PluginPromptItem.match(text, in: items)
+        #expect(match?.item.pluginID == pluginID)
+        #expect(match?.args == args)
     }
 }

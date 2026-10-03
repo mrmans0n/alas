@@ -157,6 +157,8 @@ final class ACPSessionRunner {
     private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
     private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
+    /// Text plugins add to each prompt (API 7 context providers): wire-only, never in the transcript.
+    private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
     private let isConnectionCurrent: () -> Bool
 #if DEBUG
     var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
@@ -323,6 +325,7 @@ final class ACPSessionRunner {
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+         pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
          isConnectionCurrent: @escaping () -> Bool = { true },
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
@@ -368,6 +371,7 @@ final class ACPSessionRunner {
         self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
+        self.pluginContext = pluginContext
         self.isConnectionCurrent = isConnectionCurrent
         let initialPersistedMessageCount = persistedMessageCount
             ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
@@ -3290,6 +3294,7 @@ extension ACPSessionRunner {
                 var privateBlocks: [ACPContentBlock] = []
                 if let pendingPreamble { privateBlocks.append(.text(pendingPreamble)) }
                 if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
+                for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     onDispatchRegistered?()

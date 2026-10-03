@@ -32,6 +32,14 @@ struct PluginTaskRequest: Equatable, Sendable {
     let agent: String?
 }
 
+/// What `prompt/expand` gave: the prompt text, or why there is none, ready to show the user.
+enum PluginPromptExpansion: Equatable {
+    case text(String)
+    case failed(String)
+    /// Another expansion for the same session is still waiting; a repeated send is ignored.
+    case busy
+}
+
 enum PluginTaskStart: Equatable {
     case started(sessionId: String, branch: String)
     case rejected(code: Int, message: String)
@@ -149,6 +157,9 @@ final class PluginHost {
     static let maxTimers = 8
     static let timerIDByteLimit = 64
     static let timerSeconds: ClosedRange<Double> = 60...86_400
+    static let maxContextBytes = 16 * 1024
+    /// How long `prompt/expand` waits for its answer, which may come after the plugin's own requests (API 7).
+    static let promptExpandTimeout: Duration = .seconds(30)
     private static let httpMethods: Set<String> = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
 
     let manifest: PluginManifest
@@ -191,6 +202,9 @@ final class PluginHost {
     /// Running processes of this instance, by run id. Ending the instance stops them.
     @ObservationIgnored private var processes: [String: any PluginProcessHandle] = [:]
     @ObservationIgnored private var nextProcess = 0
+    /// Requests Alas sent to the plugin (`prompt/expand`, `context/provide`), waiting for its response, by id.
+    @ObservationIgnored private var hostRequests: [Int: CheckedContinuation<Data?, Never>] = [:]
+    @ObservationIgnored private var nextHostRequest = 0
 
     @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
@@ -321,6 +335,80 @@ final class PluginHost {
         guard state == .active, manifest.commands.contains(where: { $0.id == id }) else { return }
         await deliver(encode(JSONRPCEnvelope(
             id: nil, method: "command/run", params: PluginCommandRunParams(command: id, target: target))))
+    }
+
+    /// Sessions with an expansion waiting, so pressing Send again does not ask the plugin twice.
+    @ObservationIgnored private var expandingSessions: Set<String> = []
+
+    /// Whether this instance adds context to prompts, so the composer names it.
+    var providesContext: Bool { state == .active && grants.contains(.sessionContext) }
+
+    /// Expands one of the manifest's prompts. The answer may come in a later delivery, after the plugin's own
+    /// requests, so it waits up to `promptExpandTimeout`.
+    func expandPrompt(_ name: String, args: String, session: String) async -> PluginPromptExpansion {
+        guard manifest.prompts.contains(where: { $0.name == name }) else { return .failed("Unknown prompt /\(name).") }
+        guard args.utf8.count <= Self.maxPromptBytes else { return .failed("The text after /\(name) is longer than 32 KiB.") }
+        guard expandingSessions.insert(session).inserted else { return .busy }
+        defer { expandingSessions.remove(session) }
+        guard let response = await ask(
+            "prompt/expand", PluginPromptExpandParams(name: name, args: args, session: session), wait: Self.promptExpandTimeout)
+        else { return .failed("\(manifest.name) did not expand /\(name).") }
+        if let error = response.error { return .failed("\(manifest.name) could not expand /\(name): \(Self.bounded(error.message))") }
+        guard let text = response.result?.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failed("\(manifest.name) expanded /\(name) to nothing.")
+        }
+        guard text.utf8.count <= Self.maxPromptBytes else { return .failed("\(manifest.name) expanded /\(name) to more than 32 KiB.") }
+        return .text(text)
+    }
+
+    /// The text the plugin adds to a prompt, or nil. Answered within its own delivery or not at all, so a prompt
+    /// never waits on the network; a plugin that runs past the time limit stops, as for any call.
+    func provideContext(session: String, worktree: String) async -> String? {
+        guard grants.contains(.sessionContext),
+              let response = await ask(
+                "context/provide", PluginContextProvideParams(session: session, worktree: worktree), wait: nil)
+        else { return nil }
+        if let error = response.error {
+            appendLog("warn", "context/provide failed, so the prompt went without it: \(error.message)")
+            return nil
+        }
+        guard let text = response.result?.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard text.utf8.count <= Self.maxContextBytes else {
+            appendLog("warn", "context/provide answered more than 16 KiB, so the prompt went without it")
+            return nil
+        }
+        return text
+    }
+
+    /// Sends a request to the plugin and returns its response; nil when the instance ends first, or when none came
+    /// within the request's own delivery (`wait` nil) or within `wait`. A malformed response counts as an error.
+    private func ask(_ method: String, _ params: some Codable, wait: Duration?) async -> PluginTextResponse? {
+        guard state == .active else { return nil }
+        nextHostRequest += 1
+        let token = nextHostRequest
+        let message = encode(JSONRPCEnvelope(id: .number(token), method: method, params: params))
+        let sleep = sleep
+        let data = await withCheckedContinuation { continuation in
+            hostRequests[token] = continuation
+            // The deadline runs from the send, so round trips the plugin makes while handling it count against it.
+            if let wait {
+                Task { [weak self] in
+                    try? await sleep(wait)
+                    self?.answer(token, nil)
+                }
+            }
+            Task { [weak self] in
+                await self?.deliver(message)
+                if wait == nil { self?.answer(token, nil) }
+            }
+        }
+        guard let data else { return nil }
+        return (try? JSONDecoder().decode(PluginTextResponse.self, from: data))
+            ?? PluginTextResponse(error: JSONRPCError(code: -32600, message: "malformed response to \(method)", data: nil))
+    }
+
+    private func answer(_ token: Int, _ response: Data?) {
+        hostRequests.removeValue(forKey: token)?.resume(returning: response)
     }
 
     /// Whether the manifest subscribes to an event whose capability was granted.
@@ -506,7 +594,7 @@ final class PluginHost {
             guard header.hasResult != (header.error != nil) else {
                 return .violation("plugin sent a malformed message")
             }
-            handleResponse(id: id, error: header.error)
+            handleResponse(id: id, error: header.error, data: data)
             return .none
         case (nil, nil):
             return .violation("plugin sent a malformed message")
@@ -1054,6 +1142,7 @@ final class PluginHost {
         timers = [:]
         panelDelivery?.cancel()
         panelDelivery = nil
+        for token in hostRequests.keys { answer(token, nil) }
     }
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
@@ -1174,8 +1263,13 @@ final class PluginHost {
         }))
     }
 
-    /// Only the activation response matters in v1. Anything else is stray and ignored.
-    private func handleResponse(id: JSONRPCID, error: JSONRPCError?) {
+    /// The activation response, and responses to requests Alas sent and still waits on. Anything else is stray and
+    /// ignored.
+    private func handleResponse(id: JSONRPCID, error: JSONRPCError?, data: Data) {
+        if case .number(let token) = id, hostRequests[token] != nil {
+            answer(token, data)
+            return
+        }
         guard id == Self.activateID, state == .activating else { return }
         if let error {
             fail("plugin rejected activation: \(Self.bounded(error.message))")
