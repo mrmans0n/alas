@@ -472,12 +472,6 @@ struct CommitMessageSuggestionState {
         if !Self.isBlank(subject: subject, body: body) { pending = nil }
     }
 
-    /// Another writer is about to fill the fields (the agent generator).
-    mutating func claim() {
-        pending = nil
-        applied = nil
-    }
-
     mutating func cancel() {
         pending = nil
     }

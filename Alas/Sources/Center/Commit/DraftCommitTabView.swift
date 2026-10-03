@@ -513,7 +513,9 @@ struct DraftCommitTabView: View {
 
     private func runGenerate() {
         publishSession?.clearError()
-        messageSuggestion.claim()
+        // The agent's message replaces the fields through the edit observers;
+        // until then an untouched draft stays Alas's to refresh or withdraw.
+        messageSuggestion.cancel()
         releaseMessageSuggestionIfIdle()
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
