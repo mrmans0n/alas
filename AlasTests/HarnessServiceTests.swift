@@ -35,6 +35,16 @@ struct HarnessServiceTests {
         #expect(collector.requests.isEmpty)
     }
 
+    @Test func limitedSessionsRollUpBelowRunningAndAwaiting() {
+        let (service, _) = makeService()
+        service.setExternalActivity(sessionId: "a", agent: .claude, state: .limited)
+        #expect(service.summary(forSessionIds: ["a"])?.state == .limited)
+        service.setExternalActivity(sessionId: "b", agent: .codex, state: .busy)
+        let summary = service.summary(forSessionIds: ["a", "b"])
+        #expect(summary?.state == .running)
+        #expect(summary?.sessions.map(\.state) == [.running, .limited])
+    }
+
     @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {
         let (service, collector) = makeService()
         var transitions: [HarnessActivityTransition] = []

@@ -17,6 +17,7 @@ enum ActivityState: String, Sendable, Equatable {
     case awaitingInput = "awaiting_input"
     case permissionRequest = "permission_request"
     case idle
+    case limited
 }
 
 struct AgentHookEvent: Equatable, Sendable {

@@ -132,6 +132,8 @@ struct WorktreeRowView: View {
             return StatusPresentation(note: "running", colorToken: "add", pulses: true)
         case .awaiting:
             return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
+        case .limited:
+            return StatusPresentation(note: "limited", colorToken: "warn", pulses: false)
         case nil:
             break
         }
