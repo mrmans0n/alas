@@ -26,34 +26,29 @@ struct CommitMessageSuggestionInput: Equatable, Sendable {
     struct GitFailure: Error {}
 
     static func load(worktreePath: URL, ticketTitle: String?) async throws -> Self {
-        async let log = Process.git(
-            ["log", "-\(CommitMessageSuggestionPolicy.recentSubjectCount)", "--pretty=format:%s"],
-            cwd: worktreePath
-        )
         async let branch = Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: worktreePath)
-        // Every git output is bounded while reading: a huge generated file must
-        // not be buffered whole just to be budgeted down to a few KB.
+        // Every git output is bounded while reading: a huge generated file or
+        // commit subject must not be buffered whole just to be cut down later.
+        // An unborn branch has no log; that only means there is no convention to follow.
+        let subjects = (try? await capped(
+            ["log", "-\(CommitMessageSuggestionPolicy.recentSubjectCount)", "--pretty=format:%s"],
+            worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.logOutputByteLimit
+        ))?.stdout ?? ""
         let stat = try await capped(
             ["diff", "--cached", "--stat", "--no-color"],
             worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.statOutputByteLimit
         )
-        let names = try await capped(
-            ["diff", "--cached", "--name-status", "-z", "--no-color"],
-            worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.nameStatusOutputByteLimit
-        )
-        // One read per priority tier, so noisy files that sort first cannot
-        // spend the cap before source changes are read.
+        // One capped read per priority tier, selected by pathspec, so noisy
+        // files that sort first cannot spend the cap before source changes.
         var diffs: [String] = []
-        for tier in CommitMessageSuggestionPolicy.pathTiers(nameStatus: names.stdout, truncated: names.truncated) {
+        for pathspecs in CommitMessageSuggestionPolicy.tierPathspecs {
             let diff = try await capped(
-                ["diff", "--cached", "--no-color", "--no-ext-diff", "--"] + tier.map { ":(literal)\($0)" },
+                ["diff", "--cached", "--no-color", "--no-ext-diff", "--"] + pathspecs,
                 worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.diffOutputByteLimit
             )
             diffs.append(diff.truncated ? CommitMessageSuggestionPolicy.droppingPartialTail(diff.stdout) : diff.stdout)
         }
         let branchName = try await branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        // An unborn branch has no log; that only means there is no convention to follow.
-        let subjects = (try? await log)?.stdout ?? ""
         return Self(
             stat: stat.stdout,
             diff: diffs.filter { !$0.isEmpty }.joined(separator: "\n"),
@@ -92,9 +87,7 @@ enum CommitMessageSuggestionPolicy {
     /// diff. Stat-only is the floor when even that does not fit.
     static let diffCharacterBudgets = [24_000, 5_000, 0]
     static let diffOutputByteLimit = 512_000
-    static let nameStatusOutputByteLimit = 256_000
-    /// More paths than this per tier could never fit the largest diff budget.
-    static let maximumPathsPerTier = 200
+    static let logOutputByteLimit = 16_000
     static let statOutputByteLimit = 64_000
     private static let statCharacterLimit = 2_000
     private static let contextCharacterLimit = 300
@@ -155,32 +148,58 @@ enum CommitMessageSuggestionPolicy {
         let hunks: [String]
     }
 
+    // One rule table drives both the in-process classification and the git
+    // pathspecs that read each tier, so the two cannot disagree.
+    private static let noisyNames = [
+        "package.resolved", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock",
+        "gemfile.lock", "podfile.lock", "poetry.lock", "composer.lock", "go.sum", "mix.lock", "bun.lockb",
+    ]
+    private static let noisyExtensions = ["lock", "pbxproj", "snap", "xcscheme"]
+    private static let noisyNameInfixes = [".min.", ".generated."]
+    private static let noisyNameSuffixes = [".pb.go"]
+    private static let noisyDirectories = [
+        "vendor", "vendored", "thirdparty", "third_party", "node_modules", "__snapshots__", "pods",
+    ]
+    private static let docsOrConfigExtensions = [
+        "md", "markdown", "txt", "rst", "adoc", "json", "yml", "yaml", "toml", "plist", "xml",
+        "ini", "cfg", "conf", "properties", "xcconfig", "entitlements", "strings", "csv",
+    ]
+    private static let docsDirectory = "docs"
+
     static func priority(forPath path: String) -> FilePriority {
         let lowered = path.lowercased()
         let name = (lowered as NSString).lastPathComponent
         let ext = (name as NSString).pathExtension
-        let components = lowered.split(separator: "/").map(String.init)
-        let noisyNames: Set<String> = [
-            "package.resolved", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock",
-            "gemfile.lock", "podfile.lock", "poetry.lock", "composer.lock", "go.sum", "mix.lock", "bun.lockb",
-        ]
-        let noisyDirectories: Set<String> = [
-            "vendor", "vendored", "thirdparty", "third_party", "node_modules", "__snapshots__", "pods",
-        ]
+        let directories = lowered.split(separator: "/").map(String.init).dropLast()
         if noisyNames.contains(name)
-            || ["lock", "pbxproj", "snap", "xcscheme"].contains(ext)
-            || name.contains(".min.") || name.contains(".generated.") || name.hasSuffix(".pb.go")
-            || components.dropLast().contains(where: noisyDirectories.contains) {
+            || noisyExtensions.contains(ext)
+            || noisyNameInfixes.contains(where: name.contains)
+            || noisyNameSuffixes.contains(where: name.hasSuffix)
+            || directories.contains(where: noisyDirectories.contains) {
             return .noisy
         }
-        let docsOrConfigExtensions: Set<String> = [
-            "md", "markdown", "txt", "rst", "adoc", "json", "yml", "yaml", "toml", "plist", "xml",
-            "ini", "cfg", "conf", "properties", "xcconfig", "entitlements", "strings", "csv",
-        ]
-        if docsOrConfigExtensions.contains(ext) || name.hasPrefix(".") || components.contains("docs") {
+        if docsOrConfigExtensions.contains(ext) || name.hasPrefix(".") || directories.contains(docsDirectory) {
             return .docsOrConfig
         }
         return .source
+    }
+
+    /// Pathspecs selecting source, then docs and config, then noisy files,
+    /// mirroring `priority(forPath:)`.
+    static var tierPathspecs: [[String]] {
+        let noisy = noisyNames.map { "**/\($0)" }
+            + noisyExtensions.map { "**/*.\($0)" }
+            + noisyNameInfixes.map { "**/*\($0)*" }
+            + noisyNameSuffixes.map { "**/*\($0)" }
+            + noisyDirectories.map { "**/\($0)/**" }
+        let docs = docsOrConfigExtensions.map { "**/*.\($0)" } + ["**/.*", "**/\(docsDirectory)/**"]
+        let include = { (glob: String) in ":(glob,icase)\(glob)" }
+        let exclude = { (glob: String) in ":(exclude,glob,icase)\(glob)" }
+        return [
+            ["."] + (noisy + docs).map(exclude),
+            docs.map(include) + noisy.map(exclude),
+            noisy.map(include),
+        ]
     }
 
     /// Splits `git diff` output into per-file headers and whole hunks.
@@ -223,33 +242,6 @@ enum CommitMessageSuggestionPolicy {
         }
         flushFile()
         return files
-    }
-
-    /// Groups `git diff --name-status -z` entries by file priority, source
-    /// first. A rename or copy keeps both paths together so Git can still
-    /// pair them. An entry cut short by a byte cap is dropped.
-    static func pathTiers(nameStatus: String, truncated: Bool) -> [[String]] {
-        var fields = nameStatus.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
-        if fields.last == "" { fields.removeLast() }
-        var entries: [[String]] = []
-        var index = 0
-        while index < fields.count {
-            let status = fields[index]
-            let pathCount = status.hasPrefix("R") || status.hasPrefix("C") ? 2 : 1
-            guard index + pathCount < fields.count else { break }
-            entries.append(Array(fields[(index + 1)...(index + pathCount)]))
-            index += pathCount + 1
-        }
-        if truncated, !entries.isEmpty { entries.removeLast() }
-
-        var tiers: [FilePriority: [String]] = [:]
-        for paths in entries {
-            guard let path = paths.last else { continue }
-            let priority = priority(forPath: path)
-            guard (tiers[priority]?.count ?? 0) < maximumPathsPerTier else { continue }
-            tiers[priority, default: []].append(contentsOf: paths)
-        }
-        return [FilePriority.source, .docsOrConfig, .noisy].compactMap { tiers[$0] }
     }
 
     /// Cuts a diff read through a byte cap back to its last complete hunk or

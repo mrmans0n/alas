@@ -384,7 +384,9 @@ struct DraftCommitTabView: View {
     /// and text the user typed is never replaced.
     private func suggestMessage() async {
         let indexKey = stagedIndexKey
-        guard !amend, hasStaged, publishCheckpoint == nil, appState.commitMessageSuggestionAvailable else {
+        // A running agent generation owns the next write to the fields.
+        guard !amend, hasStaged, publishCheckpoint == nil, generation == nil,
+              appState.commitMessageSuggestionAvailable else {
             messageSuggestion.cancel()
             if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
                 subject = ""

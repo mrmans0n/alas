@@ -112,17 +112,25 @@ struct CommitMessageSuggestionTests {
         #expect(CommitMessageSuggestionPolicy.parse(output, conventionalCommits: true) == nil)
     }
 
-    @Test func stagedPathsAreReadInPriorityTiers() {
-        let nameStatus = [
-            "M", "Package.resolved",
-            "R087", "docs/old.md", "docs/new.md",
-            "M", "Sources/Sync.swift",
-            "A", "Sources/Merge.sw",
-        ].joined(separator: "\0")
+    /// Git selects each tier itself, so a large noisy file that sorts first
+    /// cannot crowd source changes out of the capped reads.
+    @Test func stagedDiffIsReadSourceFirstByPathspecTier() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        for (path, text) in [
+            ("Alpha/yarn.lock", "lock\n"), ("Vendor/lib/Thing.go", "package lib\n"),
+            ("Docs/guide.md", "Guide\n"), (".gitignore", "build\n"), ("Sources/Sync.swift", "let sync = 1\n"),
+        ] {
+            try repository.write(text, to: path)
+        }
+        try await repository.git(["add", "-A"])
 
-        let tiers = CommitMessageSuggestionPolicy.pathTiers(nameStatus: nameStatus, truncated: true)
+        let input = try await CommitMessageSuggestionInput.load(worktreePath: repository.root, ticketTitle: nil)
 
-        #expect(tiers == [["Sources/Sync.swift"], ["docs/old.md", "docs/new.md"], ["Package.resolved"]])
+        let order = CommitMessageSuggestionPolicy.fileDiffs(input.diff).map(\.path)
+        #expect(order == ["Sources/Sync.swift", ".gitignore", "Docs/guide.md", "Alpha/yarn.lock", "Vendor/lib/Thing.go"])
+        #expect(order.map(CommitMessageSuggestionPolicy.priority(forPath:))
+            == [.source, .docsOrConfig, .docsOrConfig, .noisy, .noisy])
     }
 
     @Test func cappedDiffIsCutBackToTheLastCompleteHunk() {
