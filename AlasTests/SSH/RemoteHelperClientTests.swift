@@ -1057,8 +1057,10 @@ struct RemoteHelperClientTests {
         #expect((try await thirdUnsubscribe.value).ok)
     }
 
-    @Test func helperCrashReplaysSubscriptionsBeforeNextRequest() async throws {
+    @Test(arguments: [false, true])
+    func helperReconnectReplaysSubscriptionsBeforeNextRequest(afterUpgrade: Bool) async throws {
         let firstTransport = FakeJSONRPCTransport()
+        firstTransport.emitExitOnTerminate = false
         let secondTransport = FakeJSONRPCTransport()
         let queue = RemoteHelperTransportQueue([firstTransport, secondTransport])
         let client = RemoteHelperClient(
@@ -1066,17 +1068,25 @@ struct RemoteHelperClientTests {
             idleShutdownNanoseconds: 0,
             transportFactory: { queue.next() }
         )
+        defer { Task { await client.shutdown() } }
 
         let subscribe = Task {
-            try await client.subscribe(root: "/repo", kinds: [.files])
+            try await client.subscribeWithUpdates(root: "/repo", kinds: [.files])
         }
         try await waitUntil { firstTransport.sentFrames.count == 1 }
         firstTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"subscriptionId":"sub-1"}}"#.utf8))
-        #expect((try await subscribe.value).subscriptionId == "client-1")
+        let handle = try await subscribe.value
+        #expect(handle.subscriptionId == "client-1")
+        var updates = handle.updates.makeAsyncIterator()
+        #expect(await updates.next() == .available)
 
-        firstTransport.send(exitStatus: 1)
-        try await waitUntilAsync {
-            await client.lastObservedExitStatus() == 1
+        if afterUpgrade {
+            await client.reconnectAfterUpgrade()
+        } else {
+            firstTransport.send(exitStatus: 1)
+            try await waitUntilAsync {
+                await client.lastObservedExitStatus() == 1
+            }
         }
 
         let read = Task {
@@ -1087,6 +1097,7 @@ struct RemoteHelperClientTests {
             JSONSerialization.jsonObject(with: secondTransport.sentFrames[0]) as? [String: Any]
         )
         #expect(replay["method"] as? String == "watch/subscribe")
+        #expect(await updates.next() == .unavailable)
         secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"subscriptionId":"sub-2"}}"#.utf8))
 
         try await waitUntil { secondTransport.sentFrames.count == 2 }
@@ -1096,6 +1107,7 @@ struct RemoteHelperClientTests {
         #expect(readRequest["method"] as? String == "fs/read")
         secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":3,"result":{"content":"ok","mtime":null}}"#.utf8))
         #expect((try await read.value).content == "ok")
+        #expect(await updates.next() == .available)
 
         let unsubscribe = Task {
             try await client.unsubscribe(subscriptionId: "client-1")

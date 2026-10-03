@@ -6,6 +6,8 @@ import Foundation
 struct PluginProjectRef: Codable, Equatable, Sendable {
     let id: String
     let name: String
+    /// The SSH host of a remote project; absent for a local one.
+    var host: String? = nil
 }
 
 struct PluginActivateParams: Codable, Equatable, Sendable {

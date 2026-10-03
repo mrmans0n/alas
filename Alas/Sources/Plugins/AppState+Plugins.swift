@@ -150,12 +150,11 @@ extension AppState {
                 case .ok, .text: return nil
                 }
             },
-            worktreePath: { [weak self] id in
-                // Processes and files run on this Mac, so remote worktrees are out of reach.
-                guard let worktree = self?.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == id }),
-                      RemoteHostRegistry.shared.host(forPath: worktree.path.path) == nil
+            worktreeLocation: { [weak self] id in
+                guard let worktree = self?.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == id })
                 else { return nil }
-                return worktree.path
+                if let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) { return .remote(host: host) }
+                return .local(worktree.path)
             })
     }
 

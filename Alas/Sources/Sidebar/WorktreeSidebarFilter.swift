@@ -39,6 +39,14 @@ enum WorktreeSidebarFilter {
         return offset < slot / 2 ? 0 : slot
     }
 
+    /// Readiness comes from one scroll-layout snapshot. The separate viewport
+    /// measurement used to pad short lists can arrive after an overflowing
+    /// list's only layout callback.
+    static func initialParkingOffset(contentHeight: CGFloat, viewportHeight: CGFloat, slot: CGFloat) -> CGFloat? {
+        guard viewportHeight > 0, contentHeight >= viewportHeight + slot else { return nil }
+        return slot
+    }
+
     /// Where the filter row draws, from the top of the scroll area. Unpinned
     /// it rides its slot at the top of the content and scrolls away with it;
     /// pinned it never rises above its rest position, but still follows a pull

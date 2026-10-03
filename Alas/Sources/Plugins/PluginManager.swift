@@ -416,7 +416,7 @@ final class PluginManager {
             guard hostsByKey[key] == nil else { continue }
             let host = PluginHost(
                 manifest: plugin.manifest, source: plugin.source,
-                project: PluginProjectRef(id: project.id, name: project.name),
+                project: PluginProjectRef(id: project.id, name: project.name, host: project.host),
                 grants: Set(approval.capabilities), actions: actions(project),
                 storage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id, projectID: project.id)),
                 pluginStorage: PluginStorage.shared(file: PluginStorage.file(pluginID: plugin.id)),

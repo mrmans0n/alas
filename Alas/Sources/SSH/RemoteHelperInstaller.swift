@@ -107,6 +107,8 @@ enum RemoteHelperInstaller {
             )
             return false
         }
+        // Existing SSH processes keep running the old binary after the rename.
+        await RemoteHelperClientPool.shared.reconnectAfterUpgrade(host: host)
         return true
     }
 }

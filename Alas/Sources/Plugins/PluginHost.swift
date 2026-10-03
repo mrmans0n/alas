@@ -77,8 +77,8 @@ struct PluginHostActions {
     var addReviewComment: @MainActor (_ comment: PluginReviewCommentParams, _ author: String) async -> String? = { _, _ in
         "review comments are not available"
     }
-    /// The folder of a local worktree of this project; nil for any other id and for remote worktrees.
-    var worktreePath: (_ worktree: String) -> URL? = { _ in nil }
+    /// Where a worktree of this project lives; nil for any other id.
+    var worktreeLocation: (_ worktree: String) -> PluginWorktreeLocation? = { _ in nil }
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
@@ -91,6 +91,11 @@ struct PluginHostActions {
             startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available") },
             notify: { _, _ in })
     }
+}
+
+enum PluginWorktreeLocation: Equatable {
+    case local(URL)
+    case remote(host: String)
 }
 
 /// Runs one plugin in one project.
@@ -879,7 +884,7 @@ final class PluginHost {
     private func fileReply<Result: Encodable & Sendable>(
         _ id: JSONRPCID, _ worktree: String, _ work: @escaping @Sendable (URL) -> Swift.Result<Result, PluginFilesError>
     ) -> Data? {
-        guard let root = actions.worktreePath(worktree) else { return errorReply(id, code: -32003, "unknown worktree \(worktree)") }
+        guard case .local(let root)? = actions.worktreeLocation(worktree) else { return worktreeRefusal(id, worktree) }
         return replyLater(id) { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) { work(root) }.value
             guard let self else { return Data() }
@@ -888,6 +893,15 @@ final class PluginHost {
             case .failure(let error): return self.errorReply(id, code: -32003, error.message)
             }
         }
+    }
+
+    /// Processes and files run on this Mac, so a worktree on a remote host is out of reach.
+    private func worktreeRefusal(_ id: JSONRPCID, _ worktree: String) -> Data? {
+        guard case .remote(let host)? = actions.worktreeLocation(worktree) else {
+            return errorReply(id, code: -32003, "unknown worktree \(worktree)")
+        }
+        return errorReply(
+            id, code: -32003, "worktree \(worktree) is on remote host \(host); plugins can't run commands or use files there yet")
     }
 
     // MARK: - Processes
@@ -913,9 +927,7 @@ final class PluginHost {
         guard (params.stdin?.utf8.count ?? 0) <= Self.maxProcessStdinBytes, !(longRunning && params.stdin != nil) else {
             return errorReply(id, code: -32602, "stdin is up to 256 KiB, and only for process/run")
         }
-        guard let directory = actions.worktreePath(params.worktree) else {
-            return errorReply(id, code: -32003, "unknown worktree \(params.worktree)")
-        }
+        guard case .local(let directory)? = actions.worktreeLocation(params.worktree) else { return worktreeRefusal(id, params.worktree) }
         guard processes.count < Self.maxProcessesRunning else {
             return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")
         }

@@ -231,7 +231,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...9
+    static let supportedAPIVersions = 4...10
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16

@@ -68,6 +68,19 @@ struct WorktreeSidebarFilterTests {
     }
 
     @Test(arguments: [
+        (4050.0 as CGFloat, 400.0 as CGFloat, 32.0 as CGFloat?), // overflowing on the first callback
+        (50.0, 400.0, nil),       // short list still needs viewport padding
+        (432.0, 400.0, 32.0),     // padding now leaves room to hide the slot
+        (431.5, 400.0, nil),      // cannot yet scroll past the whole slot
+        (4050.0, 0.0, nil),       // viewport has not been laid out
+    ])
+    func initialParkingUsesScrollableGeometry(contentHeight: CGFloat, viewportHeight: CGFloat, expected: CGFloat?) {
+        #expect(WorktreeSidebarFilter.initialParkingOffset(
+            contentHeight: contentHeight, viewportHeight: viewportHeight, slot: 32
+        ) == expected)
+    }
+
+    @Test(arguments: [
         (0.0 as CGFloat, false, 6.0 as CGFloat),  // at the top it sits in its slot
         (32.0, false, -26.0),    // parked: scrolled away with the content
         (-20.0, false, 26.0),    // follows a pull past the top
