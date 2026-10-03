@@ -23,6 +23,7 @@ struct DraftCommitTabView: View {
     @State private var createReviewRequestAsDraft = false
     @State private var publicationProbe = CommitPublishAmendProbeLoader()
     @State private var messageSuggestion = CommitMessageSuggestionState()
+    @State private var messageSuggestionJob: Task<Void, Never>?
 
     @State private var stagedSession: DiffReviewLoadedSession?
     @State private var sessionWithActions: DiffReviewLoadedSession?
@@ -315,10 +316,12 @@ struct DraftCommitTabView: View {
         .onChange(of: subject) { _, new in
             persist(subject: new)
             messageSuggestion.recordEdit(subject: new, body: bodyText)
+            releaseMessageSuggestionIfIdle()
         }
         .onChange(of: bodyText) { _, new in
             persist(body: new)
             messageSuggestion.recordEdit(subject: subject, body: new)
+            releaseMessageSuggestionIfIdle()
         }
         .onChange(of: amend) { _, new in
             persist(amend: new)
@@ -342,7 +345,20 @@ struct DraftCommitTabView: View {
             }
         }
         // Restaging, toggling amend, or closing the tab cancels the request.
-        .task(id: "\(stagedKey):\(amend)") { await suggestMessage() }
+        .task(id: "\(stagedKey):\(amend)") {
+            // Held separately so typing or the agent generator can stop the
+            // model request without waiting for the next key change.
+            let job = Task { await suggestMessage() }
+            messageSuggestionJob = job
+            await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        }
+    }
+
+    /// Frees the local model once nothing is waiting for its answer.
+    private func releaseMessageSuggestionIfIdle() {
+        guard !messageSuggestion.isSuggesting else { return }
+        messageSuggestionJob?.cancel()
+        messageSuggestionJob = nil
     }
 
     /// Seeds empty fields with an on-device draft. Commit never waits on it,
@@ -481,6 +497,7 @@ struct DraftCommitTabView: View {
     private func runGenerate() {
         publishSession?.clearError()
         messageSuggestion.claim()
+        releaseMessageSuggestionIfIdle()
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
             availability: agentAvailability
