@@ -26,8 +26,14 @@ struct Helper {
 
 impl Helper {
     fn start() -> Self {
+        // Not the pid alone: a container reuses it from one run to the next, and
+        // a spawn of an id the earlier run left behind would only report it.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "alas-pproc-{}-{}",
+            "alas-pproc-{}-{nanos}-{}",
             std::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::SeqCst)
         ));
@@ -309,7 +315,9 @@ fn a_child_forked_during_the_term_grace_is_stopped_too() {
     let mut helper = Helper::start();
     helper.spawn_script(
         "late",
-        "trap \"setsid sh -c 'echo \\$\\$ > late.pid; exec sleep 300' &\" TERM\necho $$ > root.pid\nwhile :; do sleep 0.05; done\n",
+        // The root records the child's pid: the child itself is signalled as
+        // soon as cleanup sees it, likely before it could write anything.
+        "trap 'setsid sleep 300 & echo $! > late.pid' TERM\necho $$ > root.pid\nwhile :; do sleep 0.05; done\n",
         json!({ "killGraceMs": 1000 }),
     );
     let root = helper.pid_file("root.pid");

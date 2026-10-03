@@ -38,9 +38,8 @@ const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LEASE_MS: u64 = 10 * 60 * 1000;
 const DEFAULT_LEASE_MS: u64 = 60 * 1000;
 const STOP_GRACE_MS: u64 = 5000;
-/// API 6's 10 minutes plus the kill grace: Alas stops a run at 10 minutes
-/// itself, and this holds even when Alas is gone.
-const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000 + STOP_GRACE_MS;
+/// API 6's 10 minutes; the kill grace follows it.
+const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// What a process leaves running when it exits on its own gets this long
 /// after `SIGTERM`, as API 6 says.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -907,8 +906,12 @@ mod linux {
         }
     }
 
-    pub(super) fn anchor() -> ! {
-        // SAFETY: setting dispositions and waiting; nothing else runs here.
+    /// Ignores every signal it can and dies with `parent`. Async-signal-safe,
+    /// so the anchor runs it between fork and exec: ignored dispositions and
+    /// the parent-death signal survive exec, so the anchor is never without
+    /// them, however soon the command signals its group.
+    fn guard_anchor(parent: i32) -> std::io::Result<()> {
+        // SAFETY: sigaction and prctl only, both async-signal-safe.
         unsafe {
             for signal in 1..=64 {
                 if signal != libc::SIGKILL && signal != libc::SIGSTOP {
@@ -917,12 +920,17 @@ mod linux {
             }
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
             // The supervisor may have died before the line above took effect.
-            if libc::getppid() == 1 {
+            if libc::getppid() != parent {
                 libc::_exit(0);
             }
-            loop {
-                libc::pause();
-            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn anchor() -> ! {
+        loop {
+            // SAFETY: waiting for a signal; every catchable one is ignored.
+            unsafe { libc::pause() };
         }
     }
 
@@ -1249,7 +1257,11 @@ mod linux {
         use std::os::unix::process::CommandExt;
         let exe =
             std::env::current_exe().map_err(|error| format!("helper path failed: {error}"))?;
-        let child = Command::new(exe)
+        let parent = std::process::id() as i32;
+        let mut command = Command::new(exe);
+        // SAFETY: `guard_anchor` is async-signal-safe.
+        unsafe { command.pre_exec(move || guard_anchor(parent)) };
+        let child = command
             .arg("plugin-proc-anchor")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
