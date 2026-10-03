@@ -167,7 +167,7 @@ only where Alas has verified a control:
 |---|---|
 | Claude | Removes the `Agent`/`Task` and `Workflow` tools, plus `SendMessage` and `ListAgents`, which reach other Claude Code sessions on the same host (the remote machine for an SSH session), from the model's tool list. `TaskStop` is not affected. |
 | Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
-| OpenCode | Removes the `task` tool from every OpenCode agent through `OPENCODE_CONFIG_CONTENT`, and checks every agent's effective permissions before each launch (see below). Any `OPENCODE_CONFIG_CONTENT` you already set is merged with its key order kept, not replaced; one Alas cannot parse fails the launch with an error. Local sessions only. |
+| OpenCode | Removes the `task` tool from every OpenCode agent through `OPENCODE_CONFIG_CONTENT`, and checks every agent's effective permissions before each launch (see below). Any `OPENCODE_CONFIG_CONTENT` you already set is merged with its key order kept, not replaced; one Alas cannot parse fails the launch with an error. Local sessions only. OpenCode 1.x only; on OpenCode 2 the session fails to start with this option on. |
 | OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
 | Pi | Pi has no built-in subagent tool; extensions add them. Removes the tools of known Pi subagent extensions (`subagent`, `bg_wait`, and `subagent_supervisor` from `pi-subagents`) by starting Pi through an Alas wrapper that adds `--exclude-tools` (see below). Tools from other extensions are not affected. Your Pi settings and any `PI_ACP_PI_COMMAND` you set are kept. Local sessions only: a remote Pi session with the option on fails to start. |
 | Cursor, Gemini, Copilot | Unavailable until a control is verified. |
@@ -182,7 +182,7 @@ When it applies:
 - Alas checks the adapter before sending any session request. If it does not
   identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
   (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex),
-  `OpenCode` 1.18.33 or later, `oh-my-pi` 18.2.11 or later (OMP), or `pi-acp`
+  `OpenCode` 1.18.33 or later and below 2.0, `oh-my-pi` 18.2.11 or later (OMP), or `pi-acp`
   0.0.34 or later (Pi), the session fails to start instead of running
   unenforced.
 - The OMP overlay is a single owner-only file,
@@ -304,6 +304,10 @@ afterwards. Edits made after that take effect, and are checked, when OpenCode
 next starts. A reconnect that reattaches to a still-running adapter keeps the
 rules that were checked at its launch. A subagent you invoke yourself
 (for example an `@general` mention) still runs.
+
+OpenCode 2 removed `opencode agent list` and renamed the `task` permission to
+`subagent`, so Alas cannot verify the policy there yet. With "Disable native
+subagents" on, an OpenCode 2 session fails to start and says so.
 
 This is not a sandbox: shell commands and extensions can still start other
 agents or processes. For OMP, that includes extension tools that spawn agents
