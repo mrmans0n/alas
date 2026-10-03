@@ -56,6 +56,7 @@ you approve separately.
   it expands in the composer, and context it adds to every prompt (API 7).
 - **Configure itself** from Settings → Plugins, keep data shared by every
   project, and set slash prompts while it runs (API 9).
+- **Know where it runs**: the SSH host of a remote project (API 10).
 
 The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
@@ -71,6 +72,7 @@ The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 | Add message commands, slash prompts and prompt context | [API v7](api-v7.md) |
 | Open a tab from a command, show loading spinners and links | [API v8](api-v8.md) |
 | Add a configure screen, storage shared across projects, runtime slash prompts, tab visibility and Markdown | [API v9](api-v9.md) |
+| Learn which SSH host a project runs on | [API v10](api-v10.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |

@@ -9,6 +9,7 @@ API 9 gives a plugin a configure screen in Settings → Plugins, storage shared 
 all of its projects, slash prompts it sets while running, word of when its tabs
 are on screen, and a Markdown view node. Snapshots also mark the project's main
 worktree.
+[API 10](api-v10.md) tells a plugin which SSH host its project runs on.
 
 ## The `api` field
 

@@ -84,6 +84,7 @@ struct PluginHostTests {
         sleeper: Sleeper = Sleeper(),
         launcher: FakeLauncher = FakeLauncher(),
         worktreeRoot: URL? = nil,
+        projectHost: String? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
@@ -93,7 +94,7 @@ struct PluginHostTests {
         return PluginHost(
             manifest: manifest,
             source: PluginJSFixture.source(script),
-            project: PluginProjectRef(id: "proj", name: "Project"),
+            project: PluginProjectRef(id: "proj", name: "Project", host: projectHost),
             grants: grants,
             actions: PluginHostActions(
                 snapshot: {
@@ -143,7 +144,13 @@ struct PluginHostTests {
                     recorder.comments.append("\(author)|\(comment.worktree)|\(comment.path)|\(comment.line)")
                     return nil
                 },
-                worktreePath: { $0 == "wt" ? worktreeRoot ?? URL(fileURLWithPath: "/tmp/wt") : nil }),
+                worktreeLocation: { id in
+                    switch id {
+                    case "wt": .local(worktreeRoot ?? URL(fileURLWithPath: "/tmp/wt"))
+                    case "far": .remote(host: "devbox")
+                    default: nil
+                    }
+                }),
             storage: storage,
             pluginStorage: pluginStorage ?? PluginStorage(
                 file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),
@@ -316,11 +323,16 @@ struct PluginHostTests {
         #expect(bounded.count == 2048)
     }
 
-    @Test func activationHandshakeMakesTheHostActive() async throws {
-        let host = try makeHost([[.send(activateOK)]])
+    /// The project names its SSH host only when it is remote.
+    @Test(arguments: [String?.none, "devbox"])
+    func activationHandshakeMakesTheHostActive(projectHost: String?) async throws {
+        let host = try makeHost([[.send(activateOK)]], projectHost: projectHost)
         await host.activate()
         #expect(host.state == .active)
-        #expect(lastReply(host)?.contains(#""api":4"#) == true)
+        let activate = try #require(lastReply(host))
+        let params = try JSONDecoder().decode(PluginParams<PluginActivateParams>.self, from: Data(activate.utf8)).params
+        #expect(params.api == 4 && params.project.host == projectHost)
+        #expect(activate.contains(#""host""#) == (projectHost != nil))
     }
 
     @Test(arguments: [
@@ -1208,6 +1220,7 @@ struct PluginHostTests {
         ProcessCase(request: processCall(1, "process/run", "dev"), reply: "use process/start"),
         ProcessCase(request: processCall(1, "process/start", "install"), reply: "use process/run"),
         ProcessCase(request: processCall(1, worktree: "other"), reply: "unknown worktree other"),
+        ProcessCase(request: processCall(1, worktree: "far"), reply: "worktree far is on remote host devbox"),
         ProcessCase(request: processCall(1, "process/start", "dev"), reply: #""run":"p1""#, argv: ["pnpm", "dev"]),
     ])
     func processesRunOnlyWhatTheManifestDeclares(_ c: ProcessCase) async throws {
@@ -1421,6 +1434,7 @@ struct PluginHostTests {
         FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"bin.dat"}"#), reply: "not UTF-8"),
         FileCase(request: request(1, "file/read", #"{"worktree":"wt","path":"../a.txt"}"#), reply: #""code":-32003"#),
         FileCase(request: request(1, "file/read", #"{"worktree":"other","path":"a.txt"}"#), reply: "unknown worktree other"),
+        FileCase(request: request(1, "file/list", #"{"worktree":"far","dir":""}"#), reply: "worktree far is on remote host devbox"),
         FileCase(request: request(1, "file/list", #"{"worktree":"wt","dir":""}"#), reply: #""name":"a.txt""#, absent: ".git"),
         FileCase(request: request(1, "file/write", #"{"worktree":"wt","path":"new/dir/b.txt","content":"hi"}"#), grants: [.filesRead], reply: #""code":-32001"#),
         FileCase(request: request(1, "file/write", #"{"worktree":"wt","path":"new/dir/b.txt","content":"hi"}"#), reply: #""result":{}"#, written: ("new/dir/b.txt", "hi")),
