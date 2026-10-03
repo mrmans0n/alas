@@ -29,6 +29,7 @@ private struct HeightModelContent: View {
     var body: some View { Color.clear.frame(width: 500, height: model.height) }
 }
 
+
 /// Wide markdown tables scroll sideways in an AppKit scroll view that keeps
 /// only horizontal gestures, so vertical scrolling over a table reaches the
 /// transcript through the ordinary responder chain.
@@ -331,5 +332,36 @@ struct ACPHorizontalScrollViewTests {
         host.layoutSubtreeIfNeeded()
 
         #expect(seenThemeID == theme.id)
+    }
+
+    @Test("scrolling an enclosing scroll view does not re-measure the table")
+    func outerScrollDoesNotRemeasure() {
+        let table = ACPHorizontalNSScrollView()
+        table.setContent(AnyView(Color.clear.frame(width: 900, height: 60)))
+        table.frame = NSRect(x: 0, y: 400, width: 300, height: 60)
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 2000))
+        document.addSubview(table)
+        let outer = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 600))
+        outer.documentView = document
+        // AppKit only re-lays out nested scroll views on scroll in an ordered-in window.
+        let window = NSWindow(
+            contentRect: NSRect(x: -5000, y: -5000, width: 300, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = outer
+        window.orderFrontRegardless()
+        outer.layoutSubtreeIfNeeded()
+        let settled = table.fittingMeasurementCountForTesting
+
+        for y in stride(from: CGFloat(10), through: 300, by: 10) {
+            outer.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
+            outer.reflectScrolledClipView(outer.contentView)
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+
+        #expect(table.fittingMeasurementCountForTesting == settled)
+        #expect(table.contentFittingSize.height == 60)
     }
 }
