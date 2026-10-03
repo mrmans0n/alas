@@ -22,6 +22,7 @@ struct DraftCommitTabView: View {
     @State private var generation: Task<Void, Never>? = nil
     @State private var createReviewRequestAsDraft = false
     @State private var publicationProbe = CommitPublishAmendProbeLoader()
+    @State private var messageSuggestion = CommitMessageSuggestionState()
 
     @State private var stagedSession: DiffReviewLoadedSession?
     @State private var sessionWithActions: DiffReviewLoadedSession?
@@ -267,7 +268,10 @@ struct DraftCommitTabView: View {
                             .accessibilityIdentifier("commit-composer-abandon-publish")
                         }
                     }
-                )
+                ),
+                suggesting: messageSuggestion.isSuggesting,
+                suggestionNote: messageSuggestion.isShowingSuggestion(subject: subject, body: bodyText)
+                    ? "Suggested on this Mac from the staged diff. Review it before committing." : nil
             )
             if let activity = publishActivityText {
                 HStack(spacing: 6) {
@@ -308,11 +312,22 @@ struct DraftCommitTabView: View {
                 $0.createReviewRequestAsDraft = new
             }
         }
-        .onChange(of: subject) { _, new in persist(subject: new) }
-        .onChange(of: bodyText) { _, new in persist(body: new) }
+        .onChange(of: subject) { _, new in
+            persist(subject: new)
+            messageSuggestion.recordEdit(subject: new, body: bodyText)
+        }
+        .onChange(of: bodyText) { _, new in
+            persist(body: new)
+            messageSuggestion.recordEdit(subject: subject, body: new)
+        }
         .onChange(of: amend) { _, new in
             persist(amend: new)
             if new {
+                // Amend starts from HEAD's message, not a draft for a new commit.
+                if messageSuggestion.isShowingSuggestion(subject: subject, body: bodyText) {
+                    subject = ""
+                    bodyText = ""
+                }
                 Task { await applyAmendPrefill() }
             } else {
                 clearAmendPrefillIfUnchanged()
@@ -326,6 +341,38 @@ struct DraftCommitTabView: View {
                 onStartupRecoveryReady()
             }
         }
+        // Restaging, toggling amend, or closing the tab cancels the request.
+        .task(id: "\(stagedKey):\(amend)") { await suggestMessage() }
+    }
+
+    /// Seeds empty fields with an on-device draft. Commit never waits on it,
+    /// and text the user typed is never replaced.
+    private func suggestMessage() async {
+        let indexKey = stagedKey
+        guard !amend, hasStaged, publishCheckpoint == nil, appState.commitMessageSuggestionAvailable else {
+            messageSuggestion.cancel()
+            return
+        }
+        // Staging several files in a row moves the key repeatedly; only the
+        // settled index is worth a model request.
+        do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+        guard let id = messageSuggestion.begin(indexKey: indexKey, subject: subject, body: bodyText) else { return }
+        let ticketTitle = appState.worktree(withId: worktreeId).flatMap {
+            appState.projectsManager.issueAttachment(projectId: $0.projectId, worktreeId: worktreeId)?.title
+        }
+        let input = try? await CommitMessageSuggestionInput.load(worktreePath: worktreePath, ticketTitle: ticketTitle)
+        let suggestion: CommitMessageSuggestion?
+        if let input, !Task.isCancelled {
+            suggestion = await appState.makeCommitMessageSuggester().suggest(for: input)
+        } else {
+            suggestion = nil
+        }
+        guard !Task.isCancelled else { return }
+        guard let suggestion = messageSuggestion.complete(
+            id, suggestion: suggestion, indexKey: stagedKey, subject: subject, body: bodyText
+        ) else { return }
+        subject = suggestion.subject
+        bodyText = suggestion.body ?? ""
     }
 
     @ViewBuilder
@@ -433,6 +480,7 @@ struct DraftCommitTabView: View {
 
     private func runGenerate() {
         publishSession?.clearError()
+        messageSuggestion.claim()
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
             availability: agentAvailability

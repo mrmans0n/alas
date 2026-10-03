@@ -270,7 +270,7 @@ struct IssueWorktreeNameSuggestionTests {
 }
 
 @MainActor
-private final class Availability {
+final class Availability {
     var isAppleAvailable = true
     var isMLXAvailable = true
 }
@@ -280,7 +280,7 @@ enum SuggestionBackend: Sendable {
     case mlx
 }
 
-private actor CannedAppleGenerator {
+actor CannedAppleGenerator {
     let output: String?
     let beforeReturning: @Sendable () async -> Void
     private(set) var calls = 0
@@ -322,7 +322,7 @@ actor GenerationGate {
     }
 }
 
-private actor CannedEngine: LocalTextGenerating {
+actor CannedEngine: LocalTextGenerating {
     let outcome: Result<String, LocalTextInferenceFailure>
     let beforeReturning: @Sendable () async -> Void
     private(set) var calls = 0
