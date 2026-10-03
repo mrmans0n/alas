@@ -261,6 +261,12 @@ actor RemoteHelperClient {
         try await request(method: "fs/list", params: RemoteHelperFSListParams(path: path))
     }
 
+    /// A plugin's worktree-scoped file request (`fs/scoped-*`). Paths are real and content is the plugin's own, so
+    /// nothing is rewritten.
+    func pluginFile<Params: Encodable, Result: Decodable>(_ method: String, _ params: Params) async throws -> Result {
+        try await request(method: method, params: params, stripVirtualPaths: false)
+    }
+
     func search(
         root: String,
         query: String,
