@@ -13,8 +13,11 @@ pub struct RemoteSessionError {
     pub message: String,
 }
 impl From<rusqlite::Error> for RemoteSessionError {
-    fn from(_: rusqlite::Error) -> Self {
-        error(-32080, "Remote session storage failed")
+    fn from(error: rusqlite::Error) -> Self {
+        Self {
+            code: -32080,
+            message: format!("Remote session storage failed: {error}"),
+        }
     }
 }
 fn error(code: i64, message: &str) -> RemoteSessionError {
@@ -264,6 +267,7 @@ impl RemoteSessionStore {
         method: &str,
         params: Option<Value>,
         now: i64,
+        retire_process: impl FnOnce(&str) -> Result<(), RemoteSessionError>,
     ) -> Result<Value, RemoteSessionError> {
         self.snapshots
             .retain(|_, snapshot| snapshot.touched.elapsed().as_secs() < 60);
@@ -276,7 +280,7 @@ impl RemoteSessionStore {
                 Ok(json!({"ok":true}))
             }
             "lease/claim" | "lease/seize" => {
-                self.claim(decode(params)?, method == "lease/seize", now)
+                self.claim(decode(params)?, method == "lease/seize", now, retire_process)
             }
             "lease/observe" => {
                 let mut p: Observe = decode(params)?;
@@ -363,7 +367,13 @@ impl RemoteSessionStore {
             _ => Err(error(-32601, "Unknown remote session method")),
         }
     }
-    fn claim(&mut self, mut p: Claim, seize: bool, now: i64) -> Result<Value, RemoteSessionError> {
+    fn claim(
+        &mut self,
+        mut p: Claim,
+        seize: bool,
+        now: i64,
+        retire_process: impl FnOnce(&str) -> Result<(), RemoteSessionError>,
+    ) -> Result<Value, RemoteSessionError> {
         canonicalize(&mut p.key)?;
         if p.owner.server_id.is_empty()
             || p.owner.instance_id.is_empty()
@@ -417,6 +427,18 @@ impl RemoteSessionStore {
             }
             if seize && current.token.as_deref() == Some(&p.requested_token) && !ours {
                 return Err(error(-32602, "Takeover requires a fresh token"));
+            }
+            if !seize
+                && !current.lease.is_fresh
+                && current
+                    .lease
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.server_id != p.owner.server_id)
+            {
+                // The previous owner's initialized protocol cannot be reused by another Mac.
+                // Retirement must succeed while the old fence is still stored under this lock.
+                retire_process(&current.lease.proc_id)?;
             }
             current.lease.record_id
         } else {
@@ -618,16 +640,40 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut store = RemoteSessionStore::open(&dir).unwrap();
         let claim = |owner: &str| json!({"key":{"worktreePath":dir,"agentId":"test","remoteSessionId":"one"},"owner":{"serverId":owner,"instanceId":owner},"proposedProcId":format!("acp-{owner}"),"requestedToken":owner});
-        let first = store.handle("lease/claim", Some(claim("a")), 100).unwrap();
+        let first = store
+            .handle("lease/claim", Some(claim("a")), 100, |_| {
+                panic!("a first claim must not retire a process")
+            })
+            .unwrap();
         assert!(!first["fence"].is_null());
-        assert!(store.handle("lease/claim", Some(claim("b")), 159).unwrap()["fence"].is_null());
-        assert!(!store.handle("lease/claim", Some(claim("b")), 160).unwrap()["fence"].is_null());
+        assert!(
+            store
+                .handle("lease/claim", Some(claim("b")), 159, |_| {
+                    panic!("a denied fresh claim must not retire a process")
+                })
+                .unwrap()["fence"]
+                .is_null()
+        );
+        let process_dir = dir.join("procs").join("acp-a");
+        std::fs::create_dir_all(&process_dir).unwrap();
+        assert!(
+            !store
+                .handle("lease/claim", Some(claim("b")), 160, |proc_id| {
+                    std::fs::remove_dir_all(dir.join("procs").join(proc_id)).map_err(|failure| {
+                        error(-32050, &format!("fixture retirement failed: {failure}"))
+                    })
+                })
+                .unwrap()["fence"]
+                .is_null()
+        );
+        assert!(!process_dir.exists());
         assert_eq!(
             store
                 .handle(
                     "lease/heartbeat",
                     Some(json!({"fence":first["fence"],"status":"busy"})),
-                    160
+                    160,
+                    |_| panic!("heartbeat must not retire a process"),
                 )
                 .unwrap_err()
                 .code,

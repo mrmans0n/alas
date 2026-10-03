@@ -17,6 +17,9 @@ struct RightPaneToolbar: View {
     var showIgnored: Bool = false
     var onToggleShowIgnored: () -> Void = {}
     var onSearch: () -> Void = {}
+    /// Plugin commands for the Changes tab's `changes.toolbar` slot.
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     let onOpenPreview: () -> Void
     let onNewRunScript: (RunScriptScope) -> Void
 
@@ -45,6 +48,12 @@ struct RightPaneToolbar: View {
                 if tab == .run {
                     runControls
                         .layoutPriority(2)
+                }
+                if tab == .changes, !pluginCommands.isEmpty {
+                    ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
+                        PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
+                    }
+                    .layoutPriority(2)
                 }
                 if RightPaneToolbarModel.showsOverflowMenu(for: tab) {
                     overflowMenu

@@ -9,11 +9,20 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case notify
     case network
     case timers
+    case sessionWrite = "session.write"
+    case runsRead = "runs.read"
+    case runsStart = "runs.start"
+    case reviewRead = "review.read"
+    case reviewWrite = "review.write"
+    case processExec = "process.exec"
+    case filesRead = "files.read"
+    case filesWrite = "files.write"
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
     var api: Int {
         switch self {
         case .notify, .network, .timers: 5
+        case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
         default: 4
         }
     }
@@ -29,16 +38,52 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .notify: "Show notifications"
         case .network: "Make web requests to the hosts it lists"
         case .timers: "Run on a schedule"
+        case .sessionWrite: "Send messages to agent sessions in this project"
+        case .runsRead: "Read when run scripts start and finish in this project, and their output"
+        case .runsStart: "Start run scripts in this project"
+        case .reviewRead: "Read the pull request state and checks of this project's worktrees"
+        case .reviewWrite: "Add review comments to changes in this project"
+        case .processExec: "Run the commands listed below in this project's worktrees"
+        case .filesRead: "Read files in this project's worktrees"
+        case .filesWrite: "Create and change files in this project's worktrees"
         }
     }
+
+    /// Acts with the user's permissions outside the sandbox, so approving it takes a separate confirmation.
+    var isFullAccess: Bool { self == .processExec || self == .filesWrite }
 }
 
-/// Session changes a plugin can subscribe to with the manifest's `events`.
+/// A command the plugin may run with `process.exec`: an exact argv prefix (API 6).
+struct PluginProcessContribution: Equatable, Sendable {
+    let id: String
+    let command: [String]
+    var appendArgs = false
+    var longRunning = false
+}
+
+/// Changes a plugin can subscribe to with the manifest's `events`.
 enum PluginEvent: String, Sendable, Hashable {
     case sessionState = "session.state"
     case sessionFinished = "session.finished"
+    // API 6.
+    case gitChanged = "git.changed"
+    case worktreeCreated = "worktree.created"
+    case worktreeRemoved = "worktree.removed"
+    case focusChanged = "focus.changed"
+    case runStarted = "run.started"
+    case runFinished = "run.finished"
+    case reviewChanged = "review.changed"
 
-    var capability: PluginCapability { .sessionRead }
+    var capability: PluginCapability {
+        switch self {
+        case .sessionState, .sessionFinished: .sessionRead
+        case .gitChanged, .worktreeCreated, .worktreeRemoved, .focusChanged: .workspaceRead
+        case .runStarted, .runFinished: .runsRead
+        case .reviewChanged: .reviewRead
+        }
+    }
+
+    var api: Int { capability == .sessionRead ? 5 : 6 }
     /// `session.state` is sent as `session/state`.
     var method: String { rawValue.replacingOccurrences(of: ".", with: "/") }
 }
@@ -52,14 +97,26 @@ struct PluginTabContribution: Equatable, Sendable {
     var kind: Kind = .canvas
 }
 
+/// Where a panel is shown.
+enum PluginPanelLocation: String, Sendable {
+    /// A button in the right pane's rail.
+    case right
+    /// A row in the Changes tab, rendered for its worktree (API 6).
+    case changesSection = "changes.section"
+    /// Under a run report's header, rendered for its run (API 6).
+    case runReportSection = "run.report.section"
+
+    var api: Int { self == .right ? 5 : 6 }
+}
+
 /// A view tree the plugin describes with `view/render {panel}`, shown outside the center tabs.
-/// The right pane's rail is the only location so far.
 struct PluginPanelContribution: Equatable, Sendable {
     static let defaultIcon = "puzzlepiece.extension"
 
     let id: String
     let title: String
     var icon: String = defaultIcon
+    var location: PluginPanelLocation = .right
 }
 
 /// A value the user sets for the plugin in Settings → Plugins.
@@ -108,10 +165,11 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case invalidCommand(String)
     case unknownEvent(String)
     case eventNeedsCapability(String)
-    case needsNewerAPI(String)
+    case needsNewerAPI(String, api: Int = 5)
     case invalidSetting(String)
     case invalidNetwork(String)
     case invalidPanel(String)
+    case invalidProcess(String)
 
     var description: String {
         switch self {
@@ -136,27 +194,32 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
         case .unknownEvent(let name):
             "unknown event \"\(name)\""
         case .eventNeedsCapability(let name):
-            "event \"\(name)\" needs capability \"\(PluginCapability.sessionRead.rawValue)\""
-        case .needsNewerAPI(let feature):
-            "\(feature) needs \"api\": 5"
+            "event \"\(name)\" needs capability \"\(PluginEvent(rawValue: name)?.capability.rawValue ?? "")\""
+        case .needsNewerAPI(let feature, let api):
+            "\(feature) needs \"api\": \(api)"
         case .invalidSetting(let reason):
             "invalid setting: \(reason)"
         case .invalidNetwork(let reason):
             "invalid network list: \(reason)"
         case .invalidPanel(let reason):
             "invalid panel contribution: \(reason)"
+        case .invalidProcess(let reason):
+            "invalid process: \(reason)"
         }
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...5
+    static let supportedAPIVersions = 4...6
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
     static let maxSettings = 16
     static let maxPanels = 2
+    static let maxPanelsAPI6 = 4
+    static let maxProcesses = 16
+    static let maxArgBytes = 1024
 
     let id: String
     let name: String
@@ -171,6 +234,8 @@ struct PluginManifest: Equatable, Sendable {
     var settings: [PluginSetting] = []
     /// Hosts `http/fetch` may reach: exact, lowercase names.
     var network: [String] = []
+    /// Commands `process.exec` may run.
+    var processes: [PluginProcessContribution] = []
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -198,13 +263,14 @@ struct PluginManifest: Equatable, Sendable {
         var capabilities: [PluginCapability] = []
         for name in raw.capabilities ?? [] {
             guard let capability = PluginCapability(rawValue: name) else { throw .unknownCapability(name) }
-            guard capability.api <= api else { throw .needsNewerAPI("capability \"\(name)\"") }
+            guard capability.api <= api else { throw .needsNewerAPI("capability \"\(name)\"", api: capability.api) }
             capabilities.append(capability)
         }
         var events: [PluginEvent] = []
         for name in raw.events ?? [] {
             guard let event = PluginEvent(rawValue: name) else { throw .unknownEvent(name) }
             guard api >= 5 else { throw .needsNewerAPI("\"events\"") }
+            guard event.api <= api else { throw .needsNewerAPI("event \"\(name)\"", api: event.api) }
             guard capabilities.contains(event.capability) else { throw .eventNeedsCapability(name) }
             events.append(event)
         }
@@ -214,9 +280,9 @@ struct PluginManifest: Equatable, Sendable {
         if raw.contributesMalformed { throw .malformed }
         let tabs = try parseTabs(raw.contributes?.tabs ?? [])
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
-        let commands = try parseCommands(raw.contributes?.commands ?? [])
+        let commands = try parseCommands(raw.contributes?.commands ?? [], api: api)
         if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
-        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs)
+        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
         if raw.network != nil || raw.settings != nil, api < 5 {
             throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
         }
@@ -230,10 +296,17 @@ struct PluginManifest: Equatable, Sendable {
             throw .invalidNetwork("\"\(host)\" is not a lowercase hostname; no schemes, ports or wildcards")
         }
         let settings = try parseSettings(raw.settings ?? [], network: network)
+        if raw.processes != nil, api < 6 { throw .needsNewerAPI("\"processes\"", api: 6) }
+        let processes = try parseProcesses(raw.processes ?? [])
+        if capabilities.contains(.processExec) {
+            guard !processes.isEmpty else { throw .invalidProcess("capability \"process.exec\" needs at least one process") }
+        } else if !processes.isEmpty {
+            throw .invalidProcess("\"processes\" needs capability \"process.exec\"")
+        }
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network)
+            settings: settings, network: network, processes: processes)
     }
 
     static func isValidHost(_ host: String) -> Bool {
@@ -283,7 +356,27 @@ struct PluginManifest: Equatable, Sendable {
         return settings
     }
 
-    private static func parseCommands(_ raw: [Raw.RawCommand]) throws(PluginManifestError) -> [PluginCommandContribution] {
+    private static func parseProcesses(_ raw: [Raw.RawProcess]) throws(PluginManifestError) -> [PluginProcessContribution] {
+        guard raw.count <= maxProcesses else { throw .invalidProcess("at most \(maxProcesses) processes") }
+        var processes: [PluginProcessContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidProcess("invalid process id \"\(id)\"") }
+            guard !processes.contains(where: { $0.id == id }) else { throw .invalidProcess("duplicate process id \"\(id)\"") }
+            let command = entry.command ?? []
+            guard let executable = command.first, !executable.isEmpty else {
+                throw .invalidProcess("process \"\(id)\" needs a command")
+            }
+            guard command.allSatisfy({ $0.utf8.count <= maxArgBytes }) else {
+                throw .invalidProcess("process \"\(id)\" has an argument longer than \(maxArgBytes) bytes")
+            }
+            processes.append(PluginProcessContribution(
+                id: id, command: command, appendArgs: entry.appendArgs ?? false, longRunning: entry.longRunning ?? false))
+        }
+        return processes
+    }
+
+    private static func parseCommands(_ raw: [Raw.RawCommand], api: Int) throws(PluginManifestError) -> [PluginCommandContribution] {
         guard raw.count <= maxCommands else { throw .invalidCommand("at most \(maxCommands) commands") }
         var commands: [PluginCommandContribution] = []
         for entry in raw {
@@ -295,17 +388,20 @@ struct PluginManifest: Equatable, Sendable {
                 throw .invalidCommand("command \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
             }
             guard let slots = entry.slots, !slots.isEmpty else { throw .invalidCommand("command \"\(id)\" needs at least one slot") }
-            // Slots will keep growing, so one this Alas does not know is skipped rather than refused.
+            // Slots will keep growing, so one this Alas does not know is skipped rather than refused, and so is one
+            // newer than the manifest's API, as an Alas of that API would.
             commands.append(PluginCommandContribution(
-                id: id, title: title, icon: entry.icon, slots: slots.compactMap(PluginCommandSlot.init(rawValue:))))
+                id: id, title: title, icon: entry.icon,
+                slots: slots.compactMap(PluginCommandSlot.init(rawValue:)).filter { $0.api <= api }))
         }
         return commands
     }
 
     private static func parsePanels(
-        _ raw: [Raw.RawPanel], tabs: [PluginTabContribution]
+        _ raw: [Raw.RawPanel], tabs: [PluginTabContribution], api: Int
     ) throws(PluginManifestError) -> [PluginPanelContribution] {
-        guard raw.count <= maxPanels else { throw .invalidPanel("at most \(maxPanels) panels") }
+        let limit = api >= 6 ? maxPanelsAPI6 : maxPanels
+        guard raw.count <= limit else { throw .invalidPanel("at most \(limit) panels") }
         var panels: [PluginPanelContribution] = []
         // Every declared id, skipped locations included, so uniqueness does not depend on order or on what this
         // Alas supports.
@@ -319,11 +415,12 @@ struct PluginManifest: Equatable, Sendable {
             guard (1...maxTabTitleLength).contains(title.count) else {
                 throw .invalidPanel("panel \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
             }
-            // Locations will keep growing, so one this Alas does not know is skipped rather than refused.
-            guard (entry.location ?? "right") == "right" else { continue }
+            // Locations will keep growing, so one this Alas does not know is skipped rather than refused, and so is
+            // one newer than the manifest's API, as an Alas of that API would.
+            guard let location = PluginPanelLocation(rawValue: entry.location ?? "right"), location.api <= api else { continue }
             let icon = (entry.icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             panels.append(PluginPanelContribution(
-                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon))
+                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon, location: location))
         }
         return panels
     }
@@ -382,6 +479,12 @@ private struct Raw: Decodable {
         let icon: String?
         let location: String?
     }
+    struct RawProcess: Decodable {
+        let id: String?
+        let command: [String]?
+        let appendArgs: Bool?
+        let longRunning: Bool?
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
@@ -397,10 +500,11 @@ private struct Raw: Decodable {
     let events: [String]?
     let settings: [RawSetting]?
     let network: [String]?
+    let processes: [RawProcess]?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, contributes }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -415,6 +519,7 @@ private struct Raw: Decodable {
         events = container.contains(.events) ? try container.decode([String].self, forKey: .events) : nil
         settings = container.contains(.settings) ? try container.decode([RawSetting].self, forKey: .settings) : nil
         network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
+        processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)

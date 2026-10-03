@@ -50,7 +50,7 @@ struct HoverFeatureRenderingTests {
         let s = result.attributedString
         let range = (s.string as NSString).range(of: "func")
         let color = s.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
-        let defaultFG = NSColor(theme.color("fg"))
+        let defaultFG = theme.nsColor("fg")
         #expect(color != defaultFG)
     }
 

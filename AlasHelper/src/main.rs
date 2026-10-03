@@ -725,7 +725,14 @@ fn handle_request(
         "proc/write" | "proc/kill" => fenced_proc_request(state, method, params),
         "proc/list" => proc_list(),
         method if method.starts_with("lease/") || method.starts_with("replica/") => {
-            remote_session_store(state)?.handle(method, params, alas_helper::remote_sessions::now()).map_err(Into::into)
+            remote_session_store(state)?
+                .handle(method, params, alas_helper::remote_sessions::now(), |proc_id| {
+                    kill_proc(proc_id).map_err(|error| RemoteSessionError {
+                        code: error.code,
+                        message: error.message,
+                    })
+                })
+                .map_err(Into::into)
         }
         method if method.starts_with("acp/") => {
             acp_broker_process::handle_control_request(method, params).map_err(|error| {
@@ -1704,13 +1711,17 @@ fn input_log_already_contains(
 
 fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
     let params: ProcKillParams = decode_params(params)?;
-    validate_proc_id(&params.proc_id)?;
-    let dir = proc_dir(&params.proc_id)?;
+    kill_proc(&params.proc_id)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn kill_proc(proc_id: &str) -> Result<(), HelperError> {
+    validate_proc_id(proc_id)?;
+    let dir = proc_dir(proc_id)?;
     if let Some(pid) = verified_proc_pid(&dir) {
         terminate_process_group_and_wait(&dir, pid)?;
     }
-    remove_proc_directory(&dir)?;
-    Ok(json!({ "ok": true }))
+    remove_proc_directory(&dir)
 }
 
 fn remove_proc_directory(dir: &Path) -> Result<(), HelperError> {

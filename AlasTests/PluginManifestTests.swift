@@ -15,6 +15,8 @@ private func panels(_ list: String, tabs: String = "") -> String {
 
 private func network(_ hosts: String) -> String { #","capabilities":["network"],"network":[\#(hosts)]"# }
 
+private func processes(_ list: String) -> String { #","capabilities":["process.exec"],"processes":[\#(list)]"# }
+
 private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
 
 struct PluginManifestTests {
@@ -32,11 +34,15 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 6), .unsupportedAPI(6)),
+        (manifest(api: 7), .unsupportedAPI(7)),
         (manifest(api: 4, commands(#"{"id":"a","title":"A","slots":["palette"]}"#)), .needsNewerAPI(#""contributes.commands""#)),
         (manifest(api: 4, #","capabilities":["notify"]"#), .needsNewerAPI(#"capability "notify""#)),
         (manifest(api: 4, #","capabilities":["session.read"],"events":["session.finished"]"#), .needsNewerAPI(#""events""#)),
-        (manifest(#","capabilities":["session.read"],"events":["git.changed"]"#), .unknownEvent("git.changed")),
+        (manifest(#","capabilities":["session.read"],"events":["nope.x"]"#), .unknownEvent("nope.x")),
+        (manifest(#","capabilities":["workspace.read"],"events":["git.changed"]"#), .needsNewerAPI(#"event "git.changed""#, api: 6)),
+        (manifest(#","capabilities":["runs.read"]"#), .needsNewerAPI(#"capability "runs.read""#, api: 6)),
+        (manifest(api: 6, #","capabilities":["workspace.read"],"events":["run.finished"]"#), .eventNeedsCapability("run.finished")),
+        (manifest(api: 6, panels((0...4).map { #"{"id":"p\#($0)","title":"P"}"# }.joined(separator: ","))), .invalidPanel("at most 4 panels")),
         (manifest(#","events":["session.state"]"#), .eventNeedsCapability("session.state")),
         (manifest(commands(#"{"id":"A!","title":"A","slots":["palette"]}"#)), .invalidCommand(#"invalid command id "A!""#)),
         (manifest(commands(#"{"id":"a","title":"A","slots":["palette"]},{"id":"a","title":"B","slots":["palette"]}"#)), .invalidCommand(#"duplicate command id "a""#)),
@@ -49,7 +55,16 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","contributes":5}"#, .malformed),
-        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.write"]}"#, .unknownCapability("files.write")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["files.delete"]}"#, .unknownCapability("files.delete")),
+        (manifest(api: 4, #","capabilities":["files.write"]"#), .needsNewerAPI(#"capability "files.write""#, api: 6)),
+        (manifest(#","processes":[{"id":"a","command":["ls"]}]"#), .needsNewerAPI(#""processes""#, api: 6)),
+        (manifest(api: 6, #","processes":[{"id":"a","command":["ls"]}]"#), .invalidProcess(#""processes" needs capability "process.exec""#)),
+        (manifest(api: 6, #","capabilities":["process.exec"]"#), .invalidProcess(#"capability "process.exec" needs at least one process"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":[]}"#)), .invalidProcess(#"process "a" needs a command"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":["ls","\#(String(repeating: "x", count: 1025))"]}"#)), .invalidProcess(#"process "a" has an argument longer than 1024 bytes"#)),
+        (manifest(api: 6, processes(#"{"id":"a","command":["ls"]},{"id":"a","command":["pwd"]}"#)), .invalidProcess(#"duplicate process id "a""#)),
+        (manifest(api: 6, processes(#"{"id":"A!","command":["ls"]}"#)), .invalidProcess(#"invalid process id "A!""#)),
+        (manifest(api: 6, processes((0...16).map { #"{"id":"p\#($0)","command":["ls"]}"# }.joined(separator: ","))), .invalidProcess("at most 16 processes")),
         (manifest(api: 4, panels(#"{"id":"p","title":"P"}"#)), .needsNewerAPI(#""contributes.panels""#)),
         (manifest(panels(#"{"id":"P!","title":"P"}"#)), .invalidPanel(#"invalid panel id "P!""#)),
         (manifest(panels(#"{"id":"p","title":"P"},{"id":"p","title":"Q"}"#)), .invalidPanel(#"duplicate panel id "p""#)),
@@ -85,24 +100,42 @@ struct PluginManifestTests {
         #expect(manifest.capabilities == [.tasksStart])
     }
 
-    /// Unknown slots are skipped rather than refused, because slots keep growing.
-    @Test func commandsKeepKnownSlotsAndEventsNeedTheirCapability() throws {
-        let parsed = try PluginManifest.parse(Data(manifest(
-            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar"]}]}"#).utf8))
-        #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: [.worktreeMenu])])
+    /// Unknown slots, and slots newer than the manifest's API, are skipped rather than refused, because slots keep growing.
+    @Test(arguments: [(5, [PluginCommandSlot.worktreeMenu]), (6, [.worktreeMenu, .changesToolbar])])
+    func commandsKeepKnownSlotsAndEventsNeedTheirCapability(api: Int, slots: [PluginCommandSlot]) throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: api,
+            #","capabilities":["session.read","notify"],"events":["session.finished"],"contributes":{"commands":[{"id":"fix","title":"Fix","icon":"wrench","slots":["worktree.menu","changes.toolbar","nope"]}]}"#).utf8))
+        #expect(parsed.commands == [PluginCommandContribution(id: "fix", title: "Fix", icon: "wrench", slots: slots)])
         #expect(parsed.events == [.sessionFinished])
     }
 
-    /// Unknown locations are skipped like unknown command slots; the icon defaults.
-    @Test func panelsDefaultTheirIconAndSkipUnknownLocations() throws {
-        let parsed = try PluginManifest.parse(Data(manifest(panels(
+    /// Locations newer than the manifest's API are skipped like unknown command slots; the icon defaults.
+    @Test(arguments: [(5, ["a"]), (6, ["a", "b"])])
+    func panelsDefaultTheirIconAndSkipUnknownLocations(api: Int, ids: [String]) throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: api, panels(
             #"{"id":"a","title":"A","location":"right"},{"id":"b","title":"B","icon":"checklist","location":"changes.section"}"#)).utf8))
-        #expect(parsed.panels == [PluginPanelContribution(id: "a", title: "A")])
+        #expect(parsed.panels.map(\.id) == ids)
+        #expect(parsed.panels.first == PluginPanelContribution(id: "a", title: "A"))
+        #expect(parsed.panels.dropFirst().allSatisfy { $0.location == .changesSection && $0.icon == "checklist" })
+    }
+
+    @Test func processesKeepTheirArgvAndFlags() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 6, processes(
+            #"{"id":"install","command":["pnpm","install"]},{"id":"dev","command":["pnpm","dev"],"appendArgs":true,"longRunning":true}"#)).utf8))
+        #expect(parsed.processes == [
+            PluginProcessContribution(id: "install", command: ["pnpm", "install"]),
+            PluginProcessContribution(id: "dev", command: ["pnpm", "dev"], appendArgs: true, longRunning: true),
+        ])
+    }
+
+    @Test func eventNeedsCapabilityNamesTheEventsOwnCapability() {
+        #expect(PluginManifestError.eventNeedsCapability("review.changed").description
+            == #"event "review.changed" needs capability "review.read""#)
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 5"),
-        (6, "requires plugin API 6; this Alas supports up to 5"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 6"),
+        (7, "requires plugin API 7; this Alas supports up to 6"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

@@ -55,6 +55,24 @@ impl Helper {
         assert!(response.get("error").is_none(), "{method}: {response}");
         response["result"].clone()
     }
+    fn wait_for_echo(&mut self, proc_id: &Value, expected: Value) -> Value {
+        use base64::Engine;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let output = self.request("proc/attach", json!({"procId":proc_id}));
+            if let Some(frame) = output["stdoutFrames"].as_array().unwrap().first() {
+                let echoed = base64::engine::general_purpose::STANDARD
+                    .decode(frame["dataBase64"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(serde_json::from_slice::<Value>(&echoed).unwrap(), expected);
+                return output;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process never echoed its input"
+            );
+        }
+    }
 }
 impl Drop for Helper {
     fn drop(&mut self) {
@@ -81,6 +99,17 @@ impl Fixture {
     }
     fn claim(&self, owner: &str) -> Value {
         json!({"key":{"worktreePath":self.0,"agentId":"test","remoteSessionId":"conversation"},"owner":{"serverId":owner,"instanceId":owner},"proposedProcId":format!("acp-{owner}"),"requestedToken":format!("token-{owner}")})
+    }
+    fn expire(&self, record_id: &Value) {
+        let db = rusqlite::Connection::open(self.0.join("remote_leases.sqlite")).unwrap();
+        assert_eq!(
+            db.execute(
+                "UPDATE remote_sessions SET heartbeat_at=0 WHERE record_id=?",
+                [record_id.as_str().unwrap()],
+            )
+            .unwrap(),
+            1
+        );
     }
 }
 impl Drop for Fixture {
@@ -244,6 +273,128 @@ fn takeover_fences_old_stdin_retries_spawn_and_kill_without_disturbing_the_new_w
     new.request(
         "proc/kill",
         json!({"procId":proc_id,"leaseFence":successor["fence"]}),
+    );
+}
+
+#[test]
+fn expired_foreign_claim_stops_the_predecessor_before_granting_a_fresh_spawn() {
+    use base64::Engine;
+    let fixture = Fixture::new();
+    let mut old = Helper::start(&fixture.0);
+    let mut new = Helper::start(&fixture.0);
+    let first = old.request("lease/claim", fixture.claim("a"));
+    let proc_id = first["lease"]["procId"].clone();
+    let mut spawn = json!({"procId":proc_id,"command":"/bin/cat","args":[],"cwd":fixture.0,"env":{},"leaseFence":first["fence"]});
+    assert_eq!(old.request("proc/spawn", spawn.clone())["spawned"], true);
+    let initialized = b"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\"}\n";
+    old.request(
+        "proc/write",
+        json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(initialized),"expectedStdinOffset":0,"leaseFence":first["fence"]}),
+    );
+    let previous_output = old.wait_for_echo(
+        &proc_id,
+        json!({"jsonrpc":"2.0","method":"initialize"}),
+    );
+    assert_eq!(previous_output["stdinOffset"], initialized.len());
+    let process_dir = fixture.0.join("procs").join(proc_id.as_str().unwrap());
+    let predecessor_pid = std::fs::read_to_string(process_dir.join("pid")).unwrap();
+    fixture.expire(&first["lease"]["recordId"]);
+    let successor = new.request("lease/claim", fixture.claim("b"));
+    assert_eq!(successor["lease"]["owner"]["serverId"], "b");
+    assert_eq!(successor["lease"]["procId"], proc_id);
+    assert_eq!(successor["fence"]["token"], "token-b");
+    assert_eq!(
+        old.raw("proc/attach", json!({"procId":proc_id}))["error"]["code"],
+        -32051
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while Command::new("/bin/kill")
+        .args(["-0", predecessor_pid.trim()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expired owner's process survived the ownership grant"
+        );
+    }
+    assert_eq!(
+        old.raw("proc/write", json!({"procId":proc_id,"dataBase64":"e30K","expectedStdinOffset":initialized.len(),"leaseFence":first["fence"]}))["error"]["code"],
+        -32081
+    );
+    spawn["leaseFence"] = successor["fence"].clone();
+    assert_eq!(new.request("proc/spawn", spawn)["spawned"], true);
+    let fresh = new.request("proc/attach", json!({"procId":proc_id}));
+    assert_eq!(fresh["stdinOffset"], 0);
+    assert_eq!(fresh["stdoutOffset"], 0);
+    assert!(fresh["stdoutFrames"].as_array().unwrap().is_empty());
+    let resumed = b"{\"jsonrpc\":\"2.0\",\"method\":\"session/load\"}\n";
+    new.request(
+        "proc/write",
+        json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(resumed),"expectedStdinOffset":0,"leaseFence":successor["fence"]}),
+    );
+    let output = new.wait_for_echo(&proc_id, json!({"jsonrpc":"2.0","method":"session/load"}));
+    assert_eq!(output["stdinOffset"], resumed.len());
+    new.request(
+        "proc/kill",
+        json!({"procId":proc_id,"leaseFence":successor["fence"]}),
+    );
+}
+
+#[test]
+fn native_cleanup_failure_does_not_grant_an_expired_foreign_claim() {
+    let fixture = Fixture::new();
+    let mut helper = Helper::start(&fixture.0);
+    let first = helper.request("lease/claim", fixture.claim("a"));
+    let procs = fixture.0.join("procs");
+    std::fs::create_dir(&procs).unwrap();
+    std::fs::write(procs.join("acp-a"), b"not a process directory").unwrap();
+    fixture.expire(&first["lease"]["recordId"]);
+    let denied = helper.raw("lease/claim", fixture.claim("b"));
+    assert_eq!(denied["error"]["code"], -32050);
+    let observed = helper.request("lease/observe", json!({"key":fixture.claim("a")["key"]}));
+    assert_eq!(observed["lease"]["owner"], first["lease"]["owner"]);
+    helper.request("lease/release", json!({"fence":first["fence"]}));
+}
+
+#[test]
+fn same_server_replacement_and_expired_reconnect_reuse_the_initialized_process() {
+    use base64::Engine;
+    let fixture = Fixture::new();
+    let mut helper = Helper::start(&fixture.0);
+    let first = helper.request("lease/claim", fixture.claim("a"));
+    let proc_id = first["lease"]["procId"].clone();
+    let mut spawn = json!({"procId":proc_id,"command":"/bin/cat","args":[],"cwd":fixture.0,"env":{},"leaseFence":first["fence"]});
+    helper.request("proc/spawn", spawn.clone());
+    let initialized = b"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\"}\n";
+    helper.request(
+        "proc/write",
+        json!({"procId":proc_id,"dataBase64":base64::engine::general_purpose::STANDARD.encode(initialized),"expectedStdinOffset":0,"leaseFence":first["fence"]}),
+    );
+    helper.wait_for_echo(&proc_id, json!({"jsonrpc":"2.0","method":"initialize"}));
+    assert!(helper.request("lease/claim", fixture.claim("b"))["fence"].is_null());
+    let mut replacement = fixture.claim("a");
+    replacement["requestedToken"] = json!("replacement");
+    replacement["previousFence"] = first["fence"].clone();
+    let replaced = helper.request("lease/claim", replacement);
+    spawn["leaseFence"] = replaced["fence"].clone();
+    assert_eq!(helper.request("proc/spawn", spawn.clone())["spawned"], false);
+    fixture.expire(&first["lease"]["recordId"]);
+    let mut reconnect = fixture.claim("a");
+    reconnect["owner"]["instanceId"] = json!("new-instance");
+    reconnect["requestedToken"] = json!("reconnected");
+    let reconnected = helper.request("lease/claim", reconnect);
+    assert_eq!(reconnected["fence"]["token"], "reconnected");
+    spawn["leaseFence"] = reconnected["fence"].clone();
+    assert_eq!(helper.request("proc/spawn", spawn)["spawned"], false);
+    let output = helper.wait_for_echo(&proc_id, json!({"jsonrpc":"2.0","method":"initialize"}));
+    assert_eq!(output["stdinOffset"], initialized.len());
+    helper.request(
+        "proc/kill",
+        json!({"procId":proc_id,"leaseFence":reconnected["fence"]}),
     );
 }
 

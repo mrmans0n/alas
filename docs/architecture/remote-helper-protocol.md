@@ -226,6 +226,11 @@ require `leaseFence`, and the authority check and process mutation share that
 transaction. `expectedStdinOffset` still deduplicates retries but does not grant
 authority. Reading or attaching to output does not grant stdin authority.
 
+An ordinary claim of an expired foreign-Mac lease retires its old process inside
+that write transaction before committing the new owner and token. Cleanup failure
+does not grant ownership. The next fresh spawn resets private protocol offsets;
+same-Mac reconnects preserve intentional process reuse.
+
 Explicit takeover seizes first and imports the last committed remote replica.
 It does not wait for predecessor acknowledgement; Mac-local writes whose
 publication is unacknowledged are outside that shared cutoff.

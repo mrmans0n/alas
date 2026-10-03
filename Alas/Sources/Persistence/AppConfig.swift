@@ -47,6 +47,8 @@ struct AppConfig: Codable, Equatable {
     var nextPromptSuggestionsEnabled: Bool = false
     var sessionSummariesEnabled: Bool = false
     var runFailureBriefsEnabled: Bool = true
+    var localTextModelEnabled: Bool = false
+    var issueWorktreeNameSuggestionsEnabled: Bool = true
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
@@ -597,6 +599,8 @@ struct AppConfig: Codable, Equatable {
         workspacesEnabled: false,
         nextPromptSuggestionsEnabled: false,
         sessionSummariesEnabled: false,
+        localTextModelEnabled: false,
+        issueWorktreeNameSuggestionsEnabled: true,
         needsAttentionEnabled: false,
         pluginsEnabled: false,
         recentProjectIds: [],
@@ -694,6 +698,8 @@ extension AppConfig {
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
              runFailureBriefsEnabled,
+             localTextModelEnabled,
+             issueWorktreeNameSuggestionsEnabled,
              needsAttentionEnabled,
              pluginsEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
@@ -942,6 +948,12 @@ extension AppConfig {
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true
+        let priorModelConsent = nextPromptSuggestionsEnabled || sessionSummariesEnabled
+        localTextModelEnabled =
+            (try? c.decode(Bool.self, forKey: .localTextModelEnabled)) ?? priorModelConsent
+        issueWorktreeNameSuggestionsEnabled =
+            (try? c.decode(Bool.self, forKey: .issueWorktreeNameSuggestionsEnabled))
+            ?? (harness.acpLocalTitlesEnabled || priorModelConsent)
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? false

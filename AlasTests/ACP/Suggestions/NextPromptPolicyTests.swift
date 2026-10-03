@@ -67,6 +67,41 @@ struct NextPromptPolicyTests {
         #expect(!NextPromptPolicy.permitsOutput("Publish the sanitized excerpt.", turns: publication))
     }
 
+    @Test(arguments: [
+        ("Erasing the project folder and all backup copies will recover space. May I proceed?", false),
+        ("Start with a blank production database by discarding every table. Approve the reset?", false),
+        ("Wiping our project directory will recover space. Confirm?", false),
+        ("Purge all backup copies. Shall I proceed?", false),
+        ("Truncate the production tables. Approve?", false),
+        ("Reset the live database. May I proceed?", false),
+        ("Clear all production records. Do I have permission?", false),
+        ("Inspect the production database with a read-only schema report. May I proceed?", true),
+        ("The advice 'discard all production records' is unsafe. May I proceed with a read-only report?", true),
+        ("Never erase our project folder. Do not purge backups. May I proceed with a size report?", true),
+        ("Remove unused imports from the project source. Approve?", true)
+    ])
+    func destructiveConsentIsWithheldWithoutBlockingSafeDiscussion(
+        assistant: String, permitted: Bool
+    ) {
+        let turns = [NextPromptTurn(user: "Preserve production records, project data, and backups.",
+                                   assistant: assistant)]
+        #expect(NextPromptPolicy.permitsInput(turns) == permitted)
+        #expect(NextPromptPolicy.permitsOutput("Show the read-only report.", turns: turns) == permitted)
+    }
+
+    @Test(arguments: [
+        ("Approve dropping the live records.", false),
+        ("Confirm erasing the project directory.", false),
+        ("Never approve resetting the live database.", true),
+        ("Explain why 'approve discarding production records' is unsafe.", true),
+        ("Show the read-only production schema report.", true)
+    ])
+    func generatedConsentCannotBypassSafeInput(candidate: String, permitted: Bool) {
+        let turns = [NextPromptTurn(user: "Inspect production records without changing them.",
+                                   assistant: "A read-only schema report can explain the issue.")]
+        #expect(NextPromptPolicy.permitsOutput(candidate, turns: turns) == permitted)
+    }
+
     @Test func authorizedPublicAndRedactedExamplesRemainAvailable() {
         let template = [NextPromptTurn(
             user: "The public .env.example contains placeholders. You may discuss that template.",

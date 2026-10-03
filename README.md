@@ -39,6 +39,15 @@ respond when it needs you.
   agent works. Attach issue context, dictate prompts, and configure external MCP
   servers per project.
 
+- **Configure on-device AI.** Settings → On-device AI controls built-in chat
+  titles, worktree names, failure briefs, and conflict explanations. Apple
+  Intelligence runs these helpers first when available. An optional shared Qwen3
+  model supplies local fallback, session summaries, and next-prompt suggestions
+  after explicit download and processing consent. Feature preferences remain
+  separate; switching them on never downloads a model. Built-in inference stays
+  on this Mac. Sending accepted text to an external agent follows that agent's
+  own data policy.
+
 - **Parallel worktrees, one window.** Every repo lives in the sidebar with its
   linked worktrees underneath. Switching is instant; terminal sessions, tabs, and
   scroll positions persist per worktree. Spaces organize repositories into

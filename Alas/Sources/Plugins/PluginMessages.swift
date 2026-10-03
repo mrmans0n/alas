@@ -70,8 +70,17 @@ struct PluginTickParams: Codable, Equatable, Sendable {
     let dt: Int
 }
 
+/// Where one panel is shown: its worktree or run for the locations that have one (API 6).
+struct PluginPanelPlace: Hashable, Codable, Sendable {
+    let panel: String
+    var worktree: String?
+    var run: String?
+}
+
 struct PluginPanelVisibleParams: Codable, Equatable, Sendable {
     let panel: String
+    var worktree: String?
+    var run: String?
     let visible: Bool
 }
 
@@ -137,15 +146,20 @@ enum PluginLastMessageText {
 
 // API 3. `view/render`'s `root` and `storage/set`'s `value` are arbitrary JSON, read with `JSONSerialization`.
 
-/// Exactly one of `tab` and `panel` (API 5) says which tree the message is about.
+/// Exactly one of `tab` and `panel` (API 5) says which tree the message is about. A panel at a location with a
+/// worktree or run names it too (API 6).
 struct PluginViewRenderHeader: Decodable {
     let tab: Int?
     let panel: String?
+    let worktree: String?
+    let run: String?
 }
 
 struct PluginViewEventParams: Codable, Equatable, Sendable {
     var tab: Int?
     var panel: String?
+    var worktree: String?
+    var run: String?
     let id: String
     let kind: String
     let value: String?
@@ -221,4 +235,68 @@ struct PluginTimerSetParams: Decodable, Sendable {
 
 struct PluginTimerIDParams: Codable, Sendable {
     let id: String
+}
+
+// API 6.
+
+struct PluginSessionSendParams: Decodable, Sendable {
+    let session: String
+    let text: String
+}
+
+struct PluginRunStartParams: Decodable, Sendable {
+    let worktree: String
+    let script: String
+}
+
+struct PluginRunOutputParams: Decodable, Sendable {
+    let run: String
+}
+
+enum PluginRunOutput: Equatable, Sendable {
+    case unknownRun
+    case notFinished
+    /// The run finished but its output was not kept.
+    case unavailable
+    case text(String)
+}
+
+struct PluginRunOutputResult: Encodable, Equatable {
+    let output: String?
+    let truncated: Bool
+
+    // `null` must be present, not omitted.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(output, forKey: .output)
+        try container.encode(truncated, forKey: .truncated)
+    }
+
+    private enum CodingKeys: String, CodingKey { case output, truncated }
+
+    /// The last `maxBytes` of UTF-8 at most, starting on a Unicode scalar boundary.
+    static func tail(_ text: String, maxBytes: Int) -> PluginRunOutputResult {
+        guard text.utf8.count > maxBytes else { return PluginRunOutputResult(output: text, truncated: false) }
+        var start = text.utf8.index(text.utf8.endIndex, offsetBy: -maxBytes)
+        while start.samePosition(in: text.unicodeScalars) == nil { text.utf8.formIndex(after: &start) }
+        return PluginRunOutputResult(output: String(text.unicodeScalars[start...]), truncated: true)
+    }
+}
+
+struct PluginReviewCommentParams: Decodable, Equatable, Sendable {
+    static let maxBodyBytes = 16 * 1024
+
+    let worktree: String
+    /// Relative to the worktree.
+    let path: String
+    let line: Int
+    let body: String
+
+    var isValid: Bool {
+        !path.isEmpty && !path.hasPrefix("/") && path.utf8.count <= 1024
+            && !path.split(separator: "/").contains("..")
+            && line >= 1
+            && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && body.utf8.count <= Self.maxBodyBytes
+    }
 }

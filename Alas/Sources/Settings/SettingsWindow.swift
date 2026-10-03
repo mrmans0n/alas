@@ -31,6 +31,7 @@ struct SettingsWindow: View {
                 Group {
                     switch section {
                     case .general:    GeneralPane(state: state)
+                    case .onDeviceAI:  OnDeviceAIPane(state: state)
                     case .remote:     RemoteServerPane(state: state)
                     case .debug:      AdvancedPane(state: state)
                     case .plugins:    PluginsPane(state: state)
