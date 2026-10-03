@@ -118,12 +118,13 @@ headers, which run locally, and processes never receive them, local or remote.
   `files.*` is refused, because it would mean nothing.
 - It is part of the manifest bytes, so the trust hash covers it. Adding it in
   an update asks for approval again.
-- The approval sheet's *Full access* group adds one line when `remote` is set:
-  **"In projects on SSH hosts, these commands run and these files change on
-  that host, as your user there."** The confirmation checkbox text gains "…on
-  this Mac and on SSH hosts".
-- The grant stays per plugin, as today. A per-host grant is an open question
-  (Q4).
+- When `remote` is set, the approval sheet shows its own *On SSH hosts* line,
+  outside the *Full access* group, worded for what is requested: "reads files"
+  for `files.read`, "changes files" for `files.write`, "runs these commands"
+  for `process.exec`, each "on that host, as your user there". A read-only
+  plugin is not labelled full access. When full access is also requested, its
+  confirmation checkbox text gains "…on this Mac and on SSH hosts".
+- The grant stays per plugin (see Decisions).
 
 ### Remote `file/*`
 
@@ -379,8 +380,14 @@ nothing if the page can talk to any host:
 - WebRTC escapes CSP, so a document-start user script deletes
   `RTCPeerConnection` and its relatives before page scripts run. Frames are
   blocked, so the page can't recover them from a fresh realm.
-- Residual: timing and DNS-prefetch side channels. These are accepted and
-  listed on the approval sheet's line for web content (Q6).
+- DNS prefetch is off. CSP doesn't cover it, and `<link rel="dns-prefetch">`
+  to a crafted hostname would leak data to whoever runs its DNS. The shell is
+  served with `X-DNS-Prefetch-Control: off` and the matching `<meta>` before
+  any page script; WebKit doesn't let a document turn it back on, and frames
+  are blocked, so no fresh document can either. W1 verifies it against a test
+  page with a resolver that records lookups, and doesn't ship if any leak.
+- Residual: timing side channels, accepted and listed on the approval sheet's
+  line for web content (Q6).
 
 **The bridge carries messages to the plugin and nothing else** (threat 3):
 
