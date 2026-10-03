@@ -164,9 +164,13 @@ Same messages, limits and error codes as API 6. Differences:
   `SSHCommand`, never joined into a shell string. The working directory is
   the worktree's real path.
 - The executable resolves on the host: absolute paths as is, `./x` relative to
-  the worktree, bare names on the remote login shell's `PATH`, the same policy
-  `RemoteExec` uses for run scripts. The environment is the remote user's.
-  Nothing from the Mac's environment is forwarded.
+  the worktree, bare names on the remote login shell's `PATH`. Today the
+  helper starts through `SSHCommand.remoteScript`, whose prelude adds a fixed
+  set of directories and never runs a login shell, so tools that `.profile`,
+  nvm, mise or asdf add (`pnpm`) would be missing. R3 captures the login
+  environment once per connection, by running the user's shell with `-l -c
+  env`, and spawns plugin processes with it. The environment is the remote
+  user's; nothing from the Mac's environment is forwarded.
 - The 10-minute limit, `stdin` and the 2-per-instance cap are unchanged. On
   stop, the helper sends `SIGTERM` to the process group, then `SIGKILL` after
   5 s.
@@ -207,7 +211,10 @@ Same messages, limits and error codes as API 6. Differences:
   processes, the same limits the plugin host applies. Offsets become logical:
   monotonic byte counts with a retained base that the helper reports, so a
   client whose remembered offset fell below the base resumes at it instead of
-  seeking past the end of a shortened file.
+  seeking past the end of a shortened file. For plugin processes, stdout and
+  stderr go to one journal of tagged chunks with a sequence number rather
+  than two files, so a replay after a reconnect keeps their original order,
+  as the local Run tab shows it.
 - Exit codes match local runs: a process ended by a signal reports 128 plus
   the signal number (143, 137), taken from the exit status's signal, not the
   helper's current `code().unwrap_or(2)`.
@@ -293,8 +300,13 @@ reference plugin committed (likely a usage dashboard or a stack graph).
   variables, then `<script src="ui.js">`. Authors bundle React, Svelte,
   Chart.js or D3 into one IIFE with esbuild, the same toolchain as
   `plugin.js`. Images and fonts are inlined as `data:` URLs.
-- The trust hash becomes `hash(manifest, entry, web?)`, so changing the page
-  asks for approval again. The catalog publishes `ui.js` as a third asset and
+- The trust hash covers `ui.js`, so changing the page asks for approval again.
+  Today's hash separates manifest and entry with one NUL, which is safe only
+  because the JSON manifest can't hold a raw NUL; two JavaScript files can, so
+  bytes could move across their boundary without changing the digest. The
+  hash gets a new version that frames each field with its name and length
+  (`alas-plugin-trust-v2`), and both approvals and catalog records move to
+  it. The catalog publishes `ui.js` as a third asset and
   verifies it like the other two. The repository spec's "two files" rule
   becomes "two or three".
 
@@ -336,9 +348,12 @@ nothing if the page can talk to any host:
   No `unsafe-inline` or `unsafe-eval` for scripts, so injected `<script>` tags
   and `onerror=` handlers don't run (threat 2).
 - A `WKContentRuleList` that blocks every load outside `alas-plugin:`.
-- `decidePolicyFor navigationAction` cancels everything except the shell. A
-  user-activated click on an `https` link opens the default browser, like the
-  `link` node. `createWebViewWith` returns nil, downloads are cancelled, and
+- `decidePolicyFor navigationAction` cancels everything except the shell,
+  external links included: `WKNavigationAction` has no trustworthy
+  user-activation flag, and page script can activate an anchor to leak data
+  in its URL. A listener in an isolated content world accepts only trusted
+  (`isTrusted`) clicks on `https` anchors and asks Alas to open them in the
+  default browser, like the `link` node. `createWebViewWith` returns nil, downloads are cancelled, and
   file pickers, media capture and geolocation are denied. JS dialogs are
   unimplemented, so they return at once.
 - WebRTC escapes CSP, so a document-start user script deletes
@@ -349,8 +364,12 @@ nothing if the page can talk to any host:
 
 **The bridge carries messages to the plugin and nothing else** (threat 3):
 
-- Alas installs one script message handler and a document-start script that
-  defines `window.alas`:
+- Alas installs its script message handler in an isolated content world, not
+  the page's, so `ui.js` can't reach `window.webkit.messageHandlers` and skip
+  the checks. A relay in that world takes `alas.post` calls, enforces the
+  size and queue limits, and only then forwards; Alas checks the same bounds
+  again before a message enters the plugin's delivery queue. The page sees
+  only `window.alas`, defined by a document-start script:
 
   ```js
   alas.post(value)            // any JSON value; the whole web/message it becomes must fit in 1 MiB
