@@ -168,9 +168,11 @@ Same messages, limits and error codes as API 6. Differences:
   never share one, and the public `pN` run id maps to it only inside the
   instance that started it. A helper call for an id owned by another lease is
   refused rather than attached to.
-- The argv is the manifest's exact prefix plus `appendArgs`, quoted by
-  `SSHCommand`, never joined into a shell string. The working directory is
-  the worktree's real path.
+- The argv is the manifest's exact prefix plus `appendArgs`, sent to the
+  helper as a raw JSON array (`spawnProc` already carries `command` and `args`
+  as separate strings) and quoted exactly once, inside the helper. Alas does
+  not pre-quote it, which would pass literal quotes to the program. The
+  working directory is the worktree's real path.
 - The executable resolves on the host: absolute paths as is, `./x` relative to
   the worktree, bare names on the remote login shell's `PATH`. Today the
   helper starts through `SSHCommand.remoteScript`, whose prelude adds a fixed
@@ -491,8 +493,8 @@ Per the testing policy, pin the decisions:
 - Host-side containment keeps a symlink that resolves inside the worktree
   working (API 6's `inner/c.txt` through `inner -> a`), next to the escape
   cases.
-- Argv quoting for remote processes (`SSHCommand`), including `appendArgs`
-  with spaces and quotes.
+- Remote argv reaches the program unchanged: `appendArgs` with spaces and
+  quotes arrive as the same strings, quoted only once, in the helper.
 - Helper lifecycle, in the helper's own Rust tests: a backgrounded child is
   stopped when the root exits; a `setsid` descendant is stopped by identity;
   the group is not signalled once no member matches; the anchor ignores the
