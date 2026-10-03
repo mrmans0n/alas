@@ -48,4 +48,94 @@ struct ACPUsageLimitTests {
     func parsesResetTime(_ c: ResetCase) {
         #expect(ACPUsageLimitResetParser.resetDate(in: c.text, now: c.now, calendar: Self.madrid) == c.expected)
     }
+
+    struct DetectCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let error: JSONRPCError
+        let turnAgentText: String?
+        let rateLimit: ACPClaudeRateLimit?
+        /// nil = not a usage limit.
+        let expected: (resetsAt: Date?, source: ACPUsageLimit.ResetSource, resettable: Bool)?
+        var testDescription: String { name }
+    }
+
+    static let now = date(2026, 10, 3, 10, 0)
+
+    static func codexError(_ message: String) -> JSONRPCError {
+        JSONRPCError(code: -32603, message: "Internal error", data: AnyCodable([
+            "message": AnyCodable(message),
+            "codexErrorInfo": AnyCodable("usageLimitExceeded"),
+        ]))
+    }
+
+    static let detectCases: [DetectCase] = [
+        .init(name: "codex flag with reset in text",
+              error: codexError("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 4th, 2026 4:35 PM."),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (date(2026, 10, 4, 16, 35), .parsed, true)),
+        .init(name: "codex flag without reset",
+              error: codexError("You've hit your usage limit."),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true)),
+        .init(name: "codex flag with a reset already past",
+              error: codexError("You've hit your usage limit. Try again at Sep 21st, 2026 4:35 PM."),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, true)),
+        .init(name: "claude prefix in error message",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit · resets 3pm (Europe/Madrid)", data: nil),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (date(2026, 10, 3, 15, 0), .parsed, true)),
+        .init(name: "claude structured reset wins over text",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit · resets 3pm (Europe/Madrid)", data: nil),
+              turnAgentText: nil,
+              rateLimit: ACPClaudeRateLimit(status: "rejected", resetsAt: date(2026, 10, 3, 14, 59)),
+              expected: (date(2026, 10, 3, 14, 59), .structured, true)),
+        .init(name: "claude stale structured reset is ignored",
+              error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit", data: nil),
+              turnAgentText: nil,
+              rateLimit: ACPClaudeRateLimit(status: "rejected", resetsAt: date(2026, 10, 2, 9, 0)),
+              expected: (nil, .unknown, true)),
+        .init(name: "claude prefix only in this turn's agent text",
+              error: JSONRPCError(code: -32603, message: "Internal error", data: nil),
+              turnAgentText: "You've reached your weekly limit · resets Oct 4, 3:30pm (Europe/Madrid)",
+              rateLimit: nil,
+              expected: (date(2026, 10, 4, 15, 30), .parsed, true)),
+        .init(name: "claude org block is not resettable",
+              error: JSONRPCError(code: -32603, message: "Internal error: Your org is out of usage · contact your admin", data: nil),
+              turnAgentText: nil, rateLimit: nil,
+              expected: (nil, .unknown, false)),
+        .init(name: "unrelated error",
+              error: JSONRPCError(code: -32603, message: "Internal error: connection reset", data: nil),
+              turnAgentText: "I hit a limit in the parser, retrying.", rateLimit: nil,
+              expected: nil),
+        .init(name: "codex other error info",
+              error: JSONRPCError(code: -32603, message: "Internal error", data: AnyCodable(["codexErrorInfo": AnyCodable("contextWindowExceeded")])),
+              turnAgentText: nil, rateLimit: nil,
+              expected: nil),
+    ]
+
+    @Test("a failed prompt is classified as a usage limit only on provider signals", arguments: detectCases)
+    func detectsUsageLimit(_ c: DetectCase) {
+        let limit = ACPUsageLimitDetector.detect(
+            error: ACPClientError.jsonrpc(c.error), turnAgentText: c.turnAgentText,
+            claudeRateLimit: c.rateLimit, now: Self.now, calendar: Self.madrid
+        )
+        guard let expected = c.expected else {
+            #expect(limit == nil)
+            return
+        }
+        #expect(limit == ACPUsageLimit(
+            detectedAt: Self.now, resetsAt: expected.resetsAt, resetSource: expected.source,
+            probeAttempt: 0, resettable: expected.resettable
+        ))
+    }
+
+    @Test("a bare JSONRPCError is accepted too")
+    func acceptsBareJSONRPCError() {
+        let limit = ACPUsageLimitDetector.detect(
+            error: JSONRPCError(code: -32603, message: "Internal error: You've hit your limit", data: nil),
+            turnAgentText: nil, claudeRateLimit: nil, now: Self.now, calendar: Self.madrid
+        )
+        #expect(limit != nil)
+    }
 }

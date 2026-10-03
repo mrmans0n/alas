@@ -107,3 +107,91 @@ enum ACPUsageLimitResetParser {
         return today > now ? today : cal.date(byAdding: .day, value: 1, to: today)
     }
 }
+
+/// Classifies a failed `session/prompt` as a provider usage limit. Uses only
+/// structured signals and the SDK's exact message prefixes, never loose prose:
+/// a false positive would stop a session from retrying for hours.
+enum ACPUsageLimitDetector {
+    /// Mirrors `USAGE_LIMIT_ERROR_PREFIXES` in @anthropic-ai/claude-agent-sdk
+    /// (sdk.d.ts); claude-agent-acp matches the same list.
+    static let claudeUsageLimitPrefixes: [String] = [
+        "You've hit your",
+        "You've reached your",
+        "You're out of usage credits",
+        "Your org is out of usage · add funds to continue",
+        "Your org is out of usage · contact your admin",
+        "Your seat type doesn't include usage credits",
+        "Your seat type doesn't include usage",
+        "Your usage allocation has been disabled by your admin",
+        "Your group's usage limit is set to $0",
+        "Fable 5 requires usage credits",
+        "You're out of extra usage",
+        "Your seat type doesn't include extra usage",
+    ]
+    /// The prefixes a limit window reset lifts. The rest are account, seat or
+    /// credit blocks that need someone to act.
+    static let resettableClaudePrefixes: [String] = ["You've hit your", "You've reached your"]
+    /// codex-acp puts `codexErrorInfo` in the JSON-RPC error `data`.
+    static let codexUsageLimitInfo: Set<String> = ["usageLimitExceeded", "usage_limit_exceeded"]
+
+    static func detect(
+        error: Error,
+        turnAgentText: String?,
+        claudeRateLimit: ACPClaudeRateLimit?,
+        now: Date,
+        calendar: Calendar = .current
+    ) -> ACPUsageLimit? {
+        guard let rpc = jsonRPCError(error) else { return nil }
+        let data = object(rpc.data)
+        let message = strippedMessage(rpc.message)
+        let agentText = turnAgentText?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let candidates: [String]
+        let resettable: Bool
+        if let info = data?["codexErrorInfo"] as? String, codexUsageLimitInfo.contains(info) {
+            candidates = [data?["message"] as? String, message, agentText].compactMap { $0 }
+            resettable = true
+        } else if let text = [message, agentText].compactMap({ $0 }).first(where: { text in
+            claudeUsageLimitPrefixes.contains { text.hasPrefix($0) }
+        }) {
+            candidates = [text]
+            resettable = resettableClaudePrefixes.contains { text.hasPrefix($0) }
+        } else {
+            return nil
+        }
+
+        var resetsAt: Date?
+        var source = ACPUsageLimit.ResetSource.unknown
+        if let rateLimit = claudeRateLimit, rateLimit.status == "rejected",
+           let structured = rateLimit.resetsAt, structured > now {
+            resetsAt = structured
+            source = .structured
+        } else if let parsed = candidates.lazy
+            .compactMap({ ACPUsageLimitResetParser.resetDate(in: $0, now: now, calendar: calendar) })
+            .first, parsed > now {
+            resetsAt = parsed
+            source = .parsed
+        }
+        return ACPUsageLimit(
+            detectedAt: now, resetsAt: resetsAt, resetSource: source,
+            probeAttempt: 0, resettable: resettable
+        )
+    }
+
+    private static func jsonRPCError(_ error: Error) -> JSONRPCError? {
+        if let rpc = error as? JSONRPCError { return rpc }
+        if case ACPClientError.jsonrpc(let rpc) = error { return rpc }
+        return nil
+    }
+
+    /// `RequestError.internalError` prefixes the adapter's message.
+    private static func strippedMessage(_ message: String) -> String {
+        let prefix = "Internal error: "
+        return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
+    }
+
+    private static func object(_ value: AnyCodable?) -> [String: Any]? {
+        if let dict = value?.value as? [String: AnyCodable] { return dict.mapValues(\.value) }
+        return value?.value as? [String: Any]
+    }
+}
