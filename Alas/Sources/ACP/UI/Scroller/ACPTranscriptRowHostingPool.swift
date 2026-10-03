@@ -10,8 +10,11 @@ import SwiftUI
 final class ACPTranscriptRowHostingPool {
     /// How many released rows keep their built hosting view, so scrolling back
     /// to them reattaches the view instead of rebuilding its SwiftUI graph.
+    /// Sized to hold a whole bounded render window (`ACPTranscript.maxVisibleRows`
+    /// messages), so a full scroll back through it never rebuilds a row; rows
+    /// that leave the transcript are dropped from the cache regardless.
     /// Zero disables parking entirely.
-    static let parkedCapacity = 48
+    static let parkedCapacity = 160
 
     var onRowIntrinsicSizeInvalidated: ((String) -> Void)?
 
