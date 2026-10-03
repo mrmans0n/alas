@@ -31,13 +31,13 @@ final class SpawnedProcess: @unchecked Sendable {
     private var _termination: Termination?
     private var onExit: (@Sendable (pid_t, Termination) -> Void)?
 
-    /// Set once the child has exited and been reaped.
+    /// Set once the child has exited, before it is reaped.
     var termination: Termination? { lock.withLock { _termination } }
     var isRunning: Bool { termination == nil }
 
     /// A nil `stdin` reads `/dev/null`. The child's ends of the pipes are closed here once it has them, so the
     /// readers see EOF when it and whatever inherited them are gone. `onExit` gets the pid and how it ended, once,
-    /// on a background queue, after the child is reaped.
+    /// on the reaper thread, before the child is reaped, so its pid is still its own.
     init(
         executable: URL, arguments: [String], environment: [String: String], directory: URL? = nil,
         newProcessGroup: Bool = true, stdin: Pipe?, stdout: Pipe, stderr: Pipe,
@@ -98,21 +98,28 @@ final class SpawnedProcess: @unchecked Sendable {
         lock.withLock { if _termination == nil { _ = kill(pid, SIGTERM) } }
     }
 
-    /// Runs on the reaper thread, outside the lock: `isRunning` and `terminate()` never wait for the child.
+    /// Runs on the reaper thread, outside the lock: `isRunning` and `terminate()` never wait for the child. It
+    /// waits without reaping (`WNOWAIT`), records the exit and runs `onExit` while the zombie still holds the pid,
+    /// and reaps last, so nothing that signals by pid or group in between can reach a process that reused it.
     private func reap() {
-        var status: Int32 = 0
-        var reaped: pid_t
+        var info = siginfo_t()
+        var waited: Int32
         repeat {
-            reaped = waitpid(pid, &status, 0)
-        } while reaped == -1 && errno == EINTR
-        let signal = status & 0x7F
+            waited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT)
+        } while waited == -1 && errno == EINTR
         // Nothing else reaps this pid; should something have, the exit is still reported so no waiter hangs.
-        let termination: Termination = reaped != pid ? .exit(-1) : signal == 0 ? .exit((status >> 8) & 0xFF) : .signal(signal)
+        let termination: Termination = switch waited == 0 ? info.si_code : -1 {
+        case CLD_EXITED: .exit(info.si_status)
+        case CLD_KILLED, CLD_DUMPED: .signal(info.si_status)
+        default: .exit(-1)
+        }
         let callback = lock.withLock {
             _termination = termination
             defer { onExit = nil }
             return onExit
         }
         callback?(pid, termination)
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1, errno == EINTR {}
     }
 }
