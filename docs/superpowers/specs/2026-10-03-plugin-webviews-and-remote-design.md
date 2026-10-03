@@ -143,9 +143,12 @@ Same messages, limits and error codes as API 6. Differences:
   root with the path and enforce containment and the case-folded `.git`
   exclusion in the same call, walking components with `O_NOFOLLOW` so a
   swapped symlink can't escape. A separate `RemotePathContainment` probe
-  before the call would bring the race back. Without the helper, reads and
-  lists fall back to `RemoteFileAccess`'s `RemoteExec` scripts, which run the
-  check and the operation in one command.
+  before the call would bring the race back.
+- Remote `file/*` requires the helper, like remote `process.*`. A shell
+  script can put the check and the operation in one command but not make them
+  atomic: another process can swap a component for a symlink in between, as
+  `RemotePathContainment.containedReadScript` already notes. Without the
+  helper, file requests answer `-32003` with the reason.
 - Replies already arrive in a later delivery. Remote ones also count towards
   the 4 requests in flight, because each one holds an SSH round trip.
 - A connection failure answers `-32003 "remote host devbox is unreachable"`.
@@ -175,6 +178,20 @@ Same messages, limits and error codes as API 6. Differences:
   (`SIGTERM`, then `SIGKILL` after the grace), and makes `killProc` signal the
   recorded process group even when the leader is gone. The group id can't be
   reused while any member is alive.
+- Leaving the group doesn't escape cleanup. A child that calls `setsid` or
+  daemonizes is out of the recorded group, so R3 adds descendant tracking to
+  the helper as the local launcher does: sample the tree while the root runs,
+  keep each descendant's pid with its start time, and on stop or root exit
+  signal those still matching, so a reused pid is never hit.
+- One-shot runs see EOF. Today `proc/write` only appends to `stdin.log` and
+  the child's stdin stays open until it exits, so `cat` or a formatter waits
+  for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`
+  payload and closes the pipe, and gives runs without `stdin` `/dev/null`, as
+  the local launcher does.
+- Output is a raw byte stream. `attachProc` was built for newline-framed ACP
+  traffic: it strips newlines and drops a final unterminated fragment, so
+  `printf result` would come back empty. R3 adds a raw attach mode that
+  delivers stdout and stderr bytes exactly as written.
 - Output is bounded on the host too. The helper's `stdout.log` and
   `stderr.log` grow without limit today, so a verbose dev server fills the
   remote disk and replays it all on attach. R3 caps each log on the helper
@@ -384,8 +401,8 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 | # | API | Slice | Size |
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
-| R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion; remote `file/read`/`file/list`/`file/write` over them or `RemoteExec`, with host-side containment. | M |
-| R3 | 10 | Helper: terminate the group when the root exits, `killProc` signals the group after the leader dies, capped output logs. Remote `process/run` over helper `spawnProc`; executable resolution on the host. | M |
+| R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
+| R3 | 10 | Helper: raw output mode, one-shot stdin with EOF (and `/dev/null`), descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped output logs. Remote `process/run` over it; executable resolution on the host. | L |
 | R4 | 10 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
 | W1 | 11 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
@@ -427,8 +444,8 @@ Per the testing policy, pin the decisions:
 - **`markdown` node:** goes into API 9.
 - **Remote trust:** one `remote: true` approval per plugin covers every SSH
   host its projects use. No per-host grants.
-- **No helper:** remote `process.*` is refused when the remote helper is not
-  installed; there is no `RemoteExec` fallback.
+- **No helper:** remote `process.*` and `file/*` are refused when the remote
+  helper is not installed; there is no `RemoteExec` fallback.
 
 ## Open questions
 
