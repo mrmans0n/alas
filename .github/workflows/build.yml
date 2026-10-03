@@ -162,6 +162,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/tests/alas-build/run.sh
 
+      - name: Test release architecture verifier
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/verify-release-architecture/run.sh
+
       - name: Compute Ghostty cache key inputs
         # Use the script's authoritative fingerprint so the Actions key tracks
         # every input that can change the produced artifact.

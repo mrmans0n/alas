@@ -6,31 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-03
+
 ### ✨ Features
 
-- Add ordinary On-device AI settings with reasoned Apple Intelligence availability, independent helper preferences, and explicit permission for the shared optional local model. Download, retry, cancellation, and removal no longer belong to an individual feature.
-- Fill otherwise-empty non-main worktree metadata with a short local task explanation, using Apple Intelligence first and the installed Qwen model as fallback.
-- Give Alas-owned slash commands a moving prism badge and matching inline chips, retaining the skill-chip shape and wand icon. Reduce Motion uses a static prism fill, and existing or undo-restored chips refresh when session ownership changes.
-- Coordinate SSH ACP sessions across Macs with one remote writer, persisted read-only transcript mirrors, and fenced takeover.
+- Extend plugins through API 6 and API 7 with slots, decorations, inline panels, events and requests, process execution, file capabilities, message and session menus, slash prompts, and context providers (#1713, #1716, #1720).
+- Add production-ready On-device AI settings with reasoned Apple Intelligence availability, independent helper preferences, shared-model consent, and managed download, retry, cancellation, and removal flows (#1715).
+- Coordinate SSH ACP sessions across Macs with one remote writer, persisted read-only transcript mirrors, and fenced takeover (#1714).
+- Render delegated prompts as folding incoming bubbles, and let every agent answer side-agent input directly in the `/btw` card (#1697, #1709).
+- Fill otherwise-empty non-main worktree metadata with a concise local task explanation, using Apple Intelligence first and the installed Qwen model as fallback (#1706).
+- Give Alas-owned slash commands a moving prism badge and matching inline chips, with a static accessible treatment under Reduce Motion (#1710).
 
-### Performance
+### ⚡ Performance
 
-- Compress remote WebSocket traffic with negotiated permessage-deflate for compatible native peers and browsers. Each message uses a fresh compression dictionary, and incoming messages still have a 16 MB decoded-size limit. Clients without compression support keep the existing transport.
+- Reuse recently released ACP transcript rows, park a full transcript window of row views, and stop re-measuring Markdown tables on every scroll tick (#1702, #1719, #1721).
+- Compress compatible remote WebSocket traffic with negotiated `permessage-deflate` while retaining decoded-size limits and compatibility with uncompressed clients (#1707).
+- Draw diff theme colors directly in standard sRGB (#1718).
 
 ### 🐛 Fixes
 
-- Keep Remote Web responsive when opening transcripts containing large file edits.
-- Reconsider next-prompt suggestions when their composer becomes active again instead of permanently consuming completions during temporary focus loss.
-- Suppress next-prompt suggestions that manufacture approval to discard protected production, project, or backup data, checking both assistant context and generated candidates.
-- Cancel owned worktree-naming and sidebar-explanation requests when Worktree names is disabled, without cancelling subsequently enabled requests or discarding cached explanations. Keep requested summaries and suggestions running when a queued download Cancel arrives after verification finishes.
-- Stop warning that the agent harness didn't start the Alas MCP server when a session on the HTTP transport re-attaches or reconnects to its still-running agent. The agent keeps its connection to the same server and never re-announces it. The warning also waits 35 seconds instead of 12, past Claude Code's MCP connect timeout, so a harness that is only slow to connect no longer flashes it (#1701).
-- Keep native peer sessions connected when older peers send transcript snapshots larger than 1 MiB.
-- Bound transcript snapshots, history pages, and live-update batches to 8 MiB. Individual rows exceeding the 4 MiB remote-display budget show an explicit notice; their full content remains on the owning Mac.
+- Recover ACP sessions cleanly after terminal sign-in and stop warning that the Alas MCP server failed to start when an HTTP session reconnects to its existing agent (#1699, #1701).
+- Keep large Remote Web and native-peer transcripts responsive and connected, with bounded snapshots, history pages, live batches, and explicit notices for oversized rows (#1705, #1712).
+- Reconsider next-prompt suggestions after temporary focus loss, reject suggestions that manufacture approval for destructive operations, and cancel only the On-device AI requests owned by a disabled feature (#1700, #1715).
+- Restore the right rail after startup recovery and include repository names in sidebar pull notifications (#1698, #1711).
+- Reuse the established chip label font to prevent CoreText aborts during appearance changes (#1703).
 
-### Internal
+### 🏗️ Internal
 
-- Build each release app only for its named architecture and verify bundled binaries before signing.
-- Save Swift compiler caches only from `main`, avoiding PR-scoped duplicates that compete with release dependency caches.
+- Build each release artifact only for its requested architecture, verify bundled binaries before signing, and avoid duplicate PR-scoped compiler caches (#1708).
+- Update the Rust `libc` and `rusqlite` dependencies (#1717, #1722).
 
 ## [0.19.22] - 2026-10-02
 
