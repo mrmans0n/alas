@@ -54,7 +54,7 @@ enum DiffCodeText {
     ) -> [NSAttributedString.Key: Any] {
         [
             .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: theme.nsColor("fg"),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }
@@ -99,7 +99,7 @@ enum DiffCodeText {
             guard isValid(range, in: visibleLength) else { continue }
             output.addAttribute(
                 .backgroundColor,
-                value: NSColor(inlineColor(for: inlineTone, theme: theme).opacity(0.24)),
+                value: NSColor.drawingColor(inlineColor(for: inlineTone, theme: theme).opacity(0.24)),
                 range: range
             )
         }

@@ -64,6 +64,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
+    /// Plugin commands for the "…" menu, read when it opens.
+    var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
     /// Cancels one native subagent by child session id. Nil when the host
     /// can't cancel (read-only mirror), which also hides the action.
     var onCancelSubagent: ((String) -> Void)?
@@ -185,7 +187,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 onQuote: onQuote,
                 onFork: onFork,
                 checkpointID: Self.checkpointID(in: message),
-                onRestoreCheckpoint: onRestoreCheckpoint
+                onRestoreCheckpoint: onRestoreCheckpoint,
+                messageMenuItems: messageMenuItems
             ) {
                 if let delegatedSource {
                     DelegatedPromptRow(
@@ -220,7 +223,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 onQuote: onQuote,
                 onFork: onFork,
                 checkpointID: nil,
-                onRestoreCheckpoint: onRestoreCheckpoint
+                onRestoreCheckpoint: onRestoreCheckpoint,
+                messageMenuItems: messageMenuItems
             ) {
                 if buf.phase == .commentary {
                     ACPCommentaryRow(

@@ -58,7 +58,8 @@ struct AlasCLICommandRouter {
     }
     var activateApp: () -> Void
 
-    private var service: AlasActionService {
+    /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
+    var service: AlasActionService {
         AlasActionService(
             visibleWorktrees: visibleWorktrees,
             openRelativeFile: openRelativeFile,

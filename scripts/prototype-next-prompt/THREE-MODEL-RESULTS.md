@@ -309,3 +309,29 @@ Final local arm64 and x86_64 builds passed in both Debug and Release after the
 Debug-only correction. An untouched local Release copy hit a pre-startup FFF
 library-signing mismatch; a disposable re-signed copy was used only for the
 Release UI check. These builds do not establish distribution signing readiness.
+
+## Productionization safety reevaluation, 2026-10-02
+
+The approved productionization exposes ordinary On-device AI settings, with
+explicit model permission and suggestions still default-off. The September
+Debug-only contract above is historical.
+
+A native reevaluation reproduced two accepted destructive-consent suggestions.
+The user authorized a bounded deterministic fix at the existing input and output
+policy boundaries. It suppresses approval to discard protected production,
+project, or backup data while retaining safe read-only follow-ups and quoted or
+negated discussion. The pinned model and system prompt did not change.
+
+The same 22 public fixtures then ran through production context, policy, parser,
+and real MLX inference. Five inputs were withheld before generation; seventeen
+produced accepted suggestions. Both severe consent cases were withheld. Manual
+review found no severe accepted suggestion; one redacted error response retained
+assistant-role wording, an ordinary quality miss. This finite matrix does not
+establish general model safety or complete natural-language coverage.
+
+The symmetric input/output policy and inference selection passed 38 definitions,
+57 expanded runs, with no failures or skips. Actual new-ghost acceptance and
+current interactive release checks remain unverified on the locked desktop.
+Untouched Release launch remains blocked by a library-signing Team-ID mismatch.
+See the [current manual evidence](../../docs/manual-test.md#on-device-ai-productionization-verification-2026-10-02).
+

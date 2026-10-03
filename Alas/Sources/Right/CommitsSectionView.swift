@@ -119,6 +119,8 @@ struct CommitsSectionView: View {
     /// per entry instead, so the header chip is skipped there.
     var reviewRequest: ReviewRequest? = nil
     var onOpenReviewRequest: (() -> Void)? = nil
+    var pluginCommands: [PluginCommandItem] = []
+    var onRunPluginCommand: (PluginCommandItem, CommitInfo) -> Void = { _, _ in }
 
     var body: some View {
         Section {
@@ -290,7 +292,9 @@ struct CommitsSectionView: View {
             },
             stackEntry: entry,
             currentPositionIndicator: entry.flatMap { ggStack?.currentPositionIndicator(for: $0) },
-            codeHostKind: stackCodeHostKind
+            codeHostKind: stackCodeHostKind,
+            pluginCommands: pluginCommands,
+            onRunPluginCommand: { onRunPluginCommand($0, commit) }
         ))
     }
 
@@ -306,7 +310,9 @@ struct CommitsSectionView: View {
             onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
             onReview: { onReview(commit) },
             onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-            onRevert: { rps.runRevert(sha: commit.sha) }
+            onRevert: { rps.runRevert(sha: commit.sha) },
+            pluginCommands: pluginCommands,
+            onRunPluginCommand: { onRunPluginCommand($0, commit) }
         ))
     }
 

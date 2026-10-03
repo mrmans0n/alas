@@ -1,4 +1,5 @@
 import Testing
+import AppKit
 import SwiftUI
 @testable import Alas
 
@@ -68,5 +69,18 @@ struct ThemeTests {
         // so non-nil proves the file is bundled and complete.
         let palette = try #require(CodePalette.loadBundled(id: id))
         #expect(palette.id == id)
+    }
+
+    @Test func drawingColorIsStandardSRGBWithTheSameComponents() throws {
+        // Extended-sRGB colors make Core Graphics look up content headroom on
+        // every draw call; drawing colors must land in standard sRGB.
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let color = theme.color("add").opacity(0.24)
+        let drawing = NSColor.drawingColor(color)
+        let bridged = try #require(NSColor(color).usingColorSpace(.extendedSRGB))
+        #expect(drawing.cgColor.colorSpace?.name == CGColorSpace.sRGB)
+        for (lhs, rhs) in zip(drawing.cgColor.components ?? [], bridged.cgColor.components ?? []) {
+            #expect(abs(lhs - rhs) < 1e-5)
+        }
     }
 }

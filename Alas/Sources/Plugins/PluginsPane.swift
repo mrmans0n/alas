@@ -165,6 +165,9 @@ struct PluginsPane: View {
         case .install(let version), .update(let version):
             let asks = version.capabilities.map { PluginCapability(rawValue: $0)?.summary ?? $0 }
             lines.append(asks.isEmpty ? "Asks for no capabilities." : "Asks to: " + asks.joined(separator: "; ") + ".")
+            if version.capabilities.contains(where: { PluginCapability(rawValue: $0)?.isFullAccess == true }) {
+                lines.append("Asks for full access: it acts with your permissions, outside the sandbox.")
+            }
         case .installed: lines.append("Installed from the catalog.")
         case .installedLocally: lines.append("Installed locally; the catalog leaves it alone.")
         case .incompatible: lines.append("No version runs on this Alas.")
@@ -291,23 +294,23 @@ private struct HostLogDisclosure: View {
 private struct PluginApprovalSheet: View {
     let plugin: PluginManager.Plugin
     let finish: (Bool) -> Void
+    @State private var acceptsFullAccess = false
 
     var body: some View {
+        let manifest = plugin.manifest
+        let sandboxed = manifest.capabilities.filter { !$0.isFullAccess }
+        let fullAccess = manifest.capabilities.filter(\.isFullAccess)
         VStack(alignment: .leading, spacing: 12) {
-            Text("Approve \(plugin.manifest.name)?").font(.headline)
-            Text("\(plugin.id) · version \(plugin.manifest.version)").font(.caption).foregroundStyle(.secondary)
-            if plugin.manifest.capabilities.isEmpty {
-                Text("It requests no capabilities.")
-            } else {
-                Text("It will be able to:")
-                ForEach(plugin.manifest.capabilities, id: \.self) { Text("• \($0.summary)") }
+            Text("Approve \(manifest.name)?").font(.headline)
+            Text("\(plugin.id) · version \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+            // A long disclosure scrolls, so the confirmation and the buttons below it stay on screen.
+            ViewThatFits(in: .vertical) {
+                disclosure(sandboxed: sandboxed, fullAccess: fullAccess)
+                ScrollView { disclosure(sandboxed: sandboxed, fullAccess: fullAccess) }
             }
-            if !plugin.manifest.network.isEmpty {
-                Text("Web requests: " + plugin.manifest.network.joined(separator: ", "))
-                    .font(.callout).textSelection(.enabled)
-            }
-            ForEach(plugin.manifest.settings.filter { $0.kind == .secret }, id: \.key) { secret in
-                Text("• Can use \(secret.title) with \(secret.hosts.joined(separator: ", "))")
+            .frame(maxHeight: 420)
+            if !fullAccess.isEmpty {
+                Toggle(Self.confirmation(fullAccess), isOn: $acceptsFullAccess)
             }
             Text("Changing the plugin's files requires approving it again.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -315,9 +318,49 @@ private struct PluginApprovalSheet: View {
                 Spacer()
                 Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
                 Button("Approve") { finish(true) }.keyboardShortcut(.defaultAction)
+                    .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 460)
+    }
+
+    private func disclosure(sandboxed: [PluginCapability], fullAccess: [PluginCapability]) -> some View {
+        let manifest = plugin.manifest
+        return VStack(alignment: .leading, spacing: 12) {
+            if manifest.capabilities.isEmpty {
+                Text("It requests no capabilities.")
+            }
+            if !sandboxed.isEmpty {
+                Text("Sandboxed. It will be able to:").font(.subheadline.weight(.semibold))
+                ForEach(sandboxed, id: \.self) { Text("• \($0.summary)") }
+            }
+            if !manifest.network.isEmpty {
+                Text("Web requests: " + manifest.network.joined(separator: ", "))
+                    .font(.callout).textSelection(.enabled)
+            }
+            ForEach(manifest.settings.filter { $0.kind == .secret }, id: \.key) { secret in
+                Text("• Can use \(secret.title) with \(secret.hosts.joined(separator: ", "))")
+            }
+            if !fullAccess.isEmpty {
+                Text("Full access. With your permissions, outside any sandbox, it will be able to:")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(fullAccess, id: \.self) { Text("• \($0.summary)") }
+                ForEach(manifest.processes, id: \.id) { process in
+                    Text(PluginArgv.display(process.command) + (process.appendArgs ? " …" : ""))
+                        .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                        .padding(.leading, 12)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static func confirmation(_ fullAccess: [PluginCapability]) -> String {
+        let does = [
+            fullAccess.contains(.processExec) ? "run these commands" : nil,
+            fullAccess.contains(.filesWrite) ? "change files" : nil,
+        ].compactMap { $0 }.joined(separator: " and ")
+        return "I understand this plugin can \(does) in my worktrees"
     }
 }

@@ -195,6 +195,36 @@ struct IssueWorktreeNameSuggestionTests {
         #expect(await engine.calls == (backend == .mlx ? 1 : 0))
     }
 
+    @Test(arguments: [SuggestionBackend.apple, .mlx])
+    @MainActor
+    func cancellingOwnedNamesDiscardsOldResultsWithoutCancellingNewRequests(
+        backend: SuggestionBackend
+    ) async {
+        let requests = IssueWorktreeNameRequests()
+        let gate = GenerationGate()
+        let engine = CannedEngine(outcome: .success(#"{"name":"old-name"}"#)) { await gate.wait() }
+        let oldSuggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { backend == .apple },
+            generateWithAppleIntelligence: { _ in
+                await gate.wait()
+                return #"{"name":"old-name"}"#
+            },
+            isMLXAvailable: { backend == .mlx },
+            requests: requests
+        )
+        let old = Task { await oldSuggester.suggestName(for: Self.source) }
+        await gate.waitUntilStarted()
+        requests.cancelAll()
+        let fresh = IssueWorktreeNameSuggester(
+            engine: CannedEngine(outcome: .success(#"{"name":"new-name"}"#)),
+            isMLXAvailable: { true }, requests: requests
+        )
+        #expect(await fresh.suggestName(for: Self.source) == "new-name")
+        await gate.release()
+        #expect(await old.value == nil)
+    }
+
     /// The attach sheet lets the user edit the title before confirming; the
     /// prewarmed name only stands for the inputs it was computed from.
     @Test(arguments: [

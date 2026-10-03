@@ -150,6 +150,7 @@ final class ACPSessionManager: ObservableObject {
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
     private let onChildBlocked: ((ACPChildBlocker) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
+    private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -1570,6 +1571,7 @@ final class ACPSessionManager: ObservableObject {
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
          onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+         pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -1618,6 +1620,7 @@ final class ACPSessionManager: ObservableObject {
         self.onTurnCompleted = onTurnCompleted
         self.onChildBlocked = onChildBlocked
         self.onCheckpointCapture = onCheckpointCapture
+        self.pluginContext = pluginContext
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { spec, _ in spec }
@@ -6245,6 +6248,7 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onCheckpointCapture: onCheckpointCapture,
+                                          pluginContext: pluginContext,
                                           isConnectionCurrent: { [weak self] in
                                               self?.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                           },

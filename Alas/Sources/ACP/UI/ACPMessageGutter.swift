@@ -28,6 +28,14 @@ enum ACPMessageCopySource {
     }
 }
 
+/// An action another feature adds to the "…" menu, such as a plugin command (API 7 `message.menu`). `run` gets the
+/// message's Markdown.
+struct ACPMessageMenuItem {
+    let title: String
+    let icon: String?
+    let run: (String) -> Void
+}
+
 struct ACPMessageGutter<Content: View>: View {
     typealias CopySource = ACPMessageCopySource
 
@@ -43,6 +51,7 @@ struct ACPMessageGutter<Content: View>: View {
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let checkpointID: CheckpointID?
     let onRestoreCheckpoint: (CheckpointID) -> Void
+    var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
     @ViewBuilder var content: Content
 
     @StateObject private var hover = ACPDelayedHoverVisibility()
@@ -148,6 +157,7 @@ struct ACPMessageGutter<Content: View>: View {
             onFork: onFork,
             checkpointID: checkpointID,
             onRestoreCheckpoint: onRestoreCheckpoint,
+            messageMenuItems: messageMenuItems,
             tint: theme.color("fg-muted")
         )
             .frame(width: 19, height: 19)
@@ -171,6 +181,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let checkpointID: CheckpointID?
     let onRestoreCheckpoint: (CheckpointID) -> Void
+    let messageMenuItems: () -> [ACPMessageMenuItem]
     let tint: Color
 
     func makeCoordinator() -> Coordinator {
@@ -182,6 +193,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             onQuote: onQuote,
             checkpointID: checkpointID,
             onRestoreCheckpoint: onRestoreCheckpoint,
+            messageMenuItems: messageMenuItems,
             onFork: onFork
         )
     }
@@ -203,6 +215,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         context.coordinator.onFork = onFork
         context.coordinator.checkpointID = checkpointID
         context.coordinator.onRestoreCheckpoint = onRestoreCheckpoint
+        context.coordinator.messageMenuItems = messageMenuItems
         button.contentTintColor = NSColor(tint)
     }
 
@@ -216,6 +229,9 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         var onFork: (ACPForkMessageBoundary, String) -> Void
         var checkpointID: CheckpointID?
         var onRestoreCheckpoint: (CheckpointID) -> Void
+        var messageMenuItems: () -> [ACPMessageMenuItem]
+        /// The items of the open menu, which its entries index into.
+        private var shownMenuItems: [ACPMessageMenuItem] = []
 
         init(
             copySource: ACPMessageCopySource,
@@ -225,6 +241,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             onQuote: @escaping (String) -> Void,
             checkpointID: CheckpointID?,
             onRestoreCheckpoint: @escaping (CheckpointID) -> Void,
+            messageMenuItems: @escaping () -> [ACPMessageMenuItem],
             onFork: @escaping (ACPForkMessageBoundary, String) -> Void
         ) {
             self.copySource = copySource
@@ -234,6 +251,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             self.onQuote = onQuote
             self.checkpointID = checkpointID
             self.onRestoreCheckpoint = onRestoreCheckpoint
+            self.messageMenuItems = messageMenuItems
             self.onFork = onFork
         }
 
@@ -293,6 +311,17 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
                 forkItem.submenu = submenu
                 menu.addItem(forkItem)
             }
+            shownMenuItems = messageMenuItems()
+            if !shownMenuItems.isEmpty {
+                menu.addItem(.separator())
+                for (index, entry) in shownMenuItems.enumerated() {
+                    let item = NSMenuItem(title: entry.title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.tag = index
+                    item.image = entry.icon.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+                    menu.addItem(item)
+                }
+            }
             menu.popUp(
                 positioning: copyItem,
                 at: NSPoint(x: 0, y: sender.bounds.height + 2),
@@ -315,6 +344,11 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             let markdown = copySource.markdown
             guard ACPMessageQuote.canQuote(markdown) else { return }
             onQuote(markdown)
+        }
+
+        @objc private func runMenuItem(_ sender: NSMenuItem) {
+            guard shownMenuItems.indices.contains(sender.tag) else { return }
+            shownMenuItems[sender.tag].run(copySource.markdown)
         }
 
         @objc private func forkFromHere(_ sender: NSMenuItem) {

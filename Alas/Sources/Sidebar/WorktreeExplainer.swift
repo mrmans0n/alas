@@ -161,9 +161,17 @@ final class WorktreeExplainerStore {
     @ObservationIgnored private var results: [Key: WorktreeExplanationResult] = [:]
     @ObservationIgnored private var jobs: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private var tail: Task<Void, Never>?
+    @ObservationIgnored private var generation: UInt64 = 0
 
     init(generate: @escaping Generator) {
         self.generate = generate
+    }
+
+    func cancelPending() {
+        generation &+= 1
+        jobs.values.forEach { $0.cancel() }
+        jobs.removeAll()
+        tail = nil
     }
 
     func explanation(for worktreeID: String, evidence: WorktreeExplainerEvidence) -> String? {
@@ -183,19 +191,26 @@ final class WorktreeExplainerStore {
         if results[key] != nil { return true }
         if let job = jobs[key] {
             await job.value
-            return results[key] != nil
+            return !job.isCancelled && !Task.isCancelled && results[key] != nil
         }
 
+        let generation = self.generation
         let previous = tail
         let generate = self.generate
         let job = Task { @MainActor [weak self] in
             _ = await previous?.value
             guard let self else { return }
+            guard generation == self.generation else { return }
             guard !Task.isCancelled else {
                 jobs[key] = nil
                 return
             }
             let result = await generate(evidence)
+            guard generation == self.generation else { return }
+            guard !Task.isCancelled else {
+                jobs[key] = nil
+                return
+            }
             if let result { results[key] = result }
             jobs[key] = nil
             if currentEvidenceByWorktreeID[worktreeID] == evidence {
@@ -212,6 +227,6 @@ final class WorktreeExplainerStore {
         } onCancel: {
             job.cancel()
         }
-        return results[key] != nil
+        return !job.isCancelled && !Task.isCancelled && results[key] != nil
     }
 }

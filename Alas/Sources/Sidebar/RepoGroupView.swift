@@ -65,6 +65,9 @@ struct RepoGroupView: View {
 
     var pluginCommands: (PluginCommandSlot) -> [PluginCommandItem] = { _ in [] }
     var onRunPluginCommand: (PluginCommandItem, PluginCommandSlot, Worktree?) -> Void = { _, _, _ in }
+    /// Plugin badges for a worktree row, or for the project's header when nil.
+    var pluginDecorations: (Worktree?) -> [PluginDecorationItem] = { _ in [] }
+    var onRunPluginDecoration: (PluginDecorationItem) -> Void = { _ in }
     /// Set while the sidebar filter is active and `worktrees` holds only the
     /// matches. Rows then follow the matches rather than `collapsed`, which is
     /// left untouched so clearing the filter restores the tree exactly.
@@ -206,6 +209,8 @@ struct RepoGroupView: View {
                             },
                             pluginCommands: pluginCommands(.worktreeMenu),
                             onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
+                            pluginDecorations: pluginDecorations(wt),
+                            onRunPluginDecoration: onRunPluginDecoration,
                             isHighlighted: wt.id == highlightedWorktreeId
                         )
                         // Scroll target for the sidebar filter's highlight.
@@ -232,6 +237,7 @@ struct RepoGroupView: View {
         // the project title always yields space to the count and new-worktree
         // control at narrow sidebar widths.
         HStack(spacing: 6) {
+            PluginDecorationBadges(items: pluginDecorations(nil), run: onRunPluginDecoration)
             if isCollapsed, let summary = projectSummary() {
                 HarnessPill(
                     summary: summary,

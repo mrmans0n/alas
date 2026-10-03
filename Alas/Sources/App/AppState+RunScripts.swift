@@ -280,12 +280,12 @@ extension AppState {
         launchScript(script, in: worktree)
     }
 
-    func restartScript(_ script: RunScript, in worktree: Worktree) {
+    @discardableResult
+    func restartScript(_ script: RunScript, in worktree: Worktree, presentsLaunchFailure: Bool = true) -> RunScriptLaunchStart {
         let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         if pendingScriptLaunches[launchKey] != nil {
             stopScript(script, in: worktree)
-            launchScript(script, in: worktree)
-            return
+            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
         }
         if let existing = scriptTab(for: script, in: worktree) {
             let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
@@ -293,7 +293,7 @@ extension AppState {
             archiveFinalizedRun(finalized, capture: capture)
             closeTab(worktreeId: worktree.id, tabId: existing.id)
         }
-        launchScript(script, in: worktree)
+        return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
     }
 
     /// Stop an in-flight run by closing the terminal that hosts it. The record
@@ -405,13 +405,14 @@ extension AppState {
         return .externalProcess
     }
 
-    private func launchScript(_ script: RunScript, in worktree: Worktree) {
-        switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: true) {
-        case .started, .alreadyStarting, .projectUnavailable:
-            break
-        case let .refused(title, message):
+    /// `presentsLaunchFailure` false hands a refusal back to the caller instead of alerting the user.
+    @discardableResult
+    func launchScript(_ script: RunScript, in worktree: Worktree, presentsLaunchFailure: Bool = true) -> RunScriptLaunchStart {
+        let result = startScriptLaunch(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
+        if presentsLaunchFailure, case let .refused(title, message) = result {
             showFileActionError(title: title, message: message)
         }
+        return result
     }
 
     /// Claims a run slot and starts the terminal launch, without presenting
@@ -619,8 +620,15 @@ extension AppState {
     }
 
     func setRunFailureBriefsEnabled(_ enabled: Bool) {
+        let previous = config.runFailureBriefsEnabled
         config.runFailureBriefsEnabled = enabled
-        saveConfig()
+        if saveConfig() {
+            onDeviceAIHelperSettingsError = nil
+        } else {
+            if enabled { config.runFailureBriefsEnabled = previous }
+            onDeviceAIHelperSettingsError =
+                "Could not save helper settings. Changes apply only to this session. Retry before quitting."
+        }
         if !enabled { runFailureBriefs.invalidateAll() }
     }
 

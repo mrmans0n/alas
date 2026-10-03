@@ -448,7 +448,7 @@ struct DiffPaneTextDocumentBuilder {
             showWhitespace: showWhitespace,
             theme: theme
         ))
-        output.addAttribute(.backgroundColor, value: NSColor(rowBackground(for: row.kind, theme: theme)), range: NSRange(location: 0, length: output.length))
+        output.addAttribute(.backgroundColor, value: NSColor.drawingColor(rowBackground(for: row.kind, theme: theme)), range: NSRange(location: 0, length: output.length))
         return output
     }
 
@@ -469,7 +469,7 @@ struct DiffPaneTextDocumentBuilder {
             showWhitespace: showWhitespace,
             theme: theme
         ))
-        output.addAttribute(.backgroundColor, value: NSColor(lineBackground(for: line.kind, theme: theme)), range: NSRange(location: 0, length: output.length))
+        output.addAttribute(.backgroundColor, value: NSColor.drawingColor(lineBackground(for: line.kind, theme: theme)), range: NSRange(location: 0, length: output.length))
         return output
     }
 
@@ -482,8 +482,8 @@ struct DiffPaneTextDocumentBuilder {
             string: "      ... \(row.collapsedLineCount) unchanged lines",
             attributes: [
                 .font: font,
-                .foregroundColor: NSColor(theme.color("fg-dim")),
-                .backgroundColor: NSColor(theme.color("bg-2")),
+                .foregroundColor: theme.nsColor("fg-dim"),
+                .backgroundColor: theme.nsColor("bg-2"),
                 .paragraphStyle: CenterTypography.paragraphStyle(),
             ]
         )
@@ -549,7 +549,7 @@ struct DiffPaneTextDocumentBuilder {
         paragraph.maximumLineHeight = rowHeight
         return [
             .font: font,
-            .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
+            .foregroundColor: theme.nsColor("seg-pill-active-fg"),
             .paragraphStyle: paragraph,
             .baselineOffset: contentInset,
         ]
@@ -663,7 +663,7 @@ struct DiffPaneTextDocumentBuilder {
     private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
         [
             .font: font,
-            .foregroundColor: NSColor(theme.color("fg-dim")),
+            .foregroundColor: theme.nsColor("fg-dim"),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }
@@ -860,7 +860,7 @@ struct DiffPaneTextDocumentBuilder {
             string: text,
             attributes: [
                 .font: font,
-                .foregroundColor: NSColor(markerColor(for: side, theme: theme)),
+                .foregroundColor: NSColor.drawingColor(markerColor(for: side, theme: theme)),
                 .paragraphStyle: CenterTypography.paragraphStyle(),
             ]
         )
@@ -947,7 +947,7 @@ struct DiffPaneTextDocumentBuilder {
     private static func baseAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
         [
             .font: font,
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: theme.nsColor("fg"),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }
@@ -1034,7 +1034,7 @@ private struct ColumnAccumulator {
     init(font: NSFont, theme: Theme) {
         newlineAttributes = [
             .font: font,
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: theme.nsColor("fg"),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }
@@ -1125,7 +1125,7 @@ private struct GutterAccumulator {
         self.theme = theme
         newlineAttributes = [
             .font: font,
-            .foregroundColor: NSColor(theme.color("fg")),
+            .foregroundColor: theme.nsColor("fg"),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }

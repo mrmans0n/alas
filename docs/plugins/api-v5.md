@@ -5,7 +5,7 @@
 
 API 5 adds commands, notifications, session events, settings and secrets, web
 requests, timers and panels. It is being built in steps, so this page lists only what
-Alas already does.
+Alas already does. [API 6](api-v6.md) adds more slots, badges, events and requests.
 
 ## The `api` field
 

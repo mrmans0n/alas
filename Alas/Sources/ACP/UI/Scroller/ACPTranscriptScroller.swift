@@ -17,6 +17,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
     var onRestoreCheckpoint: (CheckpointID) -> Void = { _ in }
+    var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
     /// Cancels a native subagent by child session id.
     var onCancelSubagent: ((String) -> Void)?
     let rememberedScrollAnchor: () -> String?
@@ -861,6 +862,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onQuote: host.onQuote,
                 onFork: host.onFork,
                 onRestoreCheckpoint: host.onRestoreCheckpoint,
+                messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
                 delegatedLabel: delegatedLabel(host: host, message: message)
             )

@@ -65,3 +65,25 @@ Session summaries remain disabled by default. Native groundedness and memory acc
 - Release arm64 build: exit 0.
 - Debug x86_64 build: exit 0.
 - Release x86_64 build: exit 0.
+
+## Productionization reevaluation, 2026-10-02
+
+The approved productionization removes Debug-only availability and separates
+model permission from feature preferences. Session summaries remain default-off.
+The earlier rollout table records the September implementation, not the current
+runtime contract.
+
+An isolated native app-host smoke installed the verified pinned snapshot into a
+disposable root and ran actual MLX summary inference. It reported the supplied
+nil-query guard as completed and `Run the targeted SearchTests suite` as the next
+action, without inventing a successful test result.
+
+The complete native helper/lifecycle exercise sampled RSS at 50 ms intervals:
+396,394,496 bytes baseline, 7,294,910,464 peak, and 7,017,480,192 immediately after
+unload. Cancellation drained evaluation and released the lease; allocator memory
+remained high. This is not a worst-case memory bound.
+
+Current Release launch and interactive accessibility gates remain blocked by
+the missing valid signing identity and locked desktop. See the
+[current manual evidence](../manual-test.md#on-device-ai-productionization-verification-2026-10-02).
+
