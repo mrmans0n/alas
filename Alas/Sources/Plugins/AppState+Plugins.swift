@@ -292,12 +292,14 @@ extension AppState {
 
     private func pluginWorkspaceSnapshot(projectId: String) -> PluginWorkspaceSnapshot {
         let worktrees = projectsManager.worktreesByProject[projectId] ?? []
+        let project = projects.first { $0.id == projectId }
         return PluginWorkspaceSnapshot(
             worktrees: worktrees.map { worktree in
                 PluginWorkspaceSnapshot.WorktreeInput(
                     worktree: worktree,
                     dirty: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
-                    sessions: agentSidebarRollup(for: worktree).active.map(PluginWorkspaceSnapshot.SessionInput.init(row:)))
+                    sessions: agentSidebarRollup(for: worktree).active.map(PluginWorkspaceSnapshot.SessionInput.init(row:)),
+                    isMain: project.map { projectsManager.isMain(worktree, in: $0) } ?? false)
             },
             selectedWorktreeId: selectedWorktreeId)
     }
@@ -378,11 +380,25 @@ extension AppState {
         openPluginTab(PluginTabState(pluginID: pluginID, contributionID: tab.id, title: tab.title), worktreeID: worktree)
     }
 
+    /// The instance whose configure panel Settings → Plugins shows (API 9): the selected project's, else any running one.
+    func pluginConfigureHost(_ plugin: PluginManager.Plugin) -> PluginHost? {
+        guard let manager = pluginManager else { return nil }
+        if let projectID = selectedPluginProjectID, let host = manager.host(pluginID: plugin.id, projectID: projectID),
+           host.state == .active {
+            return host
+        }
+        return manager.hosts(for: plugin).map(\.host).first { $0.state == .active }
+    }
+
     /// Slash prompts of the plugins running in `projectID`, in plugin order.
     func pluginPrompts(projectID: String) -> [PluginPromptItem] {
         guard let manager = pluginManager else { return [] }
-        return PluginPromptItem.items(manager.plugins.map {
-            ($0.manifest, manager.host(pluginID: $0.id, projectID: projectID)?.state == .active)
+        return PluginPromptItem.items(manager.plugins.map { plugin in
+            let host = manager.host(pluginID: plugin.id, projectID: projectID)
+            // Prompts the instance set at runtime (API 9) follow the manifest's.
+            var manifest = plugin.manifest
+            manifest.prompts += host?.runtimePrompts ?? []
+            return (manifest, host?.state == .active)
         })
     }
 

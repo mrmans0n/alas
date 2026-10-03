@@ -123,12 +123,14 @@ final class PluginHost {
         "file/read": .filesRead,
         "file/list": .filesRead,
         "file/write": .filesWrite,
+        "prompts/set": nil,
     ]
     /// Methods a manifest for an older API does not know.
     private static let api6Methods: Set<String> = [
         "session/send", "run/start", "run/output", "review/comment",
         "process/run", "process/start", "process/stop", "file/read", "file/list", "file/write",
     ]
+    private static let api9Methods: Set<String> = ["prompts/set"]
     static let maxProcessesRunning = 2
     static let maxProcessArgs = 32
     static let maxProcessStdinBytes = 256 << 10
@@ -178,7 +180,12 @@ final class PluginHost {
     private(set) var decorations: [PluginDecorationKey: [PluginDecoration]] = [:]
     /// Long-running processes this instance started, shown in the Run tab; kept after they exit until the next start.
     private(set) var processRuns: [PluginProcessRun] = []
-    @ObservationIgnored private var visibleViews = 0
+    /// Slash prompts the instance set with `prompts/set` (API 9), offered beside the manifest's. Cleared when it ends.
+    private(set) var runtimePrompts: [PluginPromptContribution] = []
+    /// Called after this instance stores a key in plugin-scoped storage (API 9), so the other instances hear of it.
+    @ObservationIgnored var pluginStorageSet: (String) -> Void = { _ in }
+    /// How many views show each tab, by index. Owned by the UI, so it outlives a restart.
+    @ObservationIgnored private var visibleTabs: [Int: Int] = [:]
     /// How many views show each panel in each place. Owned by the UI, so it outlives a restart.
     @ObservationIgnored private var visiblePanels: [PluginPanelPlace: Int] = [:]
     @ObservationIgnored private var lastTick: ContinuousClock.Instant?
@@ -195,7 +202,8 @@ final class PluginHost {
     /// Running fetches by token, so ending the instance can cancel them rather than let them finish unheard.
     @ObservationIgnored private var fetches: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var nextFetchToken = 0
-    @ObservationIgnored private var panelDelivery: Task<Void, Never>?
+    /// The latest `panel/visible` or `tab/visible` delivery; each waits for the one before.
+    @ObservationIgnored private var visibilityDelivery: Task<Void, Never>?
     /// Requests answered in a later delivery (`run/start`, `run/output`, `review/comment`), by token.
     @ObservationIgnored private var requests: [Int: Task<Void, Never>] = [:]
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
@@ -209,6 +217,8 @@ final class PluginHost {
     @ObservationIgnored private let source: Data
     @ObservationIgnored private let actions: PluginHostActions
     @ObservationIgnored private let storage: PluginStorage
+    /// Shared by every instance of the plugin, in every project (API 9).
+    @ObservationIgnored private let pluginStorage: PluginStorage
     @ObservationIgnored private let limits: PluginLimits
     @ObservationIgnored private var runtime: PluginRuntime?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
@@ -224,6 +234,7 @@ final class PluginHost {
         grants: Set<PluginCapability>,
         actions: PluginHostActions,
         storage: PluginStorage,
+        pluginStorage: PluginStorage,
         settings: PluginSettings,
         transport: any PluginHTTPTransport = PluginURLSessionTransport(),
         launcher: any PluginProcessLauncher = PluginFoundationLauncher(),
@@ -237,6 +248,7 @@ final class PluginHost {
         self.grants = grants
         self.actions = actions
         self.storage = storage
+        self.pluginStorage = pluginStorage
         self.limits = limits
         self.now = now
         self.settings = settings
@@ -282,6 +294,11 @@ final class PluginHost {
             guard state == .active else { return }
             await sendPanelVisible(place, true)
         }
+        guard manifest.api >= 9 else { return }
+        for tab in visibleTabs.keys.sorted() {
+            guard state == .active else { return }
+            await sendTabVisible(tab, true)
+        }
     }
 
     /// The tree to show for `place`: nil until the plugin renders for that worktree or run, and while it is empty.
@@ -305,17 +322,48 @@ final class PluginHost {
         let before = visiblePanels[place, default: 0]
         let after = max(0, before + (visible ? 1 : -1))
         visiblePanels[place] = after == 0 ? nil : after
-        guard (before == 0) != (after == 0), state == .active else { return nil }
-        let previous = panelDelivery
+        guard (before == 0) != (after == 0) else { return nil }
+        return queueVisibility { await $0.sendPanelVisible(place, visible) }
+    }
+
+    /// Each view showing one of the plugin's tabs, canvas or view, holds one count; API 9 plugins get `tab/visible`
+    /// when the first appears or the last goes, as for panels. Canvas tabs tick only while one is shown.
+    @discardableResult
+    func setTabVisible(_ tab: Int, _ visible: Bool) -> Task<Void, Never>? {
+        guard manifest.tabs.indices.contains(tab) else { return nil }
+        let before = visibleTabs[tab, default: 0]
+        let after = max(0, before + (visible ? 1 : -1))
+        visibleTabs[tab] = after == 0 ? nil : after
+        if !canvasVisible { lastTick = nil }
+        guard (before == 0) != (after == 0), manifest.api >= 9 else { return nil }
+        return queueVisibility { await $0.sendTabVisible(tab, visible) }
+    }
+
+    /// Delivers after the previous visibility change, so the plugin sees them in order.
+    private func queueVisibility(_ send: @escaping @MainActor (PluginHost) async -> Void) -> Task<Void, Never>? {
+        guard state == .active else { return nil }
+        let previous = visibilityDelivery
         let instance = instance
         let delivery = Task { [weak self] in
             await previous?.value
             // Meant for this instance only: a restart in between gets its own report after activating.
             guard let self, self.instance == instance, !Task.isCancelled else { return }
-            await self.sendPanelVisible(place, visible)
+            await send(self)
         }
-        panelDelivery = delivery
+        visibilityDelivery = delivery
         return delivery
+    }
+
+    private func sendTabVisible(_ tab: Int, _ visible: Bool) async {
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "tab/visible", params: PluginTabVisibleParams(tab: tab, visible: visible))))
+    }
+
+    /// Another instance of this plugin stored `key` in plugin-scoped storage (API 9).
+    func pluginStorageChanged(_ key: String) async {
+        guard state == .active, manifest.api >= 9 else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "storage/changed", params: PluginStorageChangedParams(scope: "plugin", key: key))))
     }
 
     private func sendPanelVisible(_ place: PluginPanelPlace, _ visible: Bool) async {
@@ -346,7 +394,7 @@ final class PluginHost {
     /// Expands one of the manifest's prompts. The answer may come in a later delivery, after the plugin's own
     /// requests, so it waits up to `promptExpandTimeout`.
     func expandPrompt(_ name: String, args: String, session: String) async -> PluginPromptExpansion {
-        guard manifest.prompts.contains(where: { $0.name == name }) else { return .failed("Unknown prompt /\(name).") }
+        guard (manifest.prompts + runtimePrompts).contains(where: { $0.name == name }) else { return .failed("Unknown prompt /\(name).") }
         guard args.utf8.count <= Self.maxPromptBytes else { return .failed("The text after /\(name) is longer than 32 KiB.") }
         guard expandingSessions.insert(session).inserted else { return .busy }
         defer { expandingSessions.remove(session) }
@@ -459,13 +507,9 @@ final class PluginHost {
         lastTick = nil
     }
 
-    /// Each visible instance of one of this plugin's tabs holds one count.
-    func setViewVisible(_ visible: Bool) {
-        visibleViews = max(0, visibleViews + (visible ? 1 : -1))
-        if visibleViews == 0 { lastTick = nil }
-    }
+    private var canvasVisible: Bool { visibleTabs.keys.contains { tabIs($0, .canvas) } }
 
-    var isTicking: Bool { state == .active && visibleViews > 0 && manifest.tabs.contains { $0.kind == .canvas } }
+    var isTicking: Bool { state == .active && canvasVisible }
 
     /// Dropped, not queued, while any delivery is still running, so a slow plugin loses frames instead of lagging.
     func tick(at now: ContinuousClock.Instant) async {
@@ -603,7 +647,9 @@ final class PluginHost {
 
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data? {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
-        guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method) else {
+        guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
+              manifest.api >= 9 || !Self.api9Methods.contains(method)
+        else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
         if let capability, !grants.contains(capability) {
@@ -644,44 +690,25 @@ final class PluginHost {
             return encode(PluginResponse(id: id, result: PluginAgentListResult(agents: actions.agents()), error: nil))
         case "task/start":
             return startTask(id: id, data: data)
-        case "storage/get":
-            guard let params = try? JSONDecoder().decode(PluginParams<PluginStorageKeyParams>.self, from: data).params else {
+        case "storage/get", "storage/set", "storage/keys":
+            guard let scope = storageScope(data) else { return errorReply(id, code: -32602, "unknown storage scope") }
+            return storageRequest(method, id: id, data: data, scope: scope)
+        case "prompts/set":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginPromptsSetParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            guard PluginStorage.isValidKey(params.key) else { return errorReply(id, code: -32602, "invalid storage key") }
-            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
-            // Splice the stored bytes in as they are; a typed model would re-type numbers.
-            var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
-            reply.append(encode(id))
-            reply.append(Data(#","result":{"value":"#.utf8))
-            reply.append(storage.get(params.key) ?? Data("null".utf8))
-            reply.append(Data("}}".utf8))
-            return reply
-        case "storage/set":
-            guard let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
-                  let key = params["key"] as? String,
-                  let value = params["value"]
-            else {
-                return errorReply(id, code: -32602, "invalid params for \(method)")
+            let prompts: [PluginPromptContribution]
+            do {
+                prompts = try PluginManifest.parsePrompts(
+                    params.prompts.map { ($0.name, $0.description) }, max: PluginManifest.maxRuntimePrompts)
+            } catch {
+                return errorReply(id, code: -32602, error.description)
             }
-            // `null` deletes. Anything else is re-serialised, so the store always gets UTF-8.
-            var bytes: Data?
-            if !(value is NSNull) {
-                guard let encoded = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else {
-                    return errorReply(id, code: -32602, "invalid storage value")
-                }
-                bytes = encoded
+            if let taken = prompts.first(where: { prompt in manifest.prompts.contains { $0.name == prompt.name } }) {
+                return errorReply(id, code: -32602, "prompt \"\(taken.name)\" is already in the manifest")
             }
-            switch storage.set(key, value: bytes) {
-            case .stored: return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
-            case .invalidKey: return errorReply(id, code: -32602, "invalid storage key")
-            case .invalidValue: return errorReply(id, code: -32602, "invalid storage value")
-            case .full: return errorReply(id, code: -32003, "storage full")
-            case .failed: return errorReply(id, code: -32003, "storage unavailable")
-            }
-        case "storage/keys":
-            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
-            return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
+            runtimePrompts = prompts
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         case "settings/get":
             return encode(PluginResponse(id: id, result: PluginSettingsPayload(settings), error: nil))
         case "http/fetch":
@@ -783,6 +810,67 @@ final class PluginHost {
             }
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
+        }
+    }
+
+    /// The store a storage request's `scope` names (API 9): the project's, the default, or the plugin's own, shared
+    /// by its instances in every project. Nil for an unknown scope. Older plugins always get the project's, as before.
+    private func storageScope(_ data: Data) -> (store: PluginStorage, isPlugin: Bool)? {
+        guard manifest.api >= 9 else { return (storage, false) }
+        let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any]
+        switch params?["scope"] {
+        case nil: return (storage, false)
+        case let scope as String where scope == "project": return (storage, false)
+        case let scope as String where scope == "plugin": return (pluginStorage, true)
+        default: return nil
+        }
+    }
+
+    private func storageRequest(
+        _ method: String, id: JSONRPCID, data: Data, scope: (store: PluginStorage, isPlugin: Bool)
+    ) -> Data {
+        let storage = scope.store
+        switch method {
+        case "storage/get":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginStorageKeyParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            guard PluginStorage.isValidKey(params.key) else { return errorReply(id, code: -32602, "invalid storage key") }
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
+            // Splice the stored bytes in as they are; a typed model would re-type numbers.
+            var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
+            reply.append(encode(id))
+            reply.append(Data(#","result":{"value":"#.utf8))
+            reply.append(storage.get(params.key) ?? Data("null".utf8))
+            reply.append(Data("}}".utf8))
+            return reply
+        case "storage/set":
+            guard let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
+                  let key = params["key"] as? String,
+                  let value = params["value"]
+            else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            // `null` deletes. Anything else is re-serialised, so the store always gets UTF-8.
+            var bytes: Data?
+            if !(value is NSNull) {
+                guard let encoded = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed) else {
+                    return errorReply(id, code: -32602, "invalid storage value")
+                }
+                bytes = encoded
+            }
+            switch storage.set(key, value: bytes) {
+            case .stored:
+                if scope.isPlugin { pluginStorageSet(key) }
+                return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+            case .invalidKey: return errorReply(id, code: -32602, "invalid storage key")
+            case .invalidValue: return errorReply(id, code: -32602, "invalid storage value")
+            case .full: return errorReply(id, code: -32003, "storage full")
+            case .failed: return errorReply(id, code: -32003, "storage unavailable")
+            }
+        default:
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
+            return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
         }
     }
 
@@ -1140,8 +1228,9 @@ final class PluginHost {
         requests = [:]
         for timer in timers.values { timer.cancel() }
         timers = [:]
-        panelDelivery?.cancel()
-        panelDelivery = nil
+        visibilityDelivery?.cancel()
+        visibilityDelivery = nil
+        runtimePrompts = []
         for token in hostRequests.keys { answer(token, nil) }
     }
 
@@ -1173,7 +1262,7 @@ final class PluginHost {
                 }
                 // A panel names exactly the context its location has.
                 let needs: (worktree: Bool, run: Bool) = switch location {
-                case .right: (false, false)
+                case .right, .configure: (false, false)
                 case .changesSection: (true, false)
                 case .runReportSection: (false, true)
                 }

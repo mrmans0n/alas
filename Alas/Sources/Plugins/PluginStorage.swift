@@ -50,6 +50,12 @@ final class PluginStorage {
         return root.appending(path: "PluginData").appending(path: pluginID).appending(path: name + ".json")
     }
 
+    /// `root/PluginData/<pluginID>/storage`: the plugin's own store, shared by its instances in every project (API 9).
+    /// Extensionless, like the settings file, so it never collides with a project's.
+    static func file(pluginID: String, root: URL = Paths.appSupportRoot) -> URL {
+        root.appending(path: "PluginData").appending(path: pluginID).appending(path: "storage")
+    }
+
     static func isValidKey(_ key: String) -> Bool {
         (1...maxKeyBytes).contains(key.utf8.count)
     }

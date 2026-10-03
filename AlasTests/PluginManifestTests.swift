@@ -36,7 +36,10 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 9), .unsupportedAPI(9)),
+        (manifest(api: 10), .unsupportedAPI(10)),
+        (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
+        (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
+         .invalidPanel(#"at most one panel with location "configure""#)),
         (manifest(api: 7, #","contributes":{"tabs":[{"id":"t","title":"T"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"t"}]}"#),
          .needsNewerAPI(#"command "a" "opens""#, api: 8)),
         (manifest(api: 8, #","contributes":{"tabs":[{"id":"t","title":"T"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"u"}]}"#),
@@ -139,6 +142,13 @@ struct PluginManifestTests {
         #expect(parsed.panels.dropFirst().allSatisfy { $0.location == .changesSection && $0.icon == "checklist" })
     }
 
+    @Test func aConfigurePanelIsKeptBesideTheOthers() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 9, panels(
+            #"{"id":"a","title":"A"},{"id":"c","title":"Setup","location":"configure"}"#)).utf8))
+        #expect(parsed.configurePanel == PluginPanelContribution(id: "c", title: "Setup", location: .configure))
+        #expect(parsed.panels.count == 2)
+    }
+
     @Test func processesKeepTheirArgvAndFlags() throws {
         let parsed = try PluginManifest.parse(Data(manifest(api: 6, processes(
             #"{"id":"install","command":["pnpm","install"]},{"id":"dev","command":["pnpm","dev"],"appendArgs":true,"longRunning":true}"#)).utf8))
@@ -161,8 +171,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 8"),
-        (9, "requires plugin API 9; this Alas supports up to 8"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 9"),
+        (10, "requires plugin API 10; this Alas supports up to 9"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

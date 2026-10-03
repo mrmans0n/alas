@@ -114,8 +114,16 @@ enum PluginPanelLocation: String, Sendable {
     case changesSection = "changes.section"
     /// Under a run report's header, rendered for its run (API 6).
     case runReportSection = "run.report.section"
+    /// The plugin's own screen, opened from Settings → Plugins (API 9).
+    case configure
 
-    var api: Int { self == .right ? 5 : 6 }
+    var api: Int {
+        switch self {
+        case .right: 5
+        case .changesSection, .runReportSection: 6
+        case .configure: 9
+        }
+    }
 }
 
 /// A view tree the plugin describes with `view/render {panel}`, shown outside the center tabs.
@@ -223,7 +231,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...8
+    static let supportedAPIVersions = 4...9
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -233,6 +241,8 @@ struct PluginManifest: Equatable, Sendable {
     static let maxProcesses = 16
     static let maxArgBytes = 1024
     static let maxPrompts = 16
+    /// Prompts an instance sets with `prompts/set` (API 9).
+    static let maxRuntimePrompts = 32
     static let maxPromptDescriptionLength = 200
 
     let id: String
@@ -252,6 +262,9 @@ struct PluginManifest: Equatable, Sendable {
     var processes: [PluginProcessContribution] = []
     /// Slash commands for the agent composer.
     var prompts: [PluginPromptContribution] = []
+
+    /// The panel Settings → Plugins opens with Configure… (API 9).
+    var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -300,7 +313,7 @@ struct PluginManifest: Equatable, Sendable {
         if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
         let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
         if raw.contributes?.prompts != nil, api < 7 { throw .needsNewerAPI("\"contributes.prompts\"", api: 7) }
-        let prompts = try parsePrompts(raw.contributes?.prompts ?? [])
+        let prompts = try parsePrompts((raw.contributes?.prompts ?? []).map { ($0.name, $0.description) }, max: maxPrompts)
         if raw.network != nil || raw.settings != nil, api < 5 {
             throw .needsNewerAPI(raw.network != nil ? "\"network\"" : "\"settings\"")
         }
@@ -394,8 +407,11 @@ struct PluginManifest: Equatable, Sendable {
         return processes
     }
 
-    private static func parsePrompts(_ raw: [Raw.RawPrompt]) throws(PluginManifestError) -> [PluginPromptContribution] {
-        guard raw.count <= maxPrompts else { throw .invalidPrompt("at most \(maxPrompts) prompts") }
+    /// Also checks the prompts an instance sets with `prompts/set`.
+    static func parsePrompts(
+        _ raw: [(name: String?, description: String?)], max: Int
+    ) throws(PluginManifestError) -> [PluginPromptContribution] {
+        guard raw.count <= max else { throw .invalidPrompt("at most \(max) prompts") }
         var prompts: [PluginPromptContribution] = []
         for entry in raw {
             // Typed after a slash in the composer, so no dots, spaces or capitals.
@@ -449,6 +465,7 @@ struct PluginManifest: Equatable, Sendable {
         // Every declared id, skipped locations included, so uniqueness does not depend on order or on what this
         // Alas supports.
         var declared: Set<String> = []
+        var hasConfigure = false
         for entry in raw {
             let id = entry.id ?? ""
             guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidPanel("invalid panel id \"\(id)\"") }
@@ -457,6 +474,11 @@ struct PluginManifest: Equatable, Sendable {
             let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard (1...maxTabTitleLength).contains(title.count) else {
                 throw .invalidPanel("panel \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            if entry.location == PluginPanelLocation.configure.rawValue {
+                guard api >= 9 else { throw .needsNewerAPI("panel \"\(id)\" location \"configure\"", api: 9) }
+                guard !hasConfigure else { throw .invalidPanel("at most one panel with location \"configure\"") }
+                hasConfigure = true
             }
             // Locations will keep growing, so one this Alas does not know is skipped rather than refused, and so is
             // one newer than the manifest's API, as an Alas of that API would.

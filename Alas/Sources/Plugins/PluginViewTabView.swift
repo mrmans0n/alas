@@ -128,6 +128,8 @@ struct PluginViewNodeView: View {
             Button(node.label ?? "") { if let url = node.url { NSWorkspace.shared.open(url) } }
                 .buttonStyle(.link)
                 .help(node.url?.absoluteString ?? "")
+        case .markdown:
+            PluginMarkdownView(text: node.text ?? "")
         }
     }
 
@@ -191,6 +193,68 @@ struct PluginViewNodeView: View {
 
     private func color(_ tone: PluginViewNode.Tone?) -> Color {
         theme.color((tone ?? .normal).colorKey)
+    }
+}
+
+/// A markdown node (API 9), on the chat's Markdown parser. Images show only their alt text, so nothing is loaded; only
+/// absolute https links open, in the default browser, and the plugin is not told.
+private struct PluginMarkdownView: View {
+    let text: String
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(ACPMarkdownText.parse(text).enumerated()), id: \.offset) { _, block in
+                self.block(block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme?.lowercased() == "https", url.host?.isEmpty == false else { return .discarded }
+            NSWorkspace.shared.open(url)
+            return .handled
+        })
+    }
+
+    @ViewBuilder private func block(_ block: ACPMarkdownText.Block) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(Self.inline(text)).font(level <= 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
+        case .paragraph(let text):
+            Text(Self.inline(text))
+        case .quote(let text):
+            Text(Self.inline(text))
+                .foregroundColor(theme.color("fg-dim"))
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) { Rectangle().fill(theme.color("accent").opacity(0.55)).frame(width: 2) }
+        case .taskList(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: item.isChecked ? "checkmark.square" : "square").accessibilityLabel(item.isChecked ? "Done" : "To do")
+                        Text(Self.inline(item.text))
+                    }
+                }
+            }
+        case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
+            Text(body)
+                .font(.system(.body, design: .monospaced))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2")))
+        case .table(let header, let rows):
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                GridRow { ForEach(Array(header.enumerated()), id: \.offset) { Text(Self.inline($0.element)).bold() } }
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GridRow { ForEach(Array(row.enumerated()), id: \.offset) { Text(Self.inline($0.element)) } }
+                }
+            }
+        }
+    }
+
+    private static func inline(_ text: String) -> AttributedString {
+        ACPMarkdownInlineRenderer.cleanAttributedString(text)
     }
 }
 

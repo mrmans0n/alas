@@ -78,6 +78,7 @@ struct PluginHostTests {
         limits: PluginLimits = PluginHostTests.limits,
         manifest: String = PluginHostTests.plainManifest,
         storage: PluginStorage? = nil,
+        pluginStorage: PluginStorage? = nil,
         settings: PluginSettings? = nil,
         transport: FakeTransport = FakeTransport(),
         sleeper: Sleeper = Sleeper(),
@@ -144,6 +145,8 @@ struct PluginHostTests {
                 },
                 worktreePath: { $0 == "wt" ? worktreeRoot ?? URL(fileURLWithPath: "/tmp/wt") : nil }),
             storage: storage,
+            pluginStorage: pluginStorage ?? PluginStorage(
+                file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),
             settings: settings ?? Self.settings(manifest),
             transport: transport,
             launcher: launcher,
@@ -176,12 +179,12 @@ struct PluginHostTests {
         let start = ContinuousClock.now
         await host.tick(at: start)
         #expect(ticks(host).isEmpty)
-        host.setViewVisible(true)
+        host.setTabVisible(0, true)
         await host.tick(at: start)
         await host.tick(at: start + .milliseconds(66))
-        host.setViewVisible(false)
+        host.setTabVisible(0, false)
         await host.tick(at: start + .seconds(1))
-        host.setViewVisible(true)
+        host.setTabVisible(0, true)
         await host.tick(at: start + .seconds(600))
         #expect(ticks(host).map { $0.contains(#""dt":0"#) } == [true, false, true])
         #expect(ticks(host)[1].contains(#""dt":66"#))
@@ -190,7 +193,7 @@ struct PluginHostTests {
     @Test func aTickIsDroppedWhileADeliveryIsInFlight() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.canvasManifest)
         await host.activate()
-        host.setViewVisible(true)
+        host.setTabVisible(0, true)
         let first = Task { await host.tick(at: .now) }
         // The tick is traced just before the host suspends inside the plugin call.
         var spins = 0
@@ -211,7 +214,7 @@ struct PluginHostTests {
         await host.activate()
         #expect(host.frames[0]?.height == 2)
         #expect(host.regions[0]?.map(\.id) == ["r"])
-        host.setViewVisible(true)
+        host.setTabVisible(0, true)
         await host.tick(at: .now)
         #expect(host.frames.isEmpty)
         #expect(host.regions.isEmpty)
@@ -1542,5 +1545,92 @@ struct PluginHostTests {
         process.terminate()
         var iterator = ended.makeAsyncIterator()
         #expect(await iterator.next() == .signal(SIGTERM))
+    }
+
+    // MARK: - API 9
+
+    /// A view tab, a canvas tab and a manifest prompt, and from API 9 a configure panel.
+    static func api9Manifest(api: Int = 9) -> String {
+        let panels = api >= 9 ? #","panels":[{"id":"setup","title":"Setup","location":"configure"}]"# : ""
+        return #"{"id":"io.test.plugin","name":"Test","version":"1","api":\#(api),"entry":"p.js","contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}]\#(panels),"prompts":[{"name":"linear"}]}}"#
+    }
+
+    /// Plugin scope is a store of its own; only a key it actually stored is announced to the other instances.
+    @Test func pluginScopedStorageIsSeparateAndAnnouncesWhatItStored() async throws {
+        let project = PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
+        let shared = PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)"))
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(request(1, "storage/set", #"{"scope":"plugin","key":"k","value":1}"#)),
+            .send(request(2, "storage/get", #"{"key":"k"}"#)),
+            .send(request(3, "storage/get", #"{"scope":"plugin","key":"k"}"#)),
+            .send(request(4, "storage/keys", #"{"scope":"plugin"}"#)),
+            .send(request(5, "storage/set", #"{"scope":"team","key":"k","value":1}"#)),
+            .send(request(6, "storage/set", #"{"scope":"plugin","key":"","value":1}"#)),
+            .send(request(7, "storage/set", #"{"scope":"project","key":"p","value":2}"#)),
+        ]], manifest: Self.api9Manifest(), storage: project, pluginStorage: shared)
+        var announced: [String] = []
+        host.pluginStorageSet = { announced.append($0) }
+        await host.activate()
+        let sent = replies(host)
+        try #require(sent.count == 8)
+        #expect(sent[2].contains(#""value":null"#))
+        #expect(sent[3].contains(#""value":1"#))
+        #expect(sent[4].contains(#"["k"]"#))
+        #expect(sent[5].contains(#""code":-32602"#) && sent[5].contains("unknown storage scope"))
+        #expect(sent[6].contains(#""code":-32602"#))
+        #expect(project.keys() == ["p"] && shared.keys() == ["k"])
+        #expect(announced == ["k"])
+    }
+
+    @Test(arguments: [
+        (9, #"[{"name":"deploy","description":"Ship it"}]"#, nil),
+        (9, #"[{"name":"linear"}]"#, -32602),
+        (9, #"[{"name":"a"},{"name":"a"}]"#, -32602),
+        (9, #"[{"name":"Fix it"}]"#, -32602),
+        (9, "[" + (0...32).map { #"{"name":"p\#($0)"}"# }.joined(separator: ",") + "]", -32602),
+        (8, #"[{"name":"deploy"}]"#, -32601),
+    ] as [(Int, String, Int?)])
+    func runtimePromptsAreValidatedAndEndWithTheInstance(api: Int, prompts: String, code: Int?) async throws {
+        let host = try makeHost(
+            [[.send(activateOK), .send(request(1, "prompts/set", #"{"prompts":\#(prompts)}"#))]], manifest: Self.api9Manifest(api: api))
+        await host.activate()
+        let reply = try #require(lastReply(host))
+        if let code {
+            #expect(reply.contains(#""code":\#(code)"#))
+            #expect(host.runtimePrompts.isEmpty)
+        } else {
+            #expect(reply.contains(#""result":{}"#))
+            #expect(host.runtimePrompts == [PluginPromptContribution(name: "deploy", description: "Ship it")])
+            await host.deactivate()
+            #expect(host.runtimePrompts.isEmpty)
+        }
+    }
+
+    /// Mirrors `panel/visible`: sent when the first view of a tab appears and the last goes, and again to a restarted
+    /// instance; API 8 plugins hear nothing.
+    @Test(arguments: [9, 8])
+    func tabVisibilityIsSentOnTransitionsAndToANewInstance(api: Int) async throws {
+        // A configure panel renders with no worktree or run.
+        let host = try makeHost(
+            [[.send(activateOK)] + (api >= 9 ? [.send(render(panel: "setup"))] : [])], manifest: Self.api9Manifest(api: api))
+        func sent() -> [String] {
+            host.trace.filter { $0.direction == .toPlugin && $0.text.contains("tab/visible") }.map {
+                ($0.text.contains(#""tab":1"#) ? "c" : "v") + ($0.text.contains(#""visible":true"#) ? "+" : "-")
+            }
+        }
+        await host.activate()
+        if api >= 9 { #expect(host.panelTree(for: PluginPanelPlace(panel: "setup")) != nil) }
+        await host.setTabVisible(0, true)?.value
+        await host.setTabVisible(0, true)?.value
+        await host.setTabVisible(1, true)?.value
+        #expect(host.isTicking)
+        await host.setTabVisible(0, false)?.value
+        await host.setTabVisible(0, false)?.value
+        await host.setTabVisible(9, true)?.value
+        #expect(sent() == (api >= 9 ? ["v+", "c+", "v-"] : []))
+        await host.deactivate()
+        await host.activate()
+        #expect(sent() == (api >= 9 ? ["c+"] : []))
     }
 }
