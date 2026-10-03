@@ -359,22 +359,23 @@ extension AppState {
         guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
               let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID, detail: detail, text: text)
         else { return }
-        openPluginTab(for: item, worktreeID: worktreeID)
+        openPluginTab(forCommand: item.command.id, pluginID: item.pluginID, projectID: item.projectID, worktreeID: worktreeID)
         Task { await host.runCommand(item.command.id, target: target) }
     }
 
     /// Opens the tab an API 8 command names, in a worktree of the project the command ran in: the one it acts on,
     /// else the selected one, else the project's main worktree. A worktree other than the selected one is selected,
     /// as plugin tabs live in the selected worktree's center pane.
-    private func openPluginTab(for item: PluginCommandItem, worktreeID: String?) {
-        guard let opens = item.command.opens,
-              let tab = pluginManager?.plugins.first(where: { $0.id == item.pluginID })?.manifest.tabs.first(where: { $0.id == opens }),
+    private func openPluginTab(forCommand commandID: String, pluginID: String, projectID: String, worktreeID: String?) {
+        guard let manifest = pluginManager?.plugins.first(where: { $0.id == pluginID })?.manifest,
+              let opens = manifest.commands.first(where: { $0.id == commandID })?.opens,
+              let tab = manifest.tabs.first(where: { $0.id == opens }),
               let worktree = worktreeID
-              ?? (selectedPluginProjectID == item.projectID ? selectedWorktreeId : nil)
-              ?? projectsManager.visibleMainWorktree(projectId: item.projectID)?.id
+              ?? (selectedPluginProjectID == projectID ? selectedWorktreeId : nil)
+              ?? projectsManager.visibleMainWorktree(projectId: projectID)?.id
         else { return }
         if worktree != selectedWorktreeId { selectWorktree(id: worktree) }
-        openPluginTab(PluginTabState(pluginID: item.pluginID, contributionID: tab.id, title: tab.title), worktreeID: worktree)
+        openPluginTab(PluginTabState(pluginID: pluginID, contributionID: tab.id, title: tab.title), worktreeID: worktree)
     }
 
     /// Slash prompts of the plugins running in `projectID`, in plugin order.
@@ -434,6 +435,9 @@ extension AppState {
               let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
               let target = PluginCommandRouting.target(for: item.key)
         else { return }
+        // A worktree row's target is the worktree; other badges carry theirs in the key, or none.
+        let worktreeID = item.key.slot == .worktreeRow ? item.key.target : item.key.worktree
+        openPluginTab(forCommand: command, pluginID: item.pluginID, projectID: item.projectID, worktreeID: worktreeID)
         Task { await host.runCommand(command, target: target) }
     }
 
