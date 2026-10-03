@@ -944,11 +944,8 @@ struct EditorBufferTests {
         try handle.truncate(atOffset: 0)
         try handle.write(contentsOf: Data("v2\n".utf8))
         try handle.close()
-        for _ in 0..<20 where buffer.relativePath != "nested/b.txt" {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-
-        #expect(buffer.relativePath == "nested/b.txt")
+        // The watcher's events can arrive late on a loaded machine: poll with a deadline, not a fixed count of sleeps.
+        #expect(await awaitCondition { buffer.relativePath == "nested/b.txt" && buffer.storage.string == "v2\n" })
         #expect(buffer.storage.string == "v2\n")
         #expect(buffer.originalText == "v2\n")
         #expect(buffer.dirty == false)
