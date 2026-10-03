@@ -16,7 +16,6 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -266,11 +265,12 @@ fn walk(
         return refuse(format!("{path} uses .."));
     }
     let root_path = Path::new(root);
-    let (Some(root_fd), Ok(canonical_root)) =
-        (open_root(root_path), std::fs::canonicalize(root_path))
-    else {
+    // Alas sends the worktree's real path; it is opened one component at a time without following symlinks,
+    // so a root swapped for a symlink is refused rather than adopted as the boundary.
+    let Some(root_fd) = open_root(root_path) else {
         return refuse("the worktree does not exist");
     };
+    let canonical_root = root_path.to_path_buf();
     let mut stack = vec![root_fd];
     // Each name, and whether it came from a symlink's target, where a missing name means a broken link.
     let mut queue: VecDeque<(Vec<u8>, bool)> = parts
@@ -428,12 +428,16 @@ fn open_root(root: &Path) -> Option<OwnedFd> {
     if !root.is_absolute() {
         return None;
     }
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
-        .open(root)
-        .ok()
-        .map(OwnedFd::from)
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let mut fd = open_at(libc::AT_FDCWD, c"/", flags).ok()?;
+    for component in root.components().skip(1) {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        let name = CString::new(name.as_bytes()).ok()?;
+        fd = open_at(fd.as_raw_fd(), &name, flags).ok()?;
+    }
+    Some(fd)
 }
 
 fn open_at(dir: RawFd, name: &CStr, flags: libc::c_int) -> io::Result<OwnedFd> {
@@ -525,6 +529,9 @@ mod tests {
                 "alas-scoped-fs-{name}-{}-{nonce}",
                 std::process::id()
             ));
+            std::fs::create_dir_all(&base).unwrap();
+            // The real path, as Alas sends it: the root is opened without following symlinks (`/var` is one on macOS).
+            let base = std::fs::canonicalize(&base).unwrap();
             let root = base.join("wt");
             let outside = base.join("outside");
             std::fs::create_dir_all(root.join("sub")).unwrap();
@@ -553,6 +560,24 @@ mod tests {
 
     fn message<T: std::fmt::Debug>(outcome: Outcome<T>) -> String {
         outcome.expect_err("refused").message
+    }
+
+    #[test]
+    fn a_root_reached_through_a_symlink_is_refused() {
+        let f = Fixture::new("root-link");
+        let alias = f.base.join("alias");
+        symlink(&f.outside, &alias).unwrap();
+        assert_eq!(
+            message(read(alias.to_str().unwrap(), "secret.txt")),
+            "the worktree does not exist"
+        );
+        let nested = f.base.join("via");
+        symlink(&f.base, &nested).unwrap();
+        assert_eq!(
+            message(read(nested.join("wt").to_str().unwrap(), "a.txt")),
+            "the worktree does not exist"
+        );
+        assert_eq!(read(f.root(), "a.txt").unwrap(), "hello");
     }
 
     #[test]
