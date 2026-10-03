@@ -196,7 +196,19 @@ Same messages, limits and error codes as API 6. Differences:
   `stderr.log` grow without limit today, so a verbose dev server fills the
   remote disk and replays it all on attach. R3 caps each log on the helper
   side, keeping the head for `process/run` and the tail for long-running
-  processes, the same limits the plugin host applies.
+  processes, the same limits the plugin host applies. Offsets become logical:
+  monotonic byte counts with a retained base that the helper reports, so a
+  client whose remembered offset fell below the base resumes at it instead of
+  seeking past the end of a shortened file.
+- Exit codes match local runs: a process ended by a signal reports 128 plus
+  the signal number (143, 137), taken from the exit status's signal, not the
+  helper's current `code().unwrap_or(2)`.
+- The helper retires what nobody owns. If the SSH connection is gone when a
+  plugin stops, or Alas crashes, no `killProc` arrives. One-shot runs carry a
+  helper-enforced deadline (the 10-minute limit plus the kill grace), and
+  long-running ones a lease the plugin instance renews while it runs; when a
+  lease lapses, the helper stops the process and its descendants as on
+  `killProc`.
 - Long-running processes appear in the remote worktree's Run tab under
   *Plugins*, exactly like local ones, and stop when the plugin stops.
 
@@ -333,7 +345,7 @@ nothing if the page can talk to any host:
   defines `window.alas`:
 
   ```js
-  alas.post(value)            // any JSON value, at most 1 MiB once encoded
+  alas.post(value)            // any JSON value; the whole web/message it becomes must fit in 1 MiB
   alas.onmessage = (value) => { … }
   alas.context                // { tab, theme: "light" | "dark" }
   ```
@@ -359,7 +371,7 @@ nothing if the page can talk to any host:
 | Limit | Value | When exceeded |
 |---|---|---|
 | `ui.js` size | 8 MiB | The manifest is refused. |
-| A message, either direction | 1 MiB | Page: `alas.post` throws. Plugin: the plugin stops, as for any oversized send. |
+| A message, either direction | 1 MiB for the whole encoded JSON-RPC message, envelope included | Page: `alas.post` throws when the `web/message` it would become exceeds it. Plugin: the plugin stops, as for any oversized send. |
 | Page → plugin queue | 32 undelivered messages per tab | `alas.post` throws `"busy"`. Each delivery is a normal call under the 250 ms limit. |
 | Plugin → page | counts towards the 64 sends per call | as today |
 | `web/post` to a tab with no live page | dropped | The page posts its own "ready" on load. |
@@ -402,7 +414,7 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
 | R2 | 10 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
-| R3 | 10 | Helper: raw output mode, one-shot stdin with EOF (and `/dev/null`), descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped output logs. Remote `process/run` over it; executable resolution on the host. | L |
+| R3 | 10 | Helper: raw output mode, one-shot stdin with EOF (and `/dev/null`), descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
 | R4 | 10 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
 | W1 | 11 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
