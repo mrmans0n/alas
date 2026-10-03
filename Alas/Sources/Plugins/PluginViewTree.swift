@@ -2,7 +2,14 @@ import Foundation
 
 /// A validated node of a plugin-described native view.
 struct PluginViewNode: Equatable, Sendable {
-    enum Kind: String, Sendable { case vstack, hstack, scroll, text, badge, button, textField, menu, card, divider, spacer }
+    enum Kind: String, Sendable {
+        case vstack, hstack, scroll, text, badge, button, textField, menu, card, divider, spacer
+        // API 8.
+        case progress, link
+
+        /// The plugin API that introduced the kind; an older plugin that sends it renders an invalid tree.
+        var api: Int { self == .progress || self == .link ? 8 : 4 }
+    }
     enum Tone: String, Sendable { case normal, dim, accent, warn, danger }
     struct MenuItem: Equatable, Sendable {
         let id: String
@@ -11,8 +18,9 @@ struct PluginViewNode: Equatable, Sendable {
     let id: String
     let kind: Kind
     var children: [PluginViewNode] = []   // stacks, card; scroll has exactly one
-    var text: String? = nil               // text, badge
-    var label: String? = nil              // button, menu
+    var text: String? = nil               // text, badge, progress
+    var label: String? = nil              // button, menu, link
+    var url: URL? = nil                   // link: absolute https
     var value: String? = nil              // textField
     var placeholder: String? = nil
     var style: String? = nil              // validated per kind
@@ -37,17 +45,18 @@ struct PluginViewTreeError: Error, Equatable, CustomStringConvertible {
 
 /// Decodes and validates the untrusted `root` JSON a plugin sends with `view/render`.
 enum PluginViewTree {
-    static let maxNodes = 2_000, maxDepth = 16, maxString = 4_000, maxIDBytes = 64, maxMenuItems = 64
+    static let maxNodes = 2_000, maxDepth = 16, maxString = 4_000, maxIDBytes = 64, maxMenuItems = 64, maxURLBytes = 2_048
 
-    /// Decodes and validates `root` (the raw JSON of the `root` field). Returns the reason on failure.
-    static func decode(_ json: Data) -> Result<PluginViewNode, PluginViewTreeError> {
+    /// Decodes and validates `root` (the raw JSON of the `root` field) from a plugin of manifest `api`. Returns the
+    /// reason on failure.
+    static func decode(_ json: Data, api: Int) -> Result<PluginViewNode, PluginViewTreeError> {
         // Reject hostile nesting on the raw bytes, before any recursive decoding runs.
         guard bracketDepthWithinBudget(json) else { return fail("tree is deeper than \(maxDepth) levels") }
         guard let raw = try? JSONDecoder().decode(Raw.self, from: json) else { return fail("not a valid view tree") }
         var ids = Set<String>()
         var count = 0
         do {
-            return .success(try validate(raw, depth: 1, ids: &ids, count: &count))
+            return .success(try validate(raw, depth: 1, api: api, ids: &ids, count: &count))
         } catch let error as PluginViewTreeError {
             return .failure(error)
         } catch {
@@ -100,6 +109,7 @@ enum PluginViewTree {
         var axis: String?
         var text: String?
         var label: String?
+        var url: String?
         var value: String?
         var placeholder: String?
         var style: String?
@@ -113,7 +123,7 @@ enum PluginViewTree {
         var items: [RawItem]?
     }
 
-    private static func validate(_ raw: Raw, depth: Int, ids: inout Set<String>, count: inout Int) throws -> PluginViewNode {
+    private static func validate(_ raw: Raw, depth: Int, api: Int, ids: inout Set<String>, count: inout Int) throws -> PluginViewNode {
         func err(_ reason: String) -> PluginViewTreeError { PluginViewTreeError(reason: reason) }
         guard let id = raw.id, (1...maxIDBytes).contains(id.utf8.count) else { throw err("node ids must be 1 to \(maxIDBytes) bytes") }
         guard ids.insert(id).inserted else { throw err("duplicate id \"\(id)\"") }
@@ -123,6 +133,7 @@ enum PluginViewTree {
         guard let kindName = raw.kind, let kind = PluginViewNode.Kind(rawValue: kindName) else {
             throw err("unknown kind \"\(raw.kind ?? "")\"")
         }
+        guard kind.api <= api else { throw err("kind \"\(kindName)\" needs \"api\": \(kind.api)") }
         let prefix = "\(kind.rawValue) \"\(id)\""
         var node = PluginViewNode(id: id, kind: kind)
 
@@ -159,6 +170,14 @@ enum PluginViewTree {
         switch kind {
         case .text, .badge: node.text = try string(raw.text, required: "text")
         case .button: node.label = try string(raw.label, required: "label")
+        case .progress: node.text = try string(raw.text)
+        case .link:
+            node.label = try string(raw.label, required: "label")
+            guard let rawURL = raw.url else { throw err("\(prefix) needs url") }
+            guard rawURL.utf8.count <= maxURLBytes, let url = URL(string: rawURL), url.scheme?.lowercased() == "https",
+                  url.host?.isEmpty == false
+            else { throw err("\(prefix) url must be an absolute https URL of at most \(maxURLBytes) bytes") }
+            node.url = url
         case .textField: node.value = try string(raw.value, required: "value")
         case .menu:
             node.label = try string(raw.label, required: "label")
@@ -187,12 +206,12 @@ enum PluginViewTree {
         switch kind {
         case .vstack, .hstack, .card:
             guard let children = raw.children else { throw err("\(prefix) needs children") }
-            node.children = try children.map { try validate($0, depth: depth + 1, ids: &ids, count: &count) }
+            node.children = try children.map { try validate($0, depth: depth + 1, api: api, ids: &ids, count: &count) }
         case .scroll:
             guard raw.axis == "vertical" || raw.axis == "horizontal" else { throw err("\(prefix) needs an axis") }
             guard let child = raw.child else { throw err("\(prefix) needs child") }
             node.horizontal = raw.axis == "horizontal"
-            node.children = [try validate(child.raw, depth: depth + 1, ids: &ids, count: &count)]
+            node.children = [try validate(child.raw, depth: depth + 1, api: api, ids: &ids, count: &count)]
         default: break
         }
         return node

@@ -36,7 +36,11 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 8), .unsupportedAPI(8)),
+        (manifest(api: 9), .unsupportedAPI(9)),
+        (manifest(api: 7, #","contributes":{"tabs":[{"id":"t","title":"T"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"t"}]}"#),
+         .needsNewerAPI(#"command "a" "opens""#, api: 8)),
+        (manifest(api: 8, #","contributes":{"tabs":[{"id":"t","title":"T"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"u"}]}"#),
+         .invalidCommand(#"command "a" opens "u", which is not a declared tab"#)),
         (manifest(api: 6, #","capabilities":["session.context"]"#), .needsNewerAPI(#"capability "session.context""#, api: 7)),
         (manifest(api: 6, prompts(#"{"name":"a"}"#)), .needsNewerAPI(#""contributes.prompts""#, api: 7)),
         (manifest(api: 7, prompts(#"{"name":"Fix it"}"#)), .invalidPrompt(#"invalid prompt name "Fix it""#)),
@@ -119,6 +123,12 @@ struct PluginManifestTests {
         #expect(parsed.events == [.sessionFinished])
     }
 
+    @Test func commandsKeepTheTabTheyOpen() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 8,
+            #","contributes":{"tabs":[{"id":"inbox","title":"Inbox","kind":"view"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"inbox"}]}"#).utf8))
+        #expect(parsed.commands.first?.opens == "inbox")
+    }
+
     /// Locations newer than the manifest's API are skipped like unknown command slots; the icon defaults.
     @Test(arguments: [(5, ["a"]), (6, ["a", "b"])])
     func panelsDefaultTheirIconAndSkipUnknownLocations(api: Int, ids: [String]) throws {
@@ -151,8 +161,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 7"),
-        (8, "requires plugin API 8; this Alas supports up to 7"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 8"),
+        (9, "requires plugin API 9; this Alas supports up to 8"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

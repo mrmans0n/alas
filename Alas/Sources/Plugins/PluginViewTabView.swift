@@ -116,6 +116,18 @@ struct PluginViewNodeView: View {
             Divider().accessibilityHidden(true)
         case .spacer:
             Spacer(minLength: 0).accessibilityHidden(true)
+        case .progress:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                if let text = node.text {
+                    Text(text).font(.caption).foregroundColor(color(.dim))
+                }
+            }
+        case .link:
+            // Opened by Alas, not the plugin: no event, and always the default browser.
+            Button(node.label ?? "") { if let url = node.url { NSWorkspace.shared.open(url) } }
+                .buttonStyle(.link)
+                .help(node.url?.absoluteString ?? "")
         }
     }
 

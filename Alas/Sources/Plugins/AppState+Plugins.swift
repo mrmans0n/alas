@@ -359,7 +359,22 @@ extension AppState {
         guard let host = pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID),
               let target = PluginCommandRouting.target(for: slot, worktreeID: worktreeID, detail: detail, text: text)
         else { return }
+        openPluginTab(for: item, worktreeID: worktreeID)
         Task { await host.runCommand(item.command.id, target: target) }
+    }
+
+    /// Opens the tab an API 8 command names, in a worktree of the project the command ran in: the one it acts on,
+    /// else the selected one, else the project's main worktree. A worktree other than the selected one is selected,
+    /// as plugin tabs live in the selected worktree's center pane.
+    private func openPluginTab(for item: PluginCommandItem, worktreeID: String?) {
+        guard let opens = item.command.opens,
+              let tab = pluginManager?.plugins.first(where: { $0.id == item.pluginID })?.manifest.tabs.first(where: { $0.id == opens }),
+              let worktree = worktreeID
+              ?? (selectedPluginProjectID == item.projectID ? selectedWorktreeId : nil)
+              ?? projectsManager.visibleMainWorktree(projectId: item.projectID)?.id
+        else { return }
+        if worktree != selectedWorktreeId { selectWorktree(id: worktree) }
+        openPluginTab(PluginTabState(pluginID: item.pluginID, contributionID: tab.id, title: tab.title), worktreeID: worktree)
     }
 
     /// Slash prompts of the plugins running in `projectID`, in plugin order.
@@ -437,8 +452,8 @@ extension AppState {
         pluginManager?.host(pluginID: item.pluginID, projectID: item.projectID)?.stopProcess(item.run.id)
     }
 
-    func openPluginTab(_ tab: PluginTabState) {
-        guard let worktreeId = selectedWorktreeId else { return }
+    func openPluginTab(_ tab: PluginTabState, worktreeID: String? = nil) {
+        guard let worktreeId = worktreeID ?? selectedWorktreeId else { return }
         tabs.openOrFocusPluginTab(worktreeId: worktreeId, state: tab)
         activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
     }
