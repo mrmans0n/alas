@@ -194,8 +194,9 @@ Same messages, limits and error codes as API 6. Differences:
   recorded start time and is still in the recorded group; otherwise the group
   signal is skipped. A check followed by `kill(-pgid)` still has a window, so
   the supervisor starts the run under an anchor: a tiny process of its own
-  that leads the group and stays alive until cleanup has signalled the group
-  and the kill grace has passed. While it lives the group id can't be reused,
+  that leads the group, ignores `SIGTERM`, and stays alive until cleanup has
+  signalled the group and the kill grace has passed; the supervisor removes
+  it last. While it lives the group id can't be reused,
   and the check becomes a safeguard rather than the guarantee. Descendants that left the group are signalled one by
   one.
 - Leaving the group doesn't escape cleanup. A child that calls `setsid` or
@@ -494,7 +495,9 @@ Per the testing policy, pin the decisions:
   with spaces and quotes.
 - Helper lifecycle, in the helper's own Rust tests: a backgrounded child is
   stopped when the root exits; a `setsid` descendant is stopped by identity;
-  the group is not signalled once no member matches; a lapsed lease and the
+  the group is not signalled once no member matches; the anchor ignores the
+  group's `SIGTERM` and outlives it, and is removed only after the final
+  `SIGKILL` pass; a lapsed lease and the
   one-shot deadline stop the run; a signal exit reports 128 + n; replay after
   log truncation resumes at the retained base, in the original stdout/stderr
   order.
