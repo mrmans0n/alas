@@ -354,10 +354,23 @@ struct DraftCommitTabView: View {
         }
     }
 
+    /// Identifies the staged contents a suggestion describes. Unlike
+    /// `stagedKey`, unstaged and untracked churn leaves it unchanged.
+    private var stagedIndexKey: String {
+        guard let rps = rightPane else { return "" }
+        let staged = rps.changes
+            .filter { $0.stage == .staged }
+            .map { "\($0.path):\($0.add):\($0.del)" }
+            .sorted()
+        return CommitMessageSuggestionPolicy.indexKey(
+            stagedEntries: staged, indexFingerprint: rps.indexFingerprint, headSHA: rps.currentHeadSHA
+        )
+    }
+
     /// Restaging, toggling amend, or a change in whether a suggestion may run
     /// (model readiness, helper settings, a paused publish) restarts it.
     private var messageSuggestionKey: String {
-        "\(stagedKey):\(amend):\(publishCheckpoint == nil):\(appState.commitMessageSuggestionAvailable)"
+        "\(stagedIndexKey):\(amend):\(publishCheckpoint == nil):\(appState.commitMessageSuggestionAvailable)"
     }
 
     /// Frees the local model once nothing is waiting for its answer.
@@ -370,7 +383,7 @@ struct DraftCommitTabView: View {
     /// Seeds empty fields with an on-device draft. Commit never waits on it,
     /// and text the user typed is never replaced.
     private func suggestMessage() async {
-        let indexKey = stagedKey
+        let indexKey = stagedIndexKey
         guard !amend, hasStaged, publishCheckpoint == nil, appState.commitMessageSuggestionAvailable else {
             messageSuggestion.cancel()
             if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
@@ -395,7 +408,7 @@ struct DraftCommitTabView: View {
         }
         guard !Task.isCancelled else { return }
         switch messageSuggestion.complete(
-            id, suggestion: suggestion, indexKey: stagedKey, subject: subject, body: bodyText
+            id, suggestion: suggestion, indexKey: stagedIndexKey, subject: subject, body: bodyText
         ) {
         case .fill(let suggestion):
             subject = suggestion.subject

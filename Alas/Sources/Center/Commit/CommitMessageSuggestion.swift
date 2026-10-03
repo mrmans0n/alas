@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct CommitMessageSuggestion: Equatable, Sendable {
@@ -127,6 +128,15 @@ enum CommitMessageSuggestionPolicy {
                 .init(role: .user, content: sections.joined(separator: "\n\n")),
             ]
         }
+    }
+
+    /// A fixed-size key for what `git diff --cached` would show: the staged
+    /// entries, the index contents, and the commit they are compared with.
+    /// Unstaged changes are deliberately absent, and the digest keeps the
+    /// persisted draft small however large the index is.
+    static func indexKey(stagedEntries: [String], indexFingerprint: String, headSHA: String?) -> String {
+        let material = (stagedEntries + [indexFingerprint, headSHA ?? ""]).joined(separator: "\n")
+        return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: Input shaping
