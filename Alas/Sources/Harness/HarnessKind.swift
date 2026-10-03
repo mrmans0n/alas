@@ -31,7 +31,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .codex:      return ["codex"]
         case .cursor:     return ["cursor-agent"]
         case .gemini:     return ["gemini"]
-        case .opencode:   return ["opencode"]
+        case .opencode:   return ["opencode", "opencode2"]
         case .pi:         return ["pi"]
         case .omp:        return ["omp"]
         case .copilot:    return ["copilot"]
