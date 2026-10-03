@@ -195,3 +195,37 @@ enum ACPUsageLimitDetector {
         return value?.value as? [String: Any]
     }
 }
+
+/// When to resume a session stopped by a usage limit.
+enum ACPUsageLimitResumePolicy {
+    static let continueText = "The usage limit has reset. Continue where you left off."
+    /// Slack after a known reset so the first attempt doesn't race the provider's clock.
+    static let resetGrace: TimeInterval = 60
+    /// Stop auto-resuming this long after the first detection.
+    static let giveUpAfter: TimeInterval = 24 * 3600
+
+    /// Nil means "don't auto-resume": not resettable, or given up.
+    static func nextResumeAt(_ limit: ACPUsageLimit, now: Date) -> Date? {
+        guard limit.resettable, now.timeIntervalSince(limit.detectedAt) < giveUpAfter else { return nil }
+        if let resetsAt = limit.resetsAt, resetsAt > now {
+            return resetsAt + resetGrace
+        }
+        // Unknown, or a reset that turned out wrong: probe. A probe that
+        // hits the limit again is rejected immediately and costs nothing.
+        let delay: TimeInterval = switch limit.probeAttempt {
+        case 0: 15 * 60
+        case 1: 30 * 60
+        default: 60 * 60
+        }
+        return now + delay
+    }
+
+    /// Fold a new detection into the episode already in progress.
+    static func merge(previous: ACPUsageLimit?, detected: ACPUsageLimit) -> ACPUsageLimit {
+        guard let previous else { return detected }
+        var merged = detected
+        merged.detectedAt = previous.detectedAt
+        merged.probeAttempt = previous.probeAttempt + 1
+        return merged
+    }
+}

@@ -138,4 +138,48 @@ struct ACPUsageLimitTests {
         )
         #expect(limit != nil)
     }
+
+    struct ResumeCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let limit: ACPUsageLimit
+        let now: Date
+        let expected: Date?
+        var testDescription: String { name }
+    }
+
+    static func limit(detectedAt: Date = now, resetsAt: Date? = nil, attempt: Int = 0, resettable: Bool = true) -> ACPUsageLimit {
+        ACPUsageLimit(detectedAt: detectedAt, resetsAt: resetsAt, resetSource: resetsAt == nil ? .unknown : .parsed,
+                      probeAttempt: attempt, resettable: resettable)
+    }
+
+    static let resumeCases: [ResumeCase] = [
+        .init(name: "known reset: reset plus grace",
+              limit: limit(resetsAt: now + 3600), now: now, expected: now + 3600 + 60),
+        .init(name: "known reset already past falls back to backoff",
+              limit: limit(resetsAt: now - 60, attempt: 1), now: now, expected: now + 30 * 60),
+        .init(name: "unknown, first probe", limit: limit(), now: now, expected: now + 15 * 60),
+        .init(name: "unknown, second probe", limit: limit(attempt: 1), now: now, expected: now + 30 * 60),
+        .init(name: "unknown, later probes hourly", limit: limit(attempt: 5), now: now, expected: now + 60 * 60),
+        .init(name: "gives up 24h after detection",
+              limit: limit(detectedAt: now - 24 * 3600, attempt: 9), now: now, expected: nil),
+        .init(name: "a far known reset is still scheduled",
+              limit: limit(resetsAt: now + 5 * 24 * 3600), now: now, expected: now + 5 * 24 * 3600 + 60),
+        .init(name: "not resettable never resumes", limit: limit(resettable: false), now: now, expected: nil),
+    ]
+
+    @Test("resume time follows the reset or the probe backoff", arguments: resumeCases)
+    func nextResumeAt(_ c: ResumeCase) {
+        #expect(ACPUsageLimitResumePolicy.nextResumeAt(c.limit, now: c.now) == c.expected)
+    }
+
+    @Test("a repeated limit keeps the first detection and counts the attempt")
+    func mergeRepeatedLimit() {
+        let first = Self.limit(detectedAt: Self.now - 900)
+        let again = Self.limit(detectedAt: Self.now, resetsAt: Self.now + 600)
+        let merged = ACPUsageLimitResumePolicy.merge(previous: first, detected: again)
+        #expect(merged.detectedAt == Self.now - 900)
+        #expect(merged.probeAttempt == 1)
+        #expect(merged.resetsAt == Self.now + 600)
+        #expect(ACPUsageLimitResumePolicy.merge(previous: nil, detected: again) == again)
+    }
 }
