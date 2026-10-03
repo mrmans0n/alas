@@ -405,15 +405,17 @@ extension AppState {
     /// naming its plugin so the agent can tell where it came from.
     func pluginPromptContext(session: String, worktree: Worktree) async -> [String] {
         guard let manager = pluginManager else { return [] }
-        var blocks: [String] = []
-        // ponytail: one provider after another; each is bounded by the per-call time limit, so a handful stays fast.
-        for plugin in manager.plugins {
-            guard let host = manager.host(pluginID: plugin.id, projectID: worktree.projectId), host.providesContext,
-                  let text = await host.provideContext(session: session, worktree: worktree.id)
-            else { continue }
-            blocks.append("Context from the Alas plugin \(plugin.manifest.name):\n\n\(text)")
+        let providers = manager.plugins.compactMap { plugin -> (name: String, host: PluginHost)? in
+            guard let host = manager.host(pluginID: plugin.id, projectID: worktree.projectId), host.providesContext
+            else { return nil }
+            return (plugin.manifest.name, host)
         }
-        return blocks
+        // All at once: each plugin answers on its own JavaScript queue, within the per-call time limit.
+        let worktreeID = worktree.id
+        let texts = await concurrentlyInOrder(providers) { await $0.host.provideContext(session: session, worktree: worktreeID) }
+        return zip(providers, texts).compactMap { provider, text in
+            text.map { "Context from the Alas plugin \(provider.name):\n\n\($0)" }
+        }
     }
 
     /// Badges plugins running in `projectID` put on one row, in plugin order.
@@ -460,5 +462,20 @@ extension AppState {
         guard let worktreeId = worktreeID ?? selectedWorktreeId else { return }
         tabs.openOrFocusPluginTab(worktreeId: worktreeId, state: tab)
         activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
+    }
+}
+
+/// `transform` of every item, run concurrently, in the items' order whatever order they finish in.
+@MainActor
+func concurrentlyInOrder<T: Sendable, R: Sendable>(
+    _ items: [T], _ transform: @escaping @Sendable @MainActor (T) async -> R
+) async -> [R] {
+    await withTaskGroup(of: (Int, R).self) { group in
+        for (index, item) in items.enumerated() {
+            group.addTask { await (index, transform(item)) }
+        }
+        var results = [R?](repeating: nil, count: items.count)
+        for await (index, result) in group { results[index] = result }
+        return results.compactMap { $0 }
     }
 }

@@ -73,7 +73,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
-        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
+        #expect(source.observesForksBeforeBlockingDescendantSnapshot())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
@@ -136,7 +136,7 @@ private extension String {
     }
 
     func signalsProcessGroupFromTerminationHandler() -> Bool {
-        guard let handler = range(of: "process.terminationHandler"),
+        guard let handler = range(of: "let process = try SpawnedProcess("),
               let rootExited = range(of: "self.rootHasExited = true"),
               let groupSignal = range(of: "Darwin.kill(-pid, SIGTERM)") else {
             return false
@@ -145,8 +145,8 @@ private extension String {
     }
 
     func signalsCachedDescendantsFromTerminationHandler() -> Bool {
-        guard let handler = range(of: "process.terminationHandler"),
-              let run = range(of: "try process.run()", range: handler.upperBound..<endIndex) else {
+        guard let handler = range(of: "let process = try SpawnedProcess("),
+              let run = range(of: "self.process = process", range: handler.upperBound..<endIndex) else {
             return false
         }
         let handlerBody = handler.upperBound..<run.lowerBound
@@ -164,27 +164,22 @@ private extension String {
         contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
     }
 
-    func attemptsSetpgidBeforeBlockingDescendantSnapshot() -> Bool {
-        guard let run = range(of: "try process.run()"),
-              let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
-              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
-                                   range: setpgid.upperBound..<endIndex),
+    func observesForksBeforeBlockingDescendantSnapshot() -> Bool {
+        guard let run = range(of: "self.process = process"),
+              let observer = range(of: "startDescendantForkObserver(for: process.pid)",
+                                   range: run.upperBound..<endIndex),
               let refresh = range(of: "refreshOrphanSet()", range: observer.upperBound..<endIndex),
-              let tracker = range(of: "startDescendantTracker()", range: setpgid.upperBound..<endIndex) else {
+              let tracker = range(of: "startDescendantTracker()", range: observer.upperBound..<endIndex) else {
             return false
         }
-        return run.lowerBound < setpgid.lowerBound &&
-            setpgid.lowerBound < observer.lowerBound &&
-            observer.lowerBound < refresh.lowerBound &&
-            refresh.lowerBound < tracker.lowerBound
+        return observer.lowerBound < refresh.lowerBound && refresh.lowerBound < tracker.lowerBound
     }
 
     func startsDescendantTrackerWithoutBlockingStart() -> Bool {
-        guard let run = range(of: "try process.run()"),
-              let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
-              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
-                                   range: setpgid.upperBound..<endIndex),
-              let initial = range(of: "let initialDescendants = Set(Self.collectChildDescendants(of: process.processIdentifier))",
+        guard let run = range(of: "self.process = process"),
+              let observer = range(of: "startDescendantForkObserver(for: process.pid)",
+                                   range: run.upperBound..<endIndex),
+              let initial = range(of: "let initialDescendants = Set(Self.collectChildDescendants(of: process.pid))",
                                   range: observer.upperBound..<endIndex),
               let merge = range(of: "mergeInitialOrphanSet(initialDescendants)",
                                 range: initial.upperBound..<endIndex),
@@ -193,9 +188,7 @@ private extension String {
             return false
         }
         let startTail = self[observer.upperBound..<tracker.lowerBound]
-        return run.lowerBound < setpgid.lowerBound &&
-            setpgid.lowerBound < observer.lowerBound &&
-            observer.lowerBound < initial.lowerBound &&
+        return observer.lowerBound < initial.lowerBound &&
             initial.lowerBound < merge.lowerBound &&
             merge.lowerBound < tracker.lowerBound &&
             detached.lowerBound > tracker.lowerBound &&
@@ -287,7 +280,7 @@ private extension String {
 
     func serializesRootExitWithDescendantRefresh() -> Bool {
         guard let refreshLock = range(of: "private let refreshLock = NSLock()"),
-              let handler = range(of: "process.terminationHandler"),
+              let handler = range(of: "let process = try SpawnedProcess("),
               let handlerRefreshLock = range(of: "self.refreshLock.lock()", range: handler.upperBound..<endIndex),
               let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants",
                                         range: handlerRefreshLock.upperBound..<endIndex),

@@ -50,7 +50,7 @@ final class ACPTerminal: ObservableObject {
     var isProcessBacked: Bool { process != nil }
     var isMetadataBacked: Bool { process == nil }
 
-    private let process: Process?
+    private var process: SpawnedProcess?
     private let pipe: Pipe?
     private var exitWaiters: [CheckedContinuation<ACPTerminalExitStatus, Never>] = []
     /// True once the readability handler has observed an empty chunk —
@@ -111,53 +111,34 @@ final class ACPTerminal: ObservableObject {
         // tail). Per ACP `outputByteLimit` contract.
         self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
 
-        let process = Process()
         let pipe = Pipe()
-        self.process = process
         self.pipe = pipe
-        // Spawn via /usr/bin/env so bare commands (npm, cargo, etc.) are
-        // resolved against PATH. Foundation's Process only looks at the
-        // exact URL otherwise, which would fail every non-absolute command
-        // the agent sends. `--` stops env's option parsing so a command
-        // that looks like a flag still works.
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["--", command] + args
-        process.environment = env
-        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        process.standardOutput = pipe
-        process.standardError = pipe
-        // Detach from the controlling terminal's stdin so the child can't
-        // try to read from our parent's stdin handle if Foundation defaults
-        // to inheriting it.
-        process.standardInput = FileHandle.nullDevice
 
         let weakSelf = WeakBox(self)
         let rootExitState = rootExitState
         installReadabilityHandler()
-        process.terminationHandler = { proc in
+        // Spawn via /usr/bin/env so bare commands (npm, cargo, etc.) are
+        // resolved against PATH. `--` stops env's option parsing so a
+        // command that looks like a flag still works. stdin reads
+        // /dev/null, and the child leads its own process group from the
+        // spawn, so `kill()` reaches the whole tree via `kill(-pid, …)`.
+        process = try SpawnedProcess(
+            executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["--", command] + args,
+            environment: env, directory: URL(fileURLWithPath: cwd), stdin: nil, stdout: pipe, stderr: pipe
+        ) { _, termination in
             // Mark the root as exited synchronously here so any kill()
             // call that races ahead of the @MainActor handleExit Task
             // already sees the flag and skips signaling rootPid.
             rootExitState.markExited()
-            let status: ACPTerminalExitStatus
-            if proc.terminationReason == .uncaughtSignal {
-                status = ACPTerminalExitStatus(exitCode: nil, signal: Self.signalName(proc.terminationStatus))
-            } else {
-                status = ACPTerminalExitStatus(exitCode: Int(proc.terminationStatus), signal: nil)
+            let status = switch termination {
+            case .signal(let signal): ACPTerminalExitStatus(exitCode: nil, signal: Self.signalName(signal))
+            case .exit(let code): ACPTerminalExitStatus(exitCode: Int(code), signal: nil)
             }
             Task { @MainActor in
                 await weakSelf.value?.handleExit(status: status)
             }
         }
-        try process.run()
         startDescendantTracker()
-        // Move the child into its own process group so signals from
-        // `kill()` can be delivered to the whole tree via `kill(-pid, …)`.
-        // Foundation's Process doesn't expose POSIX_SPAWN_SETPGROUP, so
-        // we race the child via the parent — either side may EACCES once
-        // exec completes, but at least one of those two calls succeeds
-        // and the child ends up as group leader.
-        _ = setpgid(process.processIdentifier, process.processIdentifier)
     }
 
     init(metadataId id: String, cwd: String?, outputByteLimit: Int = 65_536) {
@@ -180,7 +161,7 @@ final class ACPTerminal: ObservableObject {
 
     func kill() {
         guard let process else { return }
-        let pid = process.processIdentifier
+        let pid = process.pid
         // `pid > 0` guards against signalling pid 0 (our own group)
         // when the process never launched. We intentionally do NOT
         // gate on exitStatus — a release()/killAll() after the EOF
@@ -251,7 +232,7 @@ final class ACPTerminal: ObservableObject {
 
     private func startDescendantTracker() {
         guard let process else { return }
-        let rootPid = process.processIdentifier
+        let rootPid = process.pid
         let weakSelf = WeakBox(self)
         descendantTracker = Task.detached(priority: .utility) {
             // Walk the live process tree every second while the root is
@@ -293,13 +274,6 @@ final class ACPTerminal: ObservableObject {
         orphanedDescendants.subtract(cached.subtracting(retained))
         orphanedDescendants.formUnion(live)
     }
-
-    /// Sends `signal` to the root pid, its process group, and every
-    /// supplied descendant pid. The group signal succeeds when the
-    /// parent-side `setpgid` won the race against the child's `exec`
-    /// (often loses on macOS, since Foundation's Process can't pass
-    /// POSIX_SPAWN_SETPGROUP). The descendant list is the fallback.
-    /// Per-pid kills are no-ops for already-dead/unrelated PIDs.
 
     nonisolated private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
         let proc = Process()
@@ -652,14 +626,9 @@ final class ACPTerminal: ObservableObject {
     private func handleExit(status: ACPTerminalExitStatus) async {
         guard let pipe else { return }
         descendantTracker?.cancel()
-        // Close the parent-side write end so the read end can EOF after
-        // the kernel buffer drains. `Pipe()` retains both ends; if we
-        // leave the write end open, the readability handler's final
-        // empty-chunk EOF never fires. The child's own write fd was
-        // closed by the kernel when it exited.
-        try? pipe.fileHandleForWriting.close()
-        // Wait up to 5 s for the readability handler to deliver every
-        // buffered byte and the empty-chunk EOF marker. The dispatch
+        // The parent-side write end was closed at spawn, so the read end
+        // EOFs once the kernel buffer drains. Wait up to 5 s for the
+        // readability handler to deliver every buffered byte and the empty-chunk EOF marker. The dispatch
         // source runs on a separate queue, so a `Task.yield()` isn't
         // enough — we have to actually wait for event delivery. Bound
         // the wait so a backgrounded descendant that inherited the

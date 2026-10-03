@@ -1513,4 +1513,34 @@ struct PluginHostTests {
         #expect(host.trace.contains { $0.text.contains(#""method":"context/provide""#) } == c.grants.contains(.sessionContext))
         #expect((host.state != .active) == c.stops)
     }
+
+    /// Context providers are asked at once, and their blocks keep plugin order: here each waits for the one after it
+    /// to finish, which asking one after another would never get past.
+    @Test(.timeLimit(.minutes(1)))
+    func contextProvidersAnswerTogetherInPluginOrder() async {
+        let gates = (0..<3).map { _ in AsyncStream<Void>.makeStream() }
+        @MainActor final class Finished { var value: [Int] = [] }
+        let finished = Finished()
+        let results = await concurrentlyInOrder(Array(0..<3)) { index in
+            if index < 2 { for await _ in gates[index].stream { break } }
+            finished.value.append(index)
+            if index > 0 { gates[index - 1].continuation.yield() }
+            return "\(index)"
+        }
+        #expect(finished.value == [2, 1, 0])
+        #expect(results == ["0", "1", "2"])
+    }
+
+    /// A spawned process leads its own process group before it runs anything, and a signal that ends it is reported
+    /// as such.
+    @Test func aSpawnedProcessLeadsItsOwnGroupFromTheStart() async throws {
+        let (ended, ending) = AsyncStream<SpawnedProcess.Termination>.makeStream()
+        let process = try SpawnedProcess(
+            executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"], environment: [:],
+            stdin: nil, stdout: Pipe(), stderr: Pipe()) { _, termination in ending.yield(termination) }
+        #expect(getpgid(process.pid) == process.pid)
+        process.terminate()
+        var iterator = ended.makeAsyncIterator()
+        #expect(await iterator.next() == .signal(SIGTERM))
+    }
 }
