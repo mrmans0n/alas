@@ -457,3 +457,22 @@ fn output_streams_as_notifications_until_the_exit() {
     };
     assert_eq!((text.as_str(), exit), ("onetwo", json!(0)));
 }
+
+#[test]
+fn a_spawn_an_earlier_helper_left_unstarted_runs_again() {
+    let mut helper = Helper::start();
+    // The earlier helper died after claiming the id, before any supervisor.
+    let stale = helper.dir("again");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("owner"), LEASE).unwrap();
+    let spawned = helper.spawn("again", &["/bin/sh", "-c", "printf ran"], json!({}));
+    assert_eq!(spawned["spawned"], true);
+    let result = helper.wait_exit("again");
+    assert_eq!(
+        (result["exit"].clone(), output(&result)),
+        (json!(0), "ran".to_string())
+    );
+    // A retry of a spawn that did start only reports it.
+    let retried = helper.spawn("again", &["/bin/sh", "-c", "printf twice"], json!({}));
+    assert_eq!(retried["spawned"], false);
+}

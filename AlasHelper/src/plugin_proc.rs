@@ -208,9 +208,17 @@ fn spawn(params: Option<Value>) -> Result<Value, HelperError> {
         .filter(|path| path.is_dir())
         .ok_or_else(|| jsonrpc_error(-32003, format!("worktree {} does not exist", params.cwd)))?;
 
-    if owned_dir(&params.proc_id, &params.lease)?.is_some() {
-        // A retried spawn: the first one went through.
-        return Ok(json!({ "procId": params.proc_id, "spawned": false }));
+    if let Some(dir) = owned_dir(&params.proc_id, &params.lease)? {
+        // A retried spawn: the first one went through if it started the
+        // process, or still may if its supervisor lives.
+        if read_exit(&dir).is_some() || (supervisor_alive(&dir) && await_start(&dir)?) {
+            return Ok(json!({ "procId": params.proc_id, "spawned": false }));
+        }
+        // An earlier helper died before anything started it: nothing owns
+        // this directory but its owner file, so it goes and the spawn runs.
+        std::fs::remove_dir_all(&dir).map_err(|error| {
+            jsonrpc_error(-32050, format!("stale process cleanup failed: {error}"))
+        })?;
     }
 
     let env = login_env();
@@ -280,24 +288,47 @@ fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
     let mut supervisor = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+    let _ = write_atomic(
+        &dir.join("supervisor"),
+        supervisor.id().to_string().as_bytes(),
+    );
     thread::spawn(move || {
         let _ = supervisor.wait();
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if dir.join("started").is_file() {
-            return Ok(());
-        }
-        if let Ok(message) = std::fs::read_to_string(dir.join("error")) {
-            return Err(jsonrpc_error(-32003, message));
-        }
-        thread::sleep(Duration::from_millis(10));
+    if await_start(dir)? {
+        return Ok(());
     }
     let _ = std::fs::write(dir.join("stop"), b"");
     Err(jsonrpc_error(
         -32050,
         "supervisor did not start the process",
     ))
+}
+
+/// True once the supervisor started the process, false when it hasn't in
+/// time; its refusal when it couldn't.
+fn await_start(dir: &Path) -> Result<bool, HelperError> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if dir.join("started").is_file() {
+            return Ok(true);
+        }
+        if let Ok(message) = std::fs::read_to_string(dir.join("error")) {
+            return Err(jsonrpc_error(-32003, message));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(false)
+}
+
+/// Whether the supervisor recorded for `dir` still runs. A reused pid only
+/// makes a retry wait for `started` until it gives up.
+fn supervisor_alive(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join("supervisor"))
+        .ok()
+        .and_then(|pid| pid.trim().parse::<i32>().ok())
+        // SAFETY: signal 0 only checks that the pid exists.
+        .is_some_and(|pid| unsafe { libc::kill(pid, 0) } == 0)
 }
 
 /// Replays the journal from `offset`, or from its retained base when `offset`
@@ -358,10 +389,19 @@ fn start_tailer(proc_id: String, dir: PathBuf, mut next: u64, events: Sender<Ser
                 ))
                 .is_ok()
         };
+        let path = dir.join("journal");
+        let mut journal = Journal::default();
+        let mut seen = None;
         loop {
             // Read the exit first: a journal read after it holds everything.
             let exit = read_exit(&dir);
-            let journal = Journal::read(&dir.join("journal"));
+            // The supervisor replaces the file on every change, so an
+            // unchanged one is not decoded again.
+            let stamp = journal_stamp(&path);
+            if stamp != seen {
+                seen = stamp;
+                journal = Journal::read(&path);
+            }
             let mut alive = true;
             for chunk in journal.replay(next) {
                 next = chunk.offset + chunk.data.len() as u64;
@@ -388,6 +428,14 @@ fn start_tailer(proc_id: String, dir: PathBuf, mut next: u64, events: Sender<Ser
         }
         tailers.lock().expect("tailers lock").remove(&proc_id);
     });
+}
+
+/// Identifies one version of the journal file: the supervisor writes a new
+/// file and renames it over the old one.
+fn journal_stamp(path: &Path) -> Option<(u64, u64, SystemTime)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.ino(), meta.len(), meta.modified().ok()?))
 }
 
 fn renew(params: Option<Value>) -> Result<Value, HelperError> {
