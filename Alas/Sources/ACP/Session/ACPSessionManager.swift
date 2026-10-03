@@ -4102,16 +4102,27 @@ final class ACPSessionManager: ObservableObject {
                     guard forked.isBareSessionID, initialized.sessionCapabilities.supportsResume else {
                         return forked
                     }
-                    return try await connection.resumeSession(
-                        cwd: worktreePath,
-                        sessionId: forked.sessionId,
-                        mcpServers: wireMCPServers,
-                        brokerOperationKey: Self.brokerStartupOperationKey(
-                            sessionId: session.id,
-                            method: "session/resume",
-                            remoteSessionId: forked.sessionId
+                    do {
+                        return try await connection.resumeSession(
+                            cwd: worktreePath,
+                            sessionId: forked.sessionId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: session.id,
+                                method: "session/resume",
+                                remoteSessionId: forked.sessionId
+                            )
                         )
-                    )
+                    } catch {
+                        // The transcript fallback below starts another
+                        // session; don't leave this fork behind.
+                        try? await closeRemoteSession(
+                            id: forked.sessionId,
+                            using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities
+                        )
+                        throw error
+                    }
                 }
             } catch {
                 // A successful durable broker completion must retry the

@@ -68,6 +68,28 @@ struct ACPSessionForkAttachTests {
         #expect(target.availableModes.map(\.id) == ["plan"])
     }
 
+    @Test("a bare fork whose resume fails is closed before the transcript fallback")
+    func failedBareForkResumeClosesFork() async throws {
+        let store = try seededForkStore()
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true, supportsResume: true, supportsClose: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
+        client.script(method: "session/resume") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error", data: nil))
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        let close = try #require(client.sent.first { $0.method == "session/close" })
+        #expect((close.params as? ACPSessionCloseParams)?.sessionId == "forked-remote")
+        #expect(target.remoteSessionId == "new-remote")
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+    }
+
     @Test("non-durable connection falls back without issuing session/fork")
     func nonDurableConnectionFallsBackWithoutForking() async throws {
         let store = try seededForkStore()
