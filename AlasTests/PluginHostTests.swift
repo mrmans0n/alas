@@ -1315,6 +1315,31 @@ struct PluginHostTests {
         #expect(RemotePluginProcess.unseen(Data("abcd".utf8), at: offset, after: next) == unseen.map { Data($0.utf8) })
     }
 
+    /// A spawn whose answer was lost is sent again under the same id, which the helper only reports; a refusal is
+    /// final at once.
+    @Test(arguments: [
+        ([RemoteHelperClientError.notRunning, .unavailable("ssh exited")], 3, true),
+        ([.notRunning, .notRunning, .notRunning], 3, false),
+        ([.jsonrpc(JSONRPCError(code: -32003, message: "command not found: pnpm", data: nil))], 1, false),
+    ] as [([RemoteHelperClientError], Int, Bool)])
+    func remoteSpawnRetriesOnlyLostConnections(failures: [RemoteHelperClientError], calls: Int, starts: Bool) async {
+        actor Attempts { var count = 0
+        func next() -> Int { count += 1
+        return count } }
+        let attempts = Attempts()
+        let started: Bool
+        do {
+            try await RemotePluginProcess.spawnRetrying(pause: .zero) {
+                let attempt = await attempts.next()
+                if attempt <= failures.count { throw failures[attempt - 1] }
+            }
+            started = true
+        } catch {
+            started = false
+        }
+        #expect(await attempts.count == calls && started == starts)
+    }
+
     @Test(arguments: [
         (["git", "status"], "git status"),
         (["sh", "-c", "a b"], #"sh -c "a b""#),

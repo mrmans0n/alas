@@ -97,12 +97,21 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
             }
             guard capabilities.helperHandshake != nil else { throw PluginRemoteFileProblem.helperMissing }
             client = await RemoteHelperClientPool.shared.client(for: host)
-            try await client.spawnPluginProc(RemotePluginProcSpawnParams(
+            let params = RemotePluginProcSpawnParams(
                 procId: procId, lease: lease, argv: argv, cwd: cwd, longRunning: longRunning,
                 stdinBase64: stdin?.base64EncodedString(),
                 // The output keeps up to `limit` of each stream, so the helper keeps both together.
                 outputLimit: limit * 2, leaseMs: Self.leaseMs,
-                timeoutMs: timeout.map { Int($0.components.seconds) * 1000 }))
+                timeoutMs: timeout.map { Int($0.components.seconds) * 1000 })
+            do {
+                try await Self.spawnRetrying { try await client.spawnPluginProc(params) }
+            } catch {
+                // It may have started all the same: stop it if the connection is back, or its lease lapses.
+                if Self.isConnectionFailure(error) {
+                    Task { [procId, lease] in try? await client.killPluginProc(procId: procId, lease: lease) }
+                }
+                throw error
+            }
         } catch {
             // The helper's own refusals (a macOS host, a kernel without pidfds, a command it can't find) pass through.
             throw PluginProcessError.refused(
@@ -114,6 +123,27 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
         }
         if stop { terminate() }
         Task { await follow(client) }
+    }
+
+    /// Spawns again, under the same id, when the connection drops: the helper may have started the process before
+    /// its answer was lost, and a repeated spawn of the same id and lease only reports it.
+    static func spawnRetrying(
+        attempts: Int = 3, pause: Duration = .seconds(1), _ spawn: @Sendable () async throws -> Void
+    ) async throws {
+        for attempt in 1... {
+            do {
+                return try await spawn()
+            } catch where attempt < attempts && isConnectionFailure(error) {
+                try? await Task.sleep(for: pause)
+            }
+        }
+    }
+
+    static func isConnectionFailure(_ error: Error) -> Bool {
+        switch error as? RemoteHelperClientError {
+        case .notRunning, .unavailable: true
+        default: false
+        }
     }
 
     /// Reads the output until the exit, attaching again from where it got to when the connection drops.

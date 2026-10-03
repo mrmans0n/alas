@@ -963,11 +963,11 @@ final class PluginHost {
                 host: host, procId: RemotePluginProcess.procId(plugin: manifest.id, project: project.id, lease: lease, run: run),
                 lease: lease, keep: .head, limit: maxOutput)
             handle = remote
-            // The helper enforces the limit too, with the grace, in case Alas is gone by then.
+            // The helper enforces the limit too, and its own kill grace, in case Alas is gone by then.
             startRemote = {
                 try await remote.start(
                     argv: argv, cwd: root, stdin: stdin, longRunning: false, limit: maxOutput,
-                    timeout: Self.processTimeout + Self.processKillGrace)
+                    timeout: Self.processTimeout)
             }
         case .refused: return nil
         }
