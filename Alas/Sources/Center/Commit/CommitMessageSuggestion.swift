@@ -14,37 +14,55 @@ struct CommitMessageSuggestionInput: Equatable, Sendable {
     let ticketTitle: String?
     let recentSubjects: [String]
 
+    struct GitFailure: Error {}
+
     static func load(worktreePath: URL, ticketTitle: String?) async throws -> Self {
-        // Both outputs are bounded while reading: a huge generated file must
-        // not be buffered whole just to be budgeted down to a few KB.
-        async let stat = Process.gitCapped(
-            ["diff", "--cached", "--stat", "--no-color"],
-            cwd: worktreePath,
-            maxOutputBytes: CommitMessageSuggestionPolicy.statOutputByteLimit
-        )
-        async let diff = Process.gitCapped(
-            ["diff", "--cached", "--no-color", "--no-ext-diff"],
-            cwd: worktreePath,
-            maxOutputBytes: CommitMessageSuggestionPolicy.diffOutputByteLimit
-        )
         async let log = Process.git(
             ["log", "-\(CommitMessageSuggestionPolicy.recentSubjectCount)", "--pretty=format:%s"],
             cwd: worktreePath
         )
         async let branch = Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: worktreePath)
+        // Every git output is bounded while reading: a huge generated file must
+        // not be buffered whole just to be budgeted down to a few KB.
+        let stat = try await capped(
+            ["diff", "--cached", "--stat", "--no-color"],
+            worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.statOutputByteLimit
+        )
+        let names = try await capped(
+            ["diff", "--cached", "--name-status", "-z", "--no-color"],
+            worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.nameStatusOutputByteLimit
+        )
+        // One read per priority tier, so noisy files that sort first cannot
+        // spend the cap before source changes are read.
+        var diffs: [String] = []
+        for tier in CommitMessageSuggestionPolicy.pathTiers(nameStatus: names.stdout, truncated: names.truncated) {
+            let diff = try await capped(
+                ["diff", "--cached", "--no-color", "--no-ext-diff", "--"] + tier.map { ":(literal)\($0)" },
+                worktreePath: worktreePath, maxOutputBytes: CommitMessageSuggestionPolicy.diffOutputByteLimit
+            )
+            diffs.append(diff.truncated ? CommitMessageSuggestionPolicy.droppingPartialTail(diff.stdout) : diff.stdout)
+        }
         let branchName = try await branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         // An unborn branch has no log; that only means there is no convention to follow.
         let subjects = (try? await log)?.stdout ?? ""
-        let diffResult = try await diff
         return Self(
-            stat: try await stat.stdout,
-            diff: diffResult.stdoutTruncated
-                ? CommitMessageSuggestionPolicy.droppingPartialTail(diffResult.stdout)
-                : diffResult.stdout,
+            stat: stat.stdout,
+            diff: diffs.filter { !$0.isEmpty }.joined(separator: "\n"),
             branch: branchName.isEmpty || branchName == "HEAD" ? nil : branchName,
             ticketTitle: ticketTitle,
             recentSubjects: subjects.split(separator: "\n").map(String.init)
         )
+    }
+
+    /// A failed command is evidence of nothing, so it fails the suggestion
+    /// instead of letting the model guess from the branch alone. A capped read
+    /// ends with the SIGTERM that enforced the cap, which is not a failure.
+    private static func capped(
+        _ args: [String], worktreePath: URL, maxOutputBytes: Int
+    ) async throws -> (stdout: String, truncated: Bool) {
+        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+        guard result.stdoutTruncated || result.exitCode == 0 else { throw GitFailure() }
+        return (result.stdout, result.stdoutTruncated)
     }
 }
 
@@ -64,7 +82,10 @@ enum CommitMessageSuggestionPolicy {
     /// Apple Intelligence bounds by UTF-8 bytes, which lands on the reduced
     /// diff. Stat-only is the floor when even that does not fit.
     static let diffCharacterBudgets = [24_000, 5_000, 0]
-    static let diffOutputByteLimit = 1_000_000
+    static let diffOutputByteLimit = 512_000
+    static let nameStatusOutputByteLimit = 256_000
+    /// More paths than this per tier could never fit the largest diff budget.
+    static let maximumPathsPerTier = 200
     static let statOutputByteLimit = 64_000
     private static let statCharacterLimit = 2_000
     private static let contextCharacterLimit = 300
@@ -102,7 +123,7 @@ enum CommitMessageSuggestionPolicy {
 
     // MARK: Input shaping
 
-    enum FilePriority: Int, Comparable {
+    enum FilePriority: Int, Comparable, Hashable {
         case source
         case docsOrConfig
         case noisy
@@ -184,6 +205,33 @@ enum CommitMessageSuggestionPolicy {
         }
         flushFile()
         return files
+    }
+
+    /// Groups `git diff --name-status -z` entries by file priority, source
+    /// first. A rename or copy keeps both paths together so Git can still
+    /// pair them. An entry cut short by a byte cap is dropped.
+    static func pathTiers(nameStatus: String, truncated: Bool) -> [[String]] {
+        var fields = nameStatus.split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
+        if fields.last == "" { fields.removeLast() }
+        var entries: [[String]] = []
+        var index = 0
+        while index < fields.count {
+            let status = fields[index]
+            let pathCount = status.hasPrefix("R") || status.hasPrefix("C") ? 2 : 1
+            guard index + pathCount < fields.count else { break }
+            entries.append(Array(fields[(index + 1)...(index + pathCount)]))
+            index += pathCount + 1
+        }
+        if truncated, !entries.isEmpty { entries.removeLast() }
+
+        var tiers: [FilePriority: [String]] = [:]
+        for paths in entries {
+            guard let path = paths.last else { continue }
+            let priority = priority(forPath: path)
+            guard (tiers[priority]?.count ?? 0) < maximumPathsPerTier else { continue }
+            tiers[priority, default: []].append(contentsOf: paths)
+        }
+        return [FilePriority.source, .docsOrConfig, .noisy].compactMap { tiers[$0] }
     }
 
     /// Cuts a diff read through a byte cap back to its last complete hunk or

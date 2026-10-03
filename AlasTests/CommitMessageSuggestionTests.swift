@@ -112,6 +112,19 @@ struct CommitMessageSuggestionTests {
         #expect(CommitMessageSuggestionPolicy.parse(output, conventionalCommits: true) == nil)
     }
 
+    @Test func stagedPathsAreReadInPriorityTiers() {
+        let nameStatus = [
+            "M", "Package.resolved",
+            "R087", "docs/old.md", "docs/new.md",
+            "M", "Sources/Sync.swift",
+            "A", "Sources/Merge.sw",
+        ].joined(separator: "\0")
+
+        let tiers = CommitMessageSuggestionPolicy.pathTiers(nameStatus: nameStatus, truncated: true)
+
+        #expect(tiers == [["Sources/Sync.swift"], ["docs/old.md", "docs/new.md"], ["Package.resolved"]])
+    }
+
     @Test func cappedDiffIsCutBackToTheLastCompleteHunk() {
         let complete = Self.fileHeader("Sources/Sync.swift") + "\n" + Self.hunk("@@ -1 +1 @@", lines: 3)
         let cut = complete + "\n" + Self.hunk("@@ -9 +9 @@", lines: 3).dropLast(4)
