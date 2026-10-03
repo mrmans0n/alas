@@ -490,7 +490,7 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 |---|---|---|---|
 | R1 | 10 | `project.host` in `alas/activate`; remote refusals say "remote host" instead of "unknown worktree"; docs `api-v10.md`; SDK type. | S |
 | R2 | 11 | Manifest `remote`, approval-sheet wording, trust hash; worktree-scoped helper file operations with `.git` exclusion and `O_NOFOLLOW` walks; remote `file/read`/`file/list`/`file/write` over them, refused without the helper. | M |
-| R3 | 11 | Helper: raw output mode, stdin with EOF (`/dev/null` for starts and runs without input), a framed login environment, descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
+| R3 | 11 | See *R3 acceptance criteria*. Helper: raw output mode, stdin with EOF (`/dev/null` for starts and runs without input), a framed login environment, descendant tracking with start-time identity, terminate the group and descendants when the root exits, `killProc` after the leader dies, capped logs with logical offsets, signal exit codes, deadlines and ownership leases. Remote `process/run` over it; executable resolution on the host. | L |
 | R4 | 11 | Remote `process/start`: plugin-owned runs in the remote Run tab, stop on plugin stop. A worktree-setup reference plugin with `"remote": true` (alas-plugins). | M |
 | N1 | 9 or 10 | Native `markdown` node, when the Linear bridge or PR inbox needs it. | S |
 | W1 | 12 | `web` tab kind: scheme handler, shell, CSP, content rules, non-persistent store, bridge (`web/post`, `web/message`), trust hash plus third catalog asset, limits. Ships with its reference plugin. | L |
@@ -498,6 +498,23 @@ Each row is one PR in Alas plus, where marked, one in `alas-plugins`.
 
 R1 is worth landing on its own even if R2–R4 wait. W1 waits for a committed
 consumer.
+
+## R3 acceptance criteria
+
+Process cleanup on the host has the most edge cases, and they are settled by
+tests in the helper rather than by more prose. R3 is done when, besides the
+behavior above, its lifecycle tests show:
+
+- A pidfd is opened first and the process's identity (start time, and group
+  where it matters) is checked again while the fd is held; a mismatch closes
+  the fd and the process is never signalled. Covered by a test that reuses a
+  pid between sampling and opening.
+- The anchor ignores every catchable signal, not only `SIGTERM`. If it dies
+  anyway (`SIGKILL`, or a command's `kill -HUP 0`), group signals stop for
+  that run for good and cleanup continues through the owned pidfds alone.
+  Covered by a test that kills the anchor early.
+- Any further race found while building R3 is added here with its test before
+  the slice merges.
 
 ## Compatibility
 
