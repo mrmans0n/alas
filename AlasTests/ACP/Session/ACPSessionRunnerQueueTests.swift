@@ -202,6 +202,19 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
+    @Test("a direct prompt stopped by a usage limit is reported as delivered, so the composer keeps it cleared")
+    func directPromptAtUsageLimitReportsDelivered() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        var reported: Bool?
+        runner.send(blocks: [.text("direct")], intent: .auto, onPromptFinished: { reported = $0 })
+        try await waitUntil { reported != nil }
+        #expect(reported == true)
+        #expect(session.usageLimit != nil)
+    }
+
     @Test("cancelling auto-resume leaves the session Limited with the queue held")
     func cancelAutoResumeHoldsQueue() async throws {
         let (runner, mock, session, _) = try mkRunner()

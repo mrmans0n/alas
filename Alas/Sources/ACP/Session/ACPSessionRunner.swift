@@ -3450,6 +3450,9 @@ extension ACPSessionRunner {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // A prompt stopped by a usage limit reached the agent and a
+                    // continue is scheduled, so the composer must not restore it.
+                    var deliveredBeforeUsageLimit = false
                     if isActivePrompt {
                         self.session.clearRetryStatus()
                         self.flushStreamingPersist()
@@ -3462,6 +3465,7 @@ extension ACPSessionRunner {
                                 now: Date()
                             )
                         if let usageLimit {
+                            deliveredBeforeUsageLimit = true
                             self.applyUsageLimit(usageLimit, failedQueuedItemId: queuedItemId)
                             self.activePromptID = nil
                             self.emitTurnCompleted(.limited)
@@ -3510,7 +3514,7 @@ extension ACPSessionRunner {
                         }
                     }
                     if !hasNewerActivePrompt {
-                        onPromptFinished?(wasCancelled)
+                        onPromptFinished?(wasCancelled || deliveredBeforeUsageLimit)
                     }
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
