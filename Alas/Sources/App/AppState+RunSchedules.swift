@@ -628,7 +628,7 @@ extension AppState {
             )
         case .limited:
             reportScheduleFailure(
-                schedule, reason: "\(agentName) hit its usage limit in \(worktree.branch). It resumes when the limit resets.",
+                schedule, reason: "\(agentName) hit its usage limit in \(worktree.branch).",
                 project: project, worktree: worktree
             )
         case .cancelled:

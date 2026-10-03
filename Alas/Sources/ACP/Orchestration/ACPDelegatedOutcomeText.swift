@@ -85,7 +85,7 @@ enum ACPDelegatedOutcomeText {
     }
 
     static func limited(_ context: Context) -> String {
-        "Delegated session \(label(context)) stopped at a provider usage limit. Alas resumes it when the limit resets."
+        "Delegated session \(label(context)) stopped at a provider usage limit."
     }
 
     /// The kinds of prompt Alas itself sends a parent about one of its
