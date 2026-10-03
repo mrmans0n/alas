@@ -439,4 +439,35 @@ struct ACPSessionQueueAPITests {
         ]))
         #expect(s.queue.isEmpty)
     }
+
+    @Test("the usage-limit resume item sits at the pending head and is never duplicated")
+    func upsertUsageLimitResume() {
+        let session = mkSession()
+        session.enqueue(blocks: [.text("later")])
+        let limit = ACPUsageLimit(detectedAt: Date(), resetsAt: nil, resetSource: .unknown, probeAttempt: 0, resettable: true)
+        let first = Date().addingTimeInterval(900)
+        session.upsertUsageLimitResume(limit: limit, scheduledAt: first)
+        var bumped = limit
+        bumped.probeAttempt = 1
+        session.upsertUsageLimitResume(limit: bumped, scheduledAt: first.addingTimeInterval(900))
+
+        #expect(session.queue.count == 2)
+        #expect(session.queue[0].usageLimit == bumped)
+        #expect(session.queue[0].scheduledAt == first.addingTimeInterval(900))
+        #expect(session.queue[0].blocks == [.text(ACPUsageLimitResumePolicy.continueText)])
+        #expect(session.removeUsageLimitResume())
+        #expect(session.queue.map(\.blocks) == [[.text("later")]])
+    }
+
+    @Test("restoring a queue with a resume item restores the Limited state")
+    func restoreQueueRestoresUsageLimitFromResumeItem() throws {
+        let limit = ACPUsageLimit(detectedAt: Date(), resetsAt: Date().addingTimeInterval(600),
+                                  resetSource: .structured, probeAttempt: 0, resettable: true)
+        let item = QueuedPrompt(blocks: [.text(ACPUsageLimitResumePolicy.continueText)],
+                                scheduledAt: Date().addingTimeInterval(660), usageLimit: limit)
+        let roundTripped = try JSONDecoder().decode(QueuedPrompt.self, from: JSONEncoder().encode(item))
+        let session = mkSession()
+        session.restoreQueue([roundTripped])
+        #expect(session.usageLimit == limit)
+    }
 }

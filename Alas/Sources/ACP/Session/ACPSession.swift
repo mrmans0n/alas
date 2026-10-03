@@ -441,6 +441,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `session/new` or `session/load`.
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
+
+    /// Set while a provider usage limit has stopped this session; cleared by
+    /// the next turn that completes. See `ACPUsageLimitResumePolicy`.
+    @Published var usageLimit: ACPUsageLimit?
+
+    var usageLimitResumeItem: QueuedPrompt? {
+        queue.first { $0.usageLimit != nil }
+    }
     var pendingQueuePersistenceCount = 0 { willSet { nextPromptActivity.send() } }
 
     /// Where a delegated child stands on its requested model/reasoning.
@@ -2335,6 +2343,28 @@ final class ACPSession: ObservableObject, Identifiable {
         return item.id
     }
 
+    /// Put (or move) the single usage-limit resume item at the head of the
+    /// pending queue. Ordinary prompts queued later are inserted ahead of
+    /// scheduled items (`enqueue`), so a message typed while Limited still
+    /// goes out first.
+    func upsertUsageLimitResume(limit: ACPUsageLimit, scheduledAt: Date) {
+        queue.removeAll { $0.usageLimit != nil && $0.status == .pending }
+        let item = QueuedPrompt(
+            blocks: [.text(ACPUsageLimitResumePolicy.continueText)],
+            scheduledAt: scheduledAt,
+            usageLimit: limit
+        )
+        let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
+    }
+
+    @discardableResult
+    func removeUsageLimitResume() -> Bool {
+        let before = queue.count
+        queue.removeAll { $0.usageLimit != nil && $0.status == .pending }
+        return queue.count != before
+    }
+
     /// Remove a specific item by id. The drag-handle X on the bubble
     /// calls this. Safe on .sending items because the UI hides X then —
     /// but we double-guard here to avoid yanking an in-flight RPC.
@@ -2551,6 +2581,9 @@ final class ACPSession: ObservableObject, Identifiable {
             var restored = item.normalizedAfterRestore(markLegacySendingUncertain: false)
             restored.dispatchedBrokerGeneration = nil
             return restored
+        }
+        if usageLimit == nil {
+            usageLimit = usageLimitResumeItem?.usageLimit
         }
     }
 

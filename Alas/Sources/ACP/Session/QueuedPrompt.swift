@@ -39,6 +39,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// True when this prompt may have reached a broker but completion could
     /// not be confirmed. The queue flusher must not resend it automatically.
     var deliveryUncertain: Bool
+    /// Set only on the resume item Alas schedules after a usage limit. It
+    /// carries the limit so a relaunch restores the session's Limited state.
+    var usageLimit: ACPUsageLimit?
 
     /// Whether the queue UI lists this item. A delegated prompt is hidden
     /// while it waits its turn — it is not the user's to edit or reorder —
@@ -64,7 +67,8 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          turnStartedAt: Int64? = nil,
          brokerOperationAttempt: Int = 0,
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
-         deliveryUncertain: Bool = false)
+         deliveryUncertain: Bool = false,
+         usageLimit: ACPUsageLimit? = nil)
     {
         self.id = id
         self.blocks = blocks
@@ -79,11 +83,13 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.brokerOperationAttempt = brokerOperationAttempt
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
+        self.usageLimit = usageLimit
     }
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
+        case usageLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +107,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
+        usageLimit = try? c.decode(ACPUsageLimit.self, forKey: .usageLimit)
         if deliveryUncertain, lastError == nil {
             lastError = Self.deliveryUncertaintyMessage
         }
