@@ -297,8 +297,10 @@ fn start_supervisor(dir: &Path) -> Result<(), HelperError> {
     let mut supervisor = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+    // Provisional and pid-only, in a file of its own: the supervisor writes its full identity to `supervisor`, and
+    // a late write here must never replace it.
     let _ = write_atomic(
-        &dir.join("supervisor"),
+        &dir.join("supervisor.launch"),
         supervisor.id().to_string().as_bytes(),
     );
     thread::spawn(move || {
@@ -331,11 +333,19 @@ fn await_start(dir: &Path) -> Result<bool, HelperError> {
 }
 
 /// Whether the supervisor recorded for `dir` still runs. It records its pid
-/// with its start time, so a reused pid doesn't pass; until it does, the
-/// helper's pid-only record covers its first moments.
+/// with its start time, so a reused pid doesn't pass; until it does, and only
+/// before the run started, the helper's provisional pid-only record covers
+/// its first moments.
 fn supervisor_alive(dir: &Path) -> bool {
-    let Ok(record) = std::fs::read_to_string(dir.join("supervisor")) else {
-        return false;
+    let record = match std::fs::read_to_string(dir.join("supervisor")) {
+        Ok(record) => record,
+        Err(_) if !dir.join("started").exists() => {
+            match std::fs::read_to_string(dir.join("supervisor.launch")) {
+                Ok(record) => record,
+                Err(_) => return false,
+            }
+        }
+        Err(_) => return false,
     };
     let mut fields = record.split_whitespace().map(str::parse::<u64>);
     let Some(Ok(pid)) = fields.next() else {
