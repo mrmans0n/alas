@@ -30,7 +30,6 @@ final class SpawnedProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var _termination: Termination?
     private var onExit: (@Sendable (pid_t, Termination) -> Void)?
-    private var source: DispatchSourceProcess?
 
     /// Set once the child has exited and been reaped.
     var termination: Termination? { lock.withLock { _termination } }
@@ -85,12 +84,13 @@ final class SpawnedProcess: @unchecked Sendable {
         try? stdout.fileHandleForWriting.close()
         if stderr !== stdout { try? stderr.fileHandleForWriting.close() }
 
-        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .global(qos: .utility))
-        source.setEventHandler { [self] in reap(blocking: true) }
-        lock.withLock { self.source = source }
-        source.resume()
-        // An exit before the source was watching.
-        DispatchQueue.global(qos: .utility).async { [self] in reap(blocking: false) }
+        // A thread of its own blocks in `waitpid` until the child exits. An exit dispatch source registers its
+        // watch asynchronously, so a child that exits in between is never reported, and a blocking wait on a shared
+        // queue could exhaust its threads.
+        let reaper = Thread { [self] in reap() }
+        reaper.name = "SpawnedProcess \(pid)"
+        reaper.stackSize = 64 << 10
+        reaper.start()
     }
 
     /// Sends SIGTERM while the child has not been reaped, so the pid is still its own.
@@ -98,26 +98,21 @@ final class SpawnedProcess: @unchecked Sendable {
         lock.withLock { if _termination == nil { _ = kill(pid, SIGTERM) } }
     }
 
-    private func reap(blocking: Bool) {
-        let finished: (@Sendable (pid_t, Termination) -> Void, Termination, DispatchSourceProcess?)? = lock.withLock {
-            guard _termination == nil else { return nil }
-            var status: Int32 = 0
-            var reaped: pid_t
-            repeat {
-                reaped = waitpid(pid, &status, blocking ? 0 : WNOHANG)
-            } while reaped == -1 && errno == EINTR
-            guard reaped == pid else { return nil }
-            let signal = status & 0x7F
-            let termination: Termination = signal == 0 ? .exit((status >> 8) & 0xFF) : .signal(signal)
+    /// Runs on the reaper thread, outside the lock: `isRunning` and `terminate()` never wait for the child.
+    private func reap() {
+        var status: Int32 = 0
+        var reaped: pid_t
+        repeat {
+            reaped = waitpid(pid, &status, 0)
+        } while reaped == -1 && errno == EINTR
+        let signal = status & 0x7F
+        // Nothing else reaps this pid; should something have, the exit is still reported so no waiter hangs.
+        let termination: Termination = reaped != pid ? .exit(-1) : signal == 0 ? .exit((status >> 8) & 0xFF) : .signal(signal)
+        let callback = lock.withLock {
             _termination = termination
-            defer {
-                onExit = nil
-                source = nil
-            }
-            return onExit.map { ($0, termination, source) }
+            defer { onExit = nil }
+            return onExit
         }
-        guard let (onExit, termination, source) = finished else { return }
-        source?.cancel()
-        onExit(pid, termination)
+        callback?(pid, termination)
     }
 }
