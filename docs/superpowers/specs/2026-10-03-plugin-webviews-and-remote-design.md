@@ -177,12 +177,20 @@ Same messages, limits and error codes as API 6. Differences:
   R3 makes the supervisor terminate the group when the root exits on its own
   (`SIGTERM`, then `SIGKILL` after the grace), and makes `killProc` signal the
   recorded process group even when the leader is gone. The group id can't be
-  reused while any member is alive.
+  reused while any member is alive, but it can once all have exited, so the
+  group is signalled only if at least one tracked member still matches its
+  recorded start time; otherwise the group signal is skipped.
 - Leaving the group doesn't escape cleanup. A child that calls `setsid` or
   daemonizes is out of the recorded group, so R3 adds descendant tracking to
   the helper as the local launcher does: sample the tree while the root runs,
   keep each descendant's pid with its start time, and on stop or root exit
-  signal those still matching, so a reused pid is never hit.
+  signal those still matching, so a reused pid is never hit. Sampling alone
+  misses a child that double-forks and is orphaned before the first sample.
+  On Linux the supervisor makes itself a child subreaper
+  (`PR_SET_CHILD_SUBREAPER`), so orphans reparent to it and stay findable;
+  cgroups are not required. macOS hosts have no subreaper and keep sampling,
+  with the same documented window as the local launcher (whose `ponytail:`
+  names the shared `posix_spawn` upgrade).
 - One-shot runs see EOF. Today `proc/write` only appends to `stdin.log` and
   the child's stdin stays open until it exits, so `cat` or a formatter waits
   for the 10-minute limit. R3 adds a spawn mode that writes the `stdin`
