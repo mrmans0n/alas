@@ -21,13 +21,12 @@ enum ACPOpenCodeTaskPolicy {
     static let configKey = "OPENCODE_CONFIG_CONTENT"
 
     /// The version `opencode --version` printed: `1.18.34` on 1.x,
-    /// `opencode v2.0.22` on 2.x. Nil when it printed no version.
+    /// `opencode v2.0.22` on 2.x. The first version-shaped word wins, so a
+    /// trailing notice cannot hide it. Nil when it printed no version.
     static func reportedVersion(_ versionOutput: String) -> String? {
-        guard var token = versionOutput.split(whereSeparator: \.isWhitespace).last.map(String.init)
-        else { return nil }
-        if token.hasPrefix("v") { token.removeFirst() }
-        guard token.split(separator: ".").first.flatMap({ Int($0) }) != nil else { return nil }
-        return token
+        versionOutput.split(whereSeparator: \.isWhitespace).lazy
+            .map { $0.hasPrefix("v") ? String($0.dropFirst()) : String($0) }
+            .first { $0.contains(".") && $0.split(separator: ".").first.flatMap({ Int($0) }) != nil }
     }
 
     /// One agent from `opencode agent list`.

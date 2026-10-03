@@ -545,6 +545,7 @@ struct ACPNativeDelegationControlsTests {
         "OpenCode --version output resolves to the version Alas gates on",
         arguments: [
             ("1.18.34\n", "1.18.34"),
+            ("1.18.34\nUpdate available: run opencode upgrade\n", "1.18.34"),
             ("opencode v2.0.22\n", "2.0.22"),
             ("opencode v2.0.0-beta.3", "2.0.0-beta.3"),
             ("", nil),
