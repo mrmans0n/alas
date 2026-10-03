@@ -7,6 +7,8 @@ enum PluginFiles {
     /// in the reply as a rule. A reply that still does not fit is refused like any other.
     static let maxFileBytes = 512 << 10
     static let maxListEntries = 2000
+    /// A folder past this many names lists a sorted sample of the first ones read.
+    static let maxListRead = 20000
 
     /// Where `path`, relative to `root`, really leads, or why it may not be used. Refuses absolute paths, `..`,
     /// anything that resolves outside `root`, through symlinks too, and anything with a component named `.git`,
@@ -60,14 +62,26 @@ enum PluginFiles {
         }
     }
 
-    static func list(_ dir: String, in root: URL) -> Result<PluginFileListResult, PluginFilesError> {
+    static func list(_ dir: String, in root: URL, readLimit: Int = maxListRead) -> Result<PluginFileListResult, PluginFilesError> {
         resolve(dir, in: root).flatMap { url in
-            guard let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
-                return .failure(.notFound(dir.isEmpty ? "." : dir))
+            guard let stream = opendir(url.path) else { return .failure(.notFound(dir.isEmpty ? "." : dir)) }
+            defer { closedir(stream) }
+            var names: [String] = []
+            var unread = false
+            while let entry = readdir(stream) {
+                let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+                    FileManager.default.string(
+                        withFileSystemRepresentation: bytes.baseAddress!.assumingMemoryBound(to: CChar.self),
+                        length: Int(entry.pointee.d_namlen))
+                }
+                guard name != ".", name != "..", name.lowercased() != ".git" else { continue }
+                guard names.count < readLimit else {
+                    unread = true
+                    break
+                }
+                names.append(name)
             }
-            // ponytail: every name is read and sorted before the cap, off the main actor; enumerate with a bound if
-            // directories of millions of entries show up.
-            let visible = names.filter { $0.lowercased() != ".git" }.sorted()
+            let visible = names.sorted()
             // Names that JSON-escape badly could still overflow the reply, so the list also stops at half the
             // message limit of encoded names.
             var budget = maxFileBytes
@@ -84,7 +98,7 @@ enum PluginFiles {
                 }
                 return PluginFileListResult.Entry(name: name, kind: kind)
             }
-            return .success(PluginFileListResult(entries: Array(entries), truncated: visible.count > entries.count))
+            return .success(PluginFileListResult(entries: Array(entries), truncated: unread || visible.count > entries.count))
         }
     }
 

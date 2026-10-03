@@ -61,4 +61,17 @@ struct PluginFilesTests {
     func remoteFailuresSayWhy(error: any Error, message: String) {
         #expect(PluginFiles.remoteFailure(error, host: "devbox") == .refused(message))
     }
+
+    /// A folder lists sorted without `.git`; past the read bound it stops reading and says so.
+    @Test(arguments: [(10, ["a", "b", "c"], false), (3, ["a", "b", "c"], false), (2, nil, true)] as [(Int, [String]?, Bool)])
+    func listStopsReadingAtItsBound(readLimit: Int, names: [String]?, truncated: Bool) throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "plugin-list-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appending(path: ".git"), withIntermediateDirectories: true)
+        for name in ["c", "a", "b"] { try Data().write(to: root.appending(path: name)) }
+
+        let result = try PluginFiles.list("", in: root, readLimit: readLimit).get()
+        #expect(result.truncated == truncated)
+        if let names { #expect(result.entries.map(\.name) == names) } else { #expect(result.entries.count == readLimit) }
+    }
 }
