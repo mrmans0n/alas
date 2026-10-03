@@ -27,7 +27,7 @@ struct SettingsWindow: View {
             .overlay(Divider().opacity(0.5), alignment: .bottom)
 
             HStack(spacing: 0) {
-                SettingsNavView(selection: $section, showsDebug: showsDebug, showsPlugins: state.pluginManager != nil)
+                SettingsNavView(selection: $section, showsDebug: showsDebug)
                 Group {
                     switch section {
                     case .general:    GeneralPane(state: state)
@@ -80,7 +80,6 @@ struct SettingsWindow: View {
             if !showsDebug, section == .debug {
                 section = .agents
             }
-            if state.pluginManager == nil, section == .plugins { section = .agents }
             state.rescanAgents()
         }
         .onChange(of: state.pendingSettingsSection) {

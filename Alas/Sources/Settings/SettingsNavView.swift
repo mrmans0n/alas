@@ -40,9 +40,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
-    static func visibleSections(showsDebug: Bool, showsPlugins: Bool = false) -> [SettingsSection] {
+    static func visibleSections(showsDebug: Bool) -> [SettingsSection] {
         SettingsSection.allCases
-            .filter { (showsDebug || $0 != .debug) && (showsPlugins || $0 != .plugins) }
+            .filter { showsDebug || $0 != .debug }
             .sorted(by: {
                 if $0 == .general { return true }
                 if $1 == .general { return false }
@@ -56,7 +56,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsNavView: View {
     @Binding var selection: SettingsSection
     var showsDebug: Bool
-    var showsPlugins: Bool = false
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -92,6 +91,6 @@ struct SettingsNavView: View {
     }
 
     private var sections: [SettingsSection] {
-        SettingsSection.visibleSections(showsDebug: showsDebug, showsPlugins: showsPlugins)
+        SettingsSection.visibleSections(showsDebug: showsDebug)
     }
 }

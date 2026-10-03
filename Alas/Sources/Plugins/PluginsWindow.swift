@@ -81,7 +81,7 @@ struct PluginsDebugRoot: View {
         if let manager = state.pluginManager {
             PluginsView(manager: manager)
         } else {
-            Text("Plugins are off. Turn them on in Settings → Advanced.")
+            Text("Plugins are off. Turn them on in Settings → Plugins.")
                 .frame(minWidth: 720, minHeight: 480)
         }
     }

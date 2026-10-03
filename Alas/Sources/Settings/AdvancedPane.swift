@@ -44,15 +44,6 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
-                    SettingsRow(
-                        name: "Plugins",
-                        desc: "Runs approved JavaScript plugins from the Plugins folder in Alas's Application Support folder."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.pluginsEnabled },
-                            set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }
-                        ))
-                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
