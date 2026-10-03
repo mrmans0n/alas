@@ -184,6 +184,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
+    /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
+    /// detection for a structured reset time. Runtime only.
+    @Published private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
     /// Per-model token usage from the most recent `session/prompt` result's
     /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
     /// only: re-derived on each prompt response, never persisted.
@@ -862,6 +865,9 @@ final class ACPSession: ObservableObject, Identifiable {
         case .usageUpdate(let info):
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
+            if let rateLimit = info.claudeRateLimit {
+                latestClaudeRateLimit = rateLimit
+            }
             return []
         case .subagentSpawned(let spawn):
             return registerSubagent(spawn, at: timestamp)
