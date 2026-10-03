@@ -18,11 +18,6 @@ struct SessionSummarySettingsTests {
         #expect(!state.sessionSummariesRuntimeEnabled)
         #expect(state.config.sessionSummariesEnabled)
         #expect(state.sessionSummaryDisableSavePending)
-        #expect(LocalTextModelSettings.sessionSummaryReadyDetail(
-            requested: state.config.sessionSummariesEnabled,
-            runtimeEnabled: state.sessionSummariesRuntimeEnabled,
-            disableSavePending: state.sessionSummaryDisableSavePending
-        ) == "Model installed. Session summaries are off for this session.")
 
         await state.retrySessionSummarySettings()
 
@@ -44,22 +39,46 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test(arguments: [false, true])
+    func staleDownloadCancellationKeepsReadyFeaturesRunning(beforeReadinessCompletes: Bool) async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let persistence = SummarySettingsStore(configEnabled: true)
+        persistence.config.nextPromptSuggestionsEnabled = true
+        let gate = LocalTextModelStateReadGate()
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) }, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
+        try await fixture.waitForInstallation { await gate.entered }
+        if !beforeReadinessCompletes {
+            await gate.open()
+            await download.value
+            try #require(state.sessionSummariesRuntimeEnabled && state.nextPromptRuntimeEnabled)
+        }
+
+        await state.cancelLocalTextDownload()
+        await gate.open()
+        await download.value
+
+        #expect(state.localTextModelAvailable)
+        #expect(state.sessionSummariesRuntimeEnabled && state.nextPromptRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test(arguments: [
         LocalTextModelState.notInstalled,
         .failed(.filesystem)
     ])
-    func staleCompletedSummaryInstallationReadCannotReplaceNewerState(
+    func staleDownloadReadCannotReplaceNewerState(
         _ newerState: LocalTextModelState
     ) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let gate = LocalTextModelStateReadGate()
-        let state = makeState(
-            fixture,
-            SummarySettingsStore(),
-            readModelState: { await gate.read(fixture.store) }
-        )
-        let enable = Task { await state.enableSessionSummaries() }
+        let persistence = SummarySettingsStore(configEnabled: true)
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) }, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
         try await fixture.waitForInstallation { await gate.entered }
         let modelObserver = state.localTextObservers.tasks.first
         modelObserver?.cancel()
@@ -67,35 +86,64 @@ struct SessionSummarySettingsTests {
         state.updateLocalTextModelState(newerState)
 
         await gate.open()
-        await enable.value
+        await download.value
 
         #expect(state.localTextModelState == newerState)
         #expect(!state.sessionSummariesRuntimeEnabled)
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func enablingEitherCapabilityUsesOneInstallationAndCapabilitySpecificConsent() async throws {
+    @Test func acceptedDownloadSurvivesFeatureDisableAndEnablesFallback() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
+        let gate = LocalTextModelStateReadGate()
+        let persistence = SummarySettingsStore(configEnabled: true)
+        persistence.config.nextPromptSuggestionsEnabled = true
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) },
+            engine: SettingsFeatureEngine(), modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
+        try await fixture.waitForInstallation { await gate.entered }
+        await state.disableNextPromptSuggestions()
+        await state.disableSessionSummaries()
+        await gate.open()
+        await download.value
+        let title = await state.makeQwenTitleFallback().generate(from: "Fix the sign-in race")
+        #expect(title == "Fix sign-in race")
+        #expect(!state.config.nextPromptSuggestionsEnabled)
+        #expect(!state.config.sessionSummariesEnabled)
+        #expect(fixture.transport.requestCount == fixture.manifest.assets.count)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func disablingWorktreeHelpersCancelsExplanationWithoutDiscardingCache() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
         let state = makeState(fixture, SummarySettingsStore())
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        state.worktreeExplainerStore = store
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let cached = Task { await store.prepare(worktreeID: "cached", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        await probe.finishNext(with: "Preserve cached explanation")
+        #expect(await cached.value)
 
-        #expect(LocalTextModelSettings.nextPromptConsent != LocalTextModelSettings.sessionSummaryConsent)
-        #expect(LocalTextModelSettings.sessionSummaryConsent.contains("2.3 GB"))
-        #expect(LocalTextModelSettings.sessionSummaryConsent.contains("transcript"))
-        #expect(LocalTextModelSettings.sessionSummaryConsent.contains("multi-gigabyte"))
-        #expect(LocalTextModelSettings.sessionSummaryConsent.contains("remain"))
+        let active = Task { await store.prepare(worktreeID: "active", evidence: evidence) }
+        await probe.waitForCallCount(2)
+        state.setIssueWorktreeNameSuggestionsEnabled(false)
+        await probe.finishNext(with: "Discard cancelled explanation")
+        try #require(!(await active.value))
+        #expect(await probe.cancelledCallCount == 1)
+        #expect(store.explanation(for: "active", evidence: evidence) == nil)
+        #expect(store.explanation(for: "cached", evidence: evidence) == "Preserve cached explanation")
 
-        await state.enableSessionSummaries()
-        let storeState = await fixture.store.state
-        try #require(state.localTextModelState == .ready,
-                     "First installation settled as \(state.localTextModelState); store: \(storeState)")
-        let installedRequests = fixture.transport.requestCount
-        await state.enableNextPromptSuggestions()
-
-        #expect(installedRequests == fixture.manifest.assets.count)
-        #expect(fixture.transport.requestCount == installedRequests)
-        #expect(state.sessionSummariesRuntimeEnabled)
-        #expect(state.nextPromptRuntimeEnabled)
+        state.setIssueWorktreeNameSuggestionsEnabled(true)
+        let retry = Task { await store.prepare(worktreeID: "active", evidence: evidence) }
+        await probe.waitForCallCount(3)
+        await probe.finishNext(with: "Keep fresh explanation")
+        #expect(await retry.value)
+        #expect(store.explanation(for: "active", evidence: evidence) == "Keep fresh explanation")
         await state.shutdownLocalTextFeatures()
     }
 
@@ -112,25 +160,6 @@ struct SessionSummarySettingsTests {
         #expect(!state.config.sessionSummariesEnabled)
         #expect(state.nextPromptRuntimeEnabled)
         #expect(state.config.nextPromptSuggestionsEnabled)
-        await state.shutdownLocalTextFeatures()
-    }
-
-    @Test func disablingLastCapabilityCancelsSummaryInstallation() async throws {
-        let fixture = try LocalTextModelFixture()
-        defer { fixture.removeTemporaryRoot() }
-        fixture.transport.mode.withLock { $0 = .waitForCancellation }
-        let state = makeState(fixture, SummarySettingsStore())
-        let enable = Task { await state.enableSessionSummaries() }
-        try await fixture.waitForInstallation(timeout: .seconds(20)) { fixture.transport.started.withLock { $0 } }
-
-        await state.disableSessionSummaries()
-
-        #expect(fixture.transport.drained.withLock { $0 })
-        if !fixture.transport.drained.withLock({ $0 }) { await state.cancelLocalTextDownload() }
-        await enable.value
-        #expect(state.localTextInstallation == nil)
-        #expect(!state.config.sessionSummariesEnabled)
-        #expect(state.localTextModelState == .notInstalled)
         await state.shutdownLocalTextFeatures()
     }
 
@@ -232,33 +261,7 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func removalRequiresBothCapabilitiesDisabled() async throws {
-        let fixture = try LocalTextModelFixture.verifiedInstall()
-        defer { fixture.removeTemporaryRoot() }
-        let state = makeState(fixture, SummarySettingsStore())
-        await state.inspectLocalTextModel()
-
-        for flags in [(true, false, false, false), (false, true, false, false),
-                      (false, false, true, false), (false, false, false, true)] {
-            state.config.nextPromptSuggestionsEnabled = flags.0
-            state.config.sessionSummariesEnabled = flags.1
-            state.nextPromptRuntimeEnabled = flags.2
-            state.sessionSummariesRuntimeEnabled = flags.3
-            #expect(!state.canRemoveLocalTextModel)
-        }
-
-        state.config.nextPromptSuggestionsEnabled = false
-        state.config.sessionSummariesEnabled = false
-        state.nextPromptRuntimeEnabled = false
-        state.sessionSummariesRuntimeEnabled = false
-        #expect(state.canRemoveLocalTextModel)
-        await state.removeLocalTextModel()
-        #expect(state.localTextRemovalFailure == nil)
-        #expect(state.localTextModelState == .notInstalled)
-        await state.shutdownLocalTextFeatures()
-    }
-
-    @Test(arguments: ["enable next", "enable summary", "retry disable"])
+    @Test(arguments: ["enable next", "enable summary", "retry disable", "enable model"])
     func removalExcludesConcurrentSettingChanges(_ action: String) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -273,6 +276,7 @@ struct SessionSummarySettingsTests {
         switch action {
         case "enable next": await state.enableNextPromptSuggestions()
         case "enable summary": await state.enableSessionSummaries()
+        case "enable model": await state.setLocalTextModelEnabled(true)
         default: await state.retryNextPromptSuggestions()
         }
 
@@ -297,6 +301,7 @@ struct SessionSummarySettingsTests {
 
         #expect(state.localTextModelState == .notInstalled)
         #expect(fixture.transport.requestCount == 0)
+        #expect(!state.config.localTextModelEnabled)
         await state.shutdownLocalTextFeatures()
     }
 
@@ -325,14 +330,14 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func startupSkipsInspectionWhenBothCapabilitiesAreDisabled() async throws {
+    @Test func startupSkipsInspectionWhenModelPermissionIsOff() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let inspections = LockedCounter()
         let state = makeState(fixture, SummarySettingsStore(), readModelState: {
             inspections.increment()
             return await fixture.store.state
-        })
+        }, modelEnabled: false)
 
         await Task.yield()
 
@@ -341,14 +346,14 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func openingSettingsInspectsOnceWhenBothCapabilitiesAreDisabled() async throws {
+    @Test func openingSettingsInspectsDisallowedModelOnce() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let inspections = LockedCounter()
         let state = makeState(fixture, SummarySettingsStore(), readModelState: {
             inspections.increment()
             return await fixture.store.state
-        })
+        }, modelEnabled: false)
 
         await state.inspectLocalTextModelOnSettingsAppearance()
         await state.inspectLocalTextModelOnSettingsAppearance()
@@ -359,24 +364,19 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func unsupportedBuildStartsNoObserversAndPerformsNoInspection() async throws {
+    @Test func unsupportedRuntimeCanManageFilesWithoutLoadingInference() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
-        let inspections = LockedCounter()
-        let store = SummarySettingsStore(configEnabled: true)
-        let state = makeState(fixture, store, readModelState: {
-            inspections.increment()
-            return await fixture.store.state
-        }, supported: false)
-
-        await Task.yield()
-        await state.inspectLocalTextModelOnSettingsAppearance()
-
-        #expect(inspections.value == 0)
+        let engine = SettingsFeatureEngine()
+        let state = makeState(fixture, SummarySettingsStore(configEnabled: true),
+                              engine: engine, supported: false)
         #expect(state.localTextObservers.tasks.isEmpty)
-        #expect(state.localTextObservers.notifications.isEmpty)
-        #expect(state.localTextObservers.pressure == nil)
-        #expect(!state.sessionSummariesRuntimeEnabled)
+        await state.inspectLocalTextModelOnSettingsAppearance()
+        #expect(state.localTextModelState == .ready)
+        await state.removeLocalTextModel()
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.path))
+        #expect(await engine.unloadCount == 0)
+        #expect(await engine.callers.isEmpty)
         await state.shutdownLocalTextFeatures()
     }
 
@@ -395,6 +395,7 @@ struct SessionSummarySettingsTests {
         state.setACPLocalTitlesEnabled(false)
 
         #expect(!state.config.harness.acpLocalTitlesEnabled)
+        #expect(state.config.issueWorktreeNameSuggestionsEnabled)
         #expect(pendingTitle.isCancelled)
         // A delayed caller-wide engine cancel could hit a title started after
         // consent returns, so revocation only cancels the tracked jobs.
@@ -441,13 +442,35 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func revokingModelPermissionDiscardsAnActiveSummary() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SettingsFeatureEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        await state.enableSessionSummaries()
+        let session = ACPSession(id: "summary", agentId: "test", worktreeId: "w", title: "Summary")
+        session.agentState = .ready
+        _ = session.recordUserPrompt(text: "Implement search", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Search is implemented.")))
+        let summary = Task { await state.sessionSummaryCoordinator.summary(for: session) }
+        await engine.waitUntilSummaryStarted()
+        await state.setLocalTextModelEnabled(false)
+        await summary.value
+        #expect(state.sessionSummaryCoordinator.phase == .idle)
+        #expect(state.config.sessionSummariesEnabled)
+        #expect(!state.sessionSummariesRuntimeEnabled)
+        #expect(!state.localTextModelAvailable)
+        await state.shutdownLocalTextFeatures()
+    }
+
     private func makeState(
         _ fixture: LocalTextModelFixture,
         _ persistence: SummarySettingsStore,
         readModelState: (@Sendable () async -> LocalTextModelState)? = nil,
         engine: (any LocalTextGenerating)? = nil,
-        supported: Bool = true
+        supported: Bool = true, modelEnabled: Bool = true
     ) -> AppState {
+        persistence.config.localTextModelEnabled = modelEnabled
         let localEngine = engine ?? LocalTextInferenceEngine(
             acquireLease: { try await fixture.store.acquireVerifiedLease() },
             load: { _ in { _ in .init(text: "", selectedCandidateIndex: 0) } },

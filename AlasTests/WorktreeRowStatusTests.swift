@@ -207,6 +207,24 @@ struct WorktreeRowStatusTests {
     }
 
     @Test @MainActor
+    func cancelledExplanationCannotReplaceAReenabledRequest() async {
+        let probe = WorktreeExplainerGenerationProbe()
+        let store = WorktreeExplainerStore { await probe.generate($0) }
+        let evidence = WorktreeExplainerEvidence(branch: "fix-sidebar", issueTitle: nil)
+        let old = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(1)
+        store.cancelPending()
+        let fresh = Task { await store.prepare(worktreeID: "worktree", evidence: evidence) }
+        await probe.waitForCallCount(2)
+        await probe.finishNext(with: "Discard stale explanation")
+        #expect(!(await old.value))
+        #expect(store.explanation(for: "worktree", evidence: evidence) == nil)
+        await probe.finishNext(with: "Keep fresh explanation")
+        #expect(await fresh.value)
+        #expect(store.explanation(for: "worktree", evidence: evidence) == "Keep fresh explanation")
+    }
+
+    @Test @MainActor
     func failedWorktreeExplanationCanRetry() async {
         let probe = WorktreeExplainerGenerationProbe()
         let store = WorktreeExplainerStore { await probe.generate($0) }
@@ -376,7 +394,7 @@ struct WorktreeRowStatusTests {
     }
 }
 
-private actor WorktreeExplainerGenerationProbe {
+actor WorktreeExplainerGenerationProbe {
     private(set) var receivedEvidence: [WorktreeExplainerEvidence] = []
     private(set) var cancelledCallCount = 0
     private(set) var maximumConcurrentCalls = 0

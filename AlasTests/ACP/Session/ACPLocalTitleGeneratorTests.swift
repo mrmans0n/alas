@@ -81,6 +81,19 @@ struct ACPLocalTitleRoutingTests {
         #expect(await engine.calls == expectedEngineCalls)
     }
 
+    @Test func failedAppleAnswerDoesNotLoadLocalFallback() async {
+        let engine = TitleEngine(outcome: .success("Local title"))
+        let fallback = ACPQwenTitleFallback(engine: engine) { true }
+        let title = await ACPLocalTitleGenerator.generate(
+            from: "Fix the sign-in race",
+            fallback: fallback,
+            foundationModelAvailable: { true },
+            foundationModel: { _ in nil }
+        )
+        #expect(title == nil)
+        #expect(await engine.calls == 0)
+    }
+
     @Test @MainActor
     func waitsForLocalTextReadinessBeforeCheckingQwenAvailability() async {
         let availability = TitleAvailability()

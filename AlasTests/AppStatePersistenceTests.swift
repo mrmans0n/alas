@@ -187,7 +187,7 @@ struct AppStatePersistenceTests {
         await state.disableNextPromptSuggestions()
         #expect(store.writtenConfig?.nextPromptSuggestionsEnabled == false)
         #expect(fixture.transport.requestCount == 0)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func sessionSummaryOptInAndDisablePersistThroughTheConfigStore() async throws {

@@ -620,8 +620,15 @@ extension AppState {
     }
 
     func setRunFailureBriefsEnabled(_ enabled: Bool) {
+        let previous = config.runFailureBriefsEnabled
         config.runFailureBriefsEnabled = enabled
-        saveConfig()
+        if saveConfig() {
+            onDeviceAIHelperSettingsError = nil
+        } else {
+            if enabled { config.runFailureBriefsEnabled = previous }
+            onDeviceAIHelperSettingsError =
+                "Could not save helper settings. Changes apply only to this session. Retry before quitting."
+        }
         if !enabled { runFailureBriefs.invalidateAll() }
     }
 

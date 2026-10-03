@@ -42,35 +42,21 @@ extension AppState {
             sessionSummarySettingsError =
                 "Could not save disabling. Retry before quitting or summaries may turn on again after relaunch."
         }
-        await cancelLocalTextDownloadIfUnused()
     }
 
     private func prepareSessionSummaries(generation: UInt64) async {
         localTextRuntimeStarted = true
         await inspectLocalTextModel()
         guard generation == sessionSummarySettingsGeneration, !nextPromptShuttingDown else { return }
-        if localTextModelState != .ready {
-            let install = localTextInstallation ?? Task { await localTextModelStore.install() }
-            localTextInstallation = install
-            await install.value
-            guard generation == sessionSummarySettingsGeneration, !nextPromptShuttingDown else { return }
-            localTextInstallation = nil
-            let modelGeneration = localTextModelGeneration
-            let modelState = await localTextReadModelState()
-            guard generation == sessionSummarySettingsGeneration, !nextPromptShuttingDown else { return }
-            // The installation's own notification may have already delivered this state.
-            guard modelGeneration == localTextModelGeneration || modelState == localTextModelState else { return }
-            updateLocalTextModelState(modelState)
-        }
         guard generation == sessionSummarySettingsGeneration,
               config.sessionSummariesEnabled,
-              localTextModelState == .ready,
+              localTextModelAvailable, !sessionSummaryDisableSavePending,
               !nextPromptShuttingDown else { return }
         sessionSummariesRuntimeEnabled = true
     }
 
-    private func beginSessionSummarySettingsChange() {
-        sessionSummaryCoordinator.teardown()
+    func beginSessionSummarySettingsChange() {
+        if localTextRuntimeStarted { sessionSummaryCoordinator.teardown() }
         sessionSummarySettingsGeneration &+= 1
         sessionSummariesRuntimeEnabled = false
         if !sessionSummaryDisableSavePending { sessionSummarySettingsError = nil }

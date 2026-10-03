@@ -22,7 +22,7 @@ struct NextPromptSettingsTests {
         #expect(await fixture.store.state == (supported ? .ready : .notInstalled))
         #expect(state.nextPromptRuntimeEnabled == supported)
         #expect(fixture.transport.requestCount == 0)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func temporaryFocusAndTabLossPreserveOffer() async throws {
@@ -114,7 +114,7 @@ struct NextPromptSettingsTests {
         state.dismissNextPromptOffer(owner: owner, sessionID: session.id)
         state.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
         #expect(state.nextPromptCoordinator.offer == nil)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test(arguments: ["stream", "delivery", "pending message"])
@@ -178,7 +178,7 @@ struct NextPromptSettingsTests {
         setChildWorking(true)
         #expect(state.nextPromptCoordinator.offer == nil)
         #expect(state.nextPromptCoordinator.takeOffer() == nil)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test(arguments: [false, true])
@@ -248,75 +248,63 @@ struct NextPromptSettingsTests {
             #expect(state.nextPromptCoordinator.takeOffer() == "Show an example.")
         }
         #expect(loads.withLock { $0 } == 2)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
-    @Test func freshInstallEnablesRuntimeWhenReadyArrivesDuringStateRead() async throws {
+    @Test func freshDownloadEnablesRequestedFeaturesAfterVerification() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        persistence.config.nextPromptSuggestionsEnabled = true
         let gate = LocalTextModelStateReadGate()
-        let state = makeState(fixture, SettingsStore(), readModelState: { await gate.read(fixture.store) })
-        let enable = Task { await state.enableNextPromptSuggestions() }
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) }, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
         try await fixture.waitForInstallation { await gate.entered }
         #expect(!state.nextPromptRuntimeEnabled)
         await state.inspectLocalTextModel()
-        #expect(state.localTextModelState == .ready)
         await gate.open()
-        await enable.value
-        #expect(state.config.nextPromptSuggestionsEnabled)
-        #expect(state.localTextModelState == .ready)
+        await download.value
         #expect(state.nextPromptRuntimeEnabled)
         #expect(fixture.transport.requestCount == fixture.manifest.assets.count)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: ["cancel", "disable", "remove", "modelChange", "shutdown"])
-    func staleCompletedInstallationReadCannotResumeSuggestions(_ interruption: String) async throws {
+    @Test(arguments: ["disable", "remove", "modelChange", "shutdown"])
+    func staleDownloadReadCannotResumeSuggestions(_ interruption: String) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        persistence.config.nextPromptSuggestionsEnabled = true
         let gate = LocalTextModelStateReadGate()
-        let state = makeState(fixture, SettingsStore(), readModelState: { await gate.read(fixture.store) })
-        let enable = Task { await state.enableNextPromptSuggestions() }
-        // Same signature as cancelledInstallRemainsEnabledUntilExplicitRetry
-        // (#1515): a freshly spawned Task's own first cooperative-pool
-        // scheduling turn is the slow part, not this wait — CI has missed
-        // even a 28s deadline here by a similarly tiny margin. Treat it as a
-        // known, intermittent environmental issue rather than a hard failure.
-        await withKnownIssue(
-            "staleCompletedInstallationReadCannotResumeSuggestions's enable Task has repeatedly needed longer than the wait budget to reach its first scheduling turn under CI load",
-            isIntermittent: true
-        ) {
-            try await fixture.waitForInstallation { await gate.entered }
-            await state.inspectLocalTextModel() // Consume ready before delivering the superseding action.
-            switch interruption {
-            case "cancel": await state.cancelLocalTextDownload()
-            case "disable": await state.disableNextPromptSuggestions()
-            case "remove":
-                await state.disableNextPromptSuggestions()
-                await state.removeLocalTextModel()
-            case "modelChange":
-                try await fixture.store.remove()
-                await state.inspectLocalTextModel()
-            default: await state.shutdownNextPromptSuggestions()
-            }
-            await gate.open()
-            await enable.value
-            #expect(!state.nextPromptRuntimeEnabled)
-            #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable" && interruption != "remove"))
-            if interruption == "remove" || interruption == "modelChange" {
-                #expect(state.localTextModelState == .notInstalled)
-            }
-            #expect(fixture.transport.requestCount == fixture.manifest.assets.count)
+        let state = makeState(fixture, persistence,
+            readModelState: { await gate.read(fixture.store) }, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
+        try await fixture.waitForInstallation { await gate.entered }
+        await state.inspectLocalTextModel()
+        switch interruption {
+        case "disable": await state.disableNextPromptSuggestions()
+        case "remove": await state.removeLocalTextModel()
+        case "modelChange":
+            try await waitUntilRemoved(fixture)
+            await state.inspectLocalTextModel()
+        default: await state.shutdownLocalTextFeatures()
         }
-        enable.cancel()
-        await state.shutdownNextPromptSuggestions()
+        await gate.open()
+        await download.value
+        #expect(!state.nextPromptRuntimeEnabled)
+        #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable"))
+        if interruption == "remove" || interruption == "modelChange" {
+            #expect(state.localTextModelState == .notInstalled)
+        }
+        await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: ["cancel", "disable", "modelChange", "shutdown"])
+    @Test(arguments: ["disable", "modelChange", "shutdown"])
     func staleRuntimeStateReadCannotResumeSuggestions(_ interruption: String) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -328,7 +316,6 @@ struct NextPromptSettingsTests {
         try await waitUntil { await runtime.isReadingState }
         #expect(!state.nextPromptRuntimeEnabled)
         switch interruption {
-        case "cancel": await state.cancelLocalTextDownload()
         case "disable": await state.disableNextPromptSuggestions()
         case "modelChange":
             // The store's own exclusive-lock guard is advisory and, like the product's
@@ -336,7 +323,7 @@ struct NextPromptSettingsTests {
             // contended right after a concurrent inspection — retry rather than fail.
             try await waitUntilRemoved(fixture)
             await state.inspectLocalTextModel()
-        default: await state.shutdownNextPromptSuggestions()
+        default: await state.shutdownLocalTextFeatures()
         }
         #expect(!state.nextPromptRuntimeEnabled)
         await runtime.releaseStateRead()
@@ -345,7 +332,7 @@ struct NextPromptSettingsTests {
         #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable"))
         #expect(await runtime.retries == 1)
         #expect(fixture.transport.requestCount == 0)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func consentCancellationAndEnabledRelaunchNeverInstall() async throws {
@@ -366,7 +353,7 @@ struct NextPromptSettingsTests {
         #expect(relaunched.localTextModelState == .notInstalled)
         #expect(relaunched.nextPromptOffer == nil)
         #expect(fixture.transport.requestCount == 0)
-        await relaunched.shutdownNextPromptSuggestions()
+        await relaunched.shutdownLocalTextFeatures()
     }
 
     @Test func failedEnableSaveRestoresPreferenceWithoutInstallation() async throws {
@@ -381,45 +368,32 @@ struct NextPromptSettingsTests {
         #expect(!state.config.nextPromptSuggestionsEnabled)
         #expect(fixture.transport.requestCount == 0)
         #expect(state.nextPromptSettingsError != nil)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
-    @Test func cancelledInstallRemainsEnabledUntilExplicitRetry() async throws {
+    @Test func cancelledDownloadRequiresAnExplicitDownloadRetry() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
         fixture.transport.mode.withLock { $0 = .waitForCancellation }
         let persistence = SettingsStore()
-        let state = makeState(fixture, persistence)
-        let enable = Task { await state.enableNextPromptSuggestions() }
-        // A freshly spawned Task's own first cooperative-pool scheduling turn
-        // has repeatedly been the slow part here, not this wait: 5s, 20s,
-        // 28s, and 45s deadlines have each *still* been missed on CI, always
-        // by a similarly tiny margin regardless of the deadline's size — a
-        // signature of real, occasional scheduling contention rather than an
-        // insufficient budget. Rather than keep raising a number that
-        // doesn't converge, treat a timeout here as a known, intermittent
-        // environmental issue instead of a hard failure.
-        await withKnownIssue(
-            "cancelledInstallRemainsEnabledUntilExplicitRetry's enable Task has repeatedly needed longer than even a 45s budget to reach its first scheduling turn under CI load",
-            isIntermittent: true
-        ) {
-            try await fixture.waitForInstallation(timeout: .seconds(45)) { fixture.transport.started.withLock { $0 } }
-            #expect(persistence.config.nextPromptSuggestionsEnabled)
-            await state.cancelLocalTextDownload()
-            await enable.value
-            #expect(state.config.nextPromptSuggestionsEnabled)
-            #expect(state.localTextModelState == .notInstalled)
-            #expect(fixture.transport.drained.withLock { $0 })
-            #expect(fixture.transport.requestCount == 1)
-            fixture.transport.mode.withLock { $0 = .valid }
-            await state.retryNextPromptSuggestions()
-            #expect(state.localTextModelState == .ready)
-            #expect(state.nextPromptRuntimeEnabled)
-        }
-        enable.cancel()
-        await state.shutdownNextPromptSuggestions()
+        persistence.config.nextPromptSuggestionsEnabled = true
+        let state = makeState(fixture, persistence, modelEnabled: false)
+        let download = Task { await state.downloadLocalTextModel() }
+        try await fixture.waitForInstallation { fixture.transport.started.withLock { $0 } }
+        await state.cancelLocalTextDownload()
+        await download.value
+        #expect(state.config.localTextModelEnabled)
+        #expect(state.localTextModelState == .notInstalled)
+        #expect(fixture.transport.drained.withLock { $0 })
+        await state.retryNextPromptSuggestions()
+        #expect(fixture.transport.requestCount == 1)
+        fixture.transport.mode.withLock { $0 = .valid }
+        await state.retryLocalTextModelDownload()
+        #expect(state.localTextModelState == .ready)
+        #expect(state.nextPromptRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func failedDisableRemainsRetryableAndStaysOffAfterRelaunch() async throws {
@@ -451,7 +425,7 @@ struct NextPromptSettingsTests {
         #expect(!state.nextPromptRuntimeEnabled)
         #expect(state.nextPromptSettingsError == nil)
         #expect(fixture.transport.requestCount == 0)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
         let relaunched = makeState(fixture, persistence)
         await relaunched.inspectLocalTextModel()
         #expect(!relaunched.config.nextPromptSuggestionsEnabled)
@@ -460,7 +434,7 @@ struct NextPromptSettingsTests {
         await relaunched.enableNextPromptSuggestions()
         #expect(relaunched.nextPromptRuntimeEnabled)
         #expect(fixture.transport.requestCount == 0)
-        await relaunched.shutdownNextPromptSuggestions()
+        await relaunched.shutdownLocalTextFeatures()
     }
 
     @Test func peerLeaseBlocksRemovalAndExplicitRetryRemovesOnlyOwnedRevision() async throws {
@@ -468,12 +442,15 @@ struct NextPromptSettingsTests {
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
-        let state = makeState(fixture, SettingsStore())
-        await state.enableNextPromptSuggestions()
-        await state.disableNextPromptSuggestions()
+        let persistence = SettingsStore()
+        persistence.config.nextPromptSuggestionsEnabled = true
+        persistence.config.sessionSummariesEnabled = true
+        let state = makeState(fixture, persistence)
+        await state.localTextObservers.tasks.last?.value
         let peer = try await fixture.store.acquireVerifiedLease()
         await state.removeLocalTextModel()
-        #expect(!state.config.nextPromptSuggestionsEnabled)
+        #expect(state.config.nextPromptSuggestionsEnabled)
+        #expect(state.config.sessionSummariesEnabled)
         #expect(state.localTextRemovalFailure == .inUse)
         #expect(FileManager.default.fileExists(atPath: fixture.directory.path))
         peer.close()
@@ -482,7 +459,7 @@ struct NextPromptSettingsTests {
         #expect(state.localTextModelState == .notInstalled)
         #expect(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".lock").path))
         #expect(try String(contentsOf: fixture.root.appendingPathComponent("unrelated"), encoding: .utf8) == "keep")
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func terminationWaitsForEvaluationDrain() async throws {
@@ -519,6 +496,121 @@ struct NextPromptSettingsTests {
         try await fixture.store.remove() // Runtime reader lease was released.
     }
 
+    @Test func featureEnableAndRuntimeRetryNeverDownloadMissingAssets() async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let state = makeState(fixture, SettingsStore())
+        await state.localTextObservers.tasks.last?.value
+        await state.enableNextPromptSuggestions()
+        await state.enableSessionSummaries()
+        await state.retryNextPromptSuggestions()
+        await state.retrySessionSummarySettings()
+        await state.retryLocalTextModelSettings()
+        #expect(fixture.transport.requestCount == 0)
+        #expect(state.localTextModelState == .notInstalled)
+        #expect(!state.nextPromptRuntimeEnabled)
+        #expect(!state.sessionSummariesRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func rejectedDownloadConsentDoesNotFetchFiles() async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        let state = makeState(fixture, persistence, modelEnabled: false)
+        persistence.rejectWrites = true
+        await state.downloadLocalTextModel()
+        await state.retryNextPromptSuggestions()
+        #expect(fixture.transport.requestCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.path))
+        #expect(!persistence.config.localTextModelEnabled)
+        #expect(state.localTextModelSettingsError != nil)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func failedRevocationCannotBeUndoneByLateReadiness() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        persistence.config.nextPromptSuggestionsEnabled = true
+        let gate = LocalTextModelStateReadGate()
+        let state = makeState(fixture, persistence,
+                              readModelState: { await gate.read(fixture.store) })
+        try await waitUntil { await gate.entered }
+        let oldReadiness = state.localTextObservers.tasks.last
+        persistence.rejectWrites = true
+        await state.setLocalTextModelEnabled(false)
+        await gate.open()
+        await oldReadiness?.value
+        #expect(persistence.config.localTextModelEnabled)
+        #expect(state.localTextModelDisableSavePending)
+        #expect(!state.localTextModelAvailable)
+        #expect(!state.nextPromptRuntimeEnabled)
+        #expect(!state.sessionSummariesRuntimeEnabled)
+        persistence.rejectWrites = false
+        await state.retryLocalTextModelSettings()
+        #expect(!persistence.config.localTextModelEnabled)
+        #expect(!state.localTextModelDisableSavePending)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func removalWaitsForPersistedPermissionRevocation() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        let state = makeState(fixture, persistence)
+        await state.localTextObservers.tasks.last?.value
+        persistence.rejectWrites = true
+        await state.removeLocalTextModel()
+        #expect(FileManager.default.fileExists(atPath: fixture.directory.path))
+        #expect(state.localTextModelDisableSavePending)
+        #expect(!state.localTextModelAvailable)
+        persistence.rejectWrites = false
+        await state.removeLocalTextModel()
+        #expect(state.localTextModelState == .notInstalled)
+        #expect(!persistence.config.localTextModelEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test(arguments: ["titles", "names", "briefs"])
+    func rejectedHelperDisableRemainsOffUntilRetryPersists(_ helper: String) async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        let state = makeState(fixture, persistence, modelEnabled: false)
+        func enabled(in config: AppConfig) -> Bool {
+            switch helper {
+            case "titles": return config.harness.acpLocalTitlesEnabled
+            case "names": return config.issueWorktreeNameSuggestionsEnabled
+            default: return config.runFailureBriefsEnabled
+            }
+        }
+        persistence.rejectWrites = true
+        switch helper {
+        case "titles": state.setACPLocalTitlesEnabled(false)
+        case "names": state.setIssueWorktreeNameSuggestionsEnabled(false)
+        default: state.setRunFailureBriefsEnabled(false)
+        }
+        #expect(!enabled(in: state.config))
+        #expect(enabled(in: persistence.config))
+        #expect(state.onDeviceAIHelperSettingsError != nil)
+        persistence.rejectWrites = false
+        state.retryOnDeviceAIHelperSettings()
+        #expect(!enabled(in: persistence.config))
+        #expect(state.onDeviceAIHelperSettingsError == nil)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func explicitRetryResetsSuppressedInference() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -535,14 +627,15 @@ struct NextPromptSettingsTests {
         await state.retryNextPromptSuggestions()
         #expect(await inference.state == .ready)
         #expect(fixture.transport.requestCount == 0)
-        await state.shutdownNextPromptSuggestions()
+        await state.shutdownLocalTextFeatures()
     }
 
     private func makeState(_ fixture: LocalTextModelFixture, _ persistence: SettingsStore,
                            inference: (any NextPromptRuntime)? = nil,
                            readModelState: (@Sendable () async -> LocalTextModelState)? = nil,
-                           supported: Bool = true) -> AppState {
-        AppState(store: persistence, persistenceErrorHandler: { _, _ in },
+                           supported: Bool = true, modelEnabled: Bool = true) -> AppState {
+        persistence.config.localTextModelEnabled = modelEnabled
+        return AppState(store: persistence, persistenceErrorHandler: { _, _ in },
                  localTextModelStore: fixture.store,
                  localTextReadModelState: readModelState,
                  nextPromptInference: inference ?? NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),

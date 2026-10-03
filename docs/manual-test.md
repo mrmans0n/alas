@@ -463,11 +463,11 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 4. Confirm both local files remain unchanged under Changes after the stack and provider state refresh.
 5. If GG refuses because the stack base became stale, confirm Alas refreshes and presents Rebase without automatically retrying Sync.
 
-### Next-prompt model provisioning
+### Shared local-model provisioning
 
-In a Debug build with the `~/.alas/.debug` marker, the controls are in Settings → Debug → Experimental → Next-prompt suggestions. For a provisioning exercise, host the actual `AdvancedPane` with an injected AppState, persistence store and model store. Use an isolated root such as `/private/tmp/alas-model-check/Application Support/Alas/Models/NextPromptSuggestions` when testing it. Pass that root explicitly to `NextPromptModelStore`; leave the normal Application Support directory alone.
+The controls are in ordinary Settings → On-device AI; no Debug marker is needed. Host the actual `SettingsWindow` with an injected AppState, persistence store, and model store for controlled progress/error cases. Pass an isolated root such as `/private/tmp/alas-model-check/Models/LocalText` explicitly to `LocalTextModelStore`; leave the user's Application Support directory alone.
 
-1. Load `NextPromptModelManifest.json` and provide a `NextPromptModelTransport` that reads the already verified local snapshot in chunks and sends them to `NextPromptModelSink.receive`. Keep the snapshot read-only. This exercises installation without downloading another copy from the network.
+1. Load `LocalTextModelManifest.json` and provide a `LocalTextModelTransport` that streams a read-only verified snapshot into `LocalTextModelSink.receive`. This exercises integrity-checked installation without another network download; it is not live downloader evidence.
 2. Start `install()`, pause the transport after the first weights chunk, and call `cancelDownload()`. Await both calls. Confirm the transfer has stopped, the revision was not published, and its staging directory was removed.
 3. Retry explicitly with the transport unpaused. Confirm `.ready`, then acquire a verified lease and compare every installed file's byte count and SHA-256 with the bundled manifest. Close the lease after reading the files.
 4. Call `install()` again. Confirm it reuses the verified revision without invoking the transport.
@@ -476,11 +476,11 @@ In a Debug build with the `~/.alas/.debug` marker, the controls are in Settings 
 
 Observed on 2026-09-25: cancellation after the first 1 MiB of weights drained before cleanup; retry installed and verified all 12 assets totaling 2,278,970,666 bytes. A second process held a verified lease, excluded both writers, and allowed removal after releasing it. The lock inode and unrelated file survived. The source snapshot still matched upstream metadata afterward.
 
-The live network check used HEAD requests against the exact pinned revision. The weights and tokenizer redirected from `huggingface.co` to `us.aws.cdn.hf.co`; `config.json` redirected within `huggingface.co`. No model response bodies were downloaded. The focused `NextPromptModelStoreTests` suite covers native URLSession response handling and cancellation with a local URL protocol, including oversized data, unexpected partial responses, interrupted transfers, and rejected redirects.
+The dated live network check used HEAD requests against the exact pinned revision. The weights and tokenizer redirected from `huggingface.co` to `us.aws.cdn.hf.co`; `config.json` redirected within `huggingface.co`. No model response bodies were downloaded. The focused `LocalTextModelStoreTests` suite covers native URLSession response handling and cancellation with a local URL protocol, including oversized data, unexpected partial responses, interrupted transfers, and rejected redirects.
 
 ## ACP next-prompt ghost text
 
-Run this with a verified model enabled in Advanced settings.
+Run this with a verified model allowed in Settings → On-device AI and next-prompt suggestions enabled separately.
 
 1. Finish a native ACP turn with the empty composer focused. When a suggestion appears, verify that copying, the draft restored after a tab switch, and the transcript do not contain it.
 2. Start a turn, switch to another tab or app before its reply completes, then return to its empty composer. Verify a suggestion can appear without sending another message.
@@ -492,18 +492,18 @@ Run this with a verified model enabled in Advanced settings.
 8. With VoiceOver, inspect the empty composer. Its value stays empty; its separate help contains the full suggestion and its actions include Accept Suggestion. Invoke that action and verify the same insertion and undo behavior as Tab. After dismissal, the action and suggestion help disappear.
 
 
-### Next-prompt settings and lifecycle
+### On-device AI settings and lifecycle
 
-Use an injected temporary model root and config store; do not change the normal Application Support directory.
+Use an injected temporary model root and config store; do not change the user's Application Support directory.
 
-1. Click Enable, read the disk, memory and local-processing notice, then Cancel. Confirm the preference remains off and no transfer starts.
-2. Confirm Enable. During a transfer, confirm byte progress and Cancel Download. Cancelling retains the enabled preference, removes staging after drain, and exposes Retry without restarting on its own.
-3. Retry explicitly. Confirm verification ends at Model ready. Disable, then enable again; verified files should be reused without transfer.
-4. Hold the temporary root's `.lock` with a shared reader lease in a second process. Remove Model must turn suggestions off and show Model in use with Retry Removal while leaving files intact. Release the peer and retry; the pinned revision disappears, but `.lock`, other revisions and unrelated files remain.
-5. Relaunch with the enabled preference and no complete model. Confirm no download resumes and no earlier turn is replayed.
-6. While generation is active, switch tabs, deactivate the app, or move focus to another window. Confirm ghost text stays hidden and cannot be accepted while inactive, then verify returning to the same empty composer reconsiders the turn. Repeated focus notifications must not overlap generation.
-7. During another generation, lose the writer lease. Confirm the opportunity is permanently invalidated. Quit during generation or download and confirm termination waits for the work to drain.
-8. Force a settings write failure. Enabling must restore the old preference without installing. Disabling must leave inference off and show the save error.
+1. Open Settings → On-device AI with no Debug marker. Confirm Apple availability includes a reason when unavailable and that helpers are independent of the optional model. Worktree naming must still work with chat titles off.
+2. Click Download, read the disk, memory, Hugging Face, and local-processing notice, then Cancel or Escape. Permission and feature preferences must remain unchanged; no transfer starts.
+3. Confirm Download and Allow. Observe byte progress, cancel, then retry explicitly. Feature switches must not cancel the shared transfer, and download/retry must not silently enable summaries or suggestions.
+4. After verification, turn Use local model off and on. Revocation drains native work but leaves Apple helpers, files, and feature preferences intact; re-allowing reuses verified files without transfer.
+5. Hold the temporary root's `.lock` with a peer shared lease. Remove Model must revoke permission and show Model in use while leaving files intact. Release the peer and retry; remove only the pinned revision and staging, preserving the lock, unrelated files, and saved feature choices.
+6. Relaunch with saved permission and an incomplete model. No implicit download resumes. On an injected unsupported runtime, inspect/remove installed files without native calls; download/use must be unavailable.
+7. During a suggestion, change focus, lose the writer lease, or quit. Check invalidation and drain with the composer procedure above. Titles-off and names-off cancel their own pending jobs without cancelling newly enabled requests.
+8. Reject persistence writes. Failed enable restores the old preference and never installs; failed disable suppresses processing immediately and exposes Retry Save. A late Cancel after a completed transfer must not pause ready features.
 
 Memory-pressure handling cancels evaluation and releases this feature's container and reader lease after drain. It does not clear MLX's process-wide allocator cache or promise that process RSS returns to baseline.
 
@@ -567,3 +567,205 @@ remained on the isolated profile. It produced
 `How does binary search work step by step?` in 4.184 seconds; all 18
 `NextPromptInferenceTests` passed. The probe was removed afterward. The
 focused coordinator and settings suites passed 26 and 14 tests respectively.
+
+### On-device AI productionization verification, 2026-10-02
+
+The actual `SettingsWindow` and `OnDeviceAIPane` ran in Xcode's Debug app host
+without a Debug marker. `HOME` and `CFFIXED_USER_HOME` pointed to
+`/private/tmp/alas-ai-production-profile`; injected configuration and a disposable
+model root did not reuse user preferences or transcripts.
+
+The pinned Qwen3 snapshot supplied all 12 assets through the production installer,
+including its byte-count and SHA-256 verification, for 2,278,970,666 bytes total.
+The snapshot was read-only. This proves installer behavior, not a live multi-GB
+download. Separate HTTPS HEAD requests followed the production pinned routes and
+returned HTTP 200 for all 12 assets.
+
+`settingsSurfaceAndNativeModel()` passed as one disposable native smoke test.
+Observed behavior included progress, cancellation and explicit retry, independent
+feature switches during transfer, model re-allow without transfer, actual native
+evaluation cancellation, peer-lease refusal, and successful removal after peer
+release. An injected unsupported runtime inspected and removed a cloned verified
+installation with zero inference-engine calls, preserving feature preferences.
+
+Actual MLX helpers produced a title while both feature-owner flags were off,
+a worktree name after chat titles were switched off, a failure brief, and a
+conflict explanation. The grounded summary reported the supplied nil-query guard
+as completed and targeted `SearchTests` as the next action; it did not claim tests
+had passed. Apple Intelligence also returned results through all four helper
+factories on this host. Light and dark native screenshots were inspected; the
+light-theme heading contrast fix was observed in the actual page.
+
+All 22 public next-prompt fixtures ran through production context, policy, parser,
+and native inference. Five inputs were withheld before generation; seventeen
+produced accepted suggestions. Both previously severe destructive-consent cases
+were withheld, and manual review found no severe accepted suggestion. A redacted
+error response still used the assistant's voice, an ordinary quality miss. This
+small matrix is not a general safety guarantee; deterministic consent screening
+does not cover every natural-language paraphrase. The model and system prompt
+were unchanged.
+
+The separate `settingsLowerSurface()` native smoke passed and scrolled the actual
+page to a 479-point vertical offset. Light/dark screenshots showed the complete
+model card, paused-but-enabled feature switches, and privacy copy without
+clipping. A rejected model-permission save displayed the actionable error
+without starting a download. This programmatic scroll is not keyboard proof.
+
+RSS sampled every 50 ms was 396,394,496 bytes before the exercise,
+7,294,910,464 bytes at sampled peak, and 7,017,480,192 bytes immediately after
+shutdown and unload. Native cancellation returned `cancelled` and released its
+reader lease, but process memory did not return to baseline.
+
+The focused symmetric policy/inference selection passed 38 test definitions and
+57 expanded runs, with no failures or skips. Naming and shared settings passed
+48 definitions and 89 expanded runs. These are local results, not CI evidence.
+Raw synthetic output and PNGs remain only under `/private/tmp/alas-ai-production-proof`.
+
+Release and interactive acceptance remain separate gates. Current arm64 Release
+compilation passed; an earlier x86_64 Release build also passed. The untouched
+Release app failed before startup because embedded `libfff_c.dylib` and the app
+had different Team IDs under library validation. The keychain reported zero
+valid signing identities. No signing or hardened-runtime bypass was used.
+
+The desktop was locked. AppKit refused to vend accessibility elements below the
+login shield; external accessibility calls returned `cannotComplete`. The new
+native ghost's Tab acceptance did not complete in that context. Keyboard order,
+consent/Escape interaction, accessibility status, Increase Contrast, and an
+actual VoiceOver session remain unverified. Earlier dated composer evidence does
+not substitute for these current release checks.
+
+
+The native host was arm64 on macOS 26.7. The model was
+`mlx-community/Qwen3-4B-Instruct-2507-4bit` at revision
+`50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b`.
+Both current arm64 and x86_64 Release builds passed with `ONLY_ACTIVE_ARCH=YES`.
+The disposable probes were archived outside the repository and removed before
+regenerating project membership.
+
+The exercised native commands, before probe removal, were:
+
+```sh
+xcodebuild -xctestrun /private/tmp/alas-ai-isolated.xctestrun \
+  -destination 'platform=macOS,arch=arm64' \
+  '-only-testing:AlasTests/OnDeviceAIProductionSmoke/settingsSurfaceAndNativeModel()' \
+  -resultBundlePath /private/tmp/alas-ai-native-lifecycle-complete-20261002.xcresult \
+  test-without-building
+xcodebuild -xctestrun /private/tmp/alas-ai-isolated.xctestrun \
+  -destination 'platform=macOS,arch=arm64' \
+  '-only-testing:AlasTests/OnDeviceAIProductionSmoke/settingsLowerSurface()' \
+  -resultBundlePath /private/tmp/alas-ai-settings-lower-20261002.xcresult \
+  test-without-building
+```
+
+The live route check ran `curl --head --location --silent --show-error --max-time 30`
+for each manifest asset at
+`https://huggingface.co/<model>/resolve/<revision>/<asset>`.
+It checked final HTTP status only, not response-body integrity or sustained
+transfer throughput. Snapshot installation supplied the byte/hash checks.
+
+After probe removal and `xcodegen`, final focused integration passed all 11
+requested suites: 137 definitions, 218 expanded runs, zero failures or skips.
+The exact command was:
+
+```sh
+xcodebuild -project Alas.xcodeproj -scheme Alas \
+  -destination 'platform=macOS,arch=arm64' \
+  -skipPackagePluginValidation -skipMacroValidation -quiet \
+  -only-testing AlasTests/AppConfigTests \
+  -only-testing AlasTests/LocalTextAppleAvailabilityTests \
+  -only-testing AlasTests/NextPromptSettingsTests \
+  -only-testing AlasTests/SessionSummarySettingsTests \
+  -only-testing AlasTests/ACPLocalTitleRoutingTests \
+  -only-testing AlasTests/IssueWorktreeNameSuggestionTests \
+  -only-testing AlasTests/RunFailureBriefCoordinatorTests \
+  -only-testing AlasTests/MergeConflictExplanationTests \
+  -only-testing AlasTests/AppStatePersistenceTests \
+  -only-testing AlasTests/NextPromptPolicyTests \
+  -only-testing AlasTests/NextPromptInferenceTests \
+  -resultBundlePath /private/tmp/alas-ai-final-integration-20261002.xcresult test
+```
+
+After rebasing onto `origin/main`, the same focused command additionally selected
+`AlasTests/WorktreeRowStatusTests` and `AlasTests/LocalTextInferenceEngineTests`,
+with result bundle `/private/tmp/alas-ai-rebased-integration-20261002.xcresult`.
+All 13 suites passed: 174 definitions, 266 expanded runs, zero failures or skips.
+The rebase preserved the new mainline worktree-explanation helper; its existing
+fallback predicate now uses the shared permission/readiness boundary.
+
+Current-head review identified a cancellation gap in the new mainline sidebar
+explainer. Disabling Worktree names now cancels its owned jobs as well as naming
+requests, preserving cached explanations and fencing late completion after
+re-enable. The actual AppState regression failed before the fix because the old
+explanation completed successfully after disable.
+
+The five affected suites then passed 87 definitions and 139 expanded runs, with
+zero failures or skips, in
+`/private/tmp/alas-ai-sidebar-cancel-green-20261002.xcresult`:
+`SessionSummarySettingsTests`, `NextPromptSettingsTests`,
+`WorktreeRowStatusTests`, `IssueWorktreeNameSuggestionTests`, and
+`LocalTextInferenceEngineTests`.
+
+A standalone Swift CLI compiled the actual `WorktreeExplainerStore` source with
+the existing controlled provider. It observed one cancelled job, discarded late
+output, preserved cached text, and completed a re-enabled request. This proves
+store cancellation semantics, not an unlocked sidebar interaction or new native
+model evaluation. The disposable CLI was removed after the run.
+
+The CI formatter's three reported consecutive-blank-line violations were fixed
+surgically. `swiftformat Alas AlasTests --lint --reporter github-actions-log`
+reported zero of 2,127 files requiring formatting. The initial CI coverage audit
+failed only because the formatter-stopped builder never published a Swift test
+plan; that run did not execute Swift shards.
+
+The next CI builder compiled successfully, then failed Swift discovery because
+the execution policy still selected
+`freshInstallEnablesRuntimeWhenReadyArrivesDuringStateRead()`. Its replacement,
+`freshDownloadEnablesRequestedFeaturesAfterVerification()`, keeps the same
+verification/readiness gate, so the existing single-method isolation was
+migrated rather than discarded.
+
+Actual compiled-inventory discovery passed after that correction:
+12,505 definitions discovered, 22 excluded, 12,483 scheduled. The generated
+four-shard plan assigns the replacement to its own subprocess invocation.
+The exact discovery command was:
+
+```sh
+SWIFT_TEST_XCTESTRUN=/Users/nacho.lopez/Library/Developer/Xcode/DerivedData/Alas-azobvreaqnsrxzbrdxicpkwckfbr/Build/Products/Alas_macosx26.5-arm64.xctestrun \
+  python3 scripts/ci_swift_tests.py plan --shard-count 4 \
+  --directory /private/tmp/alas-ai-policy-verification-20261002
+```
+
+The replacement then passed as one test in one suite with `test-without-building`
+and the exact canonical `-only-testing` selector, in
+`/private/tmp/alas-ai-policy-isolated-green-20261002.xcresult`.
+No new test or isolation rule was added. Both arm64 and x86_64 Release builds
+also passed on the cancellation-fix head `fb11473e`. Release launch and the
+interactive acceptance checks above remain required before merge.
+
+A further review found that Cancel could still see a completed installation
+while its readiness callback awaited a state read. The gated regression failed
+with summaries left paused. Cancellation now restores requested helpers if the
+model is ready, using the captured permission generation to respect revocation.
+The regression covers cancellation before and after the readiness callback.
+The old stale-read case that required a completed install to remain paused was
+removed rather than repinned to the new behavior.
+
+An isolated app-hosted native smoke then verified the actual pinned Qwen model's
+2,278,970,666 bytes in an owned clone of the read-only cached snapshot. Cancel
+ran while completion was gated; both helpers resumed. Actual MLX generation
+returned a grounded summary with the nil-query guard completed and targeted
+SearchTests still to run, followed by an accepted read-only next-prompt question.
+No network transfer occurred. The run passed one test in one suite in
+`/private/tmp/alas-ai-queued-cancel-native-20261003.xcresult`.
+The disposable driver was removed and project membership regenerated.
+This is lifecycle/native-generation evidence, not an unlocked UI interaction.
+
+After removing the obsolete cancellation variant and the disposable probe, all
+four focused suites passed: 67 definitions, 87 expanded runs, zero failures or
+skips. `SessionSummarySettingsTests`, `NextPromptSettingsTests`,
+`LocalTextModelStoreTests`, and `LocalTextInferenceEngineTests` all ran, in
+`/private/tmp/alas-ai-queued-cancel-final-green-20261003.xcresult`.
+SwiftFormat again reported zero of 2,127 files requiring formatting. Both arm64
+and x86_64 Release builds passed with the final correction.
+Compiled-inventory planning again discovered 12,505 definitions, excluded 22,
+and scheduled 12,483, without the removed probe.
