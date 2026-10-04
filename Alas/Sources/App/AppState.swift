@@ -11158,8 +11158,13 @@ final class AppState {
     }
 
     nonisolated static func harnessActivityIsBusy(_ state: ActivityState?) -> Bool {
-        guard let state else { return false }
-        return state != .idle
+        switch state {
+        case nil, .idle, .failed:
+            // A failed turn has stopped; its badge just outlives it.
+            return false
+        case .busy, .awaitingInput, .permissionRequest, .limited:
+            return true
+        }
     }
     private func worktreeCleanupWorkspaceOwners(
         for worktree: Worktree

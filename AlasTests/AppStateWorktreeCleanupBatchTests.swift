@@ -473,6 +473,7 @@ struct AppStateWorktreeCleanupBatchTests {
     @Test func missingHarnessActivityIsIdleForCleanupSessionCounts() {
         #expect(!AppState.harnessActivityIsBusy(nil))
         #expect(!AppState.harnessActivityIsBusy(.idle))
+        #expect(!AppState.harnessActivityIsBusy(.failed))
         #expect(AppState.harnessActivityIsBusy(.busy))
     }
 
