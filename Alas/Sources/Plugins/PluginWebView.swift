@@ -200,12 +200,39 @@ private final class PluginWebSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 }
 
+/// Live pages per plugin, observable so a tab refused for want of a slot opens its page as soon as one frees.
+@MainActor
+@Observable
+final class PluginWebPageSlots {
+    static let shared = PluginWebPageSlots()
+
+    let limit: Int
+    private var live: [String: Int] = [:]
+
+    init(limit: Int = PluginWebPolicy.maxLivePagesPerPlugin) {
+        self.limit = limit
+    }
+
+    func hasRoom(_ pluginID: String) -> Bool { live[pluginID, default: 0] < limit }
+
+    /// Takes a slot for a page of `pluginID`; false when the plugin's pages already fill them all.
+    func take(_ pluginID: String) -> Bool {
+        guard hasRoom(pluginID) else { return false }
+        live[pluginID, default: 0] += 1
+        return true
+    }
+
+    func release(_ pluginID: String) {
+        let left = live[pluginID, default: 0] - 1
+        live[pluginID] = left > 0 ? left : nil
+    }
+}
+
 /// One web tab's page: a WKWebView with its own non-persistent data store, served only by the scheme handler, and a
 /// bridge that carries messages between the page and its own plugin instance.
 @MainActor
 final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
     static let bridgeWorld = WKContentWorld.world(name: "alas-plugin-bridge")
-    private static var livePages: [String: Int] = [:]
     private static var compiledRules: Task<WKContentRuleList?, Never>?
 
     let webView: WKWebView
@@ -218,14 +245,19 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     private var isClosed = false
     var openExternal: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
-    /// Nil when the plugin already has `maxLivePagesPerPlugin` pages open.
-    static func open(host: PluginHost, tab: Int, script: Data, theme: Theme) -> PluginWebPage? {
-        guard livePages[host.manifest.id, default: 0] < PluginWebPolicy.maxLivePagesPerPlugin else { return nil }
-        return PluginWebPage(host: host, tab: tab, script: script, theme: theme)
+    private let slots: PluginWebPageSlots
+
+    /// Nil when the plugin's pages already fill every slot.
+    static func open(
+        host: PluginHost, tab: Int, script: Data, theme: Theme, slots: PluginWebPageSlots = .shared
+    ) -> PluginWebPage? {
+        guard slots.take(host.manifest.id) else { return nil }
+        return PluginWebPage(host: host, tab: tab, script: script, theme: theme, slots: slots)
     }
 
-    private init(host: PluginHost, tab: Int, script: Data, theme: Theme) {
+    private init(host: PluginHost, tab: Int, script: Data, theme: Theme, slots: PluginWebPageSlots) {
         self.host = host
+        self.slots = slots
         self.tab = tab
         pluginID = host.manifest.id
         schemeHandler = PluginWebSchemeHandler(
@@ -254,7 +286,6 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         #endif
         webView.allowsLinkPreview = false
         super.init()
-        Self.livePages[pluginID, default: 0] += 1
         // Added after `super.init`, since the controller retains its handler; `close` removes it.
         controller.addScriptMessageHandler(self, contentWorld: Self.bridgeWorld, name: "alas")
         webView.navigationDelegate = self
@@ -284,7 +315,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard !isClosed else { return }
         isClosed = true
         if let token { host.detachWebPage(tab: tab, token) }
-        Self.livePages[pluginID, default: 1] -= 1
+        slots.release(pluginID)
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
@@ -323,10 +354,10 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         if let text = body["open"] as? String {
             if let url = PluginWebPolicy.externalLink(text) { openExternal(url) }
             replyHandler(nil, nil)
-        } else if let json = body["post"] as? String {
+        } else if let json = body["post"] as? String, let token {
             let host = host, tab = tab
             Task {
-                let failure = await host.webMessage(tab: tab, json: json)
+                let failure = await host.webMessage(tab: tab, page: token, json: json)
                 replyHandler(nil, failure)
             }
         } else {
@@ -386,8 +417,10 @@ struct PluginWebTabView: View {
     @Environment(\.theme) private var theme
     @State private var page: PluginWebPage?
     @State private var refused = false
+    private let slots = PluginWebPageSlots.shared
 
     var body: some View {
+        let hasRoom = slots.hasRoom(host.manifest.id)
         Group {
             if let page {
                 PluginWebSurface(webView: page.webView).id(ObjectIdentifier(page))
@@ -396,15 +429,21 @@ struct PluginWebTabView: View {
                     .foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center).padding(24)
             }
         }
-        .onAppear {
-            page = PluginWebPage.open(host: host, tab: tabIndex, script: script, theme: theme)
-            refused = page == nil
+        .onAppear(perform: open)
+        // A refused tab takes the first slot another page frees.
+        .onChange(of: hasRoom) { _, hasRoom in
+            if hasRoom, refused { open() }
         }
         .onDisappear {
             page?.close()
             page = nil
         }
         .onChange(of: theme) { _, theme in page?.apply(theme) }
+    }
+
+    private func open() {
+        page = PluginWebPage.open(host: host, tab: tabIndex, script: script, theme: theme)
+        refused = page == nil
     }
 }
 

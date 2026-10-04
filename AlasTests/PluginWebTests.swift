@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import Testing
 import WebKit
 @testable import Alas
@@ -47,6 +48,20 @@ struct PluginWebTests {
     ])
     func onlyTheShellMayLoad(url: String, mainFrame: Bool, allowed: Bool) {
         #expect(PluginWebPolicy.allowsNavigation(to: URL(string: url), mainFrame: mainFrame, pluginID: Self.id) == allowed)
+    }
+
+    /// A plugin gets `limit` live pages; a freed slot is observable, so a refused tab can open its page then.
+    @MainActor
+    @Test func livePageSlotsAdmitUpToTheLimitAndAnnounceFreedOnes() {
+        let slots = PluginWebPageSlots(limit: 2)
+        #expect(slots.take("io.x.p") && slots.take("io.x.p"))
+        #expect(!slots.take("io.x.p") && !slots.hasRoom("io.x.p"))
+        #expect(slots.take("io.x.other"))
+        nonisolated(unsafe) var announced = false  // onChange is @Sendable; it fires synchronously here
+        withObservationTracking { _ = slots.hasRoom("io.x.p") } onChange: { announced = true }
+        slots.release("io.x.p")
+        #expect(announced && slots.hasRoom("io.x.p"))
+        #expect(slots.take("io.x.p") && !slots.take("io.x.p"))
     }
 
     @Test(arguments: [

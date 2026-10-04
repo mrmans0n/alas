@@ -51,7 +51,7 @@ alas.context              // { tab, theme: "light" | "dark" }
 
 - `alas.post` throws a `TypeError` for a value `JSON.stringify` can't encode,
   a `RangeError` when the message would be too large, and an `Error("busy")`
-  when 32 earlier messages from this tab are still waiting for the plugin.
+  when 32 earlier messages from this page are still waiting for the plugin.
 - The page can't call any Alas method, not even ones the plugin was granted.
   Everything goes to the plugin, which decides what to do.
 - The page shell sets `color-scheme: light dark`, the system font, and these
@@ -96,9 +96,9 @@ globalThis.handle = (text) => {
 |---|---|---|
 | `ui.js` size | 8 MiB | The plugin is refused. |
 | A message, either direction | 1 MiB for the whole JSON-RPC message, envelope included | Page: `alas.post` throws. Plugin: it stops, as for any oversized send. |
-| Page → plugin queue | 32 messages per tab not yet handled | `alas.post` throws `"busy"`. Each delivery is a normal call under the 250 ms limit. |
+| Page → plugin queue | 32 messages per page not yet handled (a tab shown in two worktrees has two pages) | `alas.post` throws `"busy"`. Each delivery is a normal call under the 250 ms limit. |
 | Plugin → page | counts towards the 64 sends per call | as for any send |
-| Live web tabs per plugin | 4, across its projects | A fifth shows a placeholder until one closes. |
+| Live web tabs per plugin | 4, across its projects | A fifth shows a placeholder, which opens its page as soon as another closes. |
 
 ## Security model
 

@@ -139,7 +139,7 @@ final class PluginHost {
     ]
     private static let api9Methods: Set<String> = ["prompts/set"]
     private static let api12Methods: Set<String> = ["web/post"]
-    /// Messages a web tab's page posted that the plugin has not yet handled, per tab (API 12).
+    /// Messages a web tab's page posted that the plugin has not yet handled, per page (API 12).
     static let maxWebQueue = 32
     static let maxProcessesRunning = 2
     static let maxProcessArgs = 32
@@ -1440,8 +1440,9 @@ final class PluginHost {
 
     /// Live pages of each web tab, by index: one tab may show in several worktrees of the project.
     @ObservationIgnored private var webPages: [Int: [UUID: (String) -> Void]] = [:]
-    /// Messages from each web tab's pages that the plugin has not yet handled.
-    @ObservationIgnored private var webQueued: [Int: Int] = [:]
+    /// Messages from each page that the plugin has not yet handled, by the page's token. Per page, as the page's
+    /// bridge counts them, so a page under its own cap is never refused here because of another page.
+    @ObservationIgnored private var webQueued: [UUID: Int] = [:]
 
     /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
     /// to detach with, or nil for a tab that is not a web tab.
@@ -1454,6 +1455,7 @@ final class PluginHost {
 
     func detachWebPage(tab: Int, _ token: UUID) {
         webPages[tab]?[token] = nil
+        webQueued[token] = nil
     }
 
     /// The largest JSON text a page of `tab` may post: the `web/message` it becomes must fit in one message.
@@ -1466,19 +1468,20 @@ final class PluginHost {
         Data(#"{"jsonrpc":"2.0","method":"web/message","params":{"tab":\#(tab),"message":\#(json)}}"#.utf8)
     }
 
-    /// A page of web tab `tab` called `alas.post`. The bridge already checked the size and the queue; they are
-    /// checked again here, since nothing the page's process sends is trusted. Returns once the plugin has handled
-    /// it, with nil, or at once with why it was dropped.
-    func webMessage(tab: Int, json: String) async -> String? {
+    /// The page `page` of web tab `tab` called `alas.post`. The bridge already checked the size and the page's queue,
+    /// and threw for the page if either was exceeded; they are checked again here, since nothing the page's process
+    /// sends is trusted. Returns once the plugin has handled it, with nil, or at once with why it was dropped.
+    func webMessage(tab: Int, page: UUID, json: String) async -> String? {
         guard state == .active else { return "the plugin is not running" }
         guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
+        guard webPages[tab]?[page] != nil else { return "the page is closed" }
         guard json.utf8.count <= webMessageLimit(tab: tab) else { return "message too large" }
         guard (try? JSONSerialization.jsonObject(with: Data(json.utf8), options: .fragmentsAllowed)) != nil else {
             return "message is not JSON"
         }
-        guard webQueued[tab, default: 0] < Self.maxWebQueue else { return "busy" }
-        webQueued[tab, default: 0] += 1
-        defer { webQueued[tab, default: 1] -= 1 }
+        guard webQueued[page, default: 0] < Self.maxWebQueue else { return "busy" }
+        webQueued[page, default: 0] += 1
+        defer { if webQueued[page] != nil { webQueued[page, default: 1] -= 1 } }
         await deliver(Self.webMessage(tab: tab, json: json))
         return nil
     }

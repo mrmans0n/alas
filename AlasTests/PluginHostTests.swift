@@ -1819,14 +1819,15 @@ struct PluginHostTests {
         await host.activate()
         var first: [String] = [], second: [String] = []
         #expect(host.attachWebPage(tab: 1) { _ in } == nil)
-        _ = try #require(host.attachWebPage(tab: 0) { first.append($0) })
+        let page = try #require(host.attachWebPage(tab: 0) { first.append($0) })
         let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
-        #expect(await host.webMessage(tab: 0, json: #"{"ready":true}"#) == nil)
+        #expect(await host.webMessage(tab: 0, page: page, json: #"{"ready":true}"#) == nil)
         #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
         #expect(host.trace.contains { $0.direction == .toPlugin && $0.text.contains(#""id":7,"result":{}"#) })
 
         host.detachWebPage(tab: 0, detached)
-        #expect(await host.webMessage(tab: 0, json: "0") == nil)
+        #expect(await host.webMessage(tab: 0, page: detached, json: "0") == "the page is closed")
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == nil)
         #expect(host.state == .failed("plugin sent a malformed web/post: tab 1 is not a web tab"))
         #expect(second.count == 2)
     }
@@ -1835,25 +1836,31 @@ struct PluginHostTests {
     @Test func webMessagesAreBoundedByTheirEnvelopeAndMustBeJSON() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
         let limit = host.webMessageLimit(tab: 0)
         let fits = "\"" + String(repeating: "a", count: limit - 2) + "\""
         #expect(PluginHost.webMessage(tab: 0, json: fits).count == Self.limits.maxMessageBytes)
-        #expect(await host.webMessage(tab: 0, json: fits) == nil)
-        #expect(await host.webMessage(tab: 0, json: fits + " ") == "message too large")
-        #expect(await host.webMessage(tab: 0, json: "{") == "message is not JSON")
-        #expect(await host.webMessage(tab: 1, json: "1") == "tab 1 is not a web tab")
+        #expect(await host.webMessage(tab: 0, page: page, json: fits) == nil)
+        #expect(await host.webMessage(tab: 0, page: page, json: fits + " ") == "message too large")
+        #expect(await host.webMessage(tab: 0, page: page, json: "{") == "message is not JSON")
+        #expect(await host.webMessage(tab: 1, page: page, json: "1") == "tab 1 is not a web tab")
     }
 
-    /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per tab.
+    /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per page, the
+    /// same count the page's bridge keeps, so another page of the same tab is never refused because of it.
     @Test func aPageCanQueueOnlySoManyMessages() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
+        let busy = try #require(host.attachWebPage(tab: 0) { _ in })
+        let other = try #require(host.attachWebPage(tab: 0) { _ in })
         // Every task starts on the main actor before the first delivery returns to it.
-        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, json: "\(index)") } }
+        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: busy, json: "\(index)") } }
+        let fromOther = Task { await host.webMessage(tab: 0, page: other, json: "0") }
         var results: [String?] = []
         for post in posts { results.append(await post.value) }
         #expect(results.filter { $0 == nil }.count == PluginHost.maxWebQueue)
         #expect(results.last == "busy")
-        #expect(await host.webMessage(tab: 0, json: "0") == nil)
+        #expect(await fromOther.value == nil)
+        #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
     }
 }
