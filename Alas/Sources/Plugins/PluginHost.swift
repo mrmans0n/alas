@@ -130,6 +130,7 @@ final class PluginHost {
         "file/list": .filesRead,
         "file/write": .filesWrite,
         "prompts/set": nil,
+        "web/post": nil,
     ]
     /// Methods a manifest for an older API does not know.
     private static let api6Methods: Set<String> = [
@@ -137,6 +138,9 @@ final class PluginHost {
         "process/run", "process/start", "process/stop", "file/read", "file/list", "file/write",
     ]
     private static let api9Methods: Set<String> = ["prompts/set"]
+    private static let api12Methods: Set<String> = ["web/post"]
+    /// Messages a web tab's page posted that the plugin has not yet handled, per tab (API 12).
+    static let maxWebQueue = 32
     static let maxProcessesRunning = 2
     static let maxProcessArgs = 32
     static let maxProcessStdinBytes = 256 << 10
@@ -595,8 +599,8 @@ final class PluginHost {
                 return
             }
             guard isRunning, self.runtime === runtime else { return }
-            if let tab = delivery.frames.keys.sorted().first(where: { tabIs($0, .view) }) {
-                fail("plugin presented a frame to view tab \(tab)")
+            if let tab = delivery.frames.keys.sorted().first(where: { !tabIs($0, .canvas) }) {
+                fail("plugin presented a frame to \(manifest.tabs[tab].kind.rawValue) tab \(tab)")
                 return
             }
             frames.merge(delivery.frames) { _, new in new }
@@ -656,7 +660,8 @@ final class PluginHost {
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data? {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
-              manifest.api >= 9 || !Self.api9Methods.contains(method)
+              manifest.api >= 9 || !Self.api9Methods.contains(method),
+              manifest.api >= 12 || !Self.api12Methods.contains(method)
         else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -814,6 +819,9 @@ final class PluginHost {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
             return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
+        case "web/post":
+            if let refusal = postToPage(data) { return errorReply(id, code: -32602, refusal) }
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -1367,6 +1375,8 @@ final class PluginHost {
             case .violation(let reason): return .violation(Self.bounded(reason))
             }
             return .none
+        case "web/post" where manifest.api >= 12:
+            return postToPage(data).map { .violation(Self.bounded("plugin sent a malformed web/post: \($0)")) } ?? .none
         case "canvas/regions":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
                   tabIs(params.tab, .canvas),
@@ -1424,6 +1434,69 @@ final class PluginHost {
         } else {
             state = .active
         }
+    }
+
+    // MARK: - Web tabs (API 12)
+
+    /// Live pages of each web tab, by index: one tab may show in several worktrees of the project.
+    @ObservationIgnored private var webPages: [Int: [UUID: (String) -> Void]] = [:]
+    /// Messages from each web tab's pages that the plugin has not yet handled.
+    @ObservationIgnored private var webQueued: [Int: Int] = [:]
+
+    /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
+    /// to detach with, or nil for a tab that is not a web tab.
+    func attachWebPage(tab: Int, receive: @escaping (String) -> Void) -> UUID? {
+        guard tabIs(tab, .web) else { return nil }
+        let token = UUID()
+        webPages[tab, default: [:]][token] = receive
+        return token
+    }
+
+    func detachWebPage(tab: Int, _ token: UUID) {
+        webPages[tab]?[token] = nil
+    }
+
+    /// The largest JSON text a page of `tab` may post: the `web/message` it becomes must fit in one message.
+    func webMessageLimit(tab: Int) -> Int {
+        limits.maxMessageBytes - Self.webMessage(tab: tab, json: "").count
+    }
+
+    /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured.
+    static func webMessage(tab: Int, json: String) -> Data {
+        Data(#"{"jsonrpc":"2.0","method":"web/message","params":{"tab":\#(tab),"message":\#(json)}}"#.utf8)
+    }
+
+    /// A page of web tab `tab` called `alas.post`. The bridge already checked the size and the queue; they are
+    /// checked again here, since nothing the page's process sends is trusted. Returns once the plugin has handled
+    /// it, with nil, or at once with why it was dropped.
+    func webMessage(tab: Int, json: String) async -> String? {
+        guard state == .active else { return "the plugin is not running" }
+        guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
+        guard json.utf8.count <= webMessageLimit(tab: tab) else { return "message too large" }
+        guard (try? JSONSerialization.jsonObject(with: Data(json.utf8), options: .fragmentsAllowed)) != nil else {
+            return "message is not JSON"
+        }
+        guard webQueued[tab, default: 0] < Self.maxWebQueue else { return "busy" }
+        webQueued[tab, default: 0] += 1
+        defer { webQueued[tab, default: 1] -= 1 }
+        await deliver(Self.webMessage(tab: tab, json: json))
+        return nil
+    }
+
+    /// `web/post {tab, message}`: hands `message` to every live page of the tab, as JSON text. Without one it is
+    /// dropped; the page posts its own "ready" when it loads. Returns why the params are invalid, or nil.
+    private func postToPage(_ data: Data) -> String? {
+        // The tab through the decoder, which takes only a whole number; the message as any JSON value.
+        guard let tab = (try? JSONDecoder().decode(PluginParams<PluginTabParams>.self, from: data))?.params.tab,
+              let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
+              let message = params["message"]
+        else { return "needs tab and message" }
+        guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
+        guard let json = try? JSONSerialization.data(withJSONObject: message, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+        else { return "message is not JSON" }
+        let text = String(decoding: json, as: UTF8.self)
+        for receive in (webPages[tab] ?? [:]).values { receive(text) }
+        return nil
     }
 
     // MARK: - Helpers

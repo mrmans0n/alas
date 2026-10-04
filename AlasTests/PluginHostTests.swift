@@ -90,7 +90,7 @@ struct PluginHostTests {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
-        let manifest = try PluginManifest.parse(Data(manifest.utf8))
+        let manifest = try PluginManifest.parse(Data(manifest.utf8), supportedAPIs: 4...12)
         return PluginHost(
             manifest: manifest,
             source: PluginJSFixture.source(script),
@@ -1802,5 +1802,58 @@ struct PluginHostTests {
         await host.deactivate()
         await host.activate()
         #expect(sent() == (api >= 9 ? ["c+"] : []))
+    }
+
+    static let webManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"},{"id":"c","title":"C"}]}}"#
+
+    private static func webPost(tab: Int, id: Int? = nil, _ message: String) -> PluginFixtureStep {
+        .send(#"{"jsonrpc":"2.0",\#(id.map { #""id":\#($0),"# } ?? "")"method":"web/post","params":{"tab":\#(tab),"message":\#(message)}}"#)
+    }
+
+    /// `web/post`, as a notification or a request, reaches every live page of the tab as JSON text; one to a tab
+    /// that is not a web tab stops the plugin.
+    @Test func webPostReachesTheTabsPagesAndOnlyWebTabs() async throws {
+        let host = try makeHost(
+            [[.send(activateOK)], [Self.webPost(tab: 0, #"{"n":1}"#), Self.webPost(tab: 0, id: 7, #""two""#)], [], [Self.webPost(tab: 1, "1")]],
+            manifest: Self.webManifest)
+        await host.activate()
+        var first: [String] = [], second: [String] = []
+        #expect(host.attachWebPage(tab: 1) { _ in } == nil)
+        _ = try #require(host.attachWebPage(tab: 0) { first.append($0) })
+        let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
+        #expect(await host.webMessage(tab: 0, json: #"{"ready":true}"#) == nil)
+        #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
+        #expect(host.trace.contains { $0.direction == .toPlugin && $0.text.contains(#""id":7,"result":{}"#) })
+
+        host.detachWebPage(tab: 0, detached)
+        #expect(await host.webMessage(tab: 0, json: "0") == nil)
+        #expect(host.state == .failed("plugin sent a malformed web/post: tab 1 is not a web tab"))
+        #expect(second.count == 2)
+    }
+
+    /// The limit is on the whole `web/message` envelope; the page's JSON is spliced in, so its size is what counts.
+    @Test func webMessagesAreBoundedByTheirEnvelopeAndMustBeJSON() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let limit = host.webMessageLimit(tab: 0)
+        let fits = "\"" + String(repeating: "a", count: limit - 2) + "\""
+        #expect(PluginHost.webMessage(tab: 0, json: fits).count == Self.limits.maxMessageBytes)
+        #expect(await host.webMessage(tab: 0, json: fits) == nil)
+        #expect(await host.webMessage(tab: 0, json: fits + " ") == "message too large")
+        #expect(await host.webMessage(tab: 0, json: "{") == "message is not JSON")
+        #expect(await host.webMessage(tab: 1, json: "1") == "tab 1 is not a web tab")
+    }
+
+    /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per tab.
+    @Test func aPageCanQueueOnlySoManyMessages() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        // Every task starts on the main actor before the first delivery returns to it.
+        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, json: "\(index)") } }
+        var results: [String?] = []
+        for post in posts { results.append(await post.value) }
+        #expect(results.filter { $0 == nil }.count == PluginHost.maxWebQueue)
+        #expect(results.last == "busy")
+        #expect(await host.webMessage(tab: 0, json: "0") == nil)
     }
 }

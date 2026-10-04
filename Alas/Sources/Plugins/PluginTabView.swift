@@ -47,23 +47,30 @@ struct PluginTabView: View {
         let plugin = manager?.plugin(id: tab.pluginID)
         let host = manager?.host(pluginID: tab.pluginID, projectID: worktree.projectId)
         let tabIndex = plugin?.manifest.tabs.firstIndex { $0.id == tab.contributionID }
-        let isView = tabIndex.map { plugin?.manifest.tabs[$0].kind == .view } ?? false
+        let kind = tabIndex.flatMap { plugin?.manifest.tabs[$0].kind }
         let content = PluginTabContent.resolve(
             pluginsOn: manager != nil,
             found: plugin != nil && tabIndex != nil,
             approved: plugin.map { manager?.isApproved($0) == true } ?? false,
             enabled: plugin.map { manager?.isEnabled($0) == true } ?? false,
             hostState: host?.state,
-            hasContent: tabIndex.map { isView ? host?.views[$0] != nil : host?.frames[$0] != nil } ?? false)
+            // A web tab's page is its own content; it posts "ready" when it loads.
+            hasContent: tabIndex.map {
+                switch kind {
+                case .view: host?.views[$0] != nil
+                case .web: true
+                default: host?.frames[$0] != nil
+                }
+            } ?? false)
         ZStack {
             theme.color("bg-1")
             switch content {
             case .content:
                 if let host, let tabIndex {
-                    if isView {
-                        PluginViewTabView(host: host, tabIndex: tabIndex)
-                    } else {
-                        PluginCanvasView(host: host, tabIndex: tabIndex)
+                    switch kind {
+                    case .view: PluginViewTabView(host: host, tabIndex: tabIndex)
+                    case .web: PluginWebTabView(host: host, tabIndex: tabIndex, script: plugin?.web ?? Data())
+                    default: PluginCanvasView(host: host, tabIndex: tabIndex)
                     }
                 }
             case .loading:

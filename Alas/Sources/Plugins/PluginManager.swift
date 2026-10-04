@@ -11,6 +11,8 @@ final class PluginManager {
         let manifest: PluginManifest
         let source: Data
         let hash: String
+        /// The `web` page script, when the manifest declares one (API 12).
+        var web: Data?
         /// Reached through a symlink in the plugins folder: someone else's files, which the catalog never
         /// replaces or deletes.
         var isLinked = false
@@ -168,7 +170,7 @@ final class PluginManager {
     func install(_ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async -> String? {
         func describe(_ error: Error) -> String { (error as? PluginCatalogError)?.description ?? error.localizedDescription }
         // Downloaded and checked outside the serialized queue, so a slow server never holds up reloads or shutdown.
-        let download: (manifest: PluginManifest, manifestData: Data, source: Data)
+        let download: Download
         do {
             download = try await self.download(entry, version)
         } catch {
@@ -219,7 +221,7 @@ final class PluginManager {
         Self.discover(in: directory).plugins.first { $0.id == id && Self.isCatalogOwned($0) }
     }
 
-    /// In `Plugins/<id>` and holding nothing but the release's two files, so files someone added are never
+    /// In `Plugins/<id>` and holding nothing but the release's files, so files someone added are never
     /// deleted by Remove or replaced by Update.
     nonisolated static func isCatalogOwned(_ plugin: Plugin) -> Bool {
         guard plugin.isCatalogFolder else { return false }
@@ -228,14 +230,16 @@ final class PluginManager {
         func relative(_ url: URL) -> String { String(url.standardizedFileURL.path.dropFirst(folder.count)) }
         let found = (FileManager.default.enumerator(at: plugin.folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
             .map(relative)
-        let entry = plugin.folder.appending(path: plugin.manifest.entry)
-        let release = Set(["plugin.json", relative(entry)])
-        // The entry may sit in a subfolder, which the enumerator lists too.
+        let files = ([plugin.manifest.entry] + (plugin.manifest.web.map { [$0] } ?? [])).map { plugin.folder.appending(path: $0) }
+        let release = Set(["plugin.json"] + files.map(relative))
+        // The scripts may sit in subfolders, which the enumerator lists too.
         var folders: Set<String> = []
-        var parent = entry.standardizedFileURL.deletingLastPathComponent()
-        while parent.path.count + 1 > folder.count {
-            folders.insert(relative(parent))
-            parent = parent.deletingLastPathComponent()
+        for file in files {
+            var parent = file.standardizedFileURL.deletingLastPathComponent()
+            while parent.path.count + 1 > folder.count {
+                folders.insert(relative(parent))
+                parent = parent.deletingLastPathComponent()
+            }
         }
         return Set(found).subtracting(folders) == release
     }
@@ -247,15 +251,17 @@ final class PluginManager {
         return !catalogOwnedIDs.contains(id)
     }
 
-    /// The release's two files, checked against the record before anything is written.
+    /// The release's two or three files, checked against the record before anything is written.
     private func download(
         _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version
-    ) async throws -> (manifest: PluginManifest, manifestData: Data, source: Data) {
+    ) async throws -> Download {
         let id = entry.id
         guard let entryURL = version.entry else { throw PluginCatalogError.hashMismatch }
         let manifestData = try await catalog.fetch(version.manifest)
         let source = try await catalog.fetch(entryURL)
-        guard PluginTrust.hash(manifest: manifestData, entry: source) == version.hash else {
+        var web: Data?
+        if let webURL = version.web { web = try await catalog.fetch(webURL) }
+        guard PluginTrust.hash(manifest: manifestData, entry: source, web: web) == version.hash else {
             throw PluginCatalogError.hashMismatch
         }
         let manifest: PluginManifest
@@ -273,15 +279,26 @@ final class PluginManager {
         guard Set(manifest.capabilities.map(\.rawValue)) == Set(version.capabilities) else {
             throw PluginCatalogError.invalidDownload("it asks for different capabilities than the catalog lists")
         }
-        return (manifest, manifestData, source)
+        // The hash covers a page only if the record lists one, so the two must agree.
+        guard (manifest.web != nil) == (web != nil) else {
+            throw PluginCatalogError.invalidDownload("its web page does not match the catalog")
+        }
+        return Download(manifest: manifest, manifestData: manifestData, source: source, web: web)
+    }
+
+    private struct Download {
+        let manifest: PluginManifest
+        let manifestData: Data
+        let source: Data
+        let web: Data?
     }
 
     private func performInstall(
         _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version,
-        _ download: (manifest: PluginManifest, manifestData: Data, source: Data)
+        _ download: Download
     ) async throws {
         let id = entry.id
-        let (manifest, manifestData, source) = download
+        let manifest = download.manifest
         // Built in a hidden staging folder, which discovery skips, then moved into place in one step.
         let fileManager = FileManager.default
         let stagingRoot = stagingDirectory
@@ -296,10 +313,15 @@ final class PluginManager {
         if (try? staging.checkResourceIsReachable()) == true || (try? staging.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
             try fileManager.removeItem(at: staging)
         }
-        try fileManager.createDirectory(
-            at: staging.appending(path: manifest.entry).deletingLastPathComponent(), withIntermediateDirectories: true)
-        try manifestData.write(to: staging.appending(path: "plugin.json"))
-        try source.write(to: staging.appending(path: manifest.entry))
+        var files = [(manifest.entry, download.source)]
+        if let path = manifest.web, let web = download.web { files.append((path, web)) }
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        try download.manifestData.write(to: staging.appending(path: "plugin.json"))
+        for (path, data) in files {
+            let file = staging.appending(path: path)
+            try fileManager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: file)
+        }
         // The same checks a rescan applies, before anything running is touched.
         let staged = Self.discover(in: stagingRoot)
         guard staged.plugins.contains(where: { $0.id == id && $0.hash == version.hash }) else {
@@ -502,23 +524,15 @@ final class PluginManager {
                 let manifestData = try Data(contentsOf: folder.appending(path: "plugin.json"))
                 let manifest = try PluginManifest.parse(manifestData)
                 parsedID = manifest.id
-                let entry = folder.appending(path: manifest.entry)
-                // `folder` is already resolved, so the resolved entry must stay beneath it. That catches a
-                // symlinked directory in the path; the regular-file check catches a symlink as the file.
-                let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                guard entry.resolvingSymlinksInPath().path.hasPrefix(folder.path + "/"), values?.isRegularFile == true
-                else {
-                    throw PluginManifestError.invalidEntry(manifest.entry)
+                let source = try readScript(manifest.entry, in: folder, invalid: .invalidEntry(manifest.entry))
+                let web = try manifest.web.map { path in
+                    let web = try readScript(path, in: folder, invalid: .invalidWeb("\"\(path)\" must be a file inside the plugin folder"))
+                    guard String(data: web, encoding: .utf8) != nil else { throw PluginManifestError.invalidWeb("\"\(path)\" is not UTF-8") }
+                    return web
                 }
-                // Checked before reading, so an oversized entry is never loaded or hashed.
-                let size = values?.fileSize ?? 0
-                guard size <= PluginLimits().maxSourceBytes else {
-                    throw PluginRuntimeError.instantiation("script of \(size) bytes exceeds the size limit")
-                }
-                let source = try Data(contentsOf: entry)
                 found.append(Plugin(
                     folder: folder, manifest: manifest, source: source,
-                    hash: PluginTrust.hash(manifest: manifestData, entry: source), isLinked: isLinked))
+                    hash: PluginTrust.hash(manifest: manifestData, entry: source, web: web), web: web, isLinked: isLinked))
             } catch {
                 invalid.append(Invalid(folder: folder, reason: String(describing: error), pluginID: parsedID))
             }
@@ -547,5 +561,24 @@ final class PluginManager {
             }
         }
         return (loaded, invalid)
+    }
+
+    /// A script the manifest names, read only if it is a regular file inside `folder` (already resolved) and within
+    /// the size limit, so an oversized one is never loaded or hashed.
+    private nonisolated static func readScript(
+        _ path: String, in folder: URL, invalid: PluginManifestError
+    ) throws -> Data {
+        let file = folder.appending(path: path)
+        // The resolved file must stay beneath the folder, which catches a symlinked directory in the path; the
+        // regular-file check catches a symlink as the file.
+        let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard file.resolvingSymlinksInPath().path.hasPrefix(folder.path + "/"), values?.isRegularFile == true else {
+            throw invalid
+        }
+        let size = values?.fileSize ?? 0
+        guard size <= PluginLimits().maxSourceBytes else {
+            throw PluginRuntimeError.instantiation("script of \(size) bytes exceeds the size limit")
+        }
+        return try Data(contentsOf: file)
     }
 }

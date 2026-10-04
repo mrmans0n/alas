@@ -19,6 +19,8 @@ private func network(_ hosts: String) -> String { #","capabilities":["network"],
 
 private func processes(_ list: String) -> String { #","capabilities":["process.exec"],"processes":[\#(list)]"# }
 
+private let webTab = #","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"#
+
 private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
 
 struct PluginManifestTests {
@@ -122,6 +124,27 @@ struct PluginManifestTests {
             let parsed = try PluginManifest.parse(Data(json.utf8))
             #expect(expected == nil)
             #expect(parsed.remote == json.contains(#""remote":true"#))
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
+    @Test(arguments: [
+        (manifest(api: 11, webTab + #","web":"ui.js""#), PluginManifestError?.some(.needsNewerAPI(#""web""#, api: 12))),
+        (manifest(api: 11, webTab), .needsNewerAPI(#"tab "w" kind "web""#, api: 12)),
+        (manifest(api: 12, webTab), .invalidWeb(#"tab "w" has kind "web", so the manifest needs "web""#)),
+        (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab with kind "web""#)),
+        (manifest(api: 12, webTab + #","web":"../ui.js""#), .invalidWeb(#""../ui.js" must be a relative path inside the plugin folder"#)),
+        (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files"#)),
+        (manifest(api: 12, webTab + #","web":"dist/ui.js""#), nil),
+    ])
+    func webTabsNeedAPI12AndTheirOwnPageScript(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8), supportedAPIs: 4...12)
+            #expect(expected == nil)
+            #expect(parsed.web == "dist/ui.js" && parsed.tabs.map(\.kind) == [.web])
+            // Not advertised until all of API 12 lands.
+            #expect(throws: PluginManifestError.unsupportedAPI(12)) { try PluginManifest.parse(Data(json.utf8)) }
         } catch {
             #expect(error == expected)
         }
