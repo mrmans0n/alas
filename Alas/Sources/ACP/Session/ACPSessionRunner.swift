@@ -3895,6 +3895,15 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
+                    onTransportHandoff: { [weak self] in
+                        Task { @MainActor in
+                            guard let self, !self.stopped, self.isConnectionCurrent(),
+                                  self.activePromptID == promptID,
+                                  self.session.transcript.streamingState == .sending
+                            else { return }
+                            self.session.transcript.streamingState = .streaming
+                        }
+                    },
                     beforeRequestHandoff: beforeRequestHandoff,
                     onRequestHandoffDidOccur: onRequestHandoffDidOccur
                 )

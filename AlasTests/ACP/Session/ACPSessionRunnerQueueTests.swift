@@ -319,7 +319,17 @@ struct ACPSessionRunnerQueueTests {
 
     @Test("native steering preserves the running prompt and queued tail", arguments: [true, false])
     func nativeSteeringPreservesRunningPrompt(queuedOriginal: Bool) async throws {
-        let (runner, mock, session, store) = try mkRunner()
+        let preparing = QueueTestGate()
+        let releasePreparation = QueueTestGate()
+        var holdPreparation = true
+        let (runner, mock, session, store) = try mkRunner(pluginContext: { _ in
+            if holdPreparation {
+                holdPreparation = false
+                await preparing.open()
+                await releasePreparation.wait()
+            }
+            return []
+        })
         session.supportsSteering = true
         let started = QueueTestGate()
         let finish = QueueTestGate()
@@ -342,8 +352,12 @@ struct ACPSessionRunnerQueueTests {
         } else {
             runner.send(blocks: [.text("running")], intent: .auto)
         }
+        await preparing.wait()
+        #expect(!session.canSteerRunningTurn)
+        await releasePreparation.open()
         await started.wait()
-        session.transcript.streamingState = .streaming
+        try await waitUntil { session.canSteerRunningTurn }
+        #expect(session.canSteerRunningTurn)
         runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
             messageId: "shared", content: .text("before")))))
         runner.send(blocks: [.text("tail")], intent: .auto)
@@ -1215,7 +1229,8 @@ struct ACPSessionRunnerQueueTests {
         await leaseGate.release()
         await probe.waitUntilFirstStarted()
         #expect(dispatchFlag.isRegistered)
-        #expect(session.transcript.streamingState == .sending)
+        try await waitUntil { session.transcript.streamingState == .streaming }
+        #expect(session.transcript.streamingState == .streaming)
         #expect(await probe.callCount == 1)
         await probe.releaseFirst()
         for _ in 0 ..< 100 {
@@ -1966,10 +1981,9 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
-    @Test("steer during prompt preparation waits for cancellation before resending", arguments: [false, true])
-    func steerWaitsForCancelledPromptToSettle(supportsSteering: Bool) async throws {
+    @Test("unsupported steering waits for cancellation before resending")
+    func steerWaitsForCancelledPromptToSettle() async throws {
         let (runner, mock, session, _) = try mkRunner()
-        session.supportsSteering = supportsSteering
         let probe = StrictSingleFlightPromptProbe()
         let cancelSent = QueueTestGate()
         mock.scriptNotifyAsync(method: "session/cancel") { _ in

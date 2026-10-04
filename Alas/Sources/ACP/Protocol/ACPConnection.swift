@@ -374,6 +374,7 @@ final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
         onRequestHandoff: (@Sendable () -> Void)? = nil,
+        onTransportHandoff: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
@@ -393,11 +394,15 @@ final class ACPConnection: @unchecked Sendable {
                     beforeRequestHandoff: beforeRequestHandoff,
                     onRequestHandoff: {
                         try handoffBoundary?.fire()
+                        onTransportHandoff?()
                         handoff?.fire()
                     }
                 )
-            } else if let handoff {
-                resp = try await client.send(request, onRequestHandoff: { handoff.fire() })
+            } else if handoff != nil || onTransportHandoff != nil {
+                resp = try await client.send(request, onRequestHandoff: {
+                    onTransportHandoff?()
+                    handoff?.fire()
+                })
             } else {
                 resp = try await client.send(request)
             }

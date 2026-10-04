@@ -371,7 +371,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         var secondAccepted: Bool?
@@ -429,7 +429,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
 
         var secondAccepted: Bool?
         runner.send(blocks: [.text("next")], intent: .auto) { succeeded in
@@ -542,7 +542,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         var replacementCompletion: Bool?
@@ -551,7 +551,7 @@ struct ACPSessionRunnerTests {
         }
         try await waitUntil {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
-                && session.transcript.streamingState == .sending
+                && session.transcript.streamingState == .streaming
         }
 
         client.emitReserved(.agentMessageChunk(.text(" old-tail")))
@@ -561,7 +561,7 @@ struct ACPSessionRunnerTests {
                 return false
             }
         }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         await replacementGate.open()
@@ -694,7 +694,7 @@ struct ACPSessionRunnerTests {
         }
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .streaming)
 
         await finishSecond.open()
         for _ in 0..<20 where secondCompletion == nil {
@@ -750,7 +750,7 @@ struct ACPSessionRunnerTests {
         await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         await finishSecond.open()
