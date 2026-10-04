@@ -243,6 +243,8 @@ struct ACPMentionPickerView: View {
     private func populateFiles() {
         Task { @MainActor in
             isIndexing = true
+            // Sessions don't depend on the file list; offer them right away.
+            rescheduleRank()
             let files: [URL]
             if let provider = filesProvider {
                 files = await provider()

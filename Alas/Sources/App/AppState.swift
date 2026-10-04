@@ -12728,42 +12728,58 @@ final class AppState {
 
     /// Sessions of `projectId` the composer can attach, most recent first.
     func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) -> [ACPSessionMentionCandidate] {
-        var rows: [(row: ACPSessionRow, worktree: Worktree)] = []
+        var candidates: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
         for (owner, manager) in acpManagers {
             guard let worktreeId = owner.worktreeID,
                   let worktree = worktree(withId: worktreeId), worktree.projectId == projectId
             else { continue }
-            for row in manager.sessionRows
-            where !row.archived && row.ephemeralParentId == nil && row.id != sessionId {
-                rows.append((row, worktree))
-            }
+            candidates += acpMentionableSessions(in: manager, worktree: worktree)
+                .filter { $0.candidate.id != sessionId }
         }
-        return rows
-            .sorted { $0.row.updatedAt > $1.row.updatedAt }
-            .map { acpSessionMentionCandidate(row: $0.row, worktree: $0.worktree) }
+        return candidates.sorted { $0.updatedAt > $1.updatedAt }.map(\.candidate)
     }
 
     func acpSessionMentionCandidate(sessionId: String) -> ACPSessionMentionCandidate? {
         for (owner, manager) in acpManagers {
-            guard let row = manager.sessionRows.first(where: { $0.id == sessionId }),
-                  !row.archived,
-                  let worktreeId = owner.worktreeID,
-                  let worktree = worktree(withId: worktreeId)
+            guard let worktreeId = owner.worktreeID, let worktree = worktree(withId: worktreeId),
+                  let match = acpMentionableSessions(in: manager, worktree: worktree)
+                    .first(where: { $0.candidate.id == sessionId })
             else { continue }
-            return acpSessionMentionCandidate(row: row, worktree: worktree)
+            return match.candidate
         }
         return nil
     }
 
-    private func acpSessionMentionCandidate(row: ACPSessionRow, worktree: Worktree) -> ACPSessionMentionCandidate {
-        let live = acpManagers[.worktree(worktree.id)]?.liveSession(for: row.id)
-        return ACPSessionMentionCandidate(
-            id: row.id,
-            projectId: worktree.projectId,
-            title: live?.title ?? row.title,
-            agentName: agent(id: row.agentId)?.displayName ?? row.agentId,
-            worktreeName: worktree.name
-        )
+    /// `manager`'s non-archived, non-side-question sessions. Like the agent
+    /// sidebar, this unions stored rows with live sessions: the rows are a
+    /// lazily refreshed snapshot that can briefly miss a live session.
+    private func acpMentionableSessions(
+        in manager: ACPSessionManager, worktree: Worktree
+    ) -> [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] {
+        func candidate(id: String, agentId: String, title: String) -> ACPSessionMentionCandidate {
+            ACPSessionMentionCandidate(
+                id: id,
+                projectId: worktree.projectId,
+                title: title,
+                agentName: agent(id: agentId)?.displayName ?? agentId,
+                worktreeName: worktree.name
+            )
+        }
+        var result: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
+        var seen = Set<String>()
+        for row in manager.sessionRows {
+            seen.insert(row.id)
+            guard !row.archived, row.ephemeralParentId == nil else { continue }
+            let title = manager.liveSession(for: row.id)?.title ?? row.title
+            result.append((candidate(id: row.id, agentId: row.agentId, title: title), row.updatedAt))
+        }
+        for session in manager.sessions.values where !seen.contains(session.id) && !session.readOnlyRestricted {
+            result.append((
+                candidate(id: session.id, agentId: session.agentId, title: session.title),
+                Int64(session.createdAt.timeIntervalSince1970)
+            ))
+        }
+        return result
     }
 
     /// A session this instance knows, live or stored, made live with its
