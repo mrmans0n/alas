@@ -47,6 +47,7 @@ struct ACPSessionRunnerQueueTests {
         agentID: String = "claude",
         validateLease: (() async -> Bool)? = nil,
         onPromptWorkChanged: (() -> Void)? = nil,
+        onPersist: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
@@ -69,6 +70,7 @@ struct ACPSessionRunnerQueueTests {
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
+            onPersist: onPersist,
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
@@ -1660,6 +1662,66 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.count == (outcome == "corrected" ? 2 : 1))
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
         #expect(await probe.callCount == 1)
+    }
+
+    @Test("queue snapshots behind wake confirmation preserve its outcome and later prompts", arguments: [(true, "queued"), (false, "queued"), (true, "scheduled"), (false, "scheduled"), (true, "stopped"), (false, "stopped"), (true, "callback")])
+    func backgroundConfirmationPreservesLaterQueueSnapshots(committed: Bool, action: String) async throws {
+        var enqueueDuringConfirmation: (() -> Void)?
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", onPersist: { enqueueDuringConfirmation?() })
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "s")
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let confirmationStarted = QueueTestGate()
+        let releaseConfirmation = QueueTestGate()
+        var heldConfirmation = false
+        runner.beforePersistenceForTesting = {
+            if !heldConfirmation, session.backgroundTasks[0].wakeDelivered {
+                heldConfirmation = true
+                await confirmationStarted.open()
+                await releaseConfirmation.wait()
+            }
+        }
+        runner.start()
+        defer {
+            runner.stop()
+            Task { await releaseConfirmation.open() }
+        }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        let wakeID = try #require(session.queue.first?.id)
+        if !committed { try rejectWakeDeliveryWrites(in: store) }
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await confirmationStarted.wait()
+        session.transcript.streamingState = .awaitingPermission
+        var laterID: UUID?
+        let enqueueLater = {
+            runner.send(blocks: [.text("Later prompt")], intent: action == "scheduled"
+                ? .schedule(Date().addingTimeInterval(3600)) : .auto)
+            laterID = session.queue.last?.id
+        }
+        if action == "callback" {
+            enqueueDuringConfirmation = {
+                enqueueDuringConfirmation = nil
+                enqueueLater()
+            }
+        } else {
+            enqueueLater()
+        }
+        if action == "stopped" { runner.stop() }
+        await releaseConfirmation.open()
+        await runner.flushPersistence()
+        let savedLaterID = try #require(laterID)
+        #expect(savedLaterID != wakeID)
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(session.queue.map(\.id) == (committed ? [savedLaterID] : [wakeID, savedLaterID]))
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        if !committed {
+            #expect(session.queue[0].status == .pending && session.queue[0].deliveryUncertain)
+            #expect(session.queue[0].lastError != nil)
+        }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
     }
 
     @Test("wake confirmation reconciles teardown without consuming a newer retry", arguments: [(true, "stopped"), (true, "replaced"), (true, "retried"), (false, "stopped"), (false, "replaced")])

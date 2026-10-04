@@ -489,7 +489,7 @@ final class ACPSessionRunner {
 
     private var observedBackgroundTaskIds: Set<String> = []
     private var backgroundStopRequests: Set<String> = []
-    private var backgroundWakeConfirmations: Set<UUID> = []
+    private var backgroundWakeConfirmations: [UUID: Int] = [:]
     private var backgroundWakeAcknowledgements: [UUID: [ACPDurableConsumptionAcknowledgement]] = [:]
     private var backgroundCancellationInProgress = false
 
@@ -2747,6 +2747,23 @@ extension ACPSessionRunner {
         )
     }
 
+    private func queueSnapshotForPersistence(consuming consumed: QueuedPrompt? = nil) -> @MainActor @Sendable () -> [QueuedPrompt] {
+        let items = session.queue.filter { item in
+            guard let consumed else { return true }
+            return item.id != consumed.id || item.brokerOperationAttempt != consumed.brokerOperationAttempt
+        }
+        let confirmations = backgroundWakeConfirmations
+        return {
+            // Earlier confirmation settles before this snapshot is written.
+            // Preserve its removal or failed-save recovery, without changing
+            // unrelated items or a newer retry captured under the same ID.
+            items.compactMap { item in
+                guard confirmations[item.id] == item.brokerOperationAttempt else { return item }
+                return self.session.queue.first { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
+            }
+        }
+    }
+
     /// Persist the current queue snapshot. Called after every mutation:
     /// enqueue, edit, remove, reorder, head-status flip. Fire-and-forget
     /// snapshots swallow write failures, matching transcript persistence.
@@ -2761,7 +2778,7 @@ extension ACPSessionRunner {
             Task { @MainActor in completion?(false) }
             return
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         queueSaveGeneration += 1
@@ -2769,7 +2786,8 @@ extension ACPSessionRunner {
         let counted = acknowledgement != nil || completion != nil || retainOnFailure
         if counted { session.pendingQueuePersistenceCount += 1 }
         enqueuePersistence({ persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }, completion: { persisted in
             let didPersist = persisted == true
             if counted { self.session.pendingQueuePersistenceCount -= 1 }
@@ -2860,10 +2878,11 @@ extension ACPSessionRunner {
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         guard holdsLeaseForWrite() else { return }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         enqueuePersistence({ persistence in
+            let items = await queueSnapshot()
             guard try await persistence.clearForkContextDeliveryPending(
                 targetSessionID: sessionId,
                 fence: fence
@@ -3729,13 +3748,14 @@ extension ACPSessionRunner {
             }
         } catch { return false }
         session.queue[queueIndex].transcriptRecorded = true
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let sessionId = sessionId
         let fence = leaseFenceProvider()
         session.pendingQueuePersistenceCount += 1
         return await withCheckedContinuation { continuation in
             enqueuePersistence({ persistence in
-                try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
+                let items = await queueSnapshot()
+                return try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
             }, completion: { persisted in
                 self.session.pendingQueuePersistenceCount -= 1
                 if persisted == true { self.commitPersistedMessageRows(rows) }
@@ -5077,23 +5097,25 @@ extension ACPSessionRunner {
         if let acknowledgement {
             backgroundWakeAcknowledgements[item.id, default: []].append(acknowledgement)
         }
-        guard backgroundWakeConfirmations.insert(item.id).inserted else { return }
+        guard backgroundWakeConfirmations[item.id] == nil else { return }
+        backgroundWakeConfirmations[item.id] = item.brokerOperationAttempt
         let messages = rows.sorted().compactMap { index -> ACPStoredMessage? in
             guard let payload = try? ACPMessageCodec.encode(session.transcript.messages[index]) else { return nil }
             return .init(id: messageRowID(index), sessionId: self.sessionId,
                 kind: session.transcript.messages[index].kind, seq: Int64(index),
                 payload: payload, createdAt: createdAt(forMessageAt: index))
         }
-        let items = session.queue.filter { $0.id != item.id }
+        let queueSnapshot = queueSnapshotForPersistence(consuming: item)
         let sessionId = sessionId
         let fence = leaseFenceProvider()
         session.pendingQueuePersistenceCount += 1
         enqueuePersistence({ persistence in
-            try await persistence.persistBackgroundWakeAndQueue(
+            let items = await queueSnapshot()
+            return try await persistence.persistBackgroundWakeAndQueue(
                 sessionId: sessionId, messages: messages, items: items,
                 deliveredForkContext: deliveredForkContext, fence: fence)
         }, completion: { persisted in
-            self.backgroundWakeConfirmations.remove(item.id)
+            defer { self.backgroundWakeConfirmations.removeValue(forKey: item.id) }
             let acknowledgements = self.backgroundWakeAcknowledgements.removeValue(forKey: item.id) ?? []
             self.session.pendingQueuePersistenceCount -= 1
             if persisted == true {

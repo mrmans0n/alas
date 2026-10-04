@@ -262,6 +262,13 @@ Local validation passed:
   SQLite failure also reproduced older confirmation removing its queue entry
   without preserving an unsaved correction. Atomic confirmation now saves the
   latest task facts or retains the older notification for explicit retry.
+- Confirmation/snapshot ordering passed **360 tests in four suites** using
+  the same selection. A gated regression first reproduced a consumed wake
+  returning on disk after an intervening enqueue. It covers ordinary and
+  scheduled prompts, successful/failed confirmation, teardown, and an enqueue
+  from the persistence callback. Queue writers now reconcile only confirming
+  attempts after their earlier transaction settles, preserving failed-save
+  recovery and unrelated or newer queued attempts.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing
