@@ -7249,8 +7249,8 @@ final class AppState {
                         manager: manager
                     )
                 },
-                referencedSessionLocation: { [weak self] sessionId in
-                    await self?.acpReferencedSessionLocation(sessionId)
+                referencedSessionLocation: { [weak self] sessionId, projectId in
+                    await self?.acpReferencedSessionLocation(sessionId, projectId: projectId)
                 },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectId, branch in
@@ -12727,16 +12727,31 @@ final class AppState {
     // MARK: Session references
 
     /// Sessions of `projectId` the composer can attach, most recent first.
-    func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) -> [ACPSessionMentionCandidate] {
+    /// Covers every worktree of the project, including ones not opened in
+    /// this run, whose stores are read on demand.
+    func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) async -> [ACPSessionMentionCandidate] {
         var candidates: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
-        for (owner, manager) in acpManagers {
-            guard let worktreeId = owner.worktreeID,
-                  let worktree = worktree(withId: worktreeId), worktree.projectId == projectId
-            else { continue }
+        for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: true) {
             candidates += acpMentionableSessions(in: manager, worktree: worktree)
                 .filter { $0.candidate.id != sessionId }
         }
         return candidates.sorted { $0.updatedAt > $1.updatedAt }.map(\.candidate)
+    }
+
+    /// A manager for every worktree of `projectId`, created when the worktree
+    /// was not opened in this run. With `loadingRecentRows`, a manager
+    /// created here has its recent rows loaded before it is returned.
+    private func acpProjectManagers(
+        projectId: String, loadingRecentRows: Bool
+    ) async -> [(worktree: Worktree, manager: ACPSessionManager)] {
+        var result: [(worktree: Worktree, manager: ACPSessionManager)] = []
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            let existed = acpManagers[.worktree(worktree.id)] != nil
+            guard let manager = acpManager(for: worktree) else { continue }
+            if loadingRecentRows, !existed { await manager.refreshRecentNow() }
+            result.append((worktree, manager))
+        }
+        return result
     }
 
     func acpSessionMentionCandidate(sessionId: String) -> ACPSessionMentionCandidate? {
@@ -12782,18 +12797,18 @@ final class AppState {
         return result
     }
 
-    /// A session this instance knows, live or stored, made live with its
-    /// whole transcript loaded. Nil when unknown or archived. Looked up in
-    /// each worktree's store, not the recent-row snapshot: an attachment can
-    /// outlive the session's place among the recent rows. Every lookup
+    /// A session of `projectId`, live or stored, made live with its whole
+    /// transcript loaded. Nil when unknown or archived. Looked up in each of
+    /// the project's worktree stores, opened or not, rather than the
+    /// recent-row snapshot: an attachment can outlive both. Every lookup
     /// retains the session until the caller calls the location's `release`,
     /// so concurrent readers share it and the last one out lets an idle,
     /// otherwise unreferenced session be evicted again.
-    func acpReferencedSessionLocation(_ sessionId: String) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
-        for (owner, manager) in acpManagers {
-            guard let worktreeId = owner.worktreeID,
-                  let worktree = worktree(withId: worktreeId),
-                  let row = await manager.persistedSessionRow(id: sessionId), !row.archived,
+    func acpReferencedSessionLocation(
+        _ sessionId: String, projectId: String
+    ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
+        for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
+            guard let row = await manager.persistedSessionRow(id: sessionId), !row.archived,
                   manager.placeholderSession(id: sessionId) != nil
             else { continue }
             manager.retainSession(id: sessionId)
@@ -12818,7 +12833,7 @@ final class AppState {
     /// What a prompt in `projectId` carries in place of an attached session.
     /// Sessions of other projects are not resolved.
     func acpSessionReferenceContext(_ sessionId: String, projectId: String) async -> String? {
-        guard let location = await acpReferencedSessionLocation(sessionId) else { return nil }
+        guard let location = await acpReferencedSessionLocation(sessionId, projectId: projectId) else { return nil }
         defer { location.release?() }
         guard location.origin.projectId == projectId,
               let session = location.manager.liveSession(for: sessionId),

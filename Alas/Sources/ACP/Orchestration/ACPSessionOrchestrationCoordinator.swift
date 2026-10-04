@@ -59,10 +59,10 @@ final class ACPSessionOrchestrationCoordinator {
         /// model check reads it.
         let launchModels: (String, Worktree) -> [ACPAgentModelCatalog.Model]?
         let sessionLocation: (String) -> SessionLocation?
-        /// Any non-archived session this instance knows, live or stored,
-        /// made live when it was not. Reaches sessions outside a delegation,
-        /// so it is only consulted for sessions the user attached.
-        let referencedSessionLocation: (String) async -> SessionLocation?
+        /// A non-archived session of the given project, live or stored, made
+        /// live when it was not. Reaches sessions outside a delegation, so it
+        /// is only consulted for sessions the user attached.
+        let referencedSessionLocation: (_ sessionId: String, _ projectId: String) async -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
         /// Creates the worktree for `(projectId, branch, base)`. The last
@@ -95,7 +95,7 @@ final class ACPSessionOrchestrationCoordinator {
             delegationAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary] = { _, _ in [] },
             launchModels: @escaping (String, Worktree) -> [ACPAgentModelCatalog.Model]? = { _, _ in nil },
             sessionLocation: @escaping (String) -> SessionLocation?,
-            referencedSessionLocation: @escaping (String) async -> SessionLocation? = { _ in nil },
+            referencedSessionLocation: @escaping (String, String) async -> SessionLocation? = { _, _ in nil },
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
             createWorktree: @escaping (String, String, String?, @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>,
@@ -742,7 +742,7 @@ final class ACPSessionOrchestrationCoordinator {
         await callerManager.awaitBackfill(id: origin.sessionId)
         guard let caller = callerManager.liveSession(for: origin.sessionId),
               ACPSessionReference.attachedSessionIds(in: caller.transcript.messages).contains(targetSessionId),
-              let location = await environment.referencedSessionLocation(targetSessionId)
+              let location = await environment.referencedSessionLocation(targetSessionId, origin.projectId)
         else { return nil }
         guard location.origin.projectId == origin.projectId else {
             location.release?()

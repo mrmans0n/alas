@@ -14,7 +14,8 @@ struct ACPSessionMentionCandidate: Identifiable, Hashable, Sendable {
 /// the sidebar goes through. Both leave out the composer's own session and
 /// sessions of other projects.
 struct ACPSessionMentionSource {
-    let candidates: @MainActor () -> [ACPSessionMentionCandidate]
+    /// Async: it can read stores of worktrees not opened in this run.
+    let candidates: @MainActor () async -> [ACPSessionMentionCandidate]
     let candidate: @MainActor (_ sessionId: String) -> ACPSessionMentionCandidate?
 }
 
@@ -28,7 +29,7 @@ enum MentionPickerItem: Hashable {
 /// float above the chat with proper key forwarding.
 struct ACPMentionPickerView: View {
     let worktreeRoot: URL
-    var sessions: [ACPSessionMentionCandidate] = []
+    var sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil
     let onPick: (URL) -> Void
     var onPickSession: (ACPSessionMentionCandidate) -> Void = { _ in }
     let onCancel: () -> Void
@@ -39,6 +40,7 @@ struct ACPMentionPickerView: View {
     @State private var highlight: Int = 0
     @FocusState private var searchFocused: Bool
     @State private var allFiles: [URL] = []
+    @State private var sessions: [ACPSessionMentionCandidate] = []
     @State private var ranked: [MentionPickerItem] = []
     @State private var isIndexing: Bool = true
     @State private var rankTask: Task<Void, Never>?
@@ -66,7 +68,10 @@ struct ACPMentionPickerView: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
-        .onAppear { populateFiles() }
+        .onAppear {
+            populateSessions()
+            populateFiles()
+        }
     }
 
     private var search: some View {
@@ -75,7 +80,7 @@ struct ACPMentionPickerView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             TextField(
-                sessions.isEmpty
+                sessionsProvider == nil
                     ? "Search files & folders… (/ or ~/ to browse)"
                     : "Search files, folders & sessions… (/ or ~/ to browse)",
                 text: $query
@@ -240,11 +245,18 @@ struct ACPMentionPickerView: View {
         highlight = next
     }
 
+    /// Sessions load on their own, so they show up while files still index.
+    private func populateSessions() {
+        guard let sessionsProvider else { return }
+        Task { @MainActor in
+            sessions = await sessionsProvider()
+            rescheduleRank()
+        }
+    }
+
     private func populateFiles() {
         Task { @MainActor in
             isIndexing = true
-            // Sessions don't depend on the file list; offer them right away.
-            rescheduleRank()
             let files: [URL]
             if let provider = filesProvider {
                 files = await provider()

@@ -1049,7 +1049,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
                     ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
                     : nil
             },
-            referencedSessionLocation: { sessionId in
+            referencedSessionLocation: { sessionId, _ in
                 manager.liveSession(for: sessionId) != nil
                     ? .init(
                         origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"),

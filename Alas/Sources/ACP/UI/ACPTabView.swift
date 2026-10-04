@@ -931,7 +931,7 @@ private struct ACPSessionView: View {
     private var sessionMentions: ACPSessionMentionSource {
         ACPSessionMentionSource(
             candidates: { [state, worktree, sessionId] in
-                state.acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+                await state.acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
             },
             candidate: { [state, worktree, sessionId] id in
                 guard id != sessionId, let candidate = state.acpSessionMentionCandidate(sessionId: id),

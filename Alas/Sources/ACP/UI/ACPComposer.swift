@@ -1564,7 +1564,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let panel = ACPMentionPanel(
             worktreeRoot: coord.worktreeRoot,
             filesProvider: coord.filesProvider,
-            sessions: coord.sessionMentions?.candidates() ?? [],
+            sessionsProvider: coord.sessionMentions?.candidates,
             onPick: { [weak self] file in
                 self?.insertMention(file)
             },
@@ -2697,7 +2697,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 final class ACPMentionPanel: NSPanel {
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
-         sessions: [ACPSessionMentionCandidate] = [],
+         sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil,
          onPick: @escaping (URL) -> Void,
          onPickSession: @escaping (ACPSessionMentionCandidate) -> Void = { _ in },
          onCancel: @escaping () -> Void = {}) {
@@ -2717,7 +2717,7 @@ final class ACPMentionPanel: NSPanel {
 
         let host = NSHostingView(rootView: ACPMentionPickerView(
             worktreeRoot: worktreeRoot,
-            sessions: sessions,
+            sessionsProvider: sessionsProvider,
             onPick: { [weak self] url in
                 self?.close()
                 onPick(url)
