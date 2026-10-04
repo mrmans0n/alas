@@ -68,6 +68,33 @@ struct ACPSessionForkManagerTests {
         await manager.releaseAllOwnedLeases()
     }
 
+    @Test("fork takeover during source restoration prevents context delivery",
+          arguments: [false, true])
+    func mergeRejectsForkTakeover(archive: Bool) async throws {
+        let (manager, store, source, fork) = try await mergeFixture()
+        let takeover = Task { @MainActor in
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while !manager._ownedLeases.contains(source.id), ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+            #expect(manager._ownedLeases.contains(source.id))
+            #expect(manager._heartbeatTasks[fork.id] != nil)
+            // Advance the contender's clock past expiry, without a real sleep,
+            // to exercise takeover even if a renewal task is stalled.
+            let claimed = try store.claimLease(sessionId: fork.id, instanceId: "other", pid: Int64(getpid()),
+                                               now: Int64(Date().timeIntervalSince1970) + 16, staleAfter: 15)
+            #expect(claimed)
+        }
+        await #expect(throws: ACPSessionForkMergeError.forkUnavailable) {
+            try await manager.mergeForkBack(id: fork.id, archive: archive)
+        }
+        try await takeover.value
+        #expect(try store.loadQueue(sessionId: source.id).isEmpty)
+        #expect(try store.loadSession(id: fork.id)?.archived == false)
+        #expect(manager._heartbeatTasks[fork.id] == nil)
+        await manager.releaseAllOwnedLeases()
+    }
+
     @Test("rejected merges leave the fork unarchived and the source queue empty",
           arguments: ["busy", "empty", "archived", "missing", "leased", "forkLeased", "write"])
     func rejectedMergeKeepsFork(reason: String) async throws {

@@ -1974,6 +1974,7 @@ final class ACPSessionManager: ObservableObject {
         guard await acquireWriterLease(sessionId: id) else {
             throw ACPSessionForkMergeError.forkUnavailable
         }
+        startHeartbeat(sessionId: id)
         do {
             guard await confirmedWriterLease(for: id) else {
                 throw ACPSessionForkMergeError.forkUnavailable
@@ -2016,6 +2017,10 @@ final class ACPSessionManager: ObservableObject {
         let hadLease = _ownedLeases.contains(sourceID)
         guard await acquireWriterLease(sessionId: sourceID), await confirmedWriterLease(for: sourceID) else {
             throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        guard await confirmedWriterLease(for: id) else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+            throw ACPSessionForkMergeError.forkUnavailable
         }
         guard sessions[id] === session, session.transcript.streamingState == .idle,
               session.queue.isEmpty, session.transcript.messages.count == messageCount else {
