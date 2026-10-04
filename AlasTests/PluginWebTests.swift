@@ -109,8 +109,7 @@ struct PluginWebTests {
         control.stopLoading()
         let ping = "</script><img src=x onerror=alert(1)>\"'`${x}\u{2028}"
         let manifest = try PluginManifest.parse(
-            Data(#"{"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8),
-            supportedAPIs: 4...12)
+            Data(#"{"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8))
         let host = PluginHost(
             manifest: manifest, source: Data(Self.plugin(ping: ping).utf8),
             project: PluginProjectRef(id: "proj", name: "Project", host: nil), grants: [], actions: .inert,

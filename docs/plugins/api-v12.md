@@ -3,9 +3,6 @@
 > Message reference. The runtime, limits and the rest of the manifest are in
 > [api-v4.md](api-v4.md), and APIs 5 to 11 in [api-v5.md](api-v5.md) to
 > [api-v11.md](api-v11.md); everything there still applies.
->
-> API 12 is still being built. Alas does not load `"api": 12` plugins until all
-> of it has landed.
 
 API 12 adds web tabs: a tab whose content is a page the plugin ships, shown in
 a sandboxed web view. Use it for what native view trees can't draw, such as

@@ -92,7 +92,7 @@ struct PluginHostTests {
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
         // Wider than Alas advertises, for API 12 requests and events.
-        let manifest = try PluginManifest.parse(Data(manifest.utf8), supportedAPIs: 4...12)
+        let manifest = try PluginManifest.parse(Data(manifest.utf8))
         return PluginHost(
             manifest: manifest,
             source: PluginJSFixture.source(script),

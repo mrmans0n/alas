@@ -123,8 +123,7 @@ struct PluginCatalogTests {
         try Data().write(to: folder.appending(path: "plugin.json"))
         let page = web.map { #","web":"\#($0)","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"# } ?? ""
         let manifest = try PluginManifest.parse(
-            Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(web == nil ? 4 : 12),"entry":"\#(entry)"\#(page)}"#.utf8),
-            supportedAPIs: 4...12)
+            Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(web == nil ? 4 : 12),"entry":"\#(entry)"\#(page)}"#.utf8))
         let plugin = PluginManager.Plugin(folder: folder, manifest: manifest, source: Data(), hash: "h")
         #expect(PluginManager.isCatalogOwned(plugin))
         try Data().write(to: folder.appending(path: "extra.txt"))

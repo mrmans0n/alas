@@ -10,6 +10,7 @@ API 11 lets a plugin use files and run its declared commands in the worktrees
 of a remote project, on the SSH host the project runs on. The plugin's
 JavaScript still runs on this Mac; only the file work and the commands move to
 the host.
+[API 12](api-v12.md) adds web tabs and agents' usage history.
 
 ## The `api` field
 
