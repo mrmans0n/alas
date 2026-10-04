@@ -736,6 +736,24 @@ actor ACPSessionPersistence {
         try openedStore().loadQueue(sessionId: sessionId)
     }
 
+    /// Completion delivery and queue removal share a transaction. Otherwise a
+    /// crash between those writes could recreate an already delivered wake.
+    func persistBackgroundWakeAndQueue(
+        sessionId: String, messages: [ACPStoredMessage], items: [QueuedPrompt],
+        deliveredForkContext: Bool = false,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = {
+            try store.upsertMessages(messages)
+            try store.upsertQueue(sessionId: sessionId, items: items)
+            if deliveredForkContext { try store.clearForkContextDeliveryPending(targetSessionID: sessionId) }
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try store.db.transaction(operation)
+        return true
+    }
+
     func scheduledQueueSessionIds() throws -> [String] {
         try openedStore().scheduledQueueSessionIds()
     }

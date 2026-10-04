@@ -2430,6 +2430,10 @@ final class ACPSessionManager: ObservableObject {
     /// subagent row revealed by later backfill still finds its child
     /// transcript in memory.
     private static func restoreSubagents(from result: HydrationResult, in session: ACPSession) {
+        session.restoreBackgroundTasks(rows: result.messages.compactMap {
+            if case .toolCall(let row) = $0.wire { return row }
+            return nil
+        })
         var rows: [ACPMessage.ToolCall] = []
         for message in result.messages {
             guard case .toolCall(let toolCall) = message.wire,
@@ -5719,6 +5723,7 @@ extension ACPSessionManager {
         // backfill is done.
         await awaitBackfill(id: sessionId)
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+        let previousBackgroundTaskIds = Set(session.activeBackgroundTasks.map(\.id))
         // Re-verify the session still exists; a close during the await above
         // would have cleared it.
         guard sessions[sessionId] === session else {
@@ -6022,6 +6027,7 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
+            connection.backgroundTaskLifecycleEnabled = ["claude", "codex"].contains(session.agentId)
             let initialized = try await connection.initialize(
                 brokerOperationKey: Self.brokerStartupOperationKey(
                     sessionId: sessionId,
@@ -6050,6 +6056,7 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
             session.supportsCodexSteeringCompletion = ["@agentclientprotocol/codex-acp", "codex-acp"].contains(initialized.agentInfo?.name ?? "")
+            session.backgroundTaskStopSupported = connection.supportsBackgroundTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
@@ -7349,6 +7356,10 @@ extension ACPSessionManager {
                     return
                 }
             }
+            runner.reconcileBackgroundTasks(
+                adapterSurvived: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true
+                    && !createdFreshRemoteSession,
+                previousTaskIds: previousBackgroundTaskIds)
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()

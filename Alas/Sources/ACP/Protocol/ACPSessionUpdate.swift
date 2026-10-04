@@ -56,6 +56,7 @@ enum ACPSessionUpdate: Codable, Equatable {
     case notice(ACPSessionNotice)
     case subagentSpawned(ACPSubagentSpawn)
     case subagentStateUpdate(ACPSubagentStateUpdate)
+    case asyncTask(ACPAsyncTaskUpdate)
     case unknown(String)
 
     static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -125,6 +126,8 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .subagentSpawned(try ACPSubagentSpawn(from: decoder))
         case "subagent_state_update":
             self = .subagentStateUpdate(try ACPSubagentStateUpdate(from: decoder))
+        case "async_task_spawned", "async_task_progress", "async_task_state_update":
+            self = .asyncTask(try ACPAsyncTaskUpdate(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -184,6 +187,8 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .subagentStateUpdate(let state):
             try c.encode("subagent_state_update", forKey: .sessionUpdate)
             try state.encode(to: encoder)
+        case .asyncTask(let update):
+            try update.encode(to: encoder)
         case .availableCommandsUpdate:
             break
         case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,
@@ -198,10 +203,9 @@ enum ACPMessagePhase: String, Codable, Equatable, Sendable {
     case finalAnswer = "final_answer"
 
     static func codexPhase(in metadata: AnyCodable?) -> ACPMessagePhase? {
-        guard let metadata = metadata?.value as? [String: AnyCodable],
-              let codex = metadata["codex"]?.value as? [String: AnyCodable],
-              let value = codex["phase"]?.value as? String
-        else { return nil }
+        let root = metadata?.value as? [String: AnyCodable]
+        let codex = root?["codex"]?.value as? [String: AnyCodable]
+        guard let value = (codex?["phase"] ?? metadata?.airFields["phase"])?.value as? String else { return nil }
         return ACPMessagePhase(rawValue: value)
     }
 }

@@ -331,6 +331,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// its live child transcript from here; `subagentOrder` keeps spawn
     /// order for the rare consumer that wants the list rather than a row.
     @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
+    @Published var backgroundTasks: [ACPBackgroundTask] = []
+    @Published var backgroundTaskStopSupported = false
     private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
@@ -1008,6 +1010,8 @@ final class ACPSession: ObservableObject, Identifiable {
             return registerSubagent(spawn, at: timestamp)
         case .subagentStateUpdate(let update):
             return applySubagentState(update, at: timestamp)
+        case .asyncTask(let update):
+            return applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .unknown:
             return []
         }
@@ -1405,6 +1409,8 @@ final class ACPSession: ObservableObject, Identifiable {
             // arrives only in this replay. Dropping it would leave the row
             // spinning against a child that finished long ago.
             dirty = applySubagentState(update, replaying: true)
+        case .asyncTask(let update):
+            dirty = applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .agentMessageChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
@@ -2761,8 +2767,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persist them.
     func cancelInFlightToolCalls(at timestamp: Date = Date()) -> [Int] {
         var changed: [Int] = []
+        let backgroundToolIds = Set(activeBackgroundTasks.compactMap(\.toolCallId))
         for i in transcript.messages.indices {
             if case .toolCall(var tc) = transcript.messages[i],
+               ACPBackgroundTask(toolCall: tc) == nil,
+               !backgroundToolIds.contains(tc.toolCallId),
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
                 if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
@@ -3381,6 +3390,8 @@ final class ACPSession: ObservableObject, Identifiable {
             applyGoalValue(goal)
         } else if let codex = Self.metadataObject(root["codex"]),
                   let goal = codex["goal"] {
+            applyGoalValue(goal)
+        } else if let goal = metadata.airFields["goal"] {
             applyGoalValue(goal)
         }
     }

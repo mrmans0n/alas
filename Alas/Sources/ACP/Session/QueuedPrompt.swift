@@ -33,6 +33,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Present only for prompts delivered by a direct delegated-session edge.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
     let delegatedSource: ACPDelegatedPromptSource?
+    let backgroundTaskWake: String?
     var brokerOperationAttempt: Int
     /// The broker generation on which this prompt crossed the dispatch
     /// boundary. A later generation cannot tell whether that request
@@ -51,7 +52,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// flusher will not retry it until the user does, so a hidden failed
     /// head would block the whole queue.
     var isShownToUser: Bool {
-        delegatedSource == nil || lastError != nil || deliveryUncertain
+        (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
     }
 
     static let deliveryUncertaintyMessage =
@@ -65,6 +66,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          lastError: String? = nil,
          draft: ACPComposerDraft? = nil,
          delegatedSource: ACPDelegatedPromptSource? = nil,
+         backgroundTaskWake: String? = nil,
          transcriptRecorded: Bool = false,
          turnStartedAt: Int64? = nil,
          brokerOperationAttempt: Int = 0,
@@ -80,6 +82,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.lastError = lastError
         self.draft = draft
         self.delegatedSource = delegatedSource
+        self.backgroundTaskWake = backgroundTaskWake
         self.transcriptRecorded = transcriptRecorded
         self.turnStartedAt = turnStartedAt
         self.brokerOperationAttempt = brokerOperationAttempt
@@ -89,7 +92,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource
+        case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
         case usageLimit
     }
@@ -104,6 +107,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         lastError = try? c.decode(String.self, forKey: .lastError)
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
         delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
+        backgroundTaskWake = try? c.decode(String.self, forKey: .backgroundTaskWake)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
         turnStartedAt = try? c.decode(Int64.self, forKey: .turnStartedAt)
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0

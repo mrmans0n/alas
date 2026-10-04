@@ -317,7 +317,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate, .usageUpdate,
              .sessionInfoUpdate, .compactionUpdate, .compactionSummaryChunk,
-             .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
+             .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
             // Session-level state of a child session has no UI of its own:
             // the child has no composer, model picker, context ring or
             // notice banner.

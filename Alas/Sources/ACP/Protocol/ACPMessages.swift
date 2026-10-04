@@ -236,6 +236,9 @@ struct ACPAuthCapabilities: Codable, Equatable {
 }
 
 struct ACPClientCapabilitiesMeta: Codable, Equatable {
+    static let backgroundTasks = ACPClientCapabilitiesMeta(
+        terminalAuth: true, parameterizedModelPicker: true,
+        openCodeChildSessionUpdates: true, jetbrains: .init(), terminalOutputDelta: true)
     static let terminalAuth = ACPClientCapabilitiesMeta(
         terminalAuth: true,
         parameterizedModelPicker: true,
@@ -247,21 +250,38 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
     /// projects a child's updates into the parent session instead of sending
     /// `opencode/session/child_update`.
     let openCodeChildSessionUpdates: Bool
+    let jetbrains: JetBrains?
+    /// AIR suppresses fallback terminal output unless the client opts in.
+    let terminalOutputDelta: Bool?
+
+    struct JetBrains: Codable, Equatable {
+        var air = Air()
+        struct Air: Codable, Equatable {
+            var version = 1
+            var capabilities = ["asyncTasks"]
+        }
+    }
 
     init(
         terminalAuth: Bool,
         parameterizedModelPicker: Bool = false,
-        openCodeChildSessionUpdates: Bool = false
+        openCodeChildSessionUpdates: Bool = false,
+        jetbrains: JetBrains? = nil,
+        terminalOutputDelta: Bool? = nil
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
         self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
+        self.jetbrains = jetbrains
+        self.terminalOutputDelta = terminalOutputDelta
     }
 
     enum CodingKeys: String, CodingKey {
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
+        case jetbrains
+        case terminalOutputDelta = "terminal_output_delta"
     }
 
     init(from decoder: Decoder) throws {
@@ -270,6 +290,8 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
         parameterizedModelPicker = try c.decodeIfPresent(Bool.self, forKey: .parameterizedModelPicker) ?? false
         openCodeChildSessionUpdates = try c.decodeIfPresent(
             Bool.self, forKey: .openCodeChildSessionUpdates) ?? false
+        jetbrains = try? c.decodeIfPresent(JetBrains.self, forKey: .jetbrains)
+        terminalOutputDelta = try? c.decodeIfPresent(Bool.self, forKey: .terminalOutputDelta)
     }
 }
 

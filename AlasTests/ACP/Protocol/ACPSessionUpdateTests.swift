@@ -4,6 +4,26 @@ import Testing
 
 @Suite("ACP session/update")
 struct ACPSessionUpdateTests {
+    @Test("background task lifecycle updates are recognized", arguments: [
+        "async_task_spawned", "async_task_progress", "async_task_state_update"
+    ])
+    func backgroundTaskLifecycle(kind: String) throws {
+        let data = Data("{\"sessionUpdate\":\"\(kind)\",\"asyncTaskId\":\"task-1\",\"state\":\"completed\",\"canStop\":\"future\",\"usage\":{\"durationMs\":12}}".utf8)
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: data)
+        #expect(update != .unknown(kind))
+        #expect(try JSONDecoder().decode(ACPSessionUpdate.self, from: JSONEncoder().encode(update)) == update)
+    }
+
+    @Test("AIR message phases survive async-task negotiation")
+    func airMessagePhase() throws {
+        let data = Data(#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"},"_meta":{"jetbrains":{"air":{"phase":"final_answer"}}}}"#.utf8)
+        guard case .agentMessageChunk(let chunk) = try JSONDecoder().decode(ACPSessionUpdate.self, from: data) else {
+            Issue.record("expected message chunk")
+            return
+        }
+        #expect(chunk.phase == .finalAnswer)
+    }
+
     @Test("decodes agent message chunk")
     func agentChunk() throws {
         let env = try decode("session-update-agent-chunk")
