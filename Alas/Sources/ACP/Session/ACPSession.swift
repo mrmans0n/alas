@@ -632,6 +632,51 @@ final class ACPSession: ObservableObject, Identifiable {
         return id
     }
 
+    private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
+
+    /// Split live text items at a follow-up without changing existing row IDs.
+    /// Persist the next segment's ID on its predecessor so subsequent chunks
+    /// keep the same binding after rehydration, including repeated steering.
+    func beginSteeringOutputBoundary() -> Set<Int> {
+        var dirty = flushPendingReplayCandidates()
+        let start = (transcript.latestUserMessageIndex ?? -1) + 1
+        for index in start..<transcript.messages.count {
+            switch transcript.messages[index] {
+            case .agent(_, .some, let text), .thought(_, .some, let text):
+                let continuation = "alas-steering:\(UUID().uuidString)"
+                text.adopt(phase: nil, metadata: AnyCodable([
+                    Self.steeringContinuationMetadataKey: AnyCodable(continuation),
+                ]))
+                transcript.noteStreamingChange(at: index)
+                dirty.insert(index)
+            default:
+                break
+            }
+        }
+        transcript.lastContentTouchIndex = nil
+        return dirty
+    }
+
+    private func steeringMessageId(_ messageId: String?, kind: ACPTranscript.TextMessageKind) -> String? {
+        guard allowsStreamingBoundaryCrossing, var resolved = messageId else { return messageId }
+        var visited: Set<String> = []
+        while visited.insert(resolved).inserted,
+              let index = transcript.messageIndex(messageId: resolved, kind: kind) {
+            let text: StreamingText
+            switch transcript.messages[index] {
+            case .agent(_, _, let value), .thought(_, _, let value): text = value
+            default: return resolved
+            }
+            guard let metadata = text.metadata?.value as? [String: AnyCodable],
+                  let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String,
+                  next.hasPrefix("alas-steering:"),
+                  UUID(uuidString: String(next.dropFirst("alas-steering:".count))) != nil
+            else { break }
+            resolved = next
+        }
+        return resolved
+    }
+
     @discardableResult
     func attachCheckpoint(_ checkpointID: CheckpointID, toUserMessage id: UUID) -> Bool {
         guard let index = transcript.messages.firstIndex(where: {
@@ -725,16 +770,17 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            let messageId = steeringMessageId(chunk.messageId, kind: .agent)
             var flushedForAgent: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
-                messageId: chunk.messageId,
+                messageId: messageId,
                 replayKind: .agent,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
                 adoptContinuation: { candidate, phase, metadata in
-                    chunk.messageId.flatMap {
+                    messageId.flatMap {
                         adoptReplayContinuation(
                             kind: .agent, candidate: candidate, messageId: $0,
                             phase: phase, metadata: metadata)
@@ -744,7 +790,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 phase: chunk.phase,
                 metadata: chunk.metadata,
                 makeNew: { text, phase, metadata in
-                    .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                    .agent(id: UUID(), messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
                 }) else {
                 return flushedForAgent
             }
@@ -763,16 +809,17 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            let messageId = steeringMessageId(chunk.messageId, kind: .thought)
             var flushedForThought: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
-                messageId: chunk.messageId,
+                messageId: messageId,
                 replayKind: .thought,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
                 adoptContinuation: { candidate, phase, metadata in
-                    chunk.messageId.flatMap {
+                    messageId.flatMap {
                         adoptReplayContinuation(
                             kind: .thought, candidate: candidate, messageId: $0,
                             phase: phase, metadata: metadata)
@@ -782,7 +829,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 phase: chunk.phase,
                 metadata: chunk.metadata,
                 makeNew: { text, phase, metadata in
-                    .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                    .thought(id: UUID(), messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
                 }) else {
                 return flushedForThought
             }

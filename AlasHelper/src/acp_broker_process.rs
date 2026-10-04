@@ -233,6 +233,7 @@ struct SteeringTurn {
     detached: bool,
     saw_idle: bool,
     saw_active: bool,
+    saw_new_active: bool,
     last_status: Option<String>,
 }
 
@@ -245,6 +246,7 @@ impl SteeringTurn {
             detached: false,
             saw_idle: already_idle,
             saw_active: false,
+            saw_new_active: false,
             last_status: None,
         }
     }
@@ -252,7 +254,10 @@ impl SteeringTurn {
     fn observe(&mut self, params: &Value) -> Option<BrokerTurnState> {
         let status = codex_thread_status(params, &self.session_id)?;
         match status {
-            "active" if self.saw_idle => self.saw_active = true,
+            "active" if self.saw_idle => {
+                self.saw_active = true;
+                self.saw_new_active = true;
+            }
             "idle" | "systemError" => self.saw_idle = true,
             "active" => {}
             _ => return None,
@@ -265,8 +270,15 @@ impl SteeringTurn {
         self.awaiting_response = false;
         if outcome == Some("startedNewTurn") {
             self.detached = true;
+            self.saw_active = self.saw_new_active;
             self.saw_idle = true;
         }
+    }
+
+    fn begin_followup(&mut self) {
+        self.awaiting_response = true;
+        self.saw_idle = matches!(self.last_status.as_deref(), Some("idle" | "systemError"));
+        self.saw_new_active = false;
     }
 
     fn turn_state(&self) -> BrokerTurnState {
@@ -1745,7 +1757,7 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             } else if params.method == "_session/steering" {
                 if let Some(session_id) = params.params.get("sessionId").and_then(Value::as_str) {
                     if let Some(turn) = state.steering_turn.as_mut() {
-                        turn.awaiting_response = true;
+                        turn.begin_followup();
                     } else {
                         let already_idle = matches!(
                             state.last_thread_status.as_deref(),
@@ -2667,6 +2679,28 @@ mod tests {
         turn.observe(&status("root", "active"));
         turn.observe(&status("root", "systemError"));
         assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+    }
+
+    #[test]
+    fn repeated_steering_does_not_reuse_the_old_continuations_active_boundary() {
+        let status = |status| json!({"sessionId": "root", "update": {
+            "sessionUpdate": "session_info_update",
+            "_meta": {"codex": {"threadStatus": {"type": status}}}
+        }});
+        for outcome in ["injected", "startedNewTurn"] {
+            let mut turn = SteeringTurn::new("root".to_string(), true);
+            turn.observe(&status("active"));
+            turn.acknowledge(Some("startedNewTurn"));
+            turn.begin_followup();
+            turn.observe(&status("idle"));
+            turn.acknowledge(Some(outcome));
+            if outcome == "startedNewTurn" {
+                assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+                turn.observe(&status("active"));
+                turn.observe(&status("idle"));
+            }
+            assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+        }
     }
 
     #[test]

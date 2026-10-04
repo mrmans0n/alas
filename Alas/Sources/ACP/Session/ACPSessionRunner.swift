@@ -289,6 +289,7 @@ final class ACPSessionRunner {
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
     private var steeringSawActive = false
+    private var steeringSawActiveAfterIdle = false
     private var pendingForceSendQueuedItemID: UUID?
     /// Holds an idle source session at its persisted remote head while
     /// `session/fork` is in flight. New prompts remain queued until the
@@ -3163,8 +3164,9 @@ extension ACPSessionRunner {
         let hadOwnedPrompt = activePromptID != nil
         nativeSteeringInProgress = true
         steerInProgress = true
-        steeringSawIdle = lastSteeringThreadStatus == "idle" || !hadOwnedPrompt
+        steeringSawIdle = lastSteeringThreadStatus == "idle" || (!hadOwnedPrompt && !detachedSteeringTurn)
         steeringSawActive = detachedSteeringTurn && lastSteeringThreadStatus == "active"
+        steeringSawActiveAfterIdle = false
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         onDispatchRegistered?()
@@ -3187,6 +3189,8 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                self.session.allowsStreamingBoundaryCrossing = true
+                self.persistIndices(self.session.beginSteeringOutputBoundary())
                 if recordUserPrompt {
                     let before = self.session.transcript.messages.count
                     let titleBefore = self.session.title
@@ -3218,6 +3222,7 @@ extension ACPSessionRunner {
                     // Hold the queue until its thread status reports completion,
                     // including status received before this acknowledgement.
                     self.detachedSteeringTurn = true
+                    self.steeringSawActive = self.steeringSawActiveAfterIdle
                     self.steeringSawIdle = true
                     self.session.allowsStreamingBoundaryCrossing = true
                     self.session.transcript.streamingState = .streaming
@@ -3300,7 +3305,10 @@ extension ACPSessionRunner {
         else { return }
         lastSteeringThreadStatus = type
         if nativeSteeringInProgress || detachedSteeringTurn {
-            if type == "active", steeringSawIdle { steeringSawActive = true }
+            if type == "active", steeringSawIdle {
+                steeringSawActive = true
+                steeringSawActiveAfterIdle = true
+            }
             if type == "idle" || type == "systemError" { steeringSawIdle = true }
             finishDetachedSteeringIfReady()
         }

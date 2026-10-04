@@ -307,6 +307,8 @@ struct ACPSessionRunnerQueueTests {
         }
         await started.wait()
         session.transcript.streamingState = .streaming
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text("before")))))
         runner.send(blocks: [.text("tail")], intent: .auto)
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
@@ -315,6 +317,10 @@ struct ACPSessionRunnerQueueTests {
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
         #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
         #expect(session.transcript.streamingState == .streaming)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text("after")))))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text(" continued")))))
         #expect(session.queue.map(\.blocks) == (queuedOriginal ? [[.text("running")], [.text("tail")]] : [[.text("tail")]]))
         await runner.flushPersistence()
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
@@ -326,6 +332,22 @@ struct ACPSessionRunnerQueueTests {
             return nil
         }
         #expect(users == ["running", "redirect", "tail"])
+        func timeline(_ messages: [ACPMessage]) -> [String] {
+            messages.compactMap {
+                switch $0 {
+                case .user(_, _, let text, _, _): "user:\(text)"
+                case .agent(_, _, let text): "agent:\(text.value)"
+                default: nil
+                }
+            }
+        }
+        let expected = ["user:running", "agent:before", "user:redirect", "agent:after continued", "user:tail"]
+        #expect(timeline(session.transcript.messages) == expected)
+        await runner.flushPersistence()
+        let restored = try store.loadMessages(sessionId: "s").map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+        }
+        #expect(timeline(restored) == expected)
     }
 
     @Test("injection into an adapter-owned turn leaves completion with the adapter")
@@ -417,6 +439,70 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }.last == [.text("tail")])
         #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
         return false }.count == 1)
+    }
+
+    @Test("repeated steering waits for the new continuation's active boundary", arguments: ["injected", "startedNewTurn"])
+    func repeatedSteeringWaitsForNewActiveBoundary(outcome: String) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        let firstAcknowledgement = QueueTestGate()
+        let secondAcknowledgement = QueueTestGate()
+        var originalFinished = false
+        mock.scriptAsync(method: "session/prompt") { request in
+            if (request.params as? ACPSessionPromptParams)?.prompt == [.text("running")] {
+                await started.open()
+                await finishOriginal.wait()
+            }
+            return Data("{}".utf8)
+        }
+        mock.scriptAsync(method: "_session/steering") { request in
+            if (request.params as? ACPSteeringParams)?.prompt == [.text("first")] {
+                await firstAcknowledgement.wait()
+                return Data(#"{"outcome":"startedNewTurn"}"#.utf8)
+            }
+            await secondAcknowledgement.wait()
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        defer {
+            runner.stop()
+            Task { await finishOriginal.open()
+            await firstAcknowledgement.open()
+            await secondAcknowledgement.open() }
+        }
+        func observe(_ status: String) throws {
+            let info = try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data("{\"_meta\":{\"codex\":{\"threadStatus\":{\"type\":\"\(status)\"}}}}".utf8))
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+        }
+        runner.send(blocks: [.text("running")], intent: .auto) { originalFinished = $0 }
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        var firstAccepted: Bool?
+        runner.send(blocks: [.text("first")], intent: .steer) { firstAccepted = $0 }
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        await finishOriginal.open()
+        try await waitUntil { originalFinished }
+        try observe("idle")
+        await firstAcknowledgement.open()
+        try await waitUntil { firstAccepted == true }
+        try observe("active")
+
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("second")], intent: .steer) { secondAccepted = $0 }
+        try await waitUntil { mock.sent.filter { $0.method == "_session/steering" }.count == 2 }
+        try observe("idle")
+        await secondAcknowledgement.open()
+        try await waitUntil { secondAccepted == true }
+        if outcome == "startedNewTurn" {
+            #expect(session.queue.map(\.status) == [.pending])
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+            try observe("active")
+            try observe("idle")
+        }
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
     }
 
     @Test("native steering refusal preserves the original turn", arguments: ["failed", "unknown"])
