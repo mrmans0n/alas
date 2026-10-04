@@ -231,6 +231,7 @@ final class ACPSessionManager: ObservableObject {
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var restartingConnections: Set<ACPSession.ID> = []
+    private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
@@ -1955,6 +1956,86 @@ final class ACPSessionManager: ObservableObject {
             await releaseWriterLease(sessionId: sourceSessionID)
         }
         return try result.get()
+    }
+
+    /// Queues a durable context transfer before optionally archiving the fork.
+    func mergeForkBack(id: ACPSession.ID, archive: Bool) async throws -> ACPSession.ID {
+        guard !isDisposed, let session = sessions[id],
+              session.hydrationState == .ready, let fork = session.forkRecord,
+              fork.phase == .ready, fork.sourceSessionID != id else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard mergingForks.insert(id).inserted else { throw ACPSessionForkMergeError.forkBusy }
+        defer { mergingForks.remove(id) }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
+        await awaitBackfill(id: id)
+        await flushAllPersistence()
+        guard session.transcript.streamingState == .idle, session.queue.isEmpty,
+              session.agentState != .spawning else { throw ACPSessionForkMergeError.forkBusy }
+        guard sessions[id] === session, !isMirror(sessionId: id),
+              let forkRow = try await persistence.loadSession(id: id), !forkRow.archived else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard let prompt = ACPSessionForkMergeContext.prompt(fork: fork, messages: session.transcript.messages) else {
+            throw ACPSessionForkMergeError.noConversation
+        }
+        let messageCount = session.transcript.messages.count
+        let sourceID = fork.sourceSessionID
+        guard let sourceRow = try await persistence.loadSession(id: sourceID), !sourceRow.archived else {
+            throw ACPSessionForkMergeError.sourceUnavailable
+        }
+        persistedRows[sourceID] = sourceRow
+        guard let source = placeholderSession(id: sourceID) else { throw ACPSessionForkMergeError.sourceUnavailable }
+        await hydrateIfNeeded(id: sourceID)
+        guard source.hydrationState == .ready, !source.readOnlyRestricted else {
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        let hadLease = _ownedLeases.contains(sourceID)
+        guard await acquireWriterLease(sessionId: sourceID), await confirmedWriterLease(for: sourceID) else {
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        let accepted = await enqueueDelegatedPrompt(
+            text: prompt,
+            source: .init(sessionId: id, messageId: "fork-merge-\(messageCount)"),
+            into: sourceID,
+            requiringWriter: true
+        )
+        if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+        guard accepted else { throw ACPSessionForkMergeError.deliveryFailed }
+        if archive {
+            // A turn started while delivery was suspended must keep its tab and runner.
+            guard sessions[id] === session, session.transcript.streamingState == .idle,
+                  session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+                throw ACPSessionForkMergeError.forkBusy
+            }
+            let hadForkLease = _ownedLeases.contains(id)
+            guard await acquireWriterLease(sessionId: id), let fence = leaseFence(sessionId: id) else {
+                throw ACPSessionForkMergeError.archiveFailed
+            }
+            guard sessions[id] === session, session.transcript.streamingState == .idle,
+                  session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+                if !hadForkLease { await releaseWriterLease(sessionId: id) }
+                throw ACPSessionForkMergeError.forkBusy
+            }
+            // Subsequent session writes must carry the archive flag too.
+            if var row = persistedRows[id] {
+                row.archived = true
+                persistedRows[id] = row
+            }
+            let archived = await enqueuePersistenceResult { persistence in
+                try await persistence.setArchived(id: id, archived: true, fence: fence)
+            }.value == true
+            if !archived, var row = persistedRows[id] {
+                row.archived = false
+                persistedRows[id] = row
+                replaceRecentRow(row)
+            }
+            if archived { recent.removeAll { $0.id == id } }
+            if !hadForkLease { await releaseWriterLease(sessionId: id) }
+            guard archived else { throw ACPSessionForkMergeError.archiveFailed }
+        }
+        return sourceID
     }
 
     /// Opens an empty side-question card on `parentID`, replacing its current

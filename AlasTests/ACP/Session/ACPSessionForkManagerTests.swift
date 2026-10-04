@@ -5,6 +5,96 @@ import Testing
 @MainActor
 @Suite("ACP session fork manager")
 struct ACPSessionForkManagerTests {
+    @Test("merge queues context in a restored busy source before optionally archiving the fork",
+          arguments: [false, true])
+    func mergeIntoRestoredSource(archive: Bool) async throws {
+        let (manager, store, source, fork) = try await mergeFixture()
+        manager.closeSession(id: source.id)
+        let restored = try #require(manager.placeholderSession(id: source.id))
+        await manager.hydrateIfNeeded(id: source.id)
+        restored.transcript.streamingState = .streaming
+        restored.replaceComposerDraft(ACPComposerDraft(segments: [.text("Unsent draft")]))
+        #expect(await manager.enqueuePrompt(id: UUID(), text: "Existing task", into: source.id))
+
+        let sourceID = try await manager.mergeForkBack(id: fork.id, archive: archive)
+        let queue = try store.loadQueue(sessionId: sourceID)
+        let item = try #require(queue.last)
+        let text = item.blocks.compactMap { block -> String? in
+            guard case .text(let text) = block else { return nil }
+            return text
+        }.joined()
+        #expect(sourceID == source.id)
+        #expect(text.contains("New finding"))
+        #expect(!text.contains("Inherited answer"))
+        #expect(item.delegatedSource?.sessionId == fork.id)
+        #expect(restored.transcript.streamingState == .streaming)
+        #expect(queue.first?.blocks == [.text("Existing task")])
+        #expect(restored.composerDraft == ACPComposerDraft(segments: [.text("Unsent draft")]))
+        #expect(try store.loadSession(id: fork.id)?.archived == archive)
+        #expect(try store.loadMessages(sessionId: fork.id).count == 2)
+        if !archive {
+            _ = try await manager.mergeForkBack(id: fork.id, archive: false)
+            #expect(try store.loadQueue(sessionId: source.id).count == 2)
+        }
+        await manager.releaseAllOwnedLeases()
+    }
+
+    @Test("rejected merges leave the fork unarchived and the source queue empty",
+          arguments: ["busy", "empty", "archived", "missing", "leased", "write"])
+    func rejectedMergeKeepsFork(reason: String) async throws {
+        let (manager, store, source, fork) = try await mergeFixture()
+        let expected: ACPSessionForkMergeError
+        switch reason {
+        case "busy":
+            fork.transcript.streamingState = .awaitingInput
+            expected = .forkBusy
+        case "empty":
+            fork.transcript.messages.removeLast()
+            expected = .noConversation
+        case "archived":
+            try store.setArchived(id: source.id, archived: true)
+            expected = .sourceUnavailable
+        case "missing":
+            try store.deleteSession(id: source.id)
+            expected = .sourceUnavailable
+        case "write":
+            try store.db.exec("""
+                CREATE TRIGGER reject_merge_queue BEFORE INSERT ON session_queue
+                BEGIN SELECT RAISE(ABORT, 'queue write rejected'); END
+                """)
+            expected = .deliveryFailed
+        default:
+            _ = try store.claimLease(sessionId: source.id, instanceId: "other", pid: Int64(getpid()),
+                                     now: Int64(Date().timeIntervalSince1970), staleAfter: 15)
+            expected = .sourceReadOnly
+        }
+        await #expect(throws: expected) {
+            try await manager.mergeForkBack(id: fork.id, archive: true)
+        }
+        #expect(try store.loadSession(id: fork.id)?.archived == false)
+        #expect(try store.loadQueue(sessionId: source.id).isEmpty)
+        #expect(source.queue.isEmpty)
+        await manager.releaseAllOwnedLeases()
+    }
+
+    private func mergeFixture() async throws -> (ACPSessionManager, ACPSessionStore, ACPSession, ACPSession) {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let source = manager.createSession(agentId: "claude")
+        source.transcript.appendMessage(.agent(id: UUID(), StreamingText("Inherited answer")))
+        manager.persistTrailingMessages(source, fromIndex: 0)
+        await manager.flushAllPersistence()
+        let boundary = try #require(source.transcript.messages.first)
+        let fork = try await manager.createFork(
+            sourceSessionID: source.id, boundary: .init(stableID: boundary.stableId, kind: .agent),
+            targetAgentID: "codex", autoRunDefault: false
+        )
+        fork.transcript.appendMessage(.agent(id: UUID(), StreamingText("New finding")))
+        manager.persistTrailingMessages(fork, fromIndex: 1)
+        await manager.flushAllPersistence()
+        return (manager, store, source, fork)
+    }
+
     @Test("createFork copies through selected boundary and leaves source unchanged")
     func createsLocalFork() async throws {
         let path = temporaryPath()

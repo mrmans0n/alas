@@ -5,6 +5,54 @@ import Testing
 @MainActor
 @Suite("ACP session fork policy")
 struct ACPSessionForkPolicyTests {
+    @Test("merge digest excludes inherited conversation and private state, with a readable offset")
+    func mergeDigestUsesOnlyPostForkConversation() throws {
+        let fork = ACPSessionForkRecord(
+            targetSessionID: "fork", sourceSessionID: "source", sourceAgentID: "claude",
+            sourceBoundarySequence: 9, inheritedMessageCount: 2,
+            phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+        )
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: " \n", attachments: []),
+            .agent(id: UUID(), StreamingText("Inherited answer")),
+            .thought(id: UUID(), StreamingText("Private reasoning")),
+            .systemNotice(id: UUID(), text: "Internal notice"),
+            .user(id: UUID(), text: "Check the retry policy", attachments: []),
+            .agent(id: UUID(), StreamingText("Retry only after acknowledgement.")),
+        ]
+        let prompt = try #require(ACPSessionForkMergeContext.prompt(fork: fork, messages: messages))
+        #expect(!prompt.contains("Inherited answer"))
+        #expect(!prompt.contains("Private reasoning"))
+        #expect(!prompt.contains("Internal notice"))
+        #expect(prompt.contains("session_read(session_id: \"fork\", offset: 1)"))
+        let json = try #require(prompt.split(separator: "\n").last)
+        let entries = try JSONDecoder().decode([ACPSessionTranscriptReader.Entry].self, from: Data(json.utf8))
+        #expect(entries.map(\.index) == [2, 3])
+        #expect(entries.map(\.text) == ["Check the retry policy", "Retry only after acknowledgement."])
+        #expect(ACPSessionForkMergeContext.prompt(fork: fork, messages: Array(messages.prefix(2))) == nil)
+    }
+
+    @Test("merge digest budgets the full escaped prompt and preserves the latest findings",
+          arguments: ["a", "\u{01}", "👨‍👩‍👧‍👦\n\"\\"])
+    func mergeDigestRespectsBudget(unit: String) throws {
+        let fork = ACPSessionForkRecord(
+            targetSessionID: "fork", sourceSessionID: "source", sourceAgentID: "codex",
+            sourceBoundarySequence: 0, inheritedMessageCount: 0,
+            phase: .ready, mechanism: .nativeACP, contextDeliveryPending: false
+        )
+        let messages = (0..<20).map { index in
+            ACPMessage.agent(id: UUID(), StreamingText(String(repeating: unit, count: 3_000) + "Finding \(index)"))
+        }
+        let prompt = try #require(ACPSessionForkMergeContext.prompt(fork: fork, messages: messages))
+        #expect(prompt.count <= ACPSessionForkMergeContext.characterBudget)
+        #expect(prompt.contains("Finding 19"))
+        #expect(!prompt.contains("Finding 0"))
+        let json = try #require(prompt.split(separator: "\n").last)
+        let entries = try JSONDecoder().decode([ACPSessionTranscriptReader.Entry].self, from: Data(json.utf8))
+        #expect(entries.last?.index == 19)
+        #expect(entries.allSatisfy { $0.truncated == true })
+    }
+
     @Test("native candidate requires same agent, remote head, id, and non-negative capability knowledge")
     func nativeCandidateRequirements() {
         #expect(ACPSessionForkCandidatePolicy.candidate(

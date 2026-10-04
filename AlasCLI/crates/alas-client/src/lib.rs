@@ -202,7 +202,7 @@ pub enum Command {
         session_id: String,
         prompt: String,
     },
-    /// One page of a direct parent's or child's text-only transcript. The
+    /// One page of a direct parent's, child's, or this session's fork transcript. The
     /// app applies its defaults to omitted bounds.
     SessionRead {
         session_id: String,
