@@ -1014,9 +1014,14 @@ struct ACPSessionRunnerQueueTests {
     @Test("retrying a recorded follow-up requires its steering boundary to be durable")
     func recordedFollowupRequiresDurableSteeringBoundary() async throws {
         let (runner, mock, session, store) = try mkRunner()
-        defer { runner.stop() }
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        defer { runner.stop()
+        Task { await release.open() } }
         session.supportsSteering = true
         session.transcript.streamingState = .streaming
+        let previous = StreamingText("earlier")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "old", previous))
         session.recordUserPrompt(text: "redirect", attachments: [])
         let text = StreamingText("working")
         session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
@@ -1031,13 +1036,28 @@ struct ACPSessionRunnerQueueTests {
             WHEN NEW.kind = 'agent'
             BEGIN SELECT RAISE(ABORT, 'boundary save failed'); END;
             """)
+        session.allowsStreamingBoundaryCrossing = false
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if !paused, text.metadata != nil {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
         runner.forceSendQueuedItem(id: id)
+        await saving.wait()
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "old", content: .text(" replay")))))
+        await release.open()
         await runner.flushPersistence()
         try await waitUntil { session.queue.isEmpty || session.queue.first?.status == .pending }
         await runner.flushPersistence()
         #expect(!mock.sent.contains { $0.method == "_session/steering" })
         #expect(text.metadata == nil)
+        #expect(!session.allowsStreamingBoundaryCrossing)
+        #expect(previous.value == "earlier")
         let retry = try #require(session.queue.first)
         #expect(retry.id == id && retry.transcriptRecorded)
         #expect(try store.loadQueue(sessionId: "s").first?.id == id)

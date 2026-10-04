@@ -3337,6 +3337,7 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                let boundaryCrossingBefore = self.session.allowsStreamingBoundaryCrossing
                 if recordUserPrompt {
                     self.flushStreamingPersist()
                     let before = self.session.transcript.messages.count
@@ -3373,6 +3374,7 @@ extension ACPSessionRunner {
                                return false
                            }) {
                             boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
+                            self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
                             self.session.transcript.messages.remove(at: index)
                             // Replay output materialized before this user row
                             // belongs to the preceding turn, even if steering
@@ -3411,6 +3413,7 @@ extension ACPSessionRunner {
                     }
                     if !persisted, self.isConnectionCurrent() {
                         boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
+                        self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
                     }
                     self.steeringRowPersistencePending = false
                     self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
