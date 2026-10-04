@@ -1940,8 +1940,14 @@ final class ACPSessionRunner {
     /// a success; resuming sends a short continue prompt instead.
     private func applyUsageLimit(_ detected: ACPUsageLimit, failedQueuedItemId: UUID?) {
         var previous = session.usageLimit
+        var consumedWake: QueuedPrompt?
         if let failedQueuedItemId, session.queue.first?.id == failedQueuedItemId {
-            let consumed = session.popQueueHead()
+            let consumed = session.queue.first
+            if consumed?.backgroundTaskWake != nil {
+                consumedWake = consumed
+            } else {
+                _ = session.popQueueHead()
+            }
             previous = previous ?? consumed?.usageLimit
             session.normalQueuedTurnIDs.remove(failedQueuedItemId)
             session.normalQueuedTurnUserMessageIDs.removeValue(forKey: failedQueuedItemId)
@@ -1955,7 +1961,11 @@ final class ACPSessionRunner {
         } else {
             session.removeUsageLimitResume()
         }
-        persistQueue()
+        if let consumedWake {
+            persistBackgroundWakeAndQueue(rows: markBackgroundWakeDelivered(id: consumedWake.id), consuming: consumedWake)
+        } else {
+            persistQueue()
+        }
     }
 
     /// Re-upsert the session's persistence row to capture changes to

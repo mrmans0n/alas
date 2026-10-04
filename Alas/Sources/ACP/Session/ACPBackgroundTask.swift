@@ -97,6 +97,7 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
         let wasActive = isActive
         let wasLost = state == "lost"
         let reportsLiveWork = update.sessionUpdate == "async_task_spawned"
+            || update.sessionUpdate == "async_task_progress"
             || ["running", "paused"].contains(update.state ?? "")
         if wasLost, reportsLiveWork {
             state = "running"

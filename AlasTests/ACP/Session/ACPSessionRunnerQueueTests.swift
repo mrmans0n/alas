@@ -94,9 +94,9 @@ struct ACPSessionRunnerQueueTests {
         ])))
     }
 
-    @Test("a queued prompt stopped by a usage limit is delivered and a resume is scheduled at the reset")
-    func usageLimitSchedulesResumeAtReset() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+    @Test("a usage-limited turn confirms its prompt and schedules a resume without losing a failed wake confirmation", arguments: [(false, true), (true, true), (true, false)])
+    func usageLimitSchedulesResumeAtReset(backgroundWake: Bool, committed: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: backgroundWake ? "codex" : "claude")
         // The parser reads local time and ignores resets more than 8 days out.
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -105,15 +105,45 @@ struct ACPSessionRunnerQueueTests {
         mock.script(method: "session/prompt") { _ in
             throw Self.codexLimitError("You've hit your usage limit. Try again at \(reset).")
         }
-        session.enqueue(blocks: [.text("first")])
+        if backgroundWake {
+            session.transcript.streamingState = .awaitingPermission
+            session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+                state: "completed"), ownerSessionId: "s")
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            session.transcript.streamingState = .idle
+            if !committed { try rejectWakeDeliveryWrites(in: store) }
+        } else {
+            session.enqueue(blocks: [.text("first")])
+        }
         session.enqueue(blocks: [.text("second")])
         runner.persistQueue()
         runner.flushQueueIfIdle()
         try await waitUntil { session.usageLimit != nil }
+        await runner.flushPersistence()
 
         let limit = try #require(session.usageLimit)
         #expect(limit.resetSource == .parsed)
         #expect(session.lastError == nil)
+        if backgroundWake {
+            #expect(session.backgroundTasks[0].wakeDelivered == committed)
+            #expect(try store.loadQueue(sessionId: "s") == session.queue)
+            let row = try #require(store.loadMessages(sessionId: "s").first)
+            let task = try #require(ACPBackgroundTask(toolCall: JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload)))
+            #expect(task.wakeDelivered == committed)
+            let queuedIDs = session.queue.map(\.id)
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            #expect(session.queue.map(\.id) == queuedIDs)
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+            if !committed {
+                #expect(session.queue.count == 3)
+                #expect(session.queue[0].backgroundTaskWake != nil && session.queue[0].deliveryUncertain)
+                #expect(session.queue[0].lastError != nil)
+                #expect(session.queue[1].usageLimit == limit)
+                return
+            }
+        }
         // "first" was delivered (its text is in the agent's history); the
         // resume item now heads the queue, ahead of "second".
         #expect(session.queue.count == 2)
@@ -121,6 +151,17 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].scheduledAt == limit.resetsAt.map { $0 + 60 })
         #expect(session.queue[0].lastError == nil)
         #expect(session.queue[1].blocks == [.text("second")])
+        if backgroundWake {
+            mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+            session.queue[0].scheduledAt = Date()
+            runner.flushQueueIfIdle()
+            try await waitUntil { session.queue.isEmpty }
+            await runner.flushPersistence()
+            await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+            await runner.flushPersistence()
+            #expect(session.queue.isEmpty)
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 3)
+        }
     }
 
     @Test("a resume that succeeds clears the Limited state and the queue drains")
@@ -1582,8 +1623,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.isEmpty)
     }
 
-    @Test("an in-flight loss notification cannot consume a later completion notification", arguments: [false, true])
-    func completionWhileLossNotificationIsSending(reannounced: Bool) async throws {
+    @Test("an in-flight loss notification cannot consume a later completion notification", arguments: ["none", "async_task_spawned", "async_task_progress"])
+    func completionWhileLossNotificationIsSending(reannouncement: String) async throws {
         let (runner, mock, session, _) = try mkRunner(agentID: "codex")
         var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")
         task.loseObservation()
@@ -1591,13 +1632,15 @@ struct ACPSessionRunnerQueueTests {
         let probe = StrictSingleFlightPromptProbe()
         mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
         runner.start()
-        defer { runner.stop() }
+        defer { runner.stop()
+        Task { await probe.releaseFirst() } }
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await probe.waitUntilFirstStarted()
-        if reannounced {
+        if reannouncement != "none" {
             mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
-                sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"))))
+                sessionUpdate: reannouncement, asyncTaskId: "watch", name: "Watch"))))
             try await waitUntil { session.backgroundTasks[0].state == "running" }
+            #expect(session.backgroundTasks[0].finishedAt == nil && session.backgroundTasks[0].summary == nil)
         }
         mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
             sessionUpdate: "async_task_state_update", asyncTaskId: "watch", state: "completed"))))

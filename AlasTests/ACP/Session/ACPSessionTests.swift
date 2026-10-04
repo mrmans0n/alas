@@ -36,6 +36,7 @@ struct ACPSessionTests {
         session.applyBackgroundTask(completion, ownerSessionId: "s")
         let finished = try #require(session.backgroundTasks.first)
         session.applyBackgroundTask(spawn, ownerSessionId: "s")
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_progress", asyncTaskId: "one"), ownerSessionId: "s")
         session.applyBackgroundTask(completion, ownerSessionId: "s")
         #expect(session.backgroundTasks.count == 2)
         #expect(session.transcript.messages.count == 2)

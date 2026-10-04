@@ -156,6 +156,10 @@ removing a previously visible row from client rendering.
 Replayed spawns cannot reopen completed work. A successful attach to a
 surviving broker retains running tasks; replacement marks only prior tasks
 that the new adapter has not reported again as lost observation.
+Sparse progress reopens lost work without reopening a completed task.
+A wake consumed before a usage limit uses the same task/queue confirmation
+transaction, with its continuation retained and failed confirmation held for
+explicit retry.
 
 ## Verification boundaries
 
@@ -230,6 +234,13 @@ Local validation passed:
   advancing without repairing the task row or queuing its wake. Repeated
   failed replays now remain unacknowledged; successful replay repairs durable
   state and queues the original wake identity exactly once.
+- Sparse progress and usage-limit delivery passed **357 tests in four suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`,
+  `ACPSessionPersistenceTests`, and `ACPSessionTests`. Existing parameterized
+  regressions first reproduced lost tasks remaining terminal after progress
+  and consumed wakes being recreated after a limit. They now cover late
+  reobservation, completed replay, successful continuation, and SQLite failure
+  retaining the notification and resume state.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing
