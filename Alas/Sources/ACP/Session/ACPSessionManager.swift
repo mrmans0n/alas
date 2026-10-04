@@ -427,8 +427,7 @@ final class ACPSessionManager: ObservableObject {
     @discardableResult
     func interrupt(for id: ACPSession.ID) async -> Bool {
         guard await confirmedWriterLease(for: id), let runner = runners[id] else { return false }
-        await runner.userCancel()
-        return true
+        return await runner.userCancel()
     }
 
     func controlGoal(

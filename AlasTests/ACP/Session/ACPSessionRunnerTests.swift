@@ -131,6 +131,13 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.retryStatus == nil)
     }
 
+    @Test("user cancellation reports whether the cancel reached the agent", arguments: [true, false])
+    func userCancellationReportsWhetherItWasSent(leaseConfirmed: Bool) async throws {
+        let (runner, _) = try makeRunner(validateLease: { leaseConfirmed })
+
+        #expect(await runner.userCancel() == leaseConfirmed)
+    }
+
     @Test("recording a submitted prompt keeps the suspended composer draft until prompt completion")
     func recordingPromptKeepsSuspendedDraftUntilPromptCompletion() async throws {
         let url = FileManager.default.temporaryDirectory
