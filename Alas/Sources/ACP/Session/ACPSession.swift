@@ -2644,6 +2644,7 @@ final class ACPSession: ObservableObject, Identifiable {
         queue[0].status = .sending
         queue[0].lastError = nil
         queue[0].dispatchedBrokerGeneration = nil
+        queue[0].dispatchCount += 1
         return queue[0].brokerOperationKey
     }
 
