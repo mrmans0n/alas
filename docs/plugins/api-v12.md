@@ -249,6 +249,16 @@ Sent after each turn of the plugin's project is recorded, with the turn as
 `usage/turns` returns it. It needs `usage.read`. Turns of other projects, and
 of multi-project workspaces, are not sent; read them with `"scope": "all"`.
 
+### Known limits
+
+- A turn in flight when Alas restarts the agent connection gets no history
+  row.
+- When a stopped turn's result arrives only after a following turn has
+  finished, cost growth around that boundary can be credited to the wrong
+  one of the two. Token counts are per turn and unaffected.
+
+Both are tracked in https://github.com/mrmans0n/alas/issues/1764.
+
 ### Errors
 
 | Code | When |
