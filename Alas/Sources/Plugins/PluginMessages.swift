@@ -276,6 +276,30 @@ struct PluginRunStartParams: Decodable, Sendable {
     let script: String
 }
 
+/// `usage/turns` and `usage/limits` (API 12). Times are epoch milliseconds; `until` is exclusive.
+struct PluginUsageParams: Decodable, Sendable {
+    let since: Int64
+    var until: Int64?
+    var limit: Int?
+    /// `project` (the default) or `all`.
+    var scope: String?
+    /// The previous page's `next`.
+    var cursor: UsageCursor?
+}
+
+struct PluginUsageTurnsResult: Encodable {
+    let turns: [UsageTurn]
+    let truncated: Bool
+    /// Present when truncated: pass it as `cursor` for the next page.
+    let next: UsageCursor?
+}
+
+struct PluginUsageLimitsResult: Encodable {
+    let limits: [UsageLimitEpisode]
+    let truncated: Bool
+    let next: UsageCursor?
+}
+
 struct PluginRunOutputParams: Decodable, Sendable {
     let run: String
 }

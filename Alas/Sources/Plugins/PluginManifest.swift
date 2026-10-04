@@ -18,6 +18,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case filesRead = "files.read"
     case filesWrite = "files.write"
     case sessionContext = "session.context"
+    case usageRead = "usage.read"
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
     var api: Int {
@@ -25,6 +26,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .notify, .network, .timers: 5
         case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
         case .sessionContext: 7
+        case .usageRead: 12
         default: 4
         }
     }
@@ -49,6 +51,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .filesRead: "Read files in this project's worktrees"
         case .filesWrite: "Create and change files in this project's worktrees"
         case .sessionContext: "Add text to every prompt sent to agents in this project"
+        case .usageRead: "Read your agents' token usage, cost and usage-limit history across all projects"
         }
     }
 
@@ -82,6 +85,8 @@ enum PluginEvent: String, Sendable, Hashable {
     case runStarted = "run.started"
     case runFinished = "run.finished"
     case reviewChanged = "review.changed"
+    // API 12.
+    case turnFinished = "turn.finished"
 
     var capability: PluginCapability {
         switch self {
@@ -89,10 +94,17 @@ enum PluginEvent: String, Sendable, Hashable {
         case .gitChanged, .worktreeCreated, .worktreeRemoved, .focusChanged: .workspaceRead
         case .runStarted, .runFinished: .runsRead
         case .reviewChanged: .reviewRead
+        case .turnFinished: .usageRead
         }
     }
 
-    var api: Int { capability == .sessionRead ? 5 : 6 }
+    var api: Int {
+        switch capability {
+        case .sessionRead: 5
+        case .usageRead: 12
+        default: 6
+        }
+    }
     /// `session.state` is sent as `session/state`.
     var method: String { rawValue.replacingOccurrences(of: ".", with: "/") }
 }

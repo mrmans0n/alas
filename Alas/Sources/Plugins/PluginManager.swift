@@ -505,6 +505,15 @@ final class PluginManager {
         }
     }
 
+    /// Sends `turn.finished` to the hosts of the turn's project (API 12); a turn of no project reaches none.
+    func turnFinished(_ turn: UsageTurn) async {
+        let event = PluginEventMessage(
+            event: .turnFinished, params: PluginEventParams(session: turn.session, worktree: turn.worktree, turn: turn))
+        for (key, host) in hostsByKey where key.projectID == turn.project && host.state == .active {
+            await host.events([event])
+        }
+    }
+
     /// Every sub-folder with a `plugin.json`. Folders that fail validation, and
     /// all folders sharing a duplicate id, are reported instead of loaded.
     nonisolated static func discover(in directory: URL) -> (plugins: [Plugin], invalid: [Invalid]) {

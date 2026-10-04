@@ -129,6 +129,23 @@ struct PluginManifestTests {
         }
     }
 
+    /// `usage.read` and `turn.finished` are API 12, which this Alas does not advertise yet, so the test widens the range.
+    @Test(arguments: [
+        (manifest(api: 11, #","capabilities":["usage.read"]"#), PluginManifestError?.some(.needsNewerAPI(#"capability "usage.read""#, api: 12))),
+        (manifest(api: 11, #","capabilities":["session.read"],"events":["turn.finished"]"#), .needsNewerAPI(#"event "turn.finished""#, api: 12)),
+        (manifest(api: 12, #","capabilities":["session.read"],"events":["turn.finished"]"#), .eventNeedsCapability("turn.finished")),
+        (manifest(api: 12, #","capabilities":["usage.read"],"events":["turn.finished"]"#), nil),
+    ])
+    func usageNeedsAPI12(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8), supportedAPIs: 4...12)
+            #expect(expected == nil)
+            #expect(parsed.events == [.turnFinished])
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
     @Test(arguments: [
         (manifest(api: 11, webTab + #","web":"ui.js""#), PluginManifestError?.some(.needsNewerAPI(#""web""#, api: 12))),
         (manifest(api: 11, webTab), .needsNewerAPI(#"tab "w" kind "web""#, api: 12)),

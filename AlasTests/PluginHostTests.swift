@@ -85,11 +85,13 @@ struct PluginHostTests {
         launcher: FakeLauncher = FakeLauncher(),
         worktreeRoot: URL? = nil,
         projectHost: String? = nil,
+        usageHistory: UsageHistoryStore? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
+        // Wider than Alas advertises, for API 12 requests and events.
         let manifest = try PluginManifest.parse(Data(manifest.utf8), supportedAPIs: 4...12)
         return PluginHost(
             manifest: manifest,
@@ -150,7 +152,8 @@ struct PluginHostTests {
                     case "far": .remote(host: "devbox", root: "/srv/wt")
                     default: nil
                     }
-                }),
+                },
+                usageHistory: usageHistory),
             storage: storage,
             pluginStorage: pluginStorage ?? PluginStorage(
                 file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),
@@ -807,6 +810,57 @@ struct PluginHostTests {
             .map(\.text)
         #expect(sent.map { $0.firstMatch(of: /"method":"([^"]+)"/).map { String($0.1) } ?? "" } == methods)
         #expect(sent.allSatisfy { !$0.contains("state") })
+    }
+
+    struct UsageCase: Sendable {
+        var api = 12
+        var grants: Set<PluginCapability> = [.usageRead]
+        let request: String
+        let reply: String
+        var sessions: [String] = []
+    }
+
+    /// `usage/*` needs API 12 and the grant, reads this project's history unless asked for all, and is bounded.
+    @Test(arguments: [
+        UsageCase(api: 11, grants: [], request: request(1, "usage/turns", #"{"since":0}"#), reply: #""code":-32601"#),
+        UsageCase(grants: [], request: request(1, "usage/turns", #"{"since":0}"#), reply: #""code":-32001"#),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0}"#), reply: #""truncated":false"#, sessions: ["mine"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"scope":"all"}"#), reply: #""truncated":false"#, sessions: ["theirs", "mine"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"scope":"all","limit":1}"#), reply: #""truncated":true"#, sessions: ["theirs"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"limit":0}"#), reply: #""code":-32602"#),
+        UsageCase(request: request(1, "usage/limits", #"{"since":0,"scope":"mine"}"#), reply: #""code":-32602"#),
+        UsageCase(request: request(1, "usage/limits", #"{"since":0}"#), reply: #""resetSource":"parsed""#, sessions: ["mine"]),
+    ])
+    func usageRequestsAreGatedAndScopedToTheProject(_ c: UsageCase) async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "usage-\(UUID().uuidString).sqlite").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try UsageHistoryStore(path: path)
+        for (session, project, end) in [("mine", "proj", Int64(1_000)), ("theirs", "other", 2_000)] {
+            _ = try await store.record(UsageTurnInput(
+                session: session, project: project, agent: "claude", startedAt: end, endedAt: end, result: "completed"))
+        }
+        try await store.record(UsageLimitEpisode(
+            session: "mine", project: "proj", worktree: nil, agent: "claude", detectedAt: 1, resetsAt: nil, resetSource: "parsed"))
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":\#(c.api),"entry":"p.js"\#(c.api >= 12 ? #","capabilities":["usage.read"]"# : "")}"#
+        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: manifest, usageHistory: store)
+        await host.activate()
+        #expect(await awaitCondition { replies(host).count == 2 })
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(c.reply))
+        #expect(reply.matches(of: /"session":"(\w+)"/).map { String($0.1) } == c.sessions)
+    }
+
+    /// `turn.finished` reaches a plugin that subscribed to it only with the grant.
+    @Test(arguments: [(Set<PluginCapability>(), 0), (Set<PluginCapability>([.usageRead]), 1)])
+    func turnFinishedNeedsTheUsageGrant(grants: Set<PluginCapability>, deliveries: Int) async throws {
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","capabilities":["usage.read"],"events":["turn.finished"]}"#
+        let host = try makeHost([[.send(activateOK)]], grants: grants, manifest: manifest)
+        await host.activate()
+        let turn = UsageTurn(
+            id: 1, session: "s1", project: "proj", worktree: "wt", agent: "claude", model: nil, startedAt: 1, endedAt: 2,
+            result: "completed", tokens: nil, cost: nil)
+        await host.events([PluginEventMessage(event: .turnFinished, params: PluginEventParams(session: "s1", turn: turn))])
+        #expect(host.trace.filter { $0.text.contains(#""method":"turn/finished""#) && $0.text.contains(#""endedAt":2"#) }.count == deliveries)
     }
 
     // MARK: - API 5: settings, network, timers

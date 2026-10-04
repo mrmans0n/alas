@@ -149,6 +149,8 @@ final class ACPSessionManager: ObservableObject {
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    /// Every turn that reached the agent, superseded ones included, for usage history.
+    private let onTurnUsage: ((ACPTurnCompletion) -> Void)?
     private let onChildBlocked: ((ACPChildBlocker) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
@@ -1615,6 +1617,7 @@ final class ACPSessionManager: ObservableObject {
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
          onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
@@ -1665,6 +1668,7 @@ final class ACPSessionManager: ObservableObject {
         self.onQueueChanged = onQueueChanged
         self.onSuccessfulTurn = onSuccessfulTurn
         self.onTurnCompleted = onTurnCompleted
+        self.onTurnUsage = onTurnUsage
         self.onChildBlocked = onChildBlocked
         self.onCheckpointCapture = onCheckpointCapture
         self.pluginContext = pluginContext
@@ -6405,6 +6409,13 @@ extension ACPSessionManager {
                                                     self.sessions[sessionId]?.readOnlyRestricted != true
                                               else { return }
                                               self.onTurnCompleted?(completion)
+                                          },
+                                          onTurnUsage: { [weak self] completion in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
+                                                    self.sessions[sessionId]?.readOnlyRestricted != true
+                                              else { return }
+                                              self.onTurnUsage?(completion)
                                           },
                                           onPermissionBlocked: { [weak self] blocker in
                                               guard let self,
