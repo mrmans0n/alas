@@ -253,9 +253,8 @@ of multi-project workspaces, are not sent; read them with `"scope": "all"`.
 
 - A turn in flight when the agent connection is restarted or lost gets no history
   row.
-- When a stopped turn's result arrives only after a following turn has
-  finished, cost growth around that boundary can be credited to the wrong
-  one of the two. Token counts are per turn and unaffected.
+- A stopped turn whose result arrives after the next turn's is recorded with
+  its tokens but no `cost`: the next turn's `cost` already includes it.
 - An update the agent sends right after a turn's result, while Alas is busy,
   can count toward that turn, so its cost may include the next turn's first
   cost growth.

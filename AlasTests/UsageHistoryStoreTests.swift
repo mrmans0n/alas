@@ -64,6 +64,20 @@ struct UsageHistoryStoreTests {
         #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, 5, 15, nil, nil])
     }
 
+    /// A stopped turn that reports after the turn sent next records its total but no cost, since the later turn's
+    /// cost already took that growth, and the later turn stays the baseline.
+    @Test func aTurnReportedAfterALaterOneIsNotChargedAgain() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try UsageHistoryStore(path: path)
+        for (started, total) in [(Int64(500), 0.40), (2_000, 0.80), (1_000, 0.60), (3_000, 0.90)] {
+            _ = try await store.record(turn(startedAt: started, endedAt: 4_000, cost: (total, "USD")))
+        }
+        let read = try await store.turns(project: nil, since: 0, until: nil, limit: 10).turns.sorted { $0.startedAt < $1.startedAt }
+        // In cents, by when each was sent: the late one (sent at 1_000) has none.
+        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, nil, 40, 10])
+    }
+
     @Test(arguments: [
         ("proj" as String?, Int64(0), Int64?.none, 2, [Int64(3_000), 2_000], true),
         (nil, 1_500, 3_000, 10, [2_500, 2_000], false),
