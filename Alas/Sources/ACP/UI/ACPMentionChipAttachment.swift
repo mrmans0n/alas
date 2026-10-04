@@ -135,11 +135,13 @@ final class ACPFileMentionHoverController {
                   let anchor = textView.imageChipAnchorRect(for: range) else { return }
             let url = URL(string: next.uri)
             let isFile = url?.isFileURL == true
+            let sessionId = ACPSessionReference.sessionId(fromURI: next.uri)
             let hosting = NSHostingController(
                 rootView: ACPFileMentionHoverCard(
                     name: attachment.displayName,
-                    location: isFile ? (url?.path ?? next.uri) : next.uri,
-                    isFile: isFile
+                    location: sessionId.map { "Agent session \($0)" }
+                        ?? (isFile ? (url?.path ?? next.uri) : next.uri),
+                    systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
                 )
             )
             hosting.sizingOptions = [.preferredContentSize]
@@ -166,11 +168,11 @@ final class ACPFileMentionHoverController {
 private struct ACPFileMentionHoverCard: View {
     let name: String
     let location: String
-    let isFile: Bool
+    let systemImage: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(name, systemImage: isFile ? "doc.text" : "link")
+            Label(name, systemImage: systemImage)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
             Text(location)

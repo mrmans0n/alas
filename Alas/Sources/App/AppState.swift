@@ -7249,6 +7249,9 @@ final class AppState {
                         manager: manager
                     )
                 },
+                referencedSessionLocation: { [weak self] sessionId in
+                    await self?.acpReferencedSessionLocation(sessionId)
+                },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectId, branch in
                     guard let self,
@@ -12721,6 +12724,91 @@ final class AppState {
         acpManagers[owner]
     }
 
+    // MARK: Session references
+
+    /// Sessions of `projectId` the composer can attach, most recent first.
+    func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) -> [ACPSessionMentionCandidate] {
+        var rows: [(row: ACPSessionRow, worktree: Worktree)] = []
+        for (owner, manager) in acpManagers {
+            guard let worktreeId = owner.worktreeID,
+                  let worktree = worktree(withId: worktreeId), worktree.projectId == projectId
+            else { continue }
+            for row in manager.sessionRows
+            where !row.archived && row.ephemeralParentId == nil && row.id != sessionId {
+                rows.append((row, worktree))
+            }
+        }
+        return rows
+            .sorted { $0.row.updatedAt > $1.row.updatedAt }
+            .map { acpSessionMentionCandidate(row: $0.row, worktree: $0.worktree) }
+    }
+
+    func acpSessionMentionCandidate(sessionId: String) -> ACPSessionMentionCandidate? {
+        for (owner, manager) in acpManagers {
+            guard let row = manager.sessionRows.first(where: { $0.id == sessionId }),
+                  !row.archived,
+                  let worktreeId = owner.worktreeID,
+                  let worktree = worktree(withId: worktreeId)
+            else { continue }
+            return acpSessionMentionCandidate(row: row, worktree: worktree)
+        }
+        return nil
+    }
+
+    private func acpSessionMentionCandidate(row: ACPSessionRow, worktree: Worktree) -> ACPSessionMentionCandidate {
+        let live = acpManagers[.worktree(worktree.id)]?.liveSession(for: row.id)
+        return ACPSessionMentionCandidate(
+            id: row.id,
+            projectId: worktree.projectId,
+            title: live?.title ?? row.title,
+            agentName: agent(id: row.agentId)?.displayName ?? row.agentId,
+            worktreeName: worktree.name
+        )
+    }
+
+    /// A session this instance knows, live or stored, made live with its
+    /// whole transcript loaded. Nil when unknown or archived.
+    func acpReferencedSessionLocation(_ sessionId: String) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
+        for (owner, manager) in acpManagers {
+            guard let worktreeId = owner.worktreeID,
+                  let worktree = worktree(withId: worktreeId),
+                  manager.liveSession(for: sessionId) != nil
+                    || manager.sessionRows.contains(where: { $0.id == sessionId }),
+                  let row = await manager.persistedSessionRow(id: sessionId), !row.archived
+            else { continue }
+            _ = manager.placeholderSession(id: sessionId)
+            await manager.hydrateIfNeeded(id: sessionId)
+            await manager.awaitBackfill(id: sessionId)
+            guard manager.liveSession(for: sessionId) != nil else { return nil }
+            return .init(
+                origin: ACPOrchestrationSessionOrigin(
+                    sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id
+                ),
+                manager: manager
+            )
+        }
+        return nil
+    }
+
+    /// What a prompt in `projectId` carries in place of an attached session.
+    /// Sessions of other projects are not resolved.
+    func acpSessionReferenceContext(_ sessionId: String, projectId: String) async -> String? {
+        guard let location = await acpReferencedSessionLocation(sessionId),
+              location.origin.projectId == projectId,
+              let session = location.manager.liveSession(for: sessionId),
+              let worktree = worktree(withId: location.origin.worktreeId)
+        else { return nil }
+        let target = ACPSessionReference.Target(
+            sessionId: sessionId,
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName ?? session.agentId,
+            worktreeName: worktree.name
+        )
+        return ACPSessionReference.context(
+            for: target, entries: ACPSessionTranscriptReader.entries(session.transcript.messages)
+        )
+    }
+
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
@@ -12833,6 +12921,9 @@ final class AppState {
             },
             pluginContext: { [weak self] sessionID in
                 await self?.pluginPromptContext(session: sessionID, worktree: worktree) ?? []
+            },
+            sessionReferenceContext: { [weak self] referencedSessionID in
+                await self?.acpSessionReferenceContext(referencedSessionID, projectId: worktree.projectId)
             },
             launchSpecTransformer: { [weak self] spec, allowsPermissionBypass in
                 guard let self else { return spec }

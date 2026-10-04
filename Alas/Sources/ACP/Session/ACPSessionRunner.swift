@@ -160,6 +160,9 @@ final class ACPSessionRunner {
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     /// Text plugins add to each prompt (API 7 context providers): wire-only, never in the transcript.
     private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
+    /// Context sent in place of an attached session's link (see
+    /// `ACPSessionReference`), or nil when that session is unavailable.
+    private let sessionReferenceContext: (@MainActor (_ referencedSessionId: String) async -> String?)?
     private let isConnectionCurrent: () -> Bool
 #if DEBUG
     var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
@@ -339,6 +342,7 @@ final class ACPSessionRunner {
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
+         sessionReferenceContext: (@MainActor (_ referencedSessionId: String) async -> String?)? = nil,
          isConnectionCurrent: @escaping () -> Bool = { true },
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
@@ -386,6 +390,7 @@ final class ACPSessionRunner {
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
         self.pluginContext = pluginContext
+        self.sessionReferenceContext = sessionReferenceContext
         self.isConnectionCurrent = isConnectionCurrent
         let initialPersistedMessageCount = persistedMessageCount
             ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
@@ -2524,6 +2529,18 @@ extension ACPSessionRunner {
         }
     }
 
+    /// Replaces attached-session links with their context, resolved now so
+    /// a queued prompt carries the session as it is when it is sent.
+    private func expandingSessionReferences(_ blocks: [ACPContentBlock]) async -> [ACPContentBlock] {
+        let ids = ACPSessionReference.sessionIds(in: blocks)
+        guard !ids.isEmpty else { return blocks }
+        var contexts: [String: String] = [:]
+        for id in ids {
+            contexts[id] = await sessionReferenceContext?(id)
+        }
+        return ACPSessionReference.replacingReferences(in: blocks, contexts: contexts)
+    }
+
     /// Backwards-compatible helper for existing image-only tests.
     nonisolated static func hydrate(_ blocks: [ACPContentBlock], imageInputSupported: Bool) async -> [ACPContentBlock] {
         await hydrate(blocks, promptCapabilities: .init(image: imageInputSupported), worktreePath: "/")
@@ -3347,9 +3364,9 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
-                var wireBlocks = await Self.hydrate(
+                var wireBlocks = await self.expandingSessionReferences(Self.hydrate(
                     blocks, promptCapabilities: self.session.promptCapabilities,
-                    worktreePath: self.worktreePath)
+                    worktreePath: self.worktreePath))
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -3911,11 +3928,11 @@ extension ACPSessionRunner {
                         messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
                     )
                 }()
-                var wireBlocks = await Self.hydrate(
+                var wireBlocks = await self.expandingSessionReferences(Self.hydrate(
                     blocks,
                     promptCapabilities: promptCapabilities,
                     worktreePath: self.worktreePath
-                )
+                ))
                 // Wire-only context is prepended for the agent and never part
                 // of the recorded transcript — recording above used `blocks`.
                 var privateBlocks: [ACPContentBlock] = []

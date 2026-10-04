@@ -4,6 +4,25 @@ import Testing
 
 @Suite("ACP mention picker")
 struct ACPMentionPickerTests {
+    @Test("sessions rank by title before agent or worktree; an empty query shows the most recent")
+    func ranksSessions() {
+        func session(_ id: String, _ title: String, agent: String = "Codex", worktree: String = "main") -> ACPSessionMentionCandidate {
+            .init(id: id, projectId: "p", title: title, agentName: agent, worktreeName: worktree)
+        }
+        let sessions = [
+            session("recent", "Review release notes", worktree: "parser-fix"),
+            session("titled", "Fix parser crash"),
+            session("other", "Update docs"),
+            session("older", "Parser cleanup"),
+        ]
+
+        let parser = MentionSessionRanking.rank(sessions, query: "parser").map(\.id)
+        #expect(Set(parser.prefix(2)) == ["titled", "older"])
+        #expect(parser.last == "recent")
+        #expect(MentionSessionRanking.rank(sessions, query: "codex docs").map(\.id) == ["other"])
+        #expect(MentionSessionRanking.rank(sessions, query: "", limit: 2).map(\.id) == ["recent", "titled"])
+    }
+
     @Test("ranks fuzzy basename and path matches with shared scorer")
     func ranksFuzzyBasenameAndPathMatches() {
         let root = URL(fileURLWithPath: "/tmp/project")

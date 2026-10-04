@@ -84,6 +84,13 @@ struct HarnessSessionBadge: View {
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityLabel(tooltip)
+        // Dropped on an agent composer, attaches the session as context.
+        .draggable(Self.dragURL(sessionId: session.id))
+    }
+
+    nonisolated static func dragURL(sessionId: String) -> URL {
+        // The id is percent-encoded into the host, so the string always parses.
+        URL(string: ACPSessionReference.uri(sessionId: sessionId))!
     }
 
     private var tooltip: String {

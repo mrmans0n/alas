@@ -1048,6 +1048,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
                     ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
                     : nil
             },
+            referencedSessionLocation: { sessionId in
+                manager.liveSession(for: sessionId) != nil
+                    ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
+                    : nil
+            },
             manager: { _ in parentReachable ? manager : nil },
             newWorktreeDestination: { _, _ in nil },
             createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
@@ -1259,6 +1264,26 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(search.matches.map(\.sessionId) == ["child"])
         #expect(search.truncated)
         #expect(sibling == .error("Only a direct parent or child session's transcript can be read."))
+    }
+
+    @Test("a session reads another session only once the user attaches it to one of its prompts")
+    func readUserAttachedSession() async throws {
+        let fixture = try makeOutcomeFixture()
+        let other = fixture.manager.createSession(id: "other", agentId: "codex", autoRunDefault: false)
+        other.transcript.messages = [.user(id: UUID(), text: "Plan the release", attachments: [])]
+        let read: () async -> AlasCLIResponse = {
+            await fixture.coordinator.perform(origin: self.parentOrigin, .read(.init(targetSessionId: "other")))
+        }
+
+        #expect(await read() == .error("Only a direct parent or child session's transcript can be read."))
+
+        fixture.manager.liveSession(for: "parent")?.transcript.messages = [.user(
+            id: UUID(), text: "Use @Release ",
+            attachments: [.init(uri: ACPSessionReference.uri(sessionId: "other"), name: "Release")]
+        )]
+        let attached = try decoded(ACPOrchestrationReadResponse.self, await read())
+
+        #expect(attached.entries.map(\.text) == ["Plan the release"])
     }
 
     @Test("session_wait returns once a running child settles, or reports the timeout")

@@ -37,7 +37,12 @@ struct UserMessageRow: View {
                     if !others.isEmpty {
                         HStack(spacing: 4) {
                             ForEach(others, id: \.uri) { a in
-                                FileChip(path: a.name ?? a.uri, lines: nil, iconSystemName: "at")
+                                FileChip(
+                                    path: a.name ?? a.uri,
+                                    lines: nil,
+                                    iconSystemName: ACPSessionReference.sessionId(fromURI: a.uri) == nil
+                                        ? "at" : "bubble.left.and.bubble.right"
+                                )
                             }
                         }
                     }
