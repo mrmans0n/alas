@@ -91,10 +91,11 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
-    enum TurnCostUpdate: CaseIterable, Sendable { case none, applied, buffered }
+    enum TurnCostUpdate: CaseIterable, Sendable { case none, applied, buffered, appliedThenBufferedWithoutCost }
 
     /// A turn reports the session's cumulative cost only when a `usage_update` arrived during it, including one still
-    /// in the coalescing buffer when the prompt result arrives; an earlier total is not its own.
+    /// in the coalescing buffer when the prompt result arrives, and a newer buffered update without a cost does not hide
+    /// an applied one's; an earlier total is not its own.
     @Test(arguments: TurnCostUpdate.allCases)
     func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
@@ -109,8 +110,12 @@ struct ACPSessionRunnerTests {
             switch update {
             case .none: break
             case .applied: await MainActor.run { _ = runner.session.apply(later) }
-            case .buffered:
-                mock.emit(.init(sessionId: "s", update: later))
+            case .buffered, .appliedThenBufferedWithoutCost:
+                if update == .appliedThenBufferedWithoutCost {
+                    await MainActor.run { _ = runner.session.apply(later) }
+                }
+                let buffered = update == .buffered ? later : .usageUpdate(.init(used: 3, size: 10, cost: nil))
+                mock.emit(.init(sessionId: "s", update: buffered))
                 _ = await Task { @MainActor in await awaitCondition { runner.pendingIncomingUpdateCountForTesting > 0 } }.value
             }
             return Data("{}".utf8)

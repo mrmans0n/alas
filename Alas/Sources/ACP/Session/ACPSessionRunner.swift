@@ -1865,19 +1865,19 @@ final class ACPSessionRunner {
             .first
     }
 
-    /// Agent text still in the incoming-update coalescing buffer, not yet in
-    /// the transcript. Read-only on purpose: draining the buffer at turn end
-    /// collides with queued-successor dispatch (see `emitTurnCompleted`).
-    /// The session's cumulative cost if a `usage_update` came during the active turn, else nil. One still in the
-    /// coalescing buffer counts and is the latest, since the prompt result can overtake it.
+    /// The session's cumulative cost if a `usage_update` with one came during the active turn, else nil. The newest
+    /// one still in the coalescing buffer wins, since the prompt result can overtake it; then the one already applied.
     private func turnCumulativeCost() -> ACPUsageInfo.Cost? {
         for pending in pendingIncomingUpdates.reversed() {
             // As `ACPSession.apply` does, a size of 0 is no data.
-            if case .usageUpdate(let info) = pending.params.update { return info.size > 0 ? info.cost : nil }
+            if case .usageUpdate(let info) = pending.params.update, info.size > 0, let cost = info.cost { return cost }
         }
         return session.usageUpdateCount != activePromptUsageUpdateCount ? session.contextUsage?.cost : nil
     }
 
+    /// Agent text still in the incoming-update coalescing buffer, not yet in
+    /// the transcript. Read-only on purpose: draining the buffer at turn end
+    /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
         let text = pendingIncomingUpdates.compactMap { pending -> String? in
             guard case .agentMessageChunk(let chunk) = pending.params.update,
