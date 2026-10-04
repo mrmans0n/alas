@@ -202,6 +202,30 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
+    @Test("a limit with no resume item survives close and reopen and keeps the pre-limit queue held")
+    func usageLimitWithoutResumeItemSurvivesReopen() async throws {
+        let (runner, mock, session, store) = try mkRunner(autoResumeAfterUsageLimit: { false })
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+        let limit = try #require(session.usageLimit)
+        // Persistence is FIFO and the limit is written before the queue.
+        try await waitUntil { (try? store.loadQueue(sessionId: "s"))?.map(\.blocks) == [[.text("second")]] }
+
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let reopened = try #require(manager.placeholderSession(id: "s"))
+        await manager.hydrateIfNeeded(id: "s")
+        #expect(reopened.usageLimit == limit)
+        #expect(reopened.queue.map(\.blocks) == [[.text("second")]])
+        #expect(reopened.queue.first?.isHeld(by: reopened.usageLimit) == true)
+    }
+
     @Test("a direct prompt stopped by a usage limit is reported as delivered, so the composer keeps it cleared")
     func directPromptAtUsageLimitReportsDelivered() async throws {
         let (runner, mock, session, _) = try mkRunner()

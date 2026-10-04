@@ -2326,6 +2326,9 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
+        // Before `restoreQueue`: the row wins, and the resume-item fallback
+        // only fills in for rows written before `usage_limit` existed.
+        session.usageLimit = result.row.usageLimit
         session.restoreQueue(result.queue, markLegacySendingUncertain: true)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
@@ -5323,6 +5326,9 @@ extension ACPSessionManager {
         session.authStatus = row.authStatus
         session.pendingMCPPreamble = row.mcpPreamblePending
         session.mcpPreambleSent = row.mcpPreambleSent
+        // The queue restore that follows re-derives it from a resume item
+        // when the row predates `usage_limit`.
+        session.usageLimit = row.usageLimit
         // Mirrors never run their own attach, so the persisted suggestions
         // list is the ONLY source for their pills and chips. A fresh list
         // wins over an empty one; the writer's newer list replaces the old.

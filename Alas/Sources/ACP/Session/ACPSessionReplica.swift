@@ -23,6 +23,7 @@ private struct ReplicaMetadata: Codable {
     let contextRecoveryPending: Bool
     let mcpPreamblePending: String?
     let mcpPreambleSent: Bool
+    let usageLimit: ACPUsageLimit?
     let authStatus: ACPAuthStatus?
     let currentModel: String?
     let currentMode: String?
@@ -40,6 +41,7 @@ private struct ReplicaMetadata: Codable {
         contextRecoveryPending = row.contextRecoveryPending
         mcpPreamblePending = row.mcpPreamblePending
         mcpPreambleSent = row.mcpPreambleSent
+        usageLimit = row.usageLimit
         authStatus = row.authStatus
         currentModel = row.currentModel
         currentMode = row.currentMode
@@ -110,7 +112,7 @@ extension ACPSessionStore {
                 let itemKey = key.replacingOccurrences(of: "ROW", with: row)
                 var predicate = "EXISTS(SELECT 1 FROM session_replica_exports WHERE session_id=\(row).\(sessionColumn)) AND EXISTS(SELECT 1 FROM sessions WHERE id=\(row).\(sessionColumn))"
                 if table == "sessions", action == "UPDATE" {
-                    let columns = ["title", "title_source", "origin", "context_recovery_pending", "mcp_preamble_pending", "mcp_preamble_sent", "auth_status", "current_model", "current_mode", "config_option_values", "native_subagents_disabled", "prompt_suggestions", "auto_run", "updated_at", "ephemeral_parent_id"]
+                    let columns = ["title", "title_source", "origin", "context_recovery_pending", "mcp_preamble_pending", "mcp_preamble_sent", "usage_limit", "auth_status", "current_model", "current_mode", "config_option_values", "native_subagents_disabled", "prompt_suggestions", "auto_run", "updated_at", "ephemeral_parent_id"]
                     predicate += " AND (" + columns.map { "NEW.\($0) IS NOT OLD.\($0)" }.joined(separator: " OR ") + ")"
                 }
                 let oldKey = key.replacingOccurrences(of: "ROW.", with: "OLD.")
@@ -407,7 +409,8 @@ extension ACPSessionStore {
             try upsertSession(row)
             // Replica metadata is authoritative even for fields preserved by local upserts.
             let authStatus = try m.authStatus.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
-            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,auth_status=?,native_subagents_disabled=?,created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.createdAt, sessionId])
+            let usageLimit = try m.usageLimit.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
+            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,usage_limit=?,auth_status=?,native_subagents_disabled=?,created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, usageLimit, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.createdAt, sessionId])
         case "message", "subagent":
             let relationKey = kind + ":" + key
             guard let payload else {

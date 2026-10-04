@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 23
+    static let targetSchemaVersion = 24
     let path: String
     let db: SQLiteDatabase
 
@@ -50,6 +50,7 @@ final class ACPSessionStore {
         if current < 21 { try migrate_to_v21() }
         if current < 22 { try createReplicaSchema() }
         if current < 23 { try migrate_to_v23() }
+        if current < 24 { try migrate_to_v24() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -67,6 +68,20 @@ final class ACPSessionStore {
         if !columns.contains(where: { ($0["name"] as? String) == "ephemeral_cleanup_pending" }) {
             try db.exec("ALTER TABLE sessions ADD COLUMN ephemeral_cleanup_pending INTEGER NOT NULL DEFAULT 0")
         }
+    }
+
+    /// Durable `ACPSession.usageLimit` (JSON), so a session stays Limited
+    /// across close/reopen even when no scheduled resume item carries the
+    /// limit. Upserts never touch it; only `setUsageLimit` writes it. The
+    /// replica metadata trigger is recreated so a limit-only change is
+    /// mirrored too.
+    private func migrate_to_v24() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        if !columns.contains(where: { ($0["name"] as? String) == "usage_limit" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN usage_limit TEXT")
+        }
+        try db.exec("DROP TRIGGER IF EXISTS replica_sessions_update")
+        try createReplicaSchema()
     }
 
     private func migrate_to_v1() throws {
@@ -379,6 +394,8 @@ struct ACPSessionRow: Equatable, Sendable {
     var recoveryProcId: String? = nil
     var mcpPreamblePending: String? = nil
     var mcpPreambleSent: Bool = false
+    /// Written only by `setUsageLimit`; upserts keep the stored value.
+    var usageLimit: ACPUsageLimit? = nil
     var authStatus: ACPAuthStatus? = nil
     var currentModel: String?
     var currentMode: String?
@@ -734,6 +751,11 @@ extension ACPSessionStore {
             "UPDATE sessions SET mcp_preamble_pending = ?, mcp_preamble_sent = ? WHERE id = ?",
             bindings: [pendingText, sent ? 1 : 0, sessionId]
         )
+    }
+
+    func setUsageLimit(sessionId: String, limit: ACPUsageLimit?) throws {
+        let json = try limit.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
+        try db.exec("UPDATE sessions SET usage_limit = ? WHERE id = ?", bindings: [json, sessionId])
     }
 
     /// Persists the latest `_auth/status_update`, so an app restart can
@@ -1237,6 +1259,9 @@ extension ACPSessionStore {
             recoveryProcId: r["recovery_proc_id"] as? String,
             mcpPreamblePending: r["mcp_preamble_pending"] as? String,
             mcpPreambleSent: ((r["mcp_preamble_sent"] as? Int64) ?? 0) != 0,
+            usageLimit: (r["usage_limit"] as? String).flatMap {
+                try? JSONDecoder().decode(ACPUsageLimit.self, from: Data($0.utf8))
+            },
             authStatus: (r["auth_status"] as? String).flatMap {
                 try? JSONDecoder().decode(ACPAuthStatus.self, from: Data($0.utf8))
             },

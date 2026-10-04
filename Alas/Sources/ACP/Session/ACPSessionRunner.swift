@@ -1872,6 +1872,7 @@ final class ACPSessionRunner {
         }
         let limit = ACPUsageLimitResumePolicy.merge(previous: previous, detected: detected)
         session.usageLimit = limit
+        persistUsageLimit()
         if autoResumeAfterUsageLimit(),
            let resumeAt = ACPUsageLimitResumePolicy.nextResumeAt(limit, now: Date()) {
             session.upsertUsageLimitResume(limit: limit, scheduledAt: resumeAt)
@@ -2680,6 +2681,19 @@ extension ACPSessionRunner {
         }
     }
 
+    /// Mirror `session.usageLimit` onto the session row. The resume item is
+    /// not enough: a limit with auto-resume off or cancelled has none, and
+    /// the reopened session must still hold the pre-limit queue.
+    private func persistUsageLimit() {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        let limit = session.usageLimit
+        enqueuePersistence { persistence in
+            _ = try await persistence.setUsageLimit(sessionId: sessionId, limit: limit, fence: fence)
+        }
+    }
+
     private func persistForkContextDelivered(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
@@ -3412,6 +3426,7 @@ extension ACPSessionRunner {
                         }
                         if !wasCancelled, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
                             self.session.usageLimit = nil
+                            self.persistUsageLimit()
                             if self.session.removeUsageLimitResume() {
                                 self.persistQueue()
                             }

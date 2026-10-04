@@ -1,8 +1,8 @@
 import Foundation
 
-/// A provider usage limit that stopped a turn. Lives on `ACPSession` and,
-/// while a resume is scheduled, on that resume `QueuedPrompt`, which is what
-/// carries it across a relaunch.
+/// A provider usage limit that stopped a turn. Lives on `ACPSession`, is
+/// persisted on the session row (`usage_limit`), and, while a resume is
+/// scheduled, is also carried by that resume `QueuedPrompt`.
 struct ACPUsageLimit: Codable, Equatable, Sendable {
     enum ResetSource: String, Codable, Sendable {
         /// From the adapter's structured rate-limit metadata.
