@@ -5058,7 +5058,13 @@ extension ACPSessionRunner {
     }
 
     private func markBackgroundWakeDelivered(id: UUID) -> Set<Int> {
-        guard var task = session.backgroundTasks.first(where: { $0.wakeId == id && !$0.wakeDelivered }) else { return [] }
+        guard var task = session.backgroundTasks.first(where: { $0.wakeId == id && !$0.wakeDelivered }) else {
+            // Confirming an older snapshot must preserve newer task facts,
+            // including when their earlier write failed.
+            guard let taskId = session.queue.first(where: { $0.id == id })?.backgroundTaskWake,
+                  let index = session.transcript.toolCallIndex(toolCallId: taskId) else { return [] }
+            return [index]
+        }
         task.wakeDelivered = true
         return session.saveBackgroundTask(task)
     }

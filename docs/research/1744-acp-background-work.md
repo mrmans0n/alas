@@ -255,6 +255,13 @@ Local validation passed:
   They now cover durable retirement, recovery between snapshot and queue
   writes, preserving failed/uncertain snapshots, and a fresh notification
   identity for later completion or renewed observation loss.
+- Terminal-result corrections passed **359 tests in four suites** using the
+  same selection. Existing regressions now cover changed state, summary and
+  output path after delivery, exact replay before/after confirmation, and a
+  correction arriving while an older snapshot is sending, failed or uncertain.
+  SQLite failure also reproduced older confirmation removing its queue entry
+  without preserving an unsaved correction. Atomic confirmation now saves the
+  latest task facts or retains the older notification for explicit retry.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

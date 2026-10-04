@@ -1357,8 +1357,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
-    @Test("Codex completion wakes once with the latest pending snapshot after blockers clear and survives replay", arguments: ["completed", "failed"])
-    func backgroundCompletionQueue(finalState: String) async throws {
+    @Test("Codex completion enriches pending wakes and delivers corrected results once after prior delivery", arguments: [("completed", "summary"), ("failed", "state"), ("completed", "output")])
+    func backgroundCompletionQueue(finalState: String, correction: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
@@ -1400,11 +1400,45 @@ struct ACPSessionRunnerQueueTests {
         restored.restoreBackgroundTasks(rows: [try JSONDecoder().decode(ACPMessage.ToolCall.self, from: persisted.payload)])
         #expect(restored.backgroundTasks.first?.wakeDelivered == true)
         session.applyBackgroundTask(spawn, ownerSessionId: "s")
-        session.applyBackgroundTask(done, ownerSessionId: "s")
+        session.applyBackgroundTask(corrected, ownerSessionId: "s")
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
         #expect(session.queue.isEmpty)
         #expect(mock.sent.count == 1)
+
+        session.transcript.streamingState = .awaitingPermission
+        var amendment = ACPAsyncTaskUpdate(sessionUpdate: "async_task_state_update", asyncTaskId: "job")
+        switch correction {
+        case "state": amendment.state = "completed"
+        case "summary": amendment.summary = "Amended result"
+        default: amendment.outputFilePath = "/tmp/amended-output"
+        }
+        let params = ACPSessionUpdateParams(sessionId: "s", update: .asyncTask(amendment))
+        runner.applyIncomingUpdateForTesting(params)
+        await runner.flushPersistence()
+        let correctionID = try #require(session.backgroundTasks[0].wakeId)
+        #expect(correctionID != queuedID)
+        #expect(session.backgroundTasks[0].needsWake)
+        #expect(session.queue.map(\.id) == [correctionID])
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        let pendingTask = session.backgroundTasks[0]
+        let correctionEnqueuedAt = session.queue.first?.enqueuedAt
+        runner.applyIncomingUpdateForTesting(params)
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0] == pendingTask)
+        #expect(session.queue.map(\.id) == [correctionID])
+        #expect(session.queue.first?.enqueuedAt == correctionEnqueuedAt)
+        #expect(mock.sent.count == 1)
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty && session.backgroundTasks[0].wakeDelivered }
+        await runner.flushPersistence()
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 2)
+        runner.applyIncomingUpdateForTesting(params)
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0].wakeId == correctionID)
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 2)
     }
 
     @Test("unchanged task replay repairs a failed write before acknowledgement", arguments: [false, true])
@@ -1562,7 +1596,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(await probe.callCount == 2)
     }
 
-    @Test("a failed delivery transaction retains a visible background wake without automatic replay", arguments: ["completed", "cancelled", "cancelDuringConfirmation"])
+    @Test("a failed delivery transaction retains a visible background wake without automatic replay", arguments: ["completed", "cancelled", "cancelDuringConfirmation", "corrected"])
     func backgroundDeliveryPersistenceFailure(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
@@ -1585,10 +1619,24 @@ struct ACPSessionRunnerQueueTests {
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
         let wakeID = try #require(session.queue.first?.id)
-        try rejectWakeDeliveryWrites(in: store)
+        if outcome == "corrected" {
+            try store.db.exec("""
+            CREATE TRIGGER reject_wake_delivery BEFORE UPDATE OF payload ON messages
+            WHEN CAST(NEW.payload AS TEXT) LIKE '%"state":"failed"%'
+            BEGIN SELECT RAISE(ABORT, 'correction write failed'); END;
+            """)
+        } else {
+            try rejectWakeDeliveryWrites(in: store)
+        }
         session.transcript.streamingState = .idle
         runner.flushQueueIfIdle()
         await probe.waitUntilFirstStarted()
+        if outcome == "corrected" {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .asyncTask(.init(
+                sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "failed", summary: "Correction"))))
+            await runner.flushPersistence()
+            #expect(session.backgroundTasks[0].wakeId != wakeID)
+        }
         if outcome == "cancelled" { await runner.userCancel() }
         await probe.releaseFirst()
         if outcome == "cancelDuringConfirmation" {
@@ -1608,8 +1656,9 @@ struct ACPSessionRunnerQueueTests {
         runner.persistQueue()
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
-        #expect(session.queue == [held])
-        #expect(try store.loadQueue(sessionId: "s") == [held])
+        #expect(session.queue.first == held)
+        #expect(session.queue.count == (outcome == "corrected" ? 2 : 1))
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
         #expect(await probe.callCount == 1)
     }
 
@@ -1663,24 +1712,53 @@ struct ACPSessionRunnerQueueTests {
 
     @Test("task corrections preserve dispatched and retry-held notification snapshots", arguments: ["sending", "failed", "uncertain"])
     func backgroundCorrectionPreservesDeliverySnapshot(delivery: String) async throws {
-        let (runner, mock, session, _) = try mkRunner(agentID: "codex")
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
             state: "completed", summary: "Original result"), ownerSessionId: "s")
         runner.start()
-        defer { runner.stop() }
+        let probe = StrictSingleFlightPromptProbe()
+        mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
+        defer {
+            runner.stop()
+            Task { await probe.releaseFirst() }
+        }
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
-        session.queue[0].status = delivery == "sending" ? .sending : .pending
-        session.queue[0].lastError = delivery == "failed" ? "Retry required" : nil
-        session.queue[0].deliveryUncertain = delivery == "uncertain"
+        if delivery == "sending" {
+            session.transcript.streamingState = .idle
+            runner.flushQueueIfIdle()
+            await probe.waitUntilFirstStarted()
+        } else {
+            session.queue[0].lastError = delivery == "failed" ? "Retry required" : nil
+            if delivery == "uncertain" { session.queue[0].markDeliveryUncertain() }
+            runner.persistQueue()
+        }
+        await runner.flushPersistence()
         let original = session.queue[0]
         mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
             sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "failed", summary: "Corrected result"))))
         try await waitUntil { session.backgroundTasks.first?.summary == "Corrected result" }
         await runner.flushPersistence()
-        #expect(session.queue == [original])
-        #expect(mock.sent.isEmpty)
+        #expect(session.queue.first == original)
+        #expect(session.queue.count == 2)
+        #expect(session.backgroundTasks[0].wakeId != original.id)
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        if delivery == "sending" {
+            await probe.releaseFirst()
+            try await waitUntil { session.queue.isEmpty && session.backgroundTasks[0].wakeDelivered }
+            await runner.flushPersistence()
+            #expect(await probe.callCount == 2)
+            let sentStates = try mock.sent.compactMap { request -> String? in
+                guard let params = request.params as? ACPSessionPromptParams,
+                      case .text(let text) = params.prompt.first else { return nil }
+                let facts = Data(try #require(text.split(separator: "\n").last).utf8)
+                return try JSONDecoder().decode(ACPBackgroundTask.self, from: facts).state
+            }
+            #expect(sentStates == ["completed", "failed"])
+        } else {
+            #expect(mock.sent.isEmpty)
+        }
     }
 
     @Test("reobserved work retires clean pending loss wakes and preserves retry-held snapshots", arguments: [("async_task_spawned", "pending"), ("async_task_progress", "pending"), ("async_task_progress", "failed"), ("async_task_progress", "uncertain")])

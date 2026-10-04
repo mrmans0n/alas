@@ -93,7 +93,8 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
     var isActive: Bool { !["completed", "failed", "stopped", "lost"].contains(state) }
     var needsWake: Bool { !isActive && wakeId != nil && !wakeDelivered }
 
-    mutating func merge(_ update: ACPAsyncTaskUpdate, wakeOnCompletion: Bool) {
+    mutating func merge(_ update: ACPAsyncTaskUpdate, wakeOnCompletion: Bool, canEnrichWake: Bool = true) {
+        let previous = self
         let wasActive = isActive
         let wasLost = state == "lost"
         let reportsLiveWork = update.sessionUpdate == "async_task_spawned"
@@ -121,12 +122,16 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
             state = value
         }
         if !isActive {
+            let requiresCorrectionWake = (wakeDelivered || !canEnrichWake) && self != previous
+                && update.sessionUpdate == "async_task_state_update"
             finishedAt = wasLost ? Date() : (finishedAt ?? Date())
             stopError = nil
             // Reobserved work completes under a fresh identity even if its
-            // earlier loss notification is still awaiting delivery.
+            // earlier loss notification is still awaiting delivery. Corrected
+            // terminal facts also need a new wake when prior delivery can no
+            // longer be enriched.
             if wakeOnCompletion, ["completed", "failed"].contains(state),
-               wakeId == nil || wasLost || wasActive {
+               wakeId == nil || wasLost || wasActive || requiresCorrectionWake {
                 wakeId = UUID()
                 wakeDelivered = false
             }
@@ -191,7 +196,10 @@ extension ACPSession {
         let initial = ACPBackgroundTask(ownerSessionId: ownerSessionId, asyncTaskId: update.asyncTaskId,
                                         name: update.name ?? update.asyncTaskId)
         var task = backgroundTasks.first(where: { $0.id == initial.id }) ?? initial
-        task.merge(update, wakeOnCompletion: agentId == "codex")
+        let canEnrichWake = task.wakeId.flatMap { id in queue.first { $0.id == id } }.map {
+            $0.status == .pending && $0.lastError == nil && !$0.deliveryUncertain
+        } ?? true
+        task.merge(update, wakeOnCompletion: agentId == "codex", canEnrichWake: canEnrichWake)
         return saveBackgroundTask(task)
     }
 
