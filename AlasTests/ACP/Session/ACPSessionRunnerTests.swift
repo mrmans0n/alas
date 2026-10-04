@@ -92,18 +92,21 @@ struct ACPSessionRunnerTests {
     }
 
     enum TurnCostUpdate: CaseIterable, Sendable {
-        case none, applied, buffered, appliedThenBufferedWithoutCost, appliedThenAppliedWithoutCost
+        case none, applied, buffered, appliedThenBufferedWithoutCost, appliedThenAppliedWithoutCost, notYetDequeued
     }
 
     /// A turn reports the session's cumulative cost only when a `usage_update` with one arrived during it, including
     /// one still in the coalescing buffer when the prompt result arrives; a newer update without a cost, applied or
-    /// buffered, does not hide it, and an earlier total is not the turn's own.
+    /// buffered, does not hide it, and an earlier total is not the turn's own. One still on the stream when the
+    /// prompt result arrives holds the completion until it is taken off.
     @Test(arguments: TurnCostUpdate.allCases)
     func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
         // Long enough that a buffered update is still waiting when the turn ends.
         let (runner, mock) = try makeRunner(
             onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        let dequeue = AsyncGate()
+        if update == .notYetDequeued { runner.beforeDequeueForTesting = { await dequeue.wait() } }
         runner.start()
         defer { runner.stop() }
         runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
@@ -111,11 +114,12 @@ struct ACPSessionRunnerTests {
         let withoutCost = ACPSessionUpdate.usageUpdate(.init(used: 3, size: 10, cost: nil))
         mock.scriptAsync(method: "session/prompt") { _ in
             let applied: [ACPSessionUpdate] = switch update {
-            case .none, .buffered: []
+            case .none, .buffered, .notYetDequeued: []
             case .applied, .appliedThenBufferedWithoutCost: [later]
             case .appliedThenAppliedWithoutCost: [later, withoutCost]
             }
             await MainActor.run { for item in applied { _ = runner.session.apply(item) } }
+            if update == .notYetDequeued { mock.emit(.init(sessionId: "s", update: later)) }
             let buffered: ACPSessionUpdate? = switch update {
             case .buffered: later
             case .appliedThenBufferedWithoutCost: withoutCost
@@ -127,7 +131,12 @@ struct ACPSessionRunnerTests {
             }
             return Data("{}".utf8)
         }
-        runner.send(text: "hello", attachments: []) { _ in }
+        var sent = false
+        runner.send(text: "hello", attachments: []) { _ in sent = true }
+        if update == .notYetDequeued {
+            #expect(await awaitCondition { sent })
+            await dequeue.open()
+        }
         #expect(await awaitCondition { !completions.isEmpty })
         #expect(completions.map(\.cumulativeCost) == [update == .none ? nil : .init(amount: 0.3, currency: "USD")])
     }

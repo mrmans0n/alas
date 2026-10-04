@@ -137,6 +137,8 @@ final class ACPSessionRunner {
     private var activePromptStartedAt: Int64?
     /// `session.costRevision` when the active prompt started.
     private var activePromptCostRevision = 0
+    /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
+    private var dequeuedUpdateCount = 0
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -239,6 +241,8 @@ final class ACPSessionRunner {
     private var pendingCompletedOutputBoundary: (updateCount: Int, successfulTurn: NextPromptCompletedTurn?)?
     private var turnPublicationGeneration = 0
 #if DEBUG
+    /// Awaited before `updatesTask` takes each update off the stream.
+    var beforeDequeueForTesting: (@MainActor () async -> Void)?
     var onPromptResponseProcessedForTesting: ((Int) -> Void)?
     // Tests opt in with an empty dictionary; ordinary Debug runners retain no handles.
     var turnPublicationTasksForTesting: [Int: Task<Void, Never>]?
@@ -483,6 +487,10 @@ final class ACPSessionRunner {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
+#if DEBUG
+                await self.beforeDequeueForTesting?()
+#endif
+                self.dequeuedUpdateCount += 1
                 guard self.isConnectionCurrent() else { continue }
                 self.enqueueIncomingUpdate(u)
             }
@@ -1843,13 +1851,31 @@ final class ACPSessionRunner {
             result: result,
             delegatedSource: activePromptDelegatedSource,
             lastAgentText: lastAgentText,
-            quota: quota,
-            cumulativeCost: turnCumulativeCost()
+            quota: quota
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
-        onTurnCompleted?(completion)
+        // The turn's last `usage_update` may still be on the stream, not yet taken off by `updatesTask`. Waiting
+        // until it has been, without flushing the coalescing buffer (see above), lets its cost count for this turn.
+        let watermark = connection.client.yieldedUpdateCount
+        let costRevision = activePromptCostRevision
+        let deliver: @MainActor (ACPSessionRunner) -> Void = { runner in
+            var completion = completion
+            completion.cumulativeCost = runner.turnCumulativeCost(since: costRevision)
+            runner.onTurnCompleted?(completion)
+        }
+        guard dequeuedUpdateCount < watermark, updatesTask?.isCancelled == false else { return deliver(self) }
+        Task { @MainActor [weak self] in
+            // ponytail: a yield loop with a deadline, as `persistPermissionDecision` drains; a stream that never
+            // delivers only delays the completion by the deadline.
+            let deadline = ContinuousClock.now + .seconds(1)
+            while let self, self.dequeuedUpdateCount < watermark, self.isConnectionCurrent(), ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+            guard let self else { return }
+            deliver(self)
+        }
     }
 
     /// Tail of the last agent message this turn produced, or nil. Only rows at
@@ -1867,11 +1893,11 @@ final class ACPSessionRunner {
 
     /// The session's cumulative cost if a `usage_update` with one came during the active turn, else nil. The newest
     /// one still in the coalescing buffer wins, since the prompt result can overtake it; then the latest applied.
-    private func turnCumulativeCost() -> ACPUsageInfo.Cost? {
+    private func turnCumulativeCost(since costRevision: Int) -> ACPUsageInfo.Cost? {
         for pending in pendingIncomingUpdates.reversed() {
             if case .usageUpdate(let info) = pending.params.update, let cost = info.cost { return cost }
         }
-        return session.costRevision != activePromptCostRevision ? session.lastCost : nil
+        return session.costRevision != costRevision ? session.lastCost : nil
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
