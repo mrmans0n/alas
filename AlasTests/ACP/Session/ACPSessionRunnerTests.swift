@@ -402,12 +402,16 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
-    /// A stopped turn whose result comes after two later prompts were sent ends where the first of them was sent:
-    /// a cost sent during the second one's turn is not its own.
-    @Test func aStoppedTurnsCostEndsWhereTheNextPromptWasSent() async throws {
+    /// A stopped turn whose result comes after later prompts were sent ends where the first of them was sent, even
+    /// when that one has since failed without reaching the agent: a cost sent after it is not the stopped turn's.
+    @Test(arguments: [false, true])
+    func aStoppedTurnsCostEndsWhereTheNextPromptWasSent(nextFails: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
         var usage: [ACPTurnCompletion] = []
         let never = AsyncGate()
-        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in await never.wait() })
         runner.start()
         defer { runner.stop() }
         let first = AsyncGate()
@@ -417,16 +421,20 @@ struct ACPSessionRunnerTests {
                 entered += 1
                 return entered
             }
+            if call == 2, nextFails { throw ACPClientError.notRunning }
             await (call == 1 ? first : never).wait()
             return Data("{}".utf8)
         }
-        for (sent, text) in ["A", "B", "C"].enumerated() {
-            runner.send(text: text, attachments: []) { _ in }
-            #expect(await awaitCondition { entered == sent + 1 })
-            if text == "B" {
-                mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.3, currency: "USD")))))
-            }
-            if text != "C" { await runner.userCancel() }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 && completions.count == (nextFails ? 2 : 1) })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.3, currency: "USD")))))
+        if !nextFails {
+            await runner.userCancel()
+            runner.send(text: "C", attachments: []) { _ in }
+            #expect(await awaitCondition { entered == 3 })
         }
         await first.open()
         #expect(await awaitCondition { usage.count == 1 })

@@ -142,6 +142,9 @@ final class ACPSessionRunner {
     private var activePromptStreamStart = 0
     /// See `nextSentAt`.
     private var lastSentAt: Int64 = 0
+    /// Where each recent prompt went out on the stream, by prompt id. Kept apart from `unreportedPrompts`, so a later
+    /// prompt still bounds an earlier one's cost after it was reported or dropped.
+    private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
     private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
@@ -1933,6 +1936,12 @@ final class ACPSessionRunner {
         return lastSentAt
     }
 
+    private func noteSent(_ promptID: Int, streamStart: Int) {
+        sentStreamStarts[promptID] = streamStart
+        // ponytail: only the newest bound anything, the few prompts still waiting being older than them.
+        if sentStreamStarts.count > 16, let oldest = sentStreamStarts.keys.min() { sentStreamStarts[oldest] = nil }
+    }
+
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
     /// (a closed transport) or a turn lost with the connection, and is not recorded.
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
@@ -1960,11 +1969,9 @@ final class ACPSessionRunner {
         onTurnUsage?(ACPTurnCompletion(
             sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
             quota: quota,
-            // Capped where the first later prompt still waiting was sent; one still preparing has not started its usage.
-            // If a later one already reported, this turn is recorded after it, so the store gives it no cost anyway.
+            // Capped where the first later prompt was sent; one still preparing has not started its usage.
             cost: turnCost(
-                streamStart: prompt.streamStart,
-                end: unreportedPrompts.filter { $0.key > promptID }.map(\.value.streamStart).min()),
+                streamStart: prompt.streamStart, end: sentStreamStarts.filter { $0.key > promptID }.map(\.value).min()),
             sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
     }
 
@@ -4047,6 +4054,7 @@ extension ACPSessionRunner {
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
                         self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
+                    self.noteSent(promptID, streamStart: self.activePromptStreamStart)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
                     if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
@@ -4291,6 +4299,7 @@ extension ACPSessionRunner {
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
                     sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
+                self.noteSent(promptID, streamStart: self.connection.client.yieldedUpdateCount)
                 return true
             }
             guard proceeded else {
