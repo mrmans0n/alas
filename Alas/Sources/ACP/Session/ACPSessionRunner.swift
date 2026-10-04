@@ -3012,6 +3012,15 @@ extension ACPSessionRunner {
         persistQueue()
         let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
         let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
+        if session.canSteerRunningTurn {
+            steerRunningTurn(
+                blocks: item.blocks, delegatedSource: item.delegatedSource,
+                recordUserPrompt: !item.transcriptRecorded, normalUserTurn: normalUserTurn,
+                recordedUserMessageID: recordedUserMessageID, draft: item.draft,
+                onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id),
+                onPromptFinished: nil, recoveryQueueItem: (item, idx))
+            return
+        }
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
@@ -3156,7 +3165,8 @@ extension ACPSessionRunner {
         recordedUserMessageID: UUID?,
         draft: ACPComposerDraft?,
         onDispatchRegistered: (@Sendable () -> Void)?,
-        onPromptFinished: (@MainActor (Bool) -> Void)?
+        onPromptFinished: (@MainActor (Bool) -> Void)?,
+        recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
         nativeSteeringGeneration += 1
         let generation = nativeSteeringGeneration
@@ -3176,6 +3186,24 @@ extension ACPSessionRunner {
             guard let self else { onPromptFinished?(false)
             return }
             var recordedMessageID = recordedUserMessageID
+            let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
+                if !succeeded, let self, let recoveryQueueItem,
+                   !self.stopped, self.isConnectionCurrent(),
+                   !self.session.queue.contains(where: { $0.id == recoveryQueueItem.item.id }) {
+                    var item = recoveryQueueItem.item
+                    item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
+                    item.status = .pending
+                    item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
+                    item.markDeliveryUncertain()
+                    self.session.queue.insert(item, at: min(recoveryQueueItem.index, self.session.queue.count))
+                    if normalUserTurn {
+                        self.session.normalQueuedTurnIDs.insert(item.id)
+                        self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
+                    }
+                    self.persistQueue()
+                }
+                onPromptFinished?(succeeded)
+            }
             do {
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
@@ -3215,7 +3243,7 @@ extension ACPSessionRunner {
                 switch outcome {
                 case .injected:
                     self.session.lastError = nil
-                    onPromptFinished?(true)
+                    finishPrompt(true)
                     self.finishNativeSteering(generation: generation)
                 case .startedNewTurn:
                     // Codex's legacy idle fallback starts a detached prompt.
@@ -3227,7 +3255,7 @@ extension ACPSessionRunner {
                     self.session.allowsStreamingBoundaryCrossing = true
                     self.session.transcript.streamingState = .streaming
                     self.session.lastError = nil
-                    onPromptFinished?(true)
+                    finishPrompt(true)
                     self.finishNativeSteering(generation: generation)
                 case .promptRequired:
                     // No content was consumed. Install an owned continuation
@@ -3239,11 +3267,24 @@ extension ACPSessionRunner {
                     else { throw CancellationError() }
                     self.nativeSteeringInProgress = false
                     self.detachedSteeringTurn = false
+                    // An owned continuation uses the queue's normal failure
+                    // handling, which retains its head before releasing output.
+                    if let recoveryQueueItem {
+                        var item = recoveryQueueItem.item
+                        item.status = .sending
+                        item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
+                        self.session.queue.insert(item, at: 0)
+                        if normalUserTurn {
+                            self.session.normalQueuedTurnIDs.insert(item.id)
+                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
+                        }
+                        self.persistQueue()
+                    }
                     self.sendNow(
-                        blocks: blocks, queuedItemId: nil, delegatedSource: delegatedSource,
+                        blocks: blocks, queuedItemId: recoveryQueueItem?.item.id, delegatedSource: delegatedSource,
                         recordUserPrompt: false, normalUserTurn: normalUserTurn,
                         recordedUserMessageID: recordedMessageID, draft: draft,
-                        onPromptFinished: onPromptFinished)
+                        onPromptFinished: finishPrompt)
                     self.finishNativeSteering(generation: generation)
                 case .failed:
                     throw ACPClientError.jsonrpc(.init(
@@ -3260,17 +3301,21 @@ extension ACPSessionRunner {
                             blocks: blocks, delegatedSource: delegatedSource,
                             recordUserPrompt: recordedMessageID == nil && recordUserPrompt,
                             normalUserTurn: normalUserTurn, recordedUserMessageID: recordedMessageID,
-                            draft: draft, onPromptFinished: onPromptFinished)
+                            draft: draft, onPromptFinished: finishPrompt)
                         return
                     }
                     if !(error is CancellationError) {
                         self.session.lastError = "Follow-up failed: \(error.localizedDescription)"
                     }
+                    // Restore a forced queue item before releasing the barrier;
+                    // it must not be dropped or automatically sent again.
+                    finishPrompt(false)
                     self.finishNativeSteering(generation: generation)
+                    return
                 }
                 // An ambiguous failure may have consumed the content. Restore
                 // the caller's draft without blindly sending it again.
-                onPromptFinished?(false)
+                finishPrompt(false)
             }
         }
     }

@@ -531,6 +531,59 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.lastError != nil)
     }
 
+    @Test("force-sent native steering failures retain a retryable queued prompt", arguments: ["failed", "unknown", "promptRequired"])
+    func forceSentSteeringFailureRetainsQueueItem(outcome: String) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        var originalFinished = false
+        var promptCalls = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            promptCalls += 1
+            if promptCalls == 2, outcome == "promptRequired" {
+                throw ACPClientError.jsonrpc(.init(code: -32000, message: "refused", data: nil))
+            }
+            await started.open()
+            await finish.wait()
+            return Data("{}".utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"\(outcome)\"}".utf8) }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto) { originalFinished = $0 }
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("selected")], intent: .auto)
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        await runner.flushPersistence()
+        let selected = try #require(session.queue.first)
+        let tailID = try #require(session.queue.last?.id)
+        runner.forceSendQueuedItem(id: selected.id)
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        if outcome == "promptRequired" { await finish.open() }
+        try await waitUntil { session.queue.contains { $0.id == selected.id && $0.lastError != nil } }
+        #expect(session.queue.map(\.id) == [selected.id, tailID])
+        let retained = try #require(session.queue.first(where: { $0.id == selected.id }))
+        #expect(retained.blocks == selected.blocks)
+        #expect(retained.status == .pending)
+        #expect(retained.transcriptRecorded)
+        #expect(retained.deliveryUncertain == (outcome != "promptRequired"))
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s").first?.id == selected.id)
+        await finish.open()
+        try await waitUntil { originalFinished }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == (outcome == "promptRequired" ? 2 : 1))
+        _ = session.retryQueueItem(id: selected.id)
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.transcript.streamingState == .idle)
+        #expect(session.transcript.messages.filter {
+            if case .user(_, _, "selected", _, _) = $0 { return true }
+            return false
+        }.count == 1)
+    }
+
     @Test("a late steering response cannot restart a stopped runner")
     func lateSteeringResponseCannotRestartStoppedRunner() async throws {
         let (runner, mock, session, _) = try mkRunner()
