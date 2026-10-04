@@ -73,10 +73,24 @@ private struct SessionsPopover: View {
     let onPick: () -> Void
     @Environment(\.theme) private var theme
     @State private var delegatedSessions: [ACPOrchestrationSessionSummary] = []
+    @State private var mergingFork = false
 
     var body: some View {
         VStack(spacing: 0) {
             currentSessionHeader
+            if session.forkRecord?.phase == .ready {
+                HStack(spacing: 12) {
+                    Button("Merge back") { mergeFork(archive: false) }
+                    Button("Merge back and archive") { mergeFork(archive: true) }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.color("accent"))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(mergingFork || session.hydrationState != .ready || manager.isMirror(sessionId: session.id))
+                .help("Send a conversation digest to the source chat after the fork's pending turns finish")
+            }
             if session.agentState == .disconnected {
                 disconnectedBanner
             }
@@ -261,6 +275,21 @@ private struct SessionsPopover: View {
     private func reconnect() {
         Task {
             await manager.reconnectNow(to: session.id)
+        }
+    }
+
+    private func mergeFork(archive: Bool) {
+        mergingFork = true
+        Task { @MainActor in
+            defer { mergingFork = false }
+            do {
+                try await state.mergeACPForkBack(
+                    worktree: worktree, owner: owner, forkSessionID: session.id, archive: archive
+                )
+                onPick()
+            } catch {
+                session.lastError = error.localizedDescription
+            }
         }
     }
 }

@@ -231,6 +231,7 @@ final class ACPSessionManager: ObservableObject {
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var restartingConnections: Set<ACPSession.ID> = []
+    private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
@@ -1955,6 +1956,128 @@ final class ACPSessionManager: ObservableObject {
             await releaseWriterLease(sessionId: sourceSessionID)
         }
         return try result.get()
+    }
+
+    /// Queues a durable context transfer before optionally archiving the fork.
+    func mergeForkBack(id: ACPSession.ID, archive: Bool) async throws -> ACPSession.ID {
+        guard !isDisposed, let session = sessions[id],
+              session.hydrationState == .ready, let fork = session.forkRecord,
+              fork.phase == .ready, fork.sourceSessionID != id else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard mergingForks.insert(id).inserted else { throw ACPSessionForkMergeError.forkBusy }
+        defer { mergingForks.remove(id) }
+        session.nextPromptWorkCount += 1
+        defer { session.nextPromptWorkCount -= 1 }
+        let hadForkLease = _ownedLeases.contains(id)
+        guard await acquireWriterLease(sessionId: id) else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        startHeartbeat(sessionId: id)
+        do {
+            guard await confirmedWriterLease(for: id) else {
+                throw ACPSessionForkMergeError.forkUnavailable
+            }
+            let sourceID = try await mergeOwnedForkBack(session: session, fork: fork, archive: archive)
+            if !hadForkLease { await releaseWriterLease(sessionId: id) }
+            return sourceID
+        } catch {
+            if !hadForkLease { await releaseWriterLease(sessionId: id) }
+            throw error
+        }
+    }
+
+    private func mergeOwnedForkBack(
+        session: ACPSession, fork: ACPSessionForkRecord, archive: Bool
+    ) async throws -> ACPSession.ID {
+        let id = session.id
+        await awaitBackfill(id: id)
+        await flushAllPersistence()
+        guard session.transcript.streamingState == .idle, session.queue.isEmpty,
+              session.agentState != .spawning else { throw ACPSessionForkMergeError.forkBusy }
+        guard sessions[id] === session, !isMirror(sessionId: id),
+              let forkRow = try await persistence.loadSession(id: id), !forkRow.archived else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard ACPSessionForkMergeContext.prompt(fork: fork, messages: session.transcript.messages) != nil else {
+            throw ACPSessionForkMergeError.noConversation
+        }
+        let messageCount = session.transcript.messages.count
+        let deliveryIdentity = try ACPSessionForkMergeContext.deliveryIdentity(fork: fork, messages: session.transcript.messages)
+        let sourceID = fork.sourceSessionID
+        guard let sourceRow = try await persistence.loadSession(id: sourceID), !sourceRow.archived else {
+            throw ACPSessionForkMergeError.sourceUnavailable
+        }
+        persistedRows[sourceID] = sourceRow
+        guard let source = placeholderSession(id: sourceID) else { throw ACPSessionForkMergeError.sourceUnavailable }
+        await hydrateIfNeeded(id: sourceID)
+        guard source.hydrationState == .ready, !source.readOnlyRestricted else {
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        let canExpand = effectiveRemoteHost() == nil
+            && source.builtInMCPRegistration == .registered
+            && source.mcpAttachmentSummary?.statuses.contains {
+                $0.id == BuiltInAlasMCP.statusId && $0.disposition == .requested
+            } == true
+        guard let prompt = ACPSessionForkMergeContext.prompt(
+            fork: fork, messages: session.transcript.messages, canExpand: canExpand
+        ) else { throw ACPSessionForkMergeError.sourceReadUnavailable }
+        let hadLease = _ownedLeases.contains(sourceID)
+        guard await acquireWriterLease(sessionId: sourceID) else {
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        startHeartbeat(sessionId: sourceID)
+        guard await confirmedWriterLease(for: sourceID) else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        guard await confirmedWriterLease(for: id) else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard sessions[id] === session, session.transcript.streamingState == .idle,
+              session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+            throw ACPSessionForkMergeError.forkBusy
+        }
+        let accepted = await enqueueDelegatedPrompt(
+            text: prompt,
+            source: .init(sessionId: id, messageId: deliveryIdentity),
+            into: sourceID,
+            requiringWriter: true
+        )
+        if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+        guard accepted else { throw ACPSessionForkMergeError.deliveryFailed }
+        if archive {
+            // A turn started while delivery was suspended must keep its tab and runner.
+            guard sessions[id] === session, session.transcript.streamingState == .idle,
+                  session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+                throw ACPSessionForkMergeError.forkBusy
+            }
+            guard await confirmedWriterLease(for: id), let fence = leaseFence(sessionId: id) else {
+                throw ACPSessionForkMergeError.archiveFailed
+            }
+            guard sessions[id] === session, session.transcript.streamingState == .idle,
+                  session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+                throw ACPSessionForkMergeError.forkBusy
+            }
+            // Subsequent session writes must carry the archive flag too.
+            if var row = persistedRows[id] {
+                row.archived = true
+                persistedRows[id] = row
+            }
+            let archived = await enqueuePersistenceResult { persistence in
+                try await persistence.setArchived(id: id, archived: true, fence: fence)
+            }.value == true
+            if !archived, var row = persistedRows[id] {
+                row.archived = false
+                persistedRows[id] = row
+                replaceRecentRow(row)
+            }
+            if archived { recent.removeAll { $0.id == id } }
+            guard archived else { throw ACPSessionForkMergeError.archiveFailed }
+        }
+        return sourceID
     }
 
     /// Opens an empty side-question card on `parentID`, replacing its current
@@ -7875,7 +7998,7 @@ extension ACPSessionManager {
 
     @discardableResult
     func sendTranscriptAsContext(sessionId: ACPSession.ID, agentName: String?) -> Bool {
-        guard let session = sessions[sessionId],
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId],
               session.contextRestoreWarning?.canSendTranscript == true,
               session.agentState == .ready,
@@ -7935,7 +8058,7 @@ extension ACPSessionManager {
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
-        guard let session = sessions[sessionId] else {
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else {
             Task { @MainActor in onPersisted?(false) }
             return
         }
@@ -8021,14 +8144,14 @@ extension ACPSessionManager {
         ahead: Bool = false,
         requiringWriter: Bool = false
     ) async -> Bool {
-        guard let suggestionSession = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let suggestionSession = sessions[sessionId] else { return false }
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
         let deliveryFence = leaseFence(sessionId: sessionId)
         guard !requiringWriter || deliveryFence != nil else { return false }
         await awaitBackfill(id: sessionId)
         guard !requiringWriter || leaseFence(sessionId: sessionId) == deliveryFence else { return false }
-        guard let session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         var seen = session.queue.compactMap(\.delegatedSource)
         seen += session.transcript.messages.compactMap { message in
             guard case .user(_, _, _, _, let source) = message else { return nil }
@@ -8372,7 +8495,7 @@ extension ACPSessionManager {
         text: String,
         into sessionId: ACPSession.ID
     ) async -> Bool {
-        guard var session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), var session = sessions[sessionId] else { return false }
         let suggestionSession = session
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
@@ -8384,7 +8507,7 @@ extension ACPSessionManager {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
         }) else { return true }
         await awaitBackfill(id: sessionId)
-        guard let currentSession = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let currentSession = sessions[sessionId] else { return false }
         session = currentSession
         guard !session.queue.contains(where: {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
@@ -8464,7 +8587,7 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
-        guard let session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false

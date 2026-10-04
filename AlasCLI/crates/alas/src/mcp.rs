@@ -167,9 +167,7 @@ fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
             .filter(|tool| {
                 tool.get("name")
                     .and_then(Value::as_str)
-                    .is_some_and(|name| {
-                        name.starts_with("workspace_") || name.starts_with("preview_")
-                    })
+                    .is_some_and(is_workspace_tool)
             })
             .collect();
     }
@@ -288,11 +286,11 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "session_read",
-            "description": "Read-only: one page of a direct parent's or child's transcript as JSON entries (user and agent messages, one-line tool-call summaries; thoughts omitted). Without offset, returns the latest entries. Pass the returned end as offset to read on.",
+            "description": "Read-only: one page of a direct parent's, child's, or this session's fork transcript as JSON entries (user and agent messages, one-line tool-call summaries; thoughts omitted). Archived forks remain readable. Without offset, returns the latest entries. Pass the returned end as offset to read on.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "session_id": { "type": "string", "description": "Direct parent or child session id." },
+                    "session_id": { "type": "string", "description": "Direct parent, child, or fork session id." },
                     "offset": { "type": "integer", "minimum": 0, "description": "First entry index to return. Omit for the latest entries." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum entries. Default: 20." },
                     "max_chars": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Text budget across entries; an entry over it is cut and marked truncated. Default: 8000." }
@@ -686,7 +684,7 @@ fn simple_preview_tool(name: &str, description: &str) -> Value {
 }
 
 fn is_workspace_tool(name: &str) -> bool {
-    name.starts_with("workspace_") || name.starts_with("preview_")
+    name.starts_with("workspace_") || name.starts_with("preview_") || name == "session_read"
 }
 
 /// Translate a tool call into the CLI command it mirrors. Relative `open`
@@ -2436,7 +2434,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_only_mode_exposes_and_accepts_only_workspace_tools() {
+    fn workspace_mode_allows_fork_reads_and_keeps_project_tools_blocked() {
         let list = handle_line_with_parent(
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
             "/checkout",
@@ -2454,6 +2452,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "session_read",
                 "preview_list",
                 "preview_open",
                 "preview_navigate",
@@ -2484,6 +2483,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(open["error"]["code"], json!(-32602));
+
+        let read = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"session_read","arguments":{"session_id":"fork"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert!(matches!(command, Command::SessionRead { session_id, .. } if session_id == "fork"));
+                Ok(Response { ok: true, lines: Some(vec!["{}".into()]), error: None, exit_code: None })
+            },
+        )
+        .unwrap();
+        assert!(read.get("error").is_none());
+        let send = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"session_send","arguments":{"session_id":"fork","prompt":"Run this"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(send["error"]["code"], json!(-32602));
 
         let workspace = handle_line_with_parent(
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workspace_list","arguments":{}}}"#,

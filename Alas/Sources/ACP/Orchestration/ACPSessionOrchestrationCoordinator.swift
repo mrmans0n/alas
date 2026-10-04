@@ -529,7 +529,7 @@ final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// `session_read`: one page of a direct parent's or child's transcript.
+    /// `session_read`: one page of a direct relative's or source session's fork transcript.
     func read(
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
@@ -675,6 +675,9 @@ final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
     ) async -> Result<ACPSession, ObservationError> {
+        if let fork = await readableFork(origin: origin, targetSessionId: targetSessionId) {
+            return .success(fork)
+        }
         let callerParent: ACPDelegationRecord?
         let targetParent: ACPDelegationRecord?
         do {
@@ -694,7 +697,7 @@ final class ACPSessionOrchestrationCoordinator {
                 targetParent: targetParent
             )
         else {
-            return .failure(.init(message: "Only a direct parent or child session's transcript can be read."))
+            return .failure(.init(message: "Only a direct parent, child, or this session's fork transcript can be read."))
         }
         guard let location = await resolveDeliveryTarget(
             sessionID: targetSessionId,
@@ -712,6 +715,33 @@ final class ACPSessionOrchestrationCoordinator {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
         return .success(session)
+    }
+
+    /// Fork access is read-only and scoped to its recorded source in the same store.
+    /// Archived forks remain readable so a merge reference survives closing its tab.
+    private func readableFork(
+        origin: ACPOrchestrationSessionOrigin,
+        targetSessionId: String
+    ) async -> ACPSession? {
+        let manager: ACPSessionManager
+        if let caller = environment.sessionLocation(origin.sessionId) {
+            guard caller.origin.projectId == origin.projectId,
+                  caller.origin.worktreeId == origin.worktreeId else { return nil }
+            manager = caller.manager
+        } else {
+            guard let worktree = environment.worktree(origin.worktreeId),
+                  worktree.projectId == origin.projectId,
+                  let resolved = environment.manager(worktree) else { return nil }
+            manager = resolved
+        }
+        guard let fork = try? await manager.persistence.loadFork(targetSessionID: targetSessionId),
+              fork.sourceSessionID == origin.sessionId, fork.phase == .ready,
+              await manager.persistedSessionRow(id: targetSessionId) != nil,
+              manager.placeholderSession(id: targetSessionId) != nil else { return nil }
+        await manager.hydrateIfNeeded(id: targetSessionId)
+        await manager.awaitBackfill(id: targetSessionId)
+        guard let session = manager.liveSession(for: targetSessionId), session.hydrationState == .ready else { return nil }
+        return session
     }
 
     private func waitSnapshot(sessionId: String) async -> ACPOrchestrationWaitResponse.Session {

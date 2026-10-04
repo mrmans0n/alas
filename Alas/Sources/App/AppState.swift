@@ -7233,21 +7233,7 @@ final class AppState {
                     return self.acpModelCatalog.launchModels(for: agentID, host: host)
                 },
                 sessionLocation: { [weak self] sessionId in
-                    guard let self,
-                          let (owner, manager) = self.acpManagers.first(where: { _, manager in
-                              manager.liveSession(for: sessionId) != nil
-                          }),
-                          let worktreeId = owner.worktreeID,
-                          let worktree = self.worktree(withId: worktreeId)
-                    else { return nil }
-                    return .init(
-                        origin: ACPOrchestrationSessionOrigin(
-                            sessionId: sessionId,
-                            projectId: worktree.projectId,
-                            worktreeId: worktree.id
-                        ),
-                        manager: manager
-                    )
+                    self?.acpOrchestrationSessionLocation(sessionId: sessionId)
                 },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectId, branch in
@@ -7299,18 +7285,7 @@ final class AppState {
                 return await self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
             },
             resolveACPSessionOrigin: { [weak self] sessionId in
-                guard let self,
-                      let (owner, _) = self.acpManagers.first(where: { _, manager in
-                          manager.liveSession(for: sessionId) != nil
-                      }),
-                      let worktreeId = owner.worktreeID,
-                      let worktree = self.worktree(withId: worktreeId)
-                else { return nil }
-                return ACPOrchestrationSessionOrigin(
-                    sessionId: sessionId,
-                    projectId: worktree.projectId,
-                    worktreeId: worktree.id
-                )
+                self?.acpOrchestrationSessionLocation(sessionId: sessionId)?.origin
             },
             originatingWorktree: { [weak self] worktreeId in
                 self?.worktree(withId: worktreeId)
@@ -13947,6 +13922,54 @@ final class AppState {
                     "Could not create fork: \(error.localizedDescription)"
             }
         }
+    }
+
+    func mergeACPForkBack(
+        worktree: Worktree,
+        owner: SessionOwnerID?,
+        forkSessionID: ACPSession.ID,
+        archive: Bool
+    ) async throws {
+        let resolvedManager: ACPSessionManager?
+        if let owner { resolvedManager = acpManager(for: owner) }
+        else { resolvedManager = acpManager(for: worktree) }
+        guard let manager = resolvedManager else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: worktree) else {
+            throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
+        }
+        let sourceID = try await manager.mergeForkBack(id: forkSessionID, archive: archive)
+        if archive {
+            let forkTabs = owner.map { tabs.tabs(for: $0) } ?? tabs.tabs(forWorktree: worktree.id)
+            for tab in forkTabs {
+                guard case .acpSession(let tabState) = tab, tabState.sessionId == forkSessionID else { continue }
+                if let owner { closeSharedSessionTab(owner: owner, tabID: tab.id) }
+                else { closeTab(worktreeId: worktree.id, tabId: tab.id) }
+            }
+        }
+        if let owner { await openExistingACPSession(sessionId: sourceID, owner: owner) }
+        else { await openExistingACPSession(sessionId: sourceID, worktree: worktree) }
+        if let source = manager.liveSession(for: sourceID), source.agentState != .ready, source.agentState != .spawning {
+            await manager.attach(to: sourceID, freshlyCreated: false)
+        }
+    }
+
+    private func acpOrchestrationSessionLocation(sessionId: String) -> ACPSessionOrchestrationCoordinator.SessionLocation? {
+        guard let (owner, manager) = acpManagers.first(where: { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        }) else { return nil }
+        let origin: ACPOrchestrationSessionOrigin
+        if let worktreeID = owner.worktreeID, let worktree = worktree(withId: worktreeID) {
+            origin = .init(sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id)
+        } else if workspaceCheckout(for: owner) != nil {
+            // Checkout forks are read within their owner's store. This scope
+            // cannot resolve to a project worktree for delegation or control.
+            origin = .init(sessionId: sessionId, projectId: owner.storageKey, worktreeId: owner.storageKey)
+        } else {
+            return nil
+        }
+        return .init(origin: origin, manager: manager)
     }
 
     /// Keeps a `/btw` side question as a regular forked session and opens it
