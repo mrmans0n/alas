@@ -10,12 +10,13 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
 
     func installState() async -> ACPSetupResult {
         await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
-            .evaluate(.binaryOnPathOrNpmPackage(
-                binary: ACPManagedAdapterDescriptor.claude.binaryName,
-                npmPackage: ACPManagedAdapterDescriptor.claude.packageName))
+            .evaluate(.npxPackage(name: ACPManagedAdapterDescriptor.claude.packageName))
     }
 
     func install() async throws {
+        for packageName in ACPManagedAdapterDescriptor.claude.legacyPackageNames {
+            _ = try? await runner("npm", ["uninstall", "-g", packageName])
+        }
         let (status, stderr) = try await runner(
             "npm", ["install", "-g", ACPManagedAdapterDescriptor.claude.packageName])
         if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }

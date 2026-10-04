@@ -8,16 +8,22 @@ struct ACPManagedAdapterDescriptor: Equatable, Sendable {
 
     static let claude = ACPManagedAdapterDescriptor(
         agentID: "claude",
-        packageName: "@agentclientprotocol/claude-agent-acp",
+        packageName: "@alas-ide/claude-agent-acp",
         binaryName: "claude-agent-acp",
-        legacyPackageNames: ["@zed-industries/claude-code-acp"]
+        legacyPackageNames: [
+            "@agentclientprotocol/claude-agent-acp",
+            "@zed-industries/claude-code-acp",
+        ]
     )
 
     static let codex = ACPManagedAdapterDescriptor(
         agentID: "codex",
-        packageName: "@agentclientprotocol/codex-acp",
+        packageName: "@alas-ide/codex-acp",
         binaryName: "codex-acp",
-        legacyPackageNames: ["@zed-industries/codex-acp"]
+        legacyPackageNames: [
+            "@agentclientprotocol/codex-acp",
+            "@zed-industries/codex-acp",
+        ]
     )
 
     static let pi = ACPManagedAdapterDescriptor(
