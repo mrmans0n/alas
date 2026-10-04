@@ -4,7 +4,9 @@ import CryptoKit
 enum AttentionProducer {
     static func harnessFingerprint(state: ActivityState, body: String?, requiresUserInput: Bool = false) -> String {
         let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
-        return state == .awaitingInput && requiresUserInput ? "\(fingerprint):input" : fingerprint
+        // A limited session flips between "resuming after reset" and "needs
+        // you" without changing state, so its input intent is part of identity.
+        return (state == .awaitingInput || state == .limited) && requiresUserInput ? "\(fingerprint):input" : fingerprint
     }
 
     static func harness(
