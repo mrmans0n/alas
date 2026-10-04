@@ -166,21 +166,31 @@ enum PluginWebPolicy {
         """
     }
 
-    /// Runs in the bridge's isolated world, the only one with the message handler. Enforces the size and queue
-    /// limits before forwarding, and turns trusted clicks on https links into requests to open them.
-    static func relayScript(outEvent: String, maxBytes: Int, queue: Int) -> String {
+    /// Runs in the bridge's isolated world, the only one with the message handler. Enforces the size, queue and
+    /// rate limits before forwarding, so a page over them never costs the app anything, and turns trusted clicks on
+    /// https links into requests to open them.
+    static func relayScript(
+        outEvent: String, maxBytes: Int, queue: Int,
+        bytesPerSecond: Int = PluginHost.maxWebBytesPerSecond, minCost: Int = PluginHost.minWebPostCost
+    ) -> String {
         """
         (() => {
           "use strict";
-          const OUT = \(literal(outEvent)), MAX = \(maxBytes), QUEUE = \(queue);
+          const OUT = \(literal(outEvent)), MAX = \(maxBytes), QUEUE = \(queue), RATE = \(bytesPerSecond), MIN = \(minCost);
           const handler = window.webkit.messageHandlers.alas, encoder = new TextEncoder();
-          let pending = 0;
+          let pending = 0, budget = RATE, at = performance.now();
           document.addEventListener(OUT, (event) => {
             const text = event.detail;
-            if (typeof text !== "string" || pending >= QUEUE || encoder.encode(text).length > MAX) {
+            const size = typeof text === "string" ? encoder.encode(text).length : Infinity;
+            const now = performance.now();
+            budget = Math.min(RATE, budget + (now - at) / 1000 * RATE);
+            at = now;
+            const cost = Math.max(size, MIN);
+            if (size > MAX || pending >= QUEUE || budget < cost) {
               event.preventDefault();
               return;
             }
+            budget -= cost;
             pending += 1;
             const settle = () => { pending -= 1; };
             handler.postMessage({ post: text }).then(settle, settle);

@@ -1924,6 +1924,25 @@ struct PluginHostTests {
         #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
     }
 
+    /// A page may post twice `maxWebBytesPerSecond` at once, then that rate as time passes, so a page posting in a
+    /// loop cannot hold the main thread; another page has its own budget.
+    @Test func aPageCanPostOnlySoMuchPerSecond() async throws {
+        var time = ContinuousClock.now
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 20
+        let host = try makeHost([[.send(activateOK)]], limits: limits, manifest: Self.webManifest, now: { time })
+        await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let eighth = "\"" + String(repeating: "a", count: PluginHost.maxWebBytesPerSecond / 8 - 2) + "\""
+        for _ in 0..<16 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        #expect(await host.webMessage(tab: 0, page: other, json: "0") == nil)
+        time += .milliseconds(500)
+        for _ in 0..<4 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+    }
+
     /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's
     /// token is refused even while its messages are still queued.
     @Test func aReloadedPageGetsAFreshQueueAndTheOldOneIsClosed() async throws {
