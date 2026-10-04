@@ -18,6 +18,8 @@ enum ActivityState: String, Sendable, Equatable {
     case permissionRequest = "permission_request"
     case idle
     case limited
+    /// The last turn ended in an error; cleared by the next turn.
+    case failed
 }
 
 struct AgentHookEvent: Equatable, Sendable {

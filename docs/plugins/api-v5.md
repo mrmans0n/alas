@@ -86,7 +86,7 @@ plugin's log gets one warning.
 | `session.finished` | `session.read` | `session/finished {session, worktree}` | A session goes from `running` to `idle`. |
 
 `state` uses the values of `workspace/snapshot` (`running`, `awaiting_input`,
-`permission_request`, `idle`, `unknown`), plus `gone` when a session leaves the
+`permission_request`, `idle`, `failed`, `unknown`), plus `gone` when a session leaves the
 project: it was closed, or it disconnected and is no longer live. Alas compares snapshots
 every half second, so a change shorter than that may not be seen. The first
 snapshot after the plugin starts is the baseline and sends nothing.

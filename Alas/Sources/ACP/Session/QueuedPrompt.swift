@@ -35,6 +35,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     var delegatedSource: ACPDelegatedPromptSource?
     let backgroundTaskWake: String?
     var brokerOperationAttempt: Int
+    /// How many times the flusher has dispatched this item. Retries can keep
+    /// `brokerOperationAttempt`, so this is what tells transcript evidence
+    /// from the first dispatch apart from a resend that reused its row.
+    var dispatchCount: Int
     /// The broker generation on which this prompt crossed the dispatch
     /// boundary. A later generation cannot tell whether that request
     /// completed, so replay is held for an explicit user decision.
@@ -70,6 +74,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          transcriptRecorded: Bool = false,
          turnStartedAt: Int64? = nil,
          brokerOperationAttempt: Int = 0,
+         dispatchCount: Int = 0,
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
          deliveryUncertain: Bool = false,
          usageLimit: ACPUsageLimit? = nil)
@@ -86,6 +91,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.transcriptRecorded = transcriptRecorded
         self.turnStartedAt = turnStartedAt
         self.brokerOperationAttempt = brokerOperationAttempt
+        self.dispatchCount = dispatchCount
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
         self.usageLimit = usageLimit
@@ -93,7 +99,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
-        case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
+        case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
         case usageLimit
     }
 
@@ -111,6 +117,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
         turnStartedAt = try? c.decode(Int64.self, forKey: .turnStartedAt)
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
+        dispatchCount = (try? c.decode(Int.self, forKey: .dispatchCount)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
         usageLimit = try? c.decode(ACPUsageLimit.self, forKey: .usageLimit)
@@ -157,6 +164,34 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// of `blocks`. See the `draft` field for why the fallback is lossy.
     var restorableDraft: ACPComposerDraft {
         draft ?? ACPComposerDraft(blocks: blocks)
+    }
+
+    /// Recorded items the transcript proves the agent received: the latest
+    /// user prompt is theirs and agent output follows it. Only the latest
+    /// prompt can be a recorded queue item — nothing else is sent while its
+    /// turn runs — so earlier prompts are not considered. A resend reuses the
+    /// recorded row, so output after it proves only the first dispatch; items
+    /// dispatched more than once are never counted.
+    static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        transcript: [ACPMessageWire]
+    ) -> Set<UUID> {
+        var answered = false
+        for message in transcript.reversed() {
+            if message.isAgentSideProgress {
+                answered = true
+                continue
+            }
+            guard case .user(_, let text, let attachments, _) = message else { continue }
+            guard answered else { return [] }
+            return Set(queue.lazy.filter {
+                $0.transcriptRecorded
+                    && $0.dispatchCount <= 1
+                    && $0.brokerOperationAttempt == 0
+                    && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
+            }.map(\.id))
+        }
+        return []
     }
 
     var brokerOperationKey: String {

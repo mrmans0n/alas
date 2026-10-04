@@ -134,6 +134,8 @@ struct WorktreeRowView: View {
             return StatusPresentation(note: "waiting", colorToken: "mod", pulses: false)
         case .limited:
             return StatusPresentation(note: "limited", colorToken: "warn", pulses: false)
+        case .failed:
+            return StatusPresentation(note: "failed", colorToken: "del", pulses: false)
         case nil:
             break
         }

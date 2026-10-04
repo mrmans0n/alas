@@ -35,14 +35,51 @@ struct HarnessServiceTests {
         #expect(collector.requests.isEmpty)
     }
 
-    @Test func limitedSessionsRollUpBelowRunningAndAwaiting() {
+    @Test func worktreeRollUpRanksAwaitingThenFailedThenRunningThenLimited() {
         let (service, _) = makeService()
-        service.setExternalActivity(sessionId: "a", agent: .claude, state: .limited)
-        #expect(service.summary(forSessionIds: ["a"])?.state == .limited)
-        service.setExternalActivity(sessionId: "b", agent: .codex, state: .busy)
-        let summary = service.summary(forSessionIds: ["a", "b"])
-        #expect(summary?.state == .running)
-        #expect(summary?.sessions.map(\.state) == [.running, .limited])
+        service.setExternalActivity(sessionId: "limited", agent: .claude, state: .limited)
+        service.setExternalActivity(sessionId: "running", agent: .codex, state: .busy)
+        service.setExternalActivity(sessionId: "failed", agent: .pi, state: .failed)
+        let ids = ["limited", "running", "failed"]
+        #expect(service.summary(forSessionIds: ids)?.state == .failed)
+
+        service.setExternalActivity(sessionId: "awaiting", agent: .claude, state: .awaitingInput)
+        let summary = service.summary(forSessionIds: ids + ["awaiting"])
+        #expect(summary?.state == .awaiting)
+        #expect(summary?.sessions.map(\.state) == [.awaiting, .failed, .running, .limited])
+    }
+
+    @Test("a failed turn survives background work and late hook events in either order", arguments: [false, true])
+    func failedTurnCoexistsWithBackgroundWork(backgroundFirst: Bool) {
+        let (service, collector) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        let hook = { (event: ActivityEvent) in
+            service.handleSocketEvent(
+                self.makeEvent(event: event, agent: .pi, activityId: event == .idle ? nil : "run-1"),
+                stateLookup: { _ in (projectId: "p1", worktreeId: "w1") }, shouldNotifyOnAwaiting: { false }
+            )
+        }
+        let fail = { service.setExternalActivity(sessionId: "session-1", agent: .pi, state: .failed, body: "boom") }
+
+        if backgroundFirst {
+            hook(.backgroundStarted)
+            fail()
+        } else {
+            fail()
+            hook(.backgroundStarted)
+        }
+        #expect(service.hasBackgroundActivity(sessionId: "session-1"))
+
+        // Pi reports `agent_end` as idle for the same failed turn.
+        hook(.idle)
+        hook(.backgroundEnded)
+
+        #expect(service.activityBySession["session-1"]?.state == .failed)
+        #expect(!service.hasBackgroundActivity(sessionId: "session-1"))
+        // Leaving `.failed` would acknowledge the failure as if a new turn began.
+        #expect(transitions.last?.state == .failed)
+        #expect(collector.requests.isEmpty)
     }
 
     @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {

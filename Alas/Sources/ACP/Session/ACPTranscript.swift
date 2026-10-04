@@ -211,10 +211,15 @@ final class ACPTranscript: ObservableObject {
         return createdAt(forStableId: stableId(for: messages[index]))
     }
 
+    /// Called after each `appendMessage`. Every live transcript append goes
+    /// through it, so restored state can watch a reattached turn resume here.
+    var onMessageAdded: ((ACPMessage) -> Void)?
+
     func appendMessage(_ message: ACPMessage, createdAt: Date = Date()) {
         messageCreatedAts[stableId(for: message)] = createdAt
         pendingMessagesMutation = .append(message)
         messages.append(message)
+        onMessageAdded?(message)
     }
 
     /// Inserts a message recovered mid-replay at its correct chronological
