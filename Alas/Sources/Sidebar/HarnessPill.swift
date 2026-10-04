@@ -43,6 +43,7 @@ struct HarnessPill: View {
         switch summary.state {
         case .running:  return theme.color("add")
         case .awaiting: return theme.color("mod")
+        case .limited:  return theme.color("warn")
         }
     }
 
@@ -50,6 +51,7 @@ struct HarnessPill: View {
         switch summary.state {
         case .running:  return "run"
         case .awaiting: return "wait"
+        case .limited:  return "limit"
         }
     }
 }
@@ -83,7 +85,7 @@ struct HarnessSessionBadge: View {
     }
 
     private var tooltip: String {
-        "\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")"
+        "\(session.agent.displayName) · \(session.state == .running ? "running" : session.state == .limited ? "limited" : "waiting")"
     }
 }
 
@@ -131,16 +133,22 @@ struct HarnessSessionOverflowBadge: View {
 enum HarnessSessionBadgeSurface: Equatable {
     case running
     case awaiting
+    case limited
     case mixed
 
     init(state: HarnessService.AggregatedState) {
         switch state {
         case .running: self = .running
         case .awaiting: self = .awaiting
+        case .limited: self = .limited
         }
     }
 
     init(sessions: [HarnessService.WorktreeHarnessSession]) {
+        if !sessions.isEmpty, sessions.allSatisfy({ $0.state == .limited }) {
+            self = .limited
+            return
+        }
         let hasRunning = sessions.contains { $0.state == .running }
         let hasAwaiting = sessions.contains { $0.state == .awaiting }
 
@@ -198,6 +206,8 @@ struct HarnessSessionBadgeChrome: ViewModifier {
             gradientColors = colors(for: "add")
         case .awaiting:
             gradientColors = colors(for: "caution")
+        case .limited:
+            gradientColors = colors(for: "warn")
         case .mixed:
             let stops = Self.mixedSurfaceRamp(
                 running: theme.tokens["add"],

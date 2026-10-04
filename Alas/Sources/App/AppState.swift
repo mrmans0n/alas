@@ -1770,6 +1770,36 @@ final class AppState {
         )
     }
 
+    /// Commit message drafts borrow existing consent: Apple Intelligence under
+    /// local chat titles, the downloaded model under next-prompt suggestions
+    /// or session summaries.
+    var commitMessageAppleSuggestionsAvailable: Bool {
+        config.harness.acpLocalTitlesEnabled && LocalTextAppleIntelligence.isAvailable
+    }
+
+    var commitMessageMLXSuggestionsAvailable: Bool {
+        (config.nextPromptSuggestionsEnabled || config.sessionSummariesEnabled) && localTextModelAvailable
+    }
+
+    var commitMessageSuggestionAvailable: Bool {
+        commitMessageAppleSuggestionsAvailable || commitMessageMLXSuggestionsAvailable
+    }
+
+    func makeCommitMessageSuggester() -> CommitMessageSuggester {
+        CommitMessageSuggester(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { [weak self] in
+                self?.commitMessageAppleSuggestionsAvailable ?? false
+            },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.commitMessageMLXSuggestionsAvailable ?? false
+            }
+        )
+    }
+
     func worktreeExplainerEvidence(
         for worktree: Worktree,
         in project: ProjectConfig
@@ -12706,6 +12736,9 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            autoResumeAfterUsageLimit: { [weak self] in
+                self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
+            },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
@@ -13174,6 +13207,9 @@ final class AppState {
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
+            },
+            autoResumeAfterUsageLimit: { [weak self] in
+                self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
             },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in

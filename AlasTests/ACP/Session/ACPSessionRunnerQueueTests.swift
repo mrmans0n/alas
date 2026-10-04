@@ -47,7 +47,8 @@ struct ACPSessionRunnerQueueTests {
         validateLease: (() async -> Bool)? = nil,
         onPromptWorkChanged: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
-        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in }
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true }
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -66,9 +67,217 @@ struct ACPSessionRunnerQueueTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
+            autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
+    }
+
+    private static func codexLimitError(_ message: String) -> ACPClientError {
+        .jsonrpc(.init(code: -32603, message: "Internal error", data: AnyCodable([
+            "message": AnyCodable(message),
+            "codexErrorInfo": AnyCodable("usageLimitExceeded"),
+        ])))
+    }
+
+    @Test("a queued prompt stopped by a usage limit is delivered and a resume is scheduled at the reset")
+    func usageLimitSchedulesResumeAtReset() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        // The parser reads local time and ignores resets more than 8 days out.
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d, yyyy h:mm a"
+        let reset = formatter.string(from: Date().addingTimeInterval(2 * 3600))
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit. Try again at \(reset).")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+
+        let limit = try #require(session.usageLimit)
+        #expect(limit.resetSource == .parsed)
+        #expect(session.lastError == nil)
+        // "first" was delivered (its text is in the agent's history); the
+        // resume item now heads the queue, ahead of "second".
+        #expect(session.queue.count == 2)
+        #expect(session.queue[0].usageLimit == limit)
+        #expect(session.queue[0].scheduledAt == limit.resetsAt.map { $0 + 60 })
+        #expect(session.queue[0].lastError == nil)
+        #expect(session.queue[1].blocks == [.text("second")])
+    }
+
+    @Test("a resume that succeeds clears the Limited state and the queue drains")
+    func usageLimitResumeSucceeds() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.queue[0].scheduledAt = Date()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit == nil)
+    }
+
+    @Test("a resume that hits the limit again backs off and keeps the episode start")
+    func usageLimitResumeHitsLimitAgain() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+        let firstDetection = try #require(session.usageLimit).detectedAt
+
+        session.queue[0].scheduledAt = Date()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit?.probeAttempt == 1 }
+
+        #expect(session.usageLimit?.detectedAt == firstDetection)
+        #expect(session.queue.count == 1)
+        let next = try #require(session.queue[0].scheduledAt)
+        #expect(next > Date().addingTimeInterval(29 * 60))
+    }
+
+    private static func sentPromptTexts(_ mock: ACPMockClient) -> [String] {
+        mock.sent.compactMap { request in
+            guard request.method == "session/prompt",
+                  let params = request.params as? ACPSessionPromptParams else { return nil }
+            return params.prompt.compactMap { block -> String? in
+                if case .text(let text) = block { return text }
+                return nil
+            }.joined()
+        }
+    }
+
+    @Test("a message sent while Limited goes first, clears the limit, and the held queue drains after it",
+          arguments: [true, false])
+    func manualSuccessClearsLimitAndResumeItem(autoResume: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner(autoResumeAfterUsageLimit: { autoResume })
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("queued before limit")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("typed while limited")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.usageLimit == nil)
+        #expect(Self.sentPromptTexts(mock) == ["first", "typed while limited", "queued before limit"])
+    }
+
+    @Test("with auto-resume off a limit shows Limited and holds the rest of the queue")
+    func usageLimitWithoutAutoResume() async throws {
+        let (runner, mock, session, _) = try mkRunner(autoResumeAfterUsageLimit: { false })
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+
+        runner.flushQueueIfIdle()
+        #expect(session.usageLimitResumeItem == nil)
+        #expect(session.queue.map(\.blocks) == [[.text("second")]])
+        #expect(session.queue.map(\.status) == [.pending])
+        #expect(Self.sentPromptTexts(mock) == ["first"])
+    }
+
+    @Test("a Claude limit announced only in agent text still in the coalescing buffer is detected")
+    func bufferedClaudeLimitTextIsDetected() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.script(method: "session/prompt") { _ in
+            // Claude's error_during_execution path builds the error from
+            // `errors`, so the limit text arrives only as an agent chunk.
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.init(
+                content: .text("You've hit your limit · resets 3pm (Europe/Madrid)")
+            ))))
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: error_during_execution", data: nil))
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil || session.queue.first?.lastError != nil }
+        #expect(session.usageLimit != nil)
+    }
+
+    @Test("a limit with no resume item survives close and reopen and keeps the pre-limit queue held")
+    func usageLimitWithoutResumeItemSurvivesReopen() async throws {
+        let (runner, mock, session, store) = try mkRunner(autoResumeAfterUsageLimit: { false })
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil }
+        let limit = try #require(session.usageLimit)
+        // Persistence is FIFO and the limit is written before the queue.
+        try await waitUntil { (try? store.loadQueue(sessionId: "s"))?.map(\.blocks) == [[.text("second")]] }
+
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let reopened = try #require(manager.placeholderSession(id: "s"))
+        await manager.hydrateIfNeeded(id: "s")
+        #expect(reopened.usageLimit == limit)
+        #expect(reopened.queue.map(\.blocks) == [[.text("second")]])
+        #expect(reopened.queue.first?.isHeld(by: reopened.usageLimit) == true)
+    }
+
+    @Test("a direct prompt stopped by a usage limit is reported as delivered, so the composer keeps it cleared")
+    func directPromptAtUsageLimitReportsDelivered() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        var reported: Bool?
+        runner.send(blocks: [.text("direct")], intent: .auto, onPromptFinished: { reported = $0 })
+        try await waitUntil { reported != nil }
+        #expect(reported == true)
+        #expect(session.usageLimit != nil)
+    }
+
+    @Test("cancelling auto-resume leaves the session Limited with the queue held")
+    func cancelAutoResumeHoldsQueue() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in
+            throw Self.codexLimitError("You've hit your usage limit.")
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimitResumeItem != nil }
+
+        #expect(session.removeUsageLimitResume())
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        #expect(session.usageLimit != nil)
+        #expect(session.queue.map(\.blocks) == [[.text("second")]])
+        #expect(session.queue.map(\.status) == [.pending])
+        #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
     @Test("queued user turn publishes only after the queue head is removed")

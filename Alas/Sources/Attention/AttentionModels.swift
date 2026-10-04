@@ -33,6 +33,7 @@ enum AttentionKind: String, Codable, Sendable {
     case agentAwaiting, agentPermission, runScriptFailure, gitOperation
     case conflicts, reviewReply, failedChecks, actionableFeedback
     case reviewSyncBlocked, hostDisconnected, agentFinished, agentReady
+    case agentLimited
 }
 
 extension AttentionKind {
@@ -42,7 +43,7 @@ extension AttentionKind {
         case .agentAwaiting, .agentPermission, .runScriptFailure, .conflicts, .hostDisconnected:
             true
         case .agentReady, .gitOperation, .reviewReply, .failedChecks, .actionableFeedback,
-             .reviewSyncBlocked, .agentFinished:
+             .reviewSyncBlocked, .agentFinished, .agentLimited:
             false
         }
     }
@@ -67,7 +68,7 @@ extension AttentionKind {
             title.replacingOccurrences(of: " needs action", with: " required action")
         case .reviewSyncBlocked:
             title.replacingOccurrences(of: " is ahead", with: " was ahead")
-        case .reviewReply, .failedChecks, .agentFinished, .agentReady:
+        case .reviewReply, .failedChecks, .agentFinished, .agentReady, .agentLimited:
             title
         }
     }

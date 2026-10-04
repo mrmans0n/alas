@@ -184,6 +184,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
+    /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
+    /// detection for a structured reset time. Runtime only.
+    @Published private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
     /// Per-model token usage from the most recent `session/prompt` result's
     /// `_meta.quota` (claude-agent-acp ≥ 0.71, codex-acp, Gemini). Runtime
     /// only: re-derived on each prompt response, never persisted.
@@ -438,6 +441,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `session/new` or `session/load`.
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
+
+    /// Set while a provider usage limit has stopped this session; cleared by
+    /// the next turn that completes. See `ACPUsageLimitResumePolicy`.
+    @Published var usageLimit: ACPUsageLimit?
+
+    var usageLimitResumeItem: QueuedPrompt? {
+        queue.first { $0.usageLimit != nil }
+    }
     var pendingQueuePersistenceCount = 0 { willSet { nextPromptActivity.send() } }
 
     /// Where a delegated child stands on its requested model/reasoning.
@@ -862,6 +873,9 @@ final class ACPSession: ObservableObject, Identifiable {
         case .usageUpdate(let info):
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
+            if let rateLimit = info.claudeRateLimit {
+                latestClaudeRateLimit = rateLimit
+            }
             return []
         case .subagentSpawned(let spawn):
             return registerSubagent(spawn, at: timestamp)
@@ -2299,8 +2313,10 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Append a new pending item to the tail of the queue. Used by the
     /// runner when the user submits while the agent is busy (or while
-    /// the queue is already non-empty — see ACPSubmitRoute). `ahead` puts it
-    /// before every item that has not gone out yet instead.
+    /// the queue is already non-empty — see ACPSubmitRoute). It still goes
+    /// ahead of scheduled items and of items held by a usage limit, so a
+    /// message sent while Limited goes out first. `ahead` puts it before
+    /// every item that has not gone out yet instead.
     func enqueue(
         id: UUID = UUID(),
         blocks: [ACPContentBlock],
@@ -2311,7 +2327,9 @@ final class ACPSession: ObservableObject, Identifiable {
         let item = QueuedPrompt(id: id, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
         let insertAt = ahead
             ? queue.firstIndex { $0.status == .pending } ?? queue.endIndex
-            : queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
+            : queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: usageLimit))
+            } ?? queue.endIndex
         queue.insert(item, at: insertAt)
     }
 
@@ -2327,6 +2345,30 @@ final class ACPSession: ObservableObject, Identifiable {
         } ?? queue.endIndex
         queue.insert(item, at: insertAt)
         return item.id
+    }
+
+    /// Put (or move) the single usage-limit resume item at the head of the
+    /// pending queue. Ordinary prompts queued later are inserted ahead of
+    /// scheduled items (`enqueue`), so a message typed while Limited still
+    /// goes out first. No-op while a resume is already in flight (`.sending`),
+    /// so "Resume now" mid-resume cannot schedule a duplicate.
+    func upsertUsageLimitResume(limit: ACPUsageLimit, scheduledAt: Date) {
+        if queue.contains(where: { $0.usageLimit != nil && $0.status == .sending }) { return }
+        queue.removeAll { $0.usageLimit != nil && $0.status == .pending }
+        let item = QueuedPrompt(
+            blocks: [.text(ACPUsageLimitResumePolicy.continueText)],
+            scheduledAt: scheduledAt,
+            usageLimit: limit
+        )
+        let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
+    }
+
+    @discardableResult
+    func removeUsageLimitResume() -> Bool {
+        let before = queue.count
+        queue.removeAll { $0.usageLimit != nil && $0.status == .pending }
+        return queue.count != before
     }
 
     /// Remove a specific item by id. The drag-handle X on the bubble
@@ -2395,6 +2437,11 @@ final class ACPSession: ObservableObject, Identifiable {
             item.lastError = nil
         }
         item.scheduledAt = nil
+        // Forcing an item the usage limit holds is the user choosing to send
+        // it while Limited, like typing a new message.
+        if item.isHeld(by: usageLimit) {
+            item.enqueuedAt = Date()
+        }
 
         let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))
@@ -2546,6 +2593,22 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
+        if usageLimit == nil {
+            usageLimit = usageLimitResumeItem?.usageLimit
+        }
+    }
+
+    /// Restore a persisted queue and Limited state as one snapshot. The queue
+    /// is published first, so an observer never sees the limit without the
+    /// resume item that makes it non-actionable. The row's limit wins; the
+    /// resume item covers rows written before `usage_limit` existed.
+    func restoreQueue(
+        _ items: [QueuedPrompt],
+        markLegacySendingUncertain: Bool,
+        persistedUsageLimit: ACPUsageLimit?
+    ) {
+        restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
+        usageLimit = persistedUsageLimit ?? usageLimitResumeItem?.usageLimit
     }
 
     /// Holds prompts dispatched on a broker generation that this connection

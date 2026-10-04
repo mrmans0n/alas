@@ -273,16 +273,16 @@ struct RepoGroupView: View {
         worktrees.compactMap { harnessSummary($0.id) }
     }
 
-    /// Project-level rollup: awaiting wins across worktrees, else running.
-    /// Returns nil if no worktree in this project has any busy session.
+    /// Project-level rollup: awaiting wins across worktrees, then running,
+    /// then limited. Returns nil if no worktree in this project has any badge.
     private func projectSummary() -> HarnessService.WorktreeHarnessSummary? {
-        if let s = summaries.first(where: { $0.state == .awaiting }) { return s }
-        return summaries.first(where: { $0.state == .running })
+        summaries.min { $0.state.rollUpRank < $1.state.rollUpRank }
     }
 
     private func headerTooltip() -> String {
         let runningCount = summaries.reduce(0) { $0 + $1.runningSessionCount }
         let awaitingCount = summaries.reduce(0) { $0 + $1.awaitingSessionCount }
+        let limitedCount = summaries.reduce(0) { $0 + $1.sessions.count { $0.state == .limited } }
         let distinctAgents: [AgentKind] = AgentKind.allCases.filter { agent in
             summaries.contains { $0.agent == agent }
         }
@@ -291,6 +291,7 @@ struct RepoGroupView: View {
         var parts: [String] = []
         if runningCount > 0 { parts.append("\(runningCount) running") }
         if awaitingCount > 0 { parts.append("\(awaitingCount) awaiting") }
+        if limitedCount > 0 { parts.append("\(limitedCount) limited") }
         let head = parts.joined(separator: ", ")
         return kindList.isEmpty ? head : "\(head) (\(kindList))"
     }

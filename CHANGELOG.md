@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-03
+
+### ✨ Features
+
+- Make plugins generally available and extend them through API 8, API 9, and API 10 with tab-opening commands, progress and link nodes, configuration screens, shared storage, runtime prompts, tab visibility, Markdown content, and remote-host identity (#1726, #1727, #1729, #1733).
+- Expand individual commit files in the native peer changes sidebar, preserving paths, badges, and expanded content across reconnects (#1736).
+- Fold tool activity inside `/btw` side-question cards (#1735).
+
+### 🐛 Fixes
+
+- Resume bare Claude native forks before starting `/btw` side sessions, close failed forks, and report attachment errors accurately (#1734).
+- Reconnect SSH helper clients after upgrades while preserving watch streams and subscriptions (#1731).
+- Restore the initial collapsed state of the worktree filter (#1730).
+- Start child processes in owned process groups before execution, reap them reliably, query plugin context providers concurrently, and bound `file/list` directory reads (#1732).
+
+### 🏗️ Internal
+
+- Harden architecture-scoped release builds and make workflow-dispatched releases repair historical project files before generation (#1724, #1725).
+- Define the design and safety requirements for plugin webview panels and remote execution (#1728).
+
 ## [0.20.0] - 2026-10-03
 
 ### ✨ Features

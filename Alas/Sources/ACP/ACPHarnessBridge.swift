@@ -32,13 +32,20 @@ final class ACPHarnessBridge {
         var isSnapshot = true
         // Hidden `/btw` side sessions never badge or notify; a promoted one
         // starts reporting from its current state.
+        let resumeScheduled = session.$queue
+            .map { $0.contains { $0.usageLimit != nil } }
+            .removeDuplicates()
         sessionCancellables[session.id] = session.$readOnlyRestricted
-            .combineLatest(session.transcript.$streamingState)
-            .filter { restricted, _ in !restricted }
-            .map(\.1)
-            .sink { [weak self, weak session] state in
+            .combineLatest(
+                session.transcript.$streamingState,
+                session.$usageLimit.map { $0 != nil }.removeDuplicates(),
+                resumeScheduled
+            )
+            .filter { restricted, _, _, _ in !restricted }
+            .sink { [weak self, weak session] _, state, limited, resumeScheduled in
                 guard let self, let session else { return }
-                self.apply(state: state, session: session, isSnapshot: isSnapshot)
+                self.apply(state: state, limited: limited, resumeScheduled: resumeScheduled,
+                           session: session, isSnapshot: isSnapshot)
                 isSnapshot = false
             }
     }
@@ -89,11 +96,20 @@ final class ACPHarnessBridge {
         observedSessionsByManager[worktreeId] = current
     }
 
-    private func apply(state: ACPSession.StreamingState, session: ACPSession, isSnapshot: Bool) {
+    private func apply(
+        state: ACPSession.StreamingState, limited: Bool, resumeScheduled: Bool, session: ACPSession, isSnapshot: Bool) {
         let agent = Self.agentKind(for: session.agentId)
         let previousState = harness.activityBySession[session.id]?.state
         switch state {
         case .idle:
+            if limited {
+                // A limit is not a finish: no completion history, keep a badge.
+                harness.setExternalActivity(
+                    sessionId: session.id, owner: session.owner, agent: agent, state: .limited,
+                    isSnapshot: isSnapshot, requiresUserInput: !resumeScheduled
+                )
+                return
+            }
             // A completed turn and removal both clear the badge, but only a
             // real transition to idle contributes completion history.
             acknowledgeIfUserAddressedAttention(previousState: previousState, session: session, isSnapshot: isSnapshot)

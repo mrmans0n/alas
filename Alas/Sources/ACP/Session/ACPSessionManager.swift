@@ -141,6 +141,7 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
+    private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let qwenTitleFallback: ACPQwenTitleFallback?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
@@ -516,6 +517,24 @@ final class ACPSessionManager: ObservableObject {
         resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
+    /// Send the usage-limit continue prompt now instead of at the reset.
+    func usageLimitResumeNow(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id],
+              let limit = session.usageLimit else { return }
+        session.upsertUsageLimitResume(limit: limit, scheduledAt: Date())
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
+    /// Drop the scheduled resume; the session stays Limited until a turn succeeds.
+    func usageLimitCancelAutoResume(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id],
+              session.removeUsageLimitResume() else { return }
+        persistQueue(for: session)
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
@@ -1588,6 +1607,7 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          qwenTitleFallback: ACPQwenTitleFallback? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
@@ -1637,6 +1657,7 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
+        self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.qwenTitleFallback = qwenTitleFallback
         self.onInputAwaiting = onInputAwaiting
         self.onPlanAwaiting = onPlanAwaiting
@@ -2305,7 +2326,11 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
-        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
+        session.restoreQueue(
+            result.queue,
+            markLegacySendingUncertain: true,
+            persistedUsageLimit: result.row.usageLimit
+        )
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
         // Only restore the draft when the live composer is still pristine
@@ -5197,7 +5222,11 @@ extension ACPSessionManager {
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
-        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
+        session.restoreQueue(
+            result.queue,
+            markLegacySendingUncertain: true,
+            persistedUsageLimit: result.row.usageLimit
+        )
         scheduleScheduledQueueReconnect(sessionId: sessionId)
         // Before the early returns below: a mirror's child transcripts come
         // only from the store, so every refresh has to carry them.
@@ -5302,6 +5331,8 @@ extension ACPSessionManager {
         session.authStatus = row.authStatus
         session.pendingMCPPreamble = row.mcpPreamblePending
         session.mcpPreambleSent = row.mcpPreambleSent
+        // `usageLimit` is restored with the queue (see the caller), not here,
+        // so it is never published ahead of its resume item.
         // Mirrors never run their own attach, so the persisted suggestions
         // list is the ONLY source for their pills and chips. A fresh list
         // wins over an empty one; the writer's newer list replaces the old.
@@ -6408,6 +6439,7 @@ extension ACPSessionManager {
                                               self.changeNotifier.post()
                                           },
                                           localTitlesEnabled: localTitlesEnabled,
+                                          autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
                                           localTitleGenerator: { [qwenTitleFallback] in
                                               await ACPLocalTitleGenerator.generate(from: $0, fallback: qwenTitleFallback)
                                           },

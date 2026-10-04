@@ -502,4 +502,25 @@ struct ACPSessionStoreSchemaTests {
         #expect(row.mcpPreamblePending == nil)
         #expect(row.mcpPreambleSent == true)
     }
+
+    @Test("usage limit round-trips and survives upsert")
+    func usageLimitRoundTrip() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("store-usage-limit-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let session = ACPSessionRow(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false)
+        try store.upsertSession(session)
+        let limit = ACPUsageLimit(detectedAt: Date(), resetsAt: Date().addingTimeInterval(600),
+                                  resetSource: .parsed, probeAttempt: 1, resettable: true)
+
+        try store.setUsageLimit(sessionId: "s", limit: limit)
+        // Runtime upserts carry rows that never saw the limit.
+        try store.upsertSession(session)
+        #expect(try store.loadSession(id: "s")?.usageLimit == limit)
+
+        try store.setUsageLimit(sessionId: "s", limit: nil)
+        #expect(try store.loadSession(id: "s")?.usageLimit == nil)
+    }
 }

@@ -452,6 +452,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let moveDownTarget: Int?
             let canMoveUp: Bool
             let canMoveDown: Bool
+            let isHeldByUsageLimit: Bool
         }
 
         private struct ConnectionRecoveryTokenInputs: Equatable {
@@ -1066,6 +1067,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 let canMoveDown = moveDownTarget.map {
                     ACPTranscriptQueuePolicy.canMoveQueueItem(from: idx, to: $0, queue: session.queue)
                 } ?? false
+                let isHeldByUsageLimit = item.isHeld(by: session.usageLimit)
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
                     // Beyond `item` (and theme/contentMaxWidth folded by
@@ -1085,7 +1087,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             item: item, idx: idx, typography: host.typography,
                             position: position,
                             moveUpTarget: moveUpTarget, moveDownTarget: moveDownTarget,
-                            canMoveUp: canMoveUp, canMoveDown: canMoveDown
+                            canMoveUp: canMoveUp, canMoveDown: canMoveDown,
+                            isHeldByUsageLimit: isHeldByUsageLimit
                         ),
                         host: host
                     ),
@@ -1098,6 +1101,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 typography: host.typography,
                                 canMoveUp: canMoveUp,
                                 canMoveDown: canMoveDown,
+                                isHeldByUsageLimit: isHeldByUsageLimit,
                                 onPromote: { host.onQueuePromote(item.id) },
                                 onSendNow: { host.onQueueForceSend(item.id) },
                                 onEdit: { host.onQueueEdit(item) },

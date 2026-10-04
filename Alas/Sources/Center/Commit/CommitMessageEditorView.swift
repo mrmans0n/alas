@@ -58,6 +58,10 @@ struct CommitMessageEditorView: View {
     var editorDisabled: Bool = false
     var onDismissError: () -> Void = {}
     var accessory: AnyView? = nil
+    /// An on-device model is drafting a message for the empty fields.
+    var suggesting: Bool = false
+    /// Shown while the fields hold an untouched on-device suggestion.
+    var suggestionNote: String? = nil
 
     @Environment(\.theme) private var theme
     @State private var focused: Field?
@@ -88,7 +92,14 @@ struct CommitMessageEditorView: View {
                 agentAvailabilityMessage(message)
             }
             subjectField
+                .aiBeam(isActive: suggesting)
             bodyField
+                .aiBeam(isActive: suggesting)
+            if let suggestionNote {
+                Text(suggestionNote)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
             if !protectedTrailers.isEmpty {
                 protectedTrailersSection
             }

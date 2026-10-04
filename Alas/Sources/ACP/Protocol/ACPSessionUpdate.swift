@@ -572,18 +572,22 @@ struct ACPUsageInfo: Codable, Equatable {
     let used: Int
     let size: Int
     let cost: Cost?
+    /// Runtime only: Claude's latest rate-limit info from `_meta`. Not encoded.
+    let claudeRateLimit: ACPClaudeRateLimit?
 
     struct Cost: Codable, Equatable {
         let amount: Double
         let currency: String
     }
 
-    private enum CodingKeys: String, CodingKey { case used, size, cost }
+    private enum CodingKeys: String, CodingKey { case used, size, cost, meta = "_meta" }
+    private enum MetaKeys: String, CodingKey { case claudeRateLimit = "_claude/rateLimit" }
 
-    init(used: Int, size: Int, cost: Cost?) {
+    init(used: Int, size: Int, cost: Cost?, claudeRateLimit: ACPClaudeRateLimit? = nil) {
         self.used = used
         self.size = size
         self.cost = cost
+        self.claudeRateLimit = claudeRateLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -591,5 +595,14 @@ struct ACPUsageInfo: Codable, Equatable {
         used = try c.decode(Int.self, forKey: .used)
         size = try c.decode(Int.self, forKey: .size)
         cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
+        let meta = try? c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta)
+        claudeRateLimit = try? meta?.decodeIfPresent(ACPClaudeRateLimit.self, forKey: .claudeRateLimit)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(used, forKey: .used)
+        try c.encode(size, forKey: .size)
+        try c.encodeIfPresent(cost, forKey: .cost)
     }
 }

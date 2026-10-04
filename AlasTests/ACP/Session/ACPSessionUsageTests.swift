@@ -27,4 +27,18 @@ struct ACPSessionUsageTests {
         _ = session.apply(.currentModelUpdate(modelId: "opus"))
         #expect(session.currentModelDisplayName == "Claude Opus")
     }
+
+    @Test("usage_update keeps Claude's rate-limit reset from _meta")
+    func decodesClaudeRateLimitMeta() throws {
+        let json = #"""
+        {"used": 5000, "size": 200000,
+         "_meta": {"_claude/rateLimit": {"status": "rejected", "resetsAt": 1790000000, "rateLimitType": "five_hour"}}}
+        """#
+        let info = try JSONDecoder().decode(ACPUsageInfo.self, from: Data(json.utf8))
+        #expect(info.claudeRateLimit == ACPClaudeRateLimit(status: "rejected", resetsAt: Date(timeIntervalSince1970: 1_790_000_000)))
+
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        _ = session.apply(.usageUpdate(info))
+        #expect(session.latestClaudeRateLimit?.status == "rejected")
+    }
 }

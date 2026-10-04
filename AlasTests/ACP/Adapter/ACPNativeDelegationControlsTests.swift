@@ -541,6 +541,37 @@ struct ACPNativeDelegationControlsTests {
         }
     }
 
+    @Test(
+        "OpenCode --version output resolves to the version Alas gates on",
+        arguments: [
+            ("1.18.34\n", "1.18.34"),
+            ("1.18.34\nUpdate available: run opencode upgrade\n", "1.18.34"),
+            ("opencode v2.0.22\n", "2.0.22"),
+            ("opencode v2.0.0-beta.3", "2.0.0-beta.3"),
+            ("", nil),
+            ("Usage: opencode [command]", nil),
+        ] as [(String, String?)]
+    )
+    func openCodeReportedVersion(output: String, expected: String?) {
+        #expect(ACPOpenCodeTaskPolicy.reportedVersion(output) == expected)
+    }
+
+    @Test("OpenCode 2 fails the native-subagent check with an OpenCode 2 message")
+    func openCodeTwoIsUnsupported() {
+        #expect(throws: ACPNativeDelegationError.adapterVersionUnsupported(
+            agentID: "opencode", found: "2.0.22", firstUnverifiedMajor: 2
+        )) {
+            try ACPNativeDelegationControls.checkAdapterVersion(
+                "2.0.22", mechanism: .openCodeConfigContent, agentID: "opencode")
+        }
+        #expect(throws: ACPNativeDelegationError.adapterVersionUnverified(
+            agentID: "opencode", found: nil, minimum: "1.18.33"
+        )) {
+            try ACPNativeDelegationControls.checkAdapterVersion(
+                nil, mechanism: .openCodeConfigContent, agentID: "opencode")
+        }
+    }
+
     private actor Recorder {
         var values: [String] = []
         func append(_ value: String) { values.append(value) }
@@ -559,6 +590,9 @@ struct ACPNativeDelegationControlsTests {
             ("codex", "garbage", false),
             ("opencode", "1.18.33", true),
             ("opencode", "1.18.32", false),
+            ("opencode", "1.99.0", true),
+            ("opencode", "2.0.22", false),
+            ("opencode", "2.0.0-beta.3", false),
             ("omp", "18.2.11", true),
             ("omp", "18.2.10", false),
             ("pi", "0.0.34", true),
