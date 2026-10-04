@@ -11,6 +11,12 @@ of a remote project, on the SSH host the project runs on. The plugin's
 JavaScript still runs on this Mac; only the file work and the commands move to
 the host.
 
+## The `api` field
+
+Alas loads plugins with `"api": 4` to `11`. `remote` needs `"api": 11`; an
+older manifest that uses it is refused. Without `remote`, a plugin on any API
+gets API 10's refusal for remote worktrees.
+
 ## The `remote` field
 
 ```json

@@ -90,8 +90,7 @@ struct PluginHostTests {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
-        let manifest = try PluginManifest.parse(
-            Data(manifest.utf8), supportedAPIs: PluginManifest.supportedAPIVersions.lowerBound...11)
+        let manifest = try PluginManifest.parse(Data(manifest.utf8))
         return PluginHost(
             manifest: manifest,
             source: PluginJSFixture.source(script),

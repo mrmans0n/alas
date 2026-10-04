@@ -234,7 +234,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...10
+    static let supportedAPIVersions = 4...11
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -271,10 +271,7 @@ struct PluginManifest: Equatable, Sendable {
     /// The panel Settings → Plugins opens with Configure… (API 9).
     var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
 
-    /// `supportedAPIs` is wider only in tests, for API 11 features Alas does not advertise until all of them land.
-    static func parse(
-        _ data: Data, supportedAPIs: ClosedRange<Int> = supportedAPIVersions
-    ) throws(PluginManifestError) -> PluginManifest {
+    static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
         do {
             raw = try JSONDecoder().decode(Raw.self, from: data)
@@ -295,7 +292,7 @@ struct PluginManifest: Equatable, Sendable {
         let entry = try required(raw.entry, "entry")
 
         guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)+/) != nil else { throw .invalidID(id) }
-        guard supportedAPIs.contains(api) else { throw .unsupportedAPI(api) }
+        guard supportedAPIVersions.contains(api) else { throw .unsupportedAPI(api) }
         // Features newer than the manifest's API are refused, so a plugin never half-works on an older Alas.
         var capabilities: [PluginCapability] = []
         for name in raw.capabilities ?? [] {
