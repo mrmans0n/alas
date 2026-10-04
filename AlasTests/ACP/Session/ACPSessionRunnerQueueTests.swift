@@ -1011,6 +1011,50 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
     }
 
+    @Test("retrying a recorded follow-up requires its steering boundary to be durable")
+    func recordedFollowupRequiresDurableSteeringBoundary() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.recordUserPrompt(text: "redirect", attachments: [])
+        let text = StreamingText("working")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
+        runner.persistIndices(Set(session.transcript.messages.indices))
+        session.enqueue(blocks: [.text("redirect")])
+        session.queue[0].transcriptRecorded = true
+        let id = try #require(session.queue.first?.id)
+        runner.persistQueue()
+        await runner.flushPersistence()
+        try store.db.exec("""
+            CREATE TRIGGER fail_steering_boundary BEFORE UPDATE ON messages
+            WHEN NEW.kind = 'agent'
+            BEGIN SELECT RAISE(ABORT, 'boundary save failed'); END;
+            """)
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.forceSendQueuedItem(id: id)
+        await runner.flushPersistence()
+        try await waitUntil { session.queue.isEmpty || session.queue.first?.status == .pending }
+        await runner.flushPersistence()
+        #expect(!mock.sent.contains { $0.method == "_session/steering" })
+        #expect(text.metadata == nil)
+        let retry = try #require(session.queue.first)
+        #expect(retry.id == id && retry.transcriptRecorded)
+        #expect(try store.loadQueue(sessionId: "s").first?.id == id)
+        try store.db.exec("DROP TRIGGER fail_steering_boundary")
+        runner.forceSendQueuedItem(id: id)
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        #expect(mock.sent.filter { $0.method == "_session/steering" }.count == 1)
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+        let row = try #require(store.loadMessages(sessionId: "s").last)
+        guard case .agent(_, _, let saved) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) else {
+            Issue.record("Missing persisted output boundary")
+            return
+        }
+        #expect(saved.metadata != nil)
+    }
+
     @Test("a second steer stays queued until the owned continuation reaches handoff")
     func secondSteerWaitsForContinuationHandoff() async throws {
         var steeringReturned = false

@@ -3399,7 +3399,24 @@ extension ACPSessionRunner {
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 } else {
                     self.session.allowsStreamingBoundaryCrossing = true
-                    self.persistIndices(self.session.beginSteeringOutputBoundary())
+                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+                    let dirty = self.session.beginSteeringOutputBoundary { text in
+                        boundaryMetadata.append((text, text.metadata))
+                    }
+                    self.steeringRowPersistencePending = true
+                    let persisted = await withCheckedContinuation { continuation in
+                        if !self.persistIndices(dirty, completion: { continuation.resume(returning: $0) }) {
+                            continuation.resume(returning: false)
+                        }
+                    }
+                    if !persisted, self.isConnectionCurrent() {
+                        boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
+                    }
+                    self.steeringRowPersistencePending = false
+                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    guard persisted else {
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up boundary; it was not sent.", data: nil))
+                    }
                 }
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
