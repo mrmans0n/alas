@@ -4910,9 +4910,20 @@ extension ACPSessionRunner {
 extension ACPSessionRunner {
     /// Reconcile only after a successful attach. A disconnected socket alone
     /// does not establish that the adapter, or any process it started, died.
-    func reconcileBackgroundTasks(adapterSurvived: Bool, previousTaskIds: Set<String>) {
+    func reconcileBackgroundTasks(adapterSurvived: Bool, previousTaskIds: Set<String>) async {
         guard isConnectionCurrent(), holdsLeaseForWrite() else { return }
+        // The attach response can arrive before updatesTask has dequeued its
+        // replay. Drain the captured client watermark before deciding which
+        // tasks the replacement adapter failed to reannounce.
+        let updateWatermark = connection.client.yieldedUpdateCount
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        while appliedUpdateCount < updateWatermark {
+            guard !stopped, !Task.isCancelled, isConnectionCurrent(), holdsLeaseForWrite(),
+                  session.agentState != .disconnected else { return }
+            await Task.yield()
+            flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        }
+        guard !stopped, !Task.isCancelled, isConnectionCurrent(), holdsLeaseForWrite() else { return }
         var dirty: Set<Int> = []
         if !adapterSurvived {
             for var task in session.backgroundTasks where previousTaskIds.contains(task.id)

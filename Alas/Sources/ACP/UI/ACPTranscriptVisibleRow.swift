@@ -28,6 +28,8 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
             if case .plan = message { return nil }
             let id = stableId(message)
             guard seen.insert(id).inserted else { return nil }
+            if case .toolCall(let toolCall) = message,
+               ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false { return nil }
             return ACPTranscriptVisibleRow(index: index, stableId: id)
         }
         return rows.reversed()

@@ -7356,10 +7356,12 @@ extension ACPSessionManager {
                     return
                 }
             }
-            runner.reconcileBackgroundTasks(
+            await runner.reconcileBackgroundTasks(
                 adapterSurvived: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true
                     && !createdFreshRemoteSession,
                 previousTaskIds: previousBackgroundTaskIds)
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+                  session.agentState == .spawning else { return }
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()

@@ -1337,7 +1337,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(restored.backgroundTasks.first?.wakeDelivered == true)
         session.applyBackgroundTask(spawn, ownerSessionId: "s")
         session.applyBackgroundTask(done, ownerSessionId: "s")
-        runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
         #expect(session.queue.isEmpty)
         #expect(mock.sent.count == 1)
@@ -1353,7 +1353,7 @@ struct ACPSessionRunnerQueueTests {
         mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
         runner.start()
         defer { runner.stop() }
-        runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await probe.waitUntilFirstStarted()
         mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
             sessionUpdate: "async_task_state_update", asyncTaskId: "watch", state: "completed"))))
@@ -1371,21 +1371,28 @@ struct ACPSessionRunnerQueueTests {
         #expect(await probe.callCount == 2)
     }
 
-    @Test("recovery preserves a surviving adapter and reports lost task ids only after replacement", arguments: [true, false])
-    func backgroundRecovery(adapterSurvived: Bool) async throws {
+    @Test("recovery preserves surviving or reannounced tasks and reports loss only after replacement", arguments: [(true, false), (false, false), (false, true)])
+    func backgroundRecovery(adapterSurvived: Bool, reannounced: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
         session.transcript.streamingState = .awaitingInput
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"), ownerSessionId: "s")
-        runner.reconcileBackgroundTasks(adapterSurvived: adapterSurvived, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
+        if reannounced {
+            mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
+                sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"))))
+        }
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: adapterSurvived, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
         await runner.flushPersistence()
-        #expect(session.backgroundTasks[0].state == (adapterSurvived ? "running" : "lost"))
-        #expect(session.queue.count == (adapterSurvived ? 0 : 1))
+        let shouldReportLoss = !adapterSurvived && !reannounced
+        #expect(session.backgroundTasks[0].state == (shouldReportLoss ? "lost" : "running"))
+        #expect(session.queue.count == (shouldReportLoss ? 1 : 0))
         #expect(mock.sent.isEmpty)
-        if !adapterSurvived {
+        if shouldReportLoss {
             #expect(session.queue[0].blocks.description.contains("watch"))
             #expect(try store.loadQueue(sessionId: "s") == session.queue)
             let id = session.queue[0].id
-            runner.reconcileBackgroundTasks(adapterSurvived: false, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
+            await runner.reconcileBackgroundTasks(adapterSurvived: false, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
             await runner.flushPersistence()
             #expect(session.queue.map(\.id) == [id])
         }
