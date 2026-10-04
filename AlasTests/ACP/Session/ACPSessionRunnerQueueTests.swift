@@ -79,6 +79,14 @@ struct ACPSessionRunnerQueueTests {
         return (runner, mock, session, store)
     }
 
+    private func rejectWakeDeliveryWrites(in store: ACPSessionStore) throws {
+        try store.db.exec("""
+        CREATE TRIGGER reject_wake_delivery BEFORE UPDATE OF payload ON messages
+        WHEN CAST(NEW.payload AS TEXT) LIKE '%"wakeDelivered":true%'
+        BEGIN SELECT RAISE(ABORT, 'delivery write failed'); END;
+        """)
+    }
+
     private static func codexLimitError(_ message: String) -> ACPClientError {
         .jsonrpc(.init(code: -32603, message: "Internal error", data: AnyCodable([
             "message": AnyCodable(message),
@@ -1381,11 +1389,7 @@ struct ACPSessionRunnerQueueTests {
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await runner.flushPersistence()
         let wakeID = try #require(session.queue.first?.id)
-        try store.db.exec("""
-        CREATE TRIGGER reject_wake_delivery BEFORE UPDATE OF payload ON messages
-        WHEN CAST(NEW.payload AS TEXT) LIKE '%"wakeDelivered":true%'
-        BEGIN SELECT RAISE(ABORT, 'delivery write failed'); END;
-        """)
+        try rejectWakeDeliveryWrites(in: store)
         session.transcript.streamingState = .idle
         runner.flushQueueIfIdle()
         await probe.waitUntilFirstStarted()
@@ -1411,6 +1415,54 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue == [held])
         #expect(try store.loadQueue(sessionId: "s") == [held])
         #expect(await probe.callCount == 1)
+    }
+
+    @Test("wake confirmation reconciles teardown without consuming a newer retry", arguments: [(true, "stopped"), (true, "replaced"), (true, "retried"), (false, "stopped"), (false, "replaced")])
+    func backgroundConfirmationReconcilesTeardown(committed: Bool, outcome: String) async throws {
+        let current = ConnectionCurrentFlag(true)
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex", isConnectionCurrent: { current.isCurrent })
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data("null".utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "completed"), ownerSessionId: "s")
+        let confirmationStarted = QueueTestGate()
+        let releaseConfirmation = QueueTestGate()
+        var heldConfirmation = false
+        runner.beforePersistenceForTesting = {
+            if !heldConfirmation, session.backgroundTasks.first?.wakeDelivered == true {
+                heldConfirmation = true
+                await confirmationStarted.open()
+                await releaseConfirmation.wait()
+            }
+        }
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        if !committed {
+            try rejectWakeDeliveryWrites(in: store)
+        }
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await confirmationStarted.wait()
+        if outcome == "replaced" { current.set(false) } else { runner.stop() }
+        session.restoreQueue(session.queue, markLegacySendingUncertain: true)
+        if outcome == "retried" { session.queue[0].brokerOperationAttempt += 1 }
+        let restoredQueue = session.queue
+        await releaseConfirmation.open()
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == (committed ? 1 : 0))
+        #expect(try store.loadQueue(sessionId: "s").isEmpty == committed)
+        if committed {
+            #expect(session.queue == (outcome == "retried" ? restoredQueue : []))
+        } else {
+            #expect(session.backgroundTasks[0].needsWake)
+            #expect(session.queue.first?.lastError?.contains("save") == true)
+            #expect(session.queue.first?.deliveryUncertain == true)
+        }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
     }
 
     @Test("task corrections preserve dispatched and retry-held notification snapshots", arguments: ["sending", "failed", "uncertain"])

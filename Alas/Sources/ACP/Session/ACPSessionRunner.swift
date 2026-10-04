@@ -5030,25 +5030,31 @@ extension ACPSessionRunner {
             self.session.pendingQueuePersistenceCount -= 1
             if persisted == true {
                 self.commitPersistedMessageRows(messages)
-                guard self.isConnectionCurrent(), !self.stopped else { return }
-                self.session.queue.removeAll { $0.id == item.id }
+                // Committed delivery survives teardown; a newer retry under
+                // the same wake ID still owns its separate attempt.
+                self.session.queue.removeAll { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
                 acknowledgement?()
+                guard self.isConnectionCurrent(), !self.stopped else { return }
                 self.onPromptWorkChanged?()
                 if !self.sendPendingQueueForceSendsAfterPersistence() { self.flushQueueIfIdle() }
             } else {
-                guard self.isConnectionCurrent(), !self.stopped, self.holdsLeaseForWrite(),
-                      let index = self.session.queue.firstIndex(where: { $0.id == item.id }) else { return }
+                guard let index = self.session.queue.firstIndex(where: {
+                    $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt
+                }) else { return }
                 self.session.queue[index].status = .pending
                 self.session.queue[index].lastError = "Could not save background work delivery confirmation. Retry may repeat the notification."
                 self.session.queue[index].deliveryUncertain = true
+                var restoredRows: Set<Int> = []
                 if var task = self.session.backgroundTasks.first(where: { $0.wakeId == item.id }) {
                     task.wakeDelivered = false
-                    self.persistIndices(self.session.saveBackgroundTask(task))
+                    restoredRows = self.session.saveBackgroundTask(task)
                 }
                 if deliveredForkContext, var fork = self.session.forkRecord {
                     fork.contextDeliveryPending = true
                     self.session.forkRecord = fork
                 }
+                guard self.isConnectionCurrent(), !self.stopped, self.holdsLeaseForWrite() else { return }
+                self.persistIndices(restoredRows)
                 self.persistQueue(completion: { _ in self.onPromptWorkChanged?() })
             }
         })

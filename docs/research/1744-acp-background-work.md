@@ -138,6 +138,9 @@ The item remains in memory until that transaction commits. A failed save
 retains a visible, delivery-uncertain entry for explicit retry, restores the
 undelivered task state, and prevents automatic replay. Concurrent Stop and
 prompt completion cannot consume the same wake twice.
+Confirmation reconciles the cached session even after its runner stops or is
+replaced, while preserving a newer retry attempt. Retired runners do not
+dispatch successor work or issue recovery writes.
 Replayed spawns cannot reopen completed work. A successful attach to a
 surviving broker retains running tasks; replacement marks only prior tasks
 that the new adapter has not reported again as lost observation.
@@ -184,6 +187,12 @@ Local validation passed:
   entry after successful or cancelled delivery. A gated Stop during
   confirmation also reproduced duplicate consumption before its guard.
   All variants retain a durable, visible entry without automatic replay.
+- Teardown confirmation handling passed **226 tests in three suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`, and
+  `ACPSessionPersistenceTests`. Gated successful and failed transactions
+  reproduced stale cached state after stop or replacement before the fix.
+  Committed responses are acknowledged, consumed attempts are removed, and
+  newer retries retain their identity and data.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 
@@ -194,6 +203,9 @@ Ghostty build script populated its artifact from the shared cache, and
 The final delivery-save selection used `COMPILER_INDEX_STORE_ENABLE=NO`
 after local disk-space and signing failures, clearing only unused generated
 compiler caches from this worktree before the successful rerun.
+The teardown selection also used `-collect-test-diagnostics never` after
+Xcode's failed-run system-log archive exhausted the disk; assertion output
+remained in the test log.
 
 The adapter-runtime probe and Swift tests exercise translation, ordering,
 persistence and routing with in-memory provider inputs. No authenticated model
