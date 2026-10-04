@@ -3353,12 +3353,14 @@ mod tests {
     #[test]
     fn a_reservation_that_never_arrives_stops_holding_its_place() {
         let order = Arc::new(RequestOrder::default());
+        // Before reserving: the grace runs from the reservation, so timing
+        // from after it could measure a hair under the grace.
+        let started = std::time::Instant::now();
         let abandoned = order.reserve();
         let next = order.reserve();
 
         // Never claimed, and deliberately not dropped either — this stands in
         // for a connection still being read from, not one that went away.
-        let started = std::time::Instant::now();
         {
             let _turn = next.claim();
         }
