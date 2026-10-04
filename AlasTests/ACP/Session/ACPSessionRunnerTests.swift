@@ -340,8 +340,8 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
-    @Test("send attaches its checkpoint before the prompt RPC")
-    func sendAttachesCheckpointBeforePrompt() async throws {
+    @Test("send attaches its checkpoint before dispatch", arguments: [false, true])
+    func sendAttachesCheckpointBeforePrompt(nativeSteering: Bool) async throws {
         let checkpointID = UUID()
         var capturedPrompt: String?
         var capturedHasAttachments: Bool?
@@ -350,16 +350,21 @@ struct ACPSessionRunnerTests {
             capturedHasAttachments = hasAttachments
             return checkpointID
         })
-        mock.script(method: "session/prompt") { _ in
+        if nativeSteering {
+            runner.session.agentState = .ready
+            runner.session.supportsSteering = true
+            runner.session.transcript.streamingState = .streaming
+        }
+        mock.script(method: nativeSteering ? "_session/steering" : "session/prompt") { _ in
             guard case .user(_, _, _, let attachments, _) = runner.session.transcript.messages.last,
                   attachments.map(\.checkpointID) == [checkpointID] else {
                 throw JSONRPCError(code: -32000, message: "checkpoint missing", data: nil)
             }
-            return Data("{}".utf8)
+            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data("{}".utf8)
         }
 
         let succeeded = await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { continuation.resume(returning: $0) }
+            runner.send(text: "hello", attachments: [], intent: nativeSteering ? .steer : .auto) { continuation.resume(returning: $0) }
         }
 
         #expect(succeeded)
@@ -615,7 +620,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         var secondAccepted: Bool?
@@ -673,7 +678,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
 
         var secondAccepted: Bool?
         runner.send(blocks: [.text("next")], intent: .auto) { succeeded in
@@ -786,7 +791,7 @@ struct ACPSessionRunnerTests {
             firstCompletion = succeeded
         }
         try await waitUntil { firstCompletion == true }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         var replacementCompletion: Bool?
@@ -795,7 +800,7 @@ struct ACPSessionRunnerTests {
         }
         try await waitUntil {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
-                && session.transcript.streamingState == .sending
+                && session.transcript.streamingState == .streaming
         }
 
         client.emitReserved(.agentMessageChunk(.text(" old-tail")))
@@ -805,7 +810,7 @@ struct ACPSessionRunnerTests {
                 return false
             }
         }
-        #expect(session.transcript.streamingState == .sending)
+        #expect(session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         await replacementGate.open()
@@ -938,7 +943,7 @@ struct ACPSessionRunnerTests {
         }
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .streaming)
 
         await finishSecond.open()
         for _ in 0..<20 where secondCompletion == nil {
@@ -994,7 +999,7 @@ struct ACPSessionRunnerTests {
         await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
-        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(runner.session.transcript.streamingState == .streaming)
         #expect(turns.isEmpty)
 
         await finishSecond.open()
@@ -1607,6 +1612,43 @@ struct ACPSessionRunnerTests {
         try await waitUntil { session.retryStatus != nil }
         mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("resumed"))))
         try await waitUntil { session.retryStatus == nil }
+    }
+
+    @Test("replay completion restores only live steering bindings", arguments: [(true, true), (true, false), (false, true)])
+    func replayCompletionRestoresLiveSteeringBinding(steered: Bool, streaming: Bool) async throws {
+        let original = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .agentMessageChunk(.init(messageId: "shared", content: .text(text))))
+        }
+        original.apply(chunk("before").update)
+        if steered { _ = original.beginSteeringOutputBoundary() }
+        original.recordUserPrompt(text: "redirect", attachments: [])
+        original.apply(.agentMessageChunk(.init(messageId: steered ? "shared" : "new", content: .text("after"))))
+
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        restored.transcript.messages = try original.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.transcript.streamingState = streaming ? .streaming : .idle
+        restored.allowsStreamingBoundaryCrossing = false
+        let (runner, _) = try makeRunner(session: restored)
+        defer { runner.stop() }
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 1)
+        runner.applyIncomingUpdateForTesting(chunk("before"))
+        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: 1)
+        runner.applyIncomingUpdateForTesting(chunk(" continued"))
+
+        #expect(restored.transcript.messages.count == 3)
+        guard case .agent(_, _, let text) = restored.transcript.messages.last else {
+            Issue.record("Missing steering continuation")
+            return
+        }
+        #expect(text.value == (streaming && steered ? "after continued" : "after"))
+        guard case .agent(_, _, let predecessor) = restored.transcript.messages.first else {
+            Issue.record("Missing predecessor")
+            return
+        }
+        #expect(predecessor.value == "before")
     }
 
     @Test("delayed load replay finish keeps active prompt boundary crossing")

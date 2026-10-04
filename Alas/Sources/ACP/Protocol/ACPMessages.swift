@@ -286,21 +286,33 @@ struct ACPInitializeResult: Codable, Equatable {
     /// The adapter's self-reported `agentInfo` (ACP `Implementation`).
     /// Optional on the wire; a malformed value is dropped, not fatal.
     let agentInfo: ACPImplementationInfo?
+    /// Extension capabilities live beside `agentCapabilities` on the wire.
+    let meta: AnyCodable?
+
+    var supportsSteering: Bool {
+        guard let root = meta?.value as? [String: AnyCodable],
+              let steering = root["steering"]?.value as? [String: AnyCodable]
+        else { return false }
+        return steering["supported"]?.value as? Bool == true
+    }
 
     init(
         protocolVersion: Int,
         agentCapabilities: ACPAgentCapabilities?,
         authMethods: [ACPAuthMethod],
-        agentInfo: ACPImplementationInfo? = nil
+        agentInfo: ACPImplementationInfo? = nil,
+        meta: AnyCodable? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.agentCapabilities = agentCapabilities
         self.authMethods = authMethods
         self.agentInfo = agentInfo
+        self.meta = meta
     }
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion, agentCapabilities, authMethods, agentInfo
+        case meta = "_meta"
     }
 
     init(from decoder: Decoder) throws {
@@ -309,6 +321,7 @@ struct ACPInitializeResult: Codable, Equatable {
         agentCapabilities = try c.decodeIfPresent(ACPAgentCapabilities.self, forKey: .agentCapabilities)
         authMethods = try c.decodeIfPresent([ACPAuthMethod].self, forKey: .authMethods) ?? []
         agentInfo = (try? c.decodeIfPresent(ACPImplementationInfo.self, forKey: .agentInfo)) ?? nil
+        meta = try? c.decodeIfPresent(AnyCodable.self, forKey: .meta)
     }
 
     struct ACPAgentCapabilities: Codable, Equatable {

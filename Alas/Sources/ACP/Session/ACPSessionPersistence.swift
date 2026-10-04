@@ -715,6 +715,23 @@ actor ACPSessionPersistence {
         return true
     }
 
+    /// Commit a recorded prompt and its recovery binding together so a
+    /// restart cannot see one without the other.
+    @discardableResult
+    func persistMessagesAndQueue(
+        _ messages: [ACPStoredMessage], sessionId: String,
+        items: [QueuedPrompt], fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = {
+            try store.upsertMessages(messages)
+            try store.upsertQueue(sessionId: sessionId, items: items)
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try store.db.transaction(operation)
+        return true
+    }
+
     func loadQueue(sessionId: String) throws -> [QueuedPrompt] {
         try openedStore().loadQueue(sessionId: sessionId)
     }

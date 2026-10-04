@@ -8,9 +8,8 @@ enum ComposerAction: Equatable {
     case hidden
     /// Idle agent + non-empty composer. Tapping submits the prompt.
     case send
-    /// Busy agent + non-empty composer. Primary action enqueues the prompt;
-    /// the menu exposes steer and stop. Scheduling stays on the idle Send
-    /// affordance so the busy Queue button keeps its existing shape.
+    /// Busy agent + non-empty composer. The preference selects the primary
+    /// follow-up action; the menu exposes its alternate and Stop.
     case queue(menu: [ComposerMenuItem])
     /// Busy agent + empty composer. Tapping cancels the in-flight turn.
     case stop
@@ -19,6 +18,7 @@ enum ComposerAction: Equatable {
 /// Items that appear in the chevron menu when `ComposerAction == .queue`.
 /// Ordered as they appear top-to-bottom in the menu.
 enum ComposerMenuItem: Hashable {
+    case queue
     case steer
     case stop
 }
@@ -69,7 +69,8 @@ enum ACPSchedulePreset: CaseIterable, Identifiable {
 func composerAction(
     streamingState: ACPSession.StreamingState,
     hasText: Bool,
-    agentState: ACPSession.AgentState
+    agentState: ACPSession.AgentState,
+    queueByDefault: Bool = true
 ) -> ComposerAction {
     switch agentState {
     case .idle, .spawning, .ready, .disconnected, .failed(_):
@@ -80,15 +81,21 @@ func composerAction(
     case .idle:
         return hasText ? .send : .hidden
     case .sending, .streaming, .awaitingPermission, .awaitingInput:
-        return hasText ? .queue(menu: [.steer, .stop]) : .stop
+        return hasText ? .queue(menu: [queueByDefault ? .steer : .queue, .stop]) : .stop
     }
 }
 
-func primarySubmitIntent(for action: ComposerAction, optionPressed: Bool) -> ACPSubmitIntent? {
+func primarySubmitIntent(for action: ComposerAction, optionPressed: Bool, queueByDefault: Bool = true) -> ACPSubmitIntent? {
     switch action {
-    case .send, .queue:
+    case .send:
         optionPressed ? .steer : .auto
+    case .queue:
+        (queueByDefault ? optionPressed : !optionPressed) ? .steer : .auto
     case .stop, .hidden:
         nil
     }
+}
+
+func steeringActionTitle(nativeSteering: Bool) -> String {
+    nativeSteering ? "Steer" : "Interrupt & send"
 }

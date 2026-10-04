@@ -31,7 +31,7 @@ struct AlasCLIWorktreeResolverTests {
         let target: String
         switch request.virtualizingPaths(like: anchor).command {
         case .worktree(.switch(let t)), .worktree(.delete(let t, _, _)), .agentList(worktree: let t?),
-             .sessionNew(_, _, .existing(let t), _, _), .review(.commentAdd(let t, _, _, _, _, _)):
+             .sessionNew(_, _, .existing(let t), _, _, _), .review(.commentAdd(let t, _, _, _, _, _)):
             target = t
         default:
             Issue.record("unexpected command")

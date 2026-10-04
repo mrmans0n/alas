@@ -202,6 +202,57 @@ struct ACPSessionManagerTests {
         #expect(session.queue.isEmpty)
     }
 
+    @Test("queued child reports share one durable wake and dedupe after delivery")
+    func queuedChildReportsShareOneWake() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-child-batch-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "claude")
+        session.transcript.streamingState = .streaming
+        let sources = ["planner", "reviewer"].map {
+            ACPDelegatedPromptSource(sessionId: $0, messageId: "report-\($0)", senderRelationship: "child")
+        }
+        for source in sources {
+            #expect(await manager.enqueueDelegatedPrompt(text: "Result from \(source.sessionId)", source: source, into: session.id))
+        }
+        #expect(session.queue.count == 1)
+        let item = try #require(try store.loadQueue(sessionId: session.id).first)
+        #expect(item.blocks == [.text("Result from planner\n\nResult from reviewer")])
+        let provenance = try #require(item.delegatedSource)
+        #expect(ACPDelegatedPromptSource.transcriptLabel(for: provenance) { $0 } == "Updates from 2 child sessions")
+        session.queue = []
+        session.transcript.messages.append(.user(id: UUID(), messageId: nil, text: "delivered batch", attachments: [], delegatedSource: item.delegatedSource))
+        for source in sources {
+            #expect(await manager.enqueueDelegatedPrompt(text: "Result from \(source.sessionId)", source: source, into: session.id))
+        }
+        #expect(session.queue.isEmpty)
+        let replay = sources.map { (text: "Repeated result", source: $0) }
+            + [(text: "New result", source: ACPDelegatedPromptSource(sessionId: "implementer", messageId: "third", senderRelationship: "child"))]
+        #expect(await manager.enqueueDelegatedPrompts(replay, into: session.id))
+        #expect(session.queue.map(\.blocks) == [[.text("New result")]])
+    }
+
+    @Test("child reports do not extend a prompt that crossed dispatch or needs recovery", arguments: ["sending", "recorded", "failed", "uncertain"])
+    func childReportsKeepDispatchedPromptsIntact(state: String) async throws {
+        let store = try ACPSessionStore(path: FileManager.default.temporaryDirectory.appendingPathComponent("mgr-batch-boundary-\(UUID()).sqlite").path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "claude")
+        let first = ACPDelegatedPromptSource(sessionId: "planner", messageId: "first", senderRelationship: "child")
+        var item = QueuedPrompt(blocks: [.text("Plan")], delegatedSource: first)
+        switch state {
+        case "sending": item.status = .sending
+        case "recorded": item.transcriptRecorded = true
+        case "failed": item.lastError = "Retry required"
+        default: item.deliveryUncertain = true
+        }
+        session.queue = [item]
+        #expect(await manager.enqueueDelegatedPrompt(text: "Review", source: .init(sessionId: "reviewer", messageId: "second", senderRelationship: "child"), into: session.id))
+        #expect(session.queue.map(\.blocks) == [[.text("Plan")], [.text("Review")]])
+        #expect(session.queue.first == item)
+    }
+
     @Test("creating a session inserts it and persists the row")
     func create() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-\(UUID()).sqlite")

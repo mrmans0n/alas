@@ -36,6 +36,7 @@ struct ACPOrchestrationStoreTests {
         let path = temporaryPath()
         var record = newRecord()
         record.modelSelection = ACPDelegatedModelSelection(model: "gpt-5.2", reasoning: "high")
+        record.role = "reviewer"
 
         do {
             let store = try ACPOrchestrationStore(path: path)
@@ -329,6 +330,7 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
         let legacy = try #require(try store.delegation(childSessionId: "child"))
         #expect(legacy.modelSelection == nil)
+        #expect(legacy.role == nil)
         #expect(legacy.pendingInitialPrompt == "Task")
         let pending = try store.pendingMessages(targetSessionId: "parent")
         #expect(pending.count == 1)

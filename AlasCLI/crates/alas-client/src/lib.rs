@@ -196,6 +196,7 @@ pub enum Command {
         model: Option<String>,
         /// Reasoning value for an agent that exposes a reasoning config option.
         reasoning: Option<String>,
+        role: Option<String>,
     },
     SessionSend {
         session_id: String,
@@ -516,6 +517,7 @@ pub fn build_request(
             worktree,
             model,
             reasoning,
+            role,
         } => {
             let mut r = Request::new("session_new");
             let mut params = serde_json::Map::new();
@@ -531,6 +533,9 @@ pub fn build_request(
                     "reasoning".into(),
                     serde_json::Value::String(reasoning.clone()),
                 );
+            }
+            if let Some(role) = role {
+                params.insert("role".into(), serde_json::Value::String(role.clone()));
             }
             match worktree {
                 SessionWorktreeTarget::Current => {}
@@ -1205,6 +1210,7 @@ mod tests {
             },
             model: Some("gpt-5.2".into()),
             reasoning: Some("high".into()),
+            role: Some("reviewer".into()),
         };
         let request = build_request(&new, Some("acp-1".into()), None);
         assert_eq!(request.session_id.as_deref(), Some("acp-1"));
@@ -1215,6 +1221,7 @@ mod tests {
                 "agent": "codex",
                 "model": "gpt-5.2",
                 "reasoning": "high",
+                "role": "reviewer",
                 "new_worktree": { "branch": "child", "base": "origin/main" }
             }))
         );

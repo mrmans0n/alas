@@ -1,6 +1,6 @@
 import Foundation
 
-private final class ACPRequestHandoff: @unchecked Sendable {
+final class ACPRequestHandoff: @unchecked Sendable {
     private let lock = NSLock()
     private var hasFired = false
     private let action: @Sendable () -> Void
@@ -56,6 +56,7 @@ struct ACPInitializeOutcome: Equatable {
     let supportsSubagents: Bool
     /// Whether the agent advertised the `_auth/status_update` extension marker.
     let advertisesAuthStatus: Bool
+    let supportsSteering: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     let agentInfo: ACPImplementationInfo?
 
@@ -69,7 +70,8 @@ struct ACPInitializeOutcome: Equatable {
         goalCapability: ACPGoalCapability? = nil,
         supportsSubagents: Bool = false,
         advertisesAuthStatus: Bool = false,
-        agentInfo: ACPImplementationInfo? = nil
+        agentInfo: ACPImplementationInfo? = nil,
+        supportsSteering: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -81,6 +83,7 @@ struct ACPInitializeOutcome: Equatable {
         self.supportsSubagents = supportsSubagents
         self.advertisesAuthStatus = advertisesAuthStatus
         self.agentInfo = agentInfo
+        self.supportsSteering = supportsSteering
     }
 }
 
@@ -89,6 +92,27 @@ struct ACPInitializeOutcome: Equatable {
 struct ACPPromptOutcome {
     let acknowledgement: ACPDurableConsumptionAcknowledgement?
     let quota: ACPPromptQuota?
+}
+
+enum ACPSteeringOutcome: String, Decodable {
+    case injected, startedNewTurn, promptRequired, failed
+}
+
+struct ACPSteeringResult {
+    let outcome: Result<ACPSteeringOutcome, Error>
+    let acknowledgement: ACPDurableConsumptionAcknowledgement?
+}
+
+struct ACPSteeringParams: Encodable {
+    let sessionId: String
+    let prompt: [ACPContentBlock]
+    // Claude honors this opt-in. Older adapters may still return startedNewTurn.
+    var meta = ["steering": ["idleBehavior": "promptRequired"]]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, prompt
+        case meta = "_meta"
+    }
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -136,7 +160,8 @@ final class ACPConnection: @unchecked Sendable {
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
-            agentInfo: result.agentInfo
+            agentInfo: result.agentInfo,
+            supportsSteering: result.supportsSteering
         )
     }
 
@@ -349,6 +374,7 @@ final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
         onRequestHandoff: (@Sendable () -> Void)? = nil,
+        onTransportHandoff: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
@@ -368,11 +394,15 @@ final class ACPConnection: @unchecked Sendable {
                     beforeRequestHandoff: beforeRequestHandoff,
                     onRequestHandoff: {
                         try handoffBoundary?.fire()
+                        onTransportHandoff?()
                         handoff?.fire()
                     }
                 )
-            } else if let handoff {
-                resp = try await client.send(request, onRequestHandoff: { handoff.fire() })
+            } else if handoff != nil || onTransportHandoff != nil {
+                resp = try await client.send(request, onRequestHandoff: {
+                    onTransportHandoff?()
+                    handoff?.fire()
+                })
             } else {
                 resp = try await client.send(request)
             }
@@ -386,6 +416,43 @@ final class ACPConnection: @unchecked Sendable {
             return ACPPromptOutcome(acknowledgement: nil, quota: quota)
         }
         return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
+    }
+
+    func steer(
+        sessionId: String, blocks: [ACPContentBlock],
+        brokerOperationKey: String? = nil,
+        onRequestHandoff: (@Sendable () -> Void)? = nil
+    ) async throws -> ACPSteeringResult {
+        let request = ACPRequest(
+            method: "_session/steering",
+            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks),
+            brokerOperationKey: brokerOperationKey
+        )
+        let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
+        let response: ACPResponse
+        func dispatch() async throws -> ACPResponse {
+            if let handoff {
+                return try await client.send(request, onRequestHandoff: { handoff.fire() })
+            }
+            return try await client.send(request)
+        }
+        do {
+            do {
+                response = try await dispatch()
+            } catch {
+                // The broker already completed this exact operation. Reusing
+                // its saved key recovers the outcome without another delivery.
+                guard brokerOperationKey != nil, error is ACPBrokerDurableCompletionReplayError else { throw error }
+                response = try await dispatch()
+            }
+        } catch {
+            handoff?.fire()
+            throw error
+        }
+        struct DecodedResult: Decodable { let outcome: ACPSteeringOutcome }
+        return ACPSteeringResult(
+            outcome: Result { try JSONDecoder().decode(DecodedResult.self, from: response.body).outcome },
+            acknowledgement: response.durableConsumptionAcknowledgement)
     }
 
     func acknowledgeDurableSessionResponses() {

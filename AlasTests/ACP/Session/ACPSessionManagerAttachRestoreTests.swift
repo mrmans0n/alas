@@ -5,6 +5,38 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test("a broker turn awaiting recovery keeps earlier queued work held across reattachment")
+    func recoveryHeldBrokerTurnDoesNotDrainOnReattach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService(supportsPromptResponses: true, turnState: .awaitingInput)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+                                        setupEvaluator: { _ in .ready }, brokerServiceFactory: { service })
+        let session = manager.createSession(id: "local-session-1", agentId: "claude")
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+        session.enqueue(blocks: [.text("earlier queued prompt")])
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        let originalRunner = try #require(manager.runners[session.id])
+        await manager.flushAllPersistence()
+        await service.setSnapshotResults(initializeResult: .object([
+            "protocolVersion": .number(1), "authMethods": .array([]),
+            "agentCapabilities": .object(["loadSession": .bool(true)])
+        ]), remoteSessionResult: .object([
+            "sessionId": .string("remote-broker"), "availableModels": .array([]),
+            "availableModes": .array([]), "promptSuggestions": .array([]), "configOptions": .array([])
+        ]))
+        await manager.detach(sessionId: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil { session.agentState == .ready && manager.runners[session.id] != nil && manager.runners[session.id] !== originalRunner }
+        #expect(manager.runners[session.id] !== originalRunner)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        #expect(session.queue.first?.blocks == [.text("earlier queued prompt")])
+        #expect(await service.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("restart supersedes a suspended setup attempt and preserves the queued prompt")
     func restartSupersedesSuspendedSetupAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -2404,8 +2436,8 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
     }
 
-    @Test("a later model pick waits for prompt RPC handoff")
-    func laterModelPickWaitsForPromptRPCHandoff() async throws {
+    @Test("a later model pick waits for prompt handoff or confirmed native consumption", arguments: [false, true])
+    func laterModelPickWaitsForPromptRPCHandoff(nativeSteering: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -2439,9 +2471,10 @@ struct ACPSessionManagerAttachRestoreTests {
             }
             return Data("{}".utf8)
         }
-        client.scriptAsync(method: "session/prompt") { _ in
+        let followupMethod = nativeSteering ? "_session/steering" : "session/prompt"
+        client.scriptAsync(method: followupMethod) { _ in
             await promptGate.waitInPrompt()
-            return Data("{}".utf8)
+            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data("{}".utf8)
         }
         let manager = manager(
             store: store,
@@ -2454,6 +2487,10 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: session.id)
         await manager.attach(to: session.id, freshlyCreated: false)
+        if nativeSteering {
+            session.supportsSteering = true
+            session.transcript.streamingState = .streaming
+        }
         let initialRequestCount = client.sent.count
 
         let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
@@ -2463,7 +2500,7 @@ struct ACPSessionManagerAttachRestoreTests {
             sessionId: session.id,
             text: "submit before changing the model again",
             attachments: [],
-            intent: .auto
+            intent: nativeSteering ? .steer : .auto
         ) { succeeded in
             promptCompleted = succeeded
         }
@@ -2476,14 +2513,21 @@ struct ACPSessionManagerAttachRestoreTests {
         await Task.yield()
 
         let beforeHandoff = client.sent.dropFirst(initialRequestCount).filter {
-            $0.method == "session/set_model" || $0.method == "session/prompt"
+            $0.method == "session/set_model" || $0.method == followupMethod
         }
         #expect(beforeHandoff.map(\.method) == ["session/set_model"])
         #expect((beforeHandoff.first?.params as? ACPSessionSetModelParams)?.modelId == "haiku")
 
         await checkpointGate.release()
         try await waitUntil {
-            client.sent.dropFirst(initialRequestCount).contains { $0.method == "session/prompt" }
+            client.sent.dropFirst(initialRequestCount).contains { $0.method == followupMethod }
+        }
+        if nativeSteering {
+            try await waitUntilAsync { await promptGate.hasEntered }
+            #expect(client.sent.dropFirst(initialRequestCount).compactMap {
+                ($0.params as? ACPSessionSetModelParams)?.modelId
+            } == ["haiku"])
+            await promptGate.release()
         }
         try await waitUntil {
             client.sent.dropFirst(initialRequestCount).contains {
@@ -2495,11 +2539,11 @@ struct ACPSessionManagerAttachRestoreTests {
         await laterSelection.value
 
         let orderedRequests = client.sent.dropFirst(initialRequestCount).filter {
-            $0.method == "session/set_model" || $0.method == "session/prompt"
+            $0.method == "session/set_model" || $0.method == followupMethod
         }
         #expect(orderedRequests.map(\.method) == [
             "session/set_model",
-            "session/prompt",
+            followupMethod,
             "session/set_model",
         ])
         #expect(orderedRequests.compactMap {
@@ -5854,6 +5898,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     let openGate = ManagerBrokerGate()
     private let generation: UInt64
     private let supportsPromptResponses: Bool
+    private let turnState: ACPBrokerTurnState
     private var shouldHoldNextOpen = false
     private var completedOperationKeys: Set<ACPBrokerOperationKey> = []
     private(set) var replayedPromptOperationKeys: [ACPBrokerOperationKey] = []
@@ -5868,9 +5913,10 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
 
-    init(generation: UInt64 = 7, supportsPromptResponses: Bool = false) {
+    init(generation: UInt64 = 7, supportsPromptResponses: Bool = false, turnState: ACPBrokerTurnState = .idle) {
         self.generation = generation
         self.supportsPromptResponses = supportsPromptResponses
+        self.turnState = turnState
     }
 
     func holdNextOpen() {
@@ -5984,7 +6030,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
             ),
             initializeResult: snapshotInitializeResult,
             remoteSessionResult: snapshotRemoteSessionResult,
-            turnState: .idle,
+            turnState: turnState,
             acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
             journalTail: ACPBrokerEventCursor(rawValue: 0),
             pendingRequests: [],
@@ -6009,7 +6055,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
             ),
             initializeResult: snapshotInitializeResult,
             remoteSessionResult: snapshotRemoteSessionResult,
-            turnState: .idle,
+            turnState: turnState,
             acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: 0),
             pendingRequests: [],

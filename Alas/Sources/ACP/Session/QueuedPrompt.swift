@@ -32,7 +32,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     var draft: ACPComposerDraft?
     /// Present only for prompts delivered by a direct delegated-session edge.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
-    let delegatedSource: ACPDelegatedPromptSource?
+    var delegatedSource: ACPDelegatedPromptSource?
     var brokerOperationAttempt: Int
     /// The broker generation on which this prompt crossed the dispatch
     /// boundary. A later generation cannot tell whether that request
@@ -157,6 +157,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     var brokerOperationKey: String {
         "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):session/prompt"
+    }
+
+    var steeringBrokerOperationKey: String {
+        "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):_session/steering"
     }
 
     mutating func advanceBrokerOperationAttempt() {

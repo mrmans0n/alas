@@ -463,6 +463,105 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("steering segments reused text IDs and preserves their binding after rehydration", arguments: [false, true])
+    func steeringSegmentsReusedTextIDs(thought: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdate {
+            let value = ACPTextChunk(messageId: "shared", content: .text(text))
+            return thought ? .agentThoughtChunk(value) : .agentMessageChunk(value)
+        }
+        func text(_ message: ACPMessage) -> String? {
+            switch message {
+            case .agent(_, _, let value), .thought(_, _, let value): value.value
+            default: nil
+            }
+        }
+        session.apply(chunk("before"))
+        let originalID = session.transcript.messages[0].stableId
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "redirect", attachments: [])
+        session.apply(chunk("after"))
+        session.apply(chunk(" continued"))
+        try #require(session.transcript.messages.count == 3)
+        #expect(text(session.transcript.messages[0]) == "before")
+        #expect(text(session.transcript.messages[2]) == "after continued")
+        #expect(session.transcript.messages[0].stableId == originalID)
+        #expect(Set(session.transcript.messages.map(\.stableId)).count == 3)
+
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        restored.transcript.messages = try session.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.allowsStreamingBoundaryCrossing = false
+        restored.apply(chunk("before"))
+        #expect(text(restored.transcript.messages[0]) == "before")
+        restored.allowsStreamingBoundaryCrossing = true
+        restored.apply(chunk(" again"))
+        #expect(restored.transcript.messages.count == 3)
+        #expect(text(restored.transcript.messages[2]) == "after continued again")
+        _ = restored.beginSteeringOutputBoundary()
+        restored.recordUserPrompt(text: "redirect again", attachments: [])
+        restored.apply(chunk("latest"))
+        #expect(restored.transcript.messages.count == 5)
+        #expect(text(try #require(restored.transcript.messages.last)) == "latest")
+        #expect(text(restored.transcript.messages[0]) == "before")
+        #expect(Set(restored.transcript.messages.map(\.stableId)).count == 5)
+    }
+
+    @Test("consecutive steers preserve an unresolved text binding after rehydration", arguments: [false, true])
+    func consecutiveSteersPreserveUnresolvedBinding(thought: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdate {
+            let value = ACPTextChunk(messageId: "shared", content: .text(text))
+            return thought ? .agentThoughtChunk(value) : .agentMessageChunk(value)
+        }
+        session.apply(chunk("before"))
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "first redirect", attachments: [])
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "second redirect", attachments: [])
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        restored.transcript.messages = try session.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.transcript.streamingState = .streaming
+        restored.allowsStreamingBoundaryCrossing = false
+        restored.apply(chunk("after"))
+        #expect(restored.transcript.messages.map(\.kind) == [thought ? "thought" : "agent", "user", "user", thought ? "thought" : "agent"])
+        switch restored.transcript.messages.last {
+        case .agent(_, _, let output), .thought(_, _, let output):
+            #expect(output.value == "after")
+        default: Issue.record("Missing continuation")
+        }
+    }
+
+    @Test("a later normal turn cannot reactivate a completed steering binding", arguments: [false, true])
+    func normalTurnDoesNotReactivateSteeringBinding(continuationRecorded: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdate {
+            .agentMessageChunk(.init(messageId: "shared", content: .text(text)))
+        }
+        session.apply(chunk("before"))
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "redirect", attachments: [])
+        if continuationRecorded { session.apply(chunk("after")) }
+        session.markCompletedOutputBoundary()
+        session.recordUserPrompt(text: "next normal turn", attachments: [])
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        restored.transcript.messages = try session.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.transcript.streamingState = .streaming
+        restored.allowsStreamingBoundaryCrossing = true
+        restored.apply(chunk(" delayed"))
+        let output = restored.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(output == (continuationRecorded ? ["before", "after"] : ["before"]))
+        #expect(restored.transcript.messages.last?.kind == "user")
+    }
+
     @Test("late replay chunk with unknown messageId does not append output")
     func lateReplayUnknownMessageIdChunkDoesNotAppendOutput() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

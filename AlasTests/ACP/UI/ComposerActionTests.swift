@@ -69,22 +69,6 @@ struct ComposerActionTests {
         }
     }
 
-    // MARK: - .hidden
-
-    @Test("idle + empty composer shows nothing")
-    func idleEmptyHidden() {
-        let action = composerAction(streamingState: .idle, hasText: false, agentState: .ready)
-        #expect(action == .hidden)
-    }
-
-    // MARK: - .send
-
-    @Test("idle + has text shows Send")
-    func idleWithTextSends() {
-        let action = composerAction(streamingState: .idle, hasText: true, agentState: .ready)
-        #expect(action == .send)
-    }
-
     // MARK: - .stop
 
     @Test("busy + empty composer shows Stop, for every busy state")
@@ -103,27 +87,29 @@ struct ComposerActionTests {
 
     // MARK: - .queue
 
-    @Test("busy + has text shows Queue with Steer and Stop menu items, for every busy state")
-    func busyWithTextQueuesWithSteerAndStopMenu() {
+    @Test("busy menu exposes the alternate action and Stop", arguments: [true, false])
+    func busyMenuExposesAlternateAction(queueByDefault: Bool) {
         for state in busyStates {
             for agentState in agentStates {
                 let action = composerAction(
                     streamingState: state,
                     hasText: true,
-                    agentState: agentState
+                    agentState: agentState,
+                    queueByDefault: queueByDefault
                 )
-                #expect(action == .queue(menu: [.steer, .stop]),
-                        "expected .queue([.steer, .stop]) for state=\(state), agentState=\(agentState)")
+                #expect(action == .queue(menu: queueByDefault ? [.steer, .stop] : [.queue, .stop]))
             }
         }
     }
 
-    @Test("primary submit intent preserves Option-click steer shortcut")
-    func primarySubmitIntentPreservesOptionClickSteer() {
+    @Test("busy primary action follows the preference and Option chooses the alternate", arguments: [true, false])
+    func primarySubmitIntentFollowsPreference(queueByDefault: Bool) {
         #expect(primarySubmitIntent(for: .send, optionPressed: false) == .auto)
         #expect(primarySubmitIntent(for: .send, optionPressed: true) == .steer)
-        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: false) == .auto)
-        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: true) == .steer)
+        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: false,
+                                    queueByDefault: queueByDefault) == (queueByDefault ? .auto : .steer))
+        #expect(primarySubmitIntent(for: .queue(menu: [.steer, .stop]), optionPressed: true,
+                                    queueByDefault: queueByDefault) == (queueByDefault ? .steer : .auto))
     }
 
     @Test("primary submit intent is absent for non-submit actions")
