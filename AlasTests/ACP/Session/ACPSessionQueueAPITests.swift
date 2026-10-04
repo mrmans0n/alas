@@ -388,17 +388,34 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].deliveryUncertain)
     }
 
-    @Test("a follow-up already awaiting steering confirmation survives restore despite later output")
-    func unconfirmedSteeredFollowUpSurvivesRestore() {
-        let s = mkSession()
-        // Steering records the row first and persists the item as uncertain;
-        // the running turn's output after that row does not prove delivery.
-        var followUp = QueuedPrompt(blocks: [.text("also this")], status: .sending, transcriptRecorded: true)
-        followUp.markDeliveryUncertain()
-        s.deliveredQueuedPromptIDs = [followUp.id]
+    enum RetainedUncertainPrompt: CaseIterable {
+        /// Steering records the row first and persists the item as uncertain;
+        /// the running turn's output after that row does not prove delivery.
+        case unconfirmedSteeredFollowUp
+        /// The turn produced partial output, then failed; Retry must survive.
+        case failedAfterPartialOutput
+    }
 
-        #expect(!s.restoreQueue([followUp], markLegacySendingUncertain: true))
-        #expect(s.queue.map(\.id) == [followUp.id])
+    @Test("an answered-looking uncertain prompt that may still need Retry survives restore",
+          arguments: RetainedUncertainPrompt.allCases)
+    func uncertainPromptNeedingRetrySurvives(_ kind: RetainedUncertainPrompt) {
+        let s = mkSession()
+        var item: QueuedPrompt
+        switch kind {
+        case .unconfirmedSteeredFollowUp:
+            item = QueuedPrompt(blocks: [.text("also this")], status: .sending, transcriptRecorded: true)
+            item.markDeliveryUncertain()
+        case .failedAfterPartialOutput:
+            item = QueuedPrompt(blocks: [.text("do it")], lastError: "connection reset",
+                                transcriptRecorded: true,
+                                dispatchedBrokerGeneration: ACPBrokerGeneration(rawValue: 7))
+        }
+        s.deliveredQueuedPromptIDs = [item.id]
+
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+        s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+
+        #expect(s.queue.map(\.id) == [item.id])
     }
 
     @Test("deliveredRecordedPromptIDs needs agent output after a first-attempt recorded prompt",

@@ -2760,10 +2760,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// that kept broker dispatch provenance from an earlier reconnect. A
     /// follow-up steered into a running turn has no provenance and records
     /// its row before steering is confirmed, so output after it is no proof.
+    /// A turn that failed after partial output keeps its error and Retry.
     private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
         guard !deliveredQueuedPromptIDs.isEmpty else { return }
         queue.removeAll { item in
             item.deliveryUncertain
+                && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
                 && deliveredQueuedPromptIDs.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
