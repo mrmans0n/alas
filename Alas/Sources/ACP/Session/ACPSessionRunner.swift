@@ -1951,8 +1951,11 @@ final class ACPSessionRunner {
         onTurnUsage?(ACPTurnCompletion(
             sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
             quota: quota,
-            // Capped where a successor was sent: one still preparing has not started its usage yet.
-            cost: turnCost(streamStart: prompt.streamStart, end: activePromptID.flatMap { unreportedPrompts[$0]?.streamStart }),
+            // Capped where the first later prompt still waiting was sent; one still preparing has not started its usage.
+            // If a later one already reported, this turn is recorded after it, so the store gives it no cost anyway.
+            cost: turnCost(
+                streamStart: prompt.streamStart,
+                end: unreportedPrompts.filter { $0.key > promptID }.map(\.value.streamStart).min()),
             sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
     }
 

@@ -402,6 +402,38 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
+    /// A stopped turn whose result comes after two later prompts were sent ends where the first of them was sent:
+    /// a cost sent during the second one's turn is not its own.
+    @Test func aStoppedTurnsCostEndsWhereTheNextPromptWasSent() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : never).wait()
+            return Data("{}".utf8)
+        }
+        for (sent, text) in ["A", "B", "C"].enumerated() {
+            runner.send(text: text, attachments: []) { _ in }
+            #expect(await awaitCondition { entered == sent + 1 })
+            if text == "B" {
+                mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.3, currency: "USD")))))
+            }
+            if text != "C" { await runner.userCancel() }
+        }
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve() == nil)
+        await never.open()
+    }
+
     /// More stopped turns waiting on their results than the runner keeps: the oldest is still recorded, without
     /// tokens, when it makes room.
     @Test func aStoppedTurnPastTheKeptOnesIsStillRecorded() async throws {
