@@ -12723,7 +12723,12 @@ final class AppState {
         var result: [(worktree: Worktree, manager: ACPSessionManager)] = []
         for worktree in projectsManager.worktrees(projectId: projectId) {
             guard let manager = acpManager(for: worktree) else { continue }
-            if loadingRecentRows { await manager.refreshRecentNow() }
+            if loadingRecentRows {
+                // Queued local writes (an archive, a new session) land first,
+                // so the reload cannot bring back an older row.
+                await manager.flushPersistence()
+                await manager.refreshRecentNow()
+            }
             result.append((worktree, manager))
         }
         return result
@@ -12790,8 +12795,10 @@ final class AppState {
     ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
             // Check both the store, which another instance may have archived
-            // since this one cached the row, and the cached row, which a
-            // local archive updates before its write reaches the store.
+            // since this one cached the row, and the cached row. Queued local
+            // writes land first, so a just-created session is in the store
+            // and a local archive is in both.
+            await manager.flushPersistence()
             guard let stored = try? await manager.persistence.loadSession(id: sessionId), !stored.archived,
                   let cached = await manager.persistedSessionRow(id: sessionId), !cached.archived,
                   manager.placeholderSession(id: sessionId) != nil
