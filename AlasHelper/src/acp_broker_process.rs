@@ -258,6 +258,7 @@ struct SteeringTurn {
     awaiting_response: bool,
     original_prompt_completed: bool,
     detached: bool,
+    untracked: bool,
     saw_idle: bool,
     saw_active: bool,
     saw_new_active: bool,
@@ -271,6 +272,7 @@ impl SteeringTurn {
             awaiting_response: true,
             original_prompt_completed: false,
             detached: false,
+            untracked: false,
             saw_idle: already_idle,
             saw_active: false,
             saw_new_active: false,
@@ -293,9 +295,10 @@ impl SteeringTurn {
         (self.detached || self.saw_active).then(|| self.turn_state())
     }
 
-    fn acknowledge(&mut self, outcome: Option<&str>) {
+    fn acknowledge(&mut self, outcome: Option<&str>, supports_completion: bool) {
         self.awaiting_response = false;
-        if outcome == Some("startedNewTurn") {
+        self.untracked = outcome == Some("startedNewTurn") && !supports_completion;
+        if outcome == Some("startedNewTurn") && supports_completion {
             self.detached = true;
             self.saw_active = self.saw_new_active;
             self.saw_idle = true;
@@ -309,6 +312,9 @@ impl SteeringTurn {
     }
 
     fn turn_state(&self) -> BrokerTurnState {
+        if self.untracked {
+            return BrokerTurnState::Ambiguous;
+        }
         if !self.awaiting_response
             && self.saw_active
             && matches!(self.last_status.as_deref(), Some("idle" | "systemError"))
@@ -2016,11 +2022,15 @@ fn handle_adapter_response(runtime: &Runtime, value: Value) {
             let steering_outcome = outcome.result.as_ref()
                 .and_then(|value| value.get("outcome"))
                 .and_then(Value::as_str);
-            turn.acknowledge(steering_outcome);
-            if turn.detached {
+            let supports_completion = state.last_thread_status.is_some()
+                || matches!(state.broker.snapshot().initialize_result.as_ref()
+                    .and_then(|value| value.pointer("/agentInfo/name"))
+                    .and_then(Value::as_str), Some("@agentclientprotocol/codex-acp" | "codex-acp"));
+            turn.acknowledge(steering_outcome, supports_completion);
+            if turn.detached || turn.untracked {
                 let turn_state = turn.turn_state();
                 let _ = state.broker.set_turn_state(turn_state);
-                if turn_state != BrokerTurnState::Completed {
+                if turn_state == BrokerTurnState::Streaming {
                     state.steering_turn = Some(turn);
                 }
             } else if (turn.original_prompt_completed || steering_outcome == Some("promptRequired")) && !state
@@ -2660,6 +2670,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn untracked_started_turn_is_ambiguous_instead_of_permanently_streaming() {
+        let mut turn = SteeringTurn::new("generic".to_string(), true);
+        turn.acknowledge(Some("startedNewTurn"), false);
+        assert_eq!(turn.turn_state(), BrokerTurnState::Ambiguous);
+    }
+
+    #[test]
     fn detached_steering_waits_for_root_completion_on_either_side_of_acknowledgement() {
         fn status(session_id: &str, status: &str) -> Value {
             json!({"sessionId": session_id, "update": {
@@ -2678,7 +2695,7 @@ mod tests {
                 turn.observe(&status("root", "idle"));
                 assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
             }
-            turn.acknowledge(Some("startedNewTurn"));
+            turn.acknowledge(Some("startedNewTurn"), true);
             if !completes_before_ack {
                 assert_eq!(turn.observe(&status("child", "idle")), None);
                 assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
@@ -2689,7 +2706,7 @@ mod tests {
         // An idle update from the old prompt cannot finish the new prompt.
         let mut turn = SteeringTurn::new("root".to_string(), false);
         turn.observe(&status("root", "idle"));
-        turn.acknowledge(Some("startedNewTurn"));
+        turn.acknowledge(Some("startedNewTurn"), true);
         assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
         turn.observe(&status("root", "active"));
         turn.observe(&status("root", "systemError"));
@@ -2736,10 +2753,10 @@ mod tests {
         for outcome in ["injected", "startedNewTurn"] {
             let mut turn = SteeringTurn::new("root".to_string(), true);
             turn.observe(&status("active"));
-            turn.acknowledge(Some("startedNewTurn"));
+            turn.acknowledge(Some("startedNewTurn"), true);
             turn.begin_followup();
             turn.observe(&status("idle"));
-            turn.acknowledge(Some(outcome));
+            turn.acknowledge(Some(outcome), true);
             if outcome == "startedNewTurn" {
                 assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
                 turn.observe(&status("active"));

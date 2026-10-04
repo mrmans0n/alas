@@ -61,6 +61,7 @@ struct ACPSessionRunnerQueueTests {
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        session.supportsCodexSteeringCompletion = true
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -475,6 +476,29 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }.last == [.text("tail")])
         #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
         return false }.count == 1)
+    }
+
+    @Test("an unsupported detached steering lifecycle retains recovery without holding streaming")
+    func unknownDetachedSteeringLifecycleFailsExplicitly() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.supportsCodexSteeringCompletion = false
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"startedNewTurn"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(session.transcript.streamingState == .idle)
+        guard case .failed = session.agentState else {
+            Issue.record("expected an explicit unsupported completion failure")
+            return
+        }
+        #expect(!session.supportsSteering)
+        #expect(try store.loadQueue(sessionId: "s").first?.deliveryUncertain == true)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
     }
 
     @Test("repeated steering waits for the new continuation's active boundary", arguments: ["injected", "startedNewTurn"])
@@ -1432,8 +1456,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.first?.deliveryUncertain == false)
     }
 
-    @Test("queue dispatch provenance is durable before broker handoff", arguments: [false, true])
-    func queueDispatchProvenanceIsPersistedBeforeHandoff(nativeContinuation: Bool) async throws {
+    @Test("queue dispatch provenance is durable before broker handoff", arguments: ["queued", "promptRequired", "methodNotFound"])
+    func queueDispatchProvenanceIsPersistedBeforeHandoff(route: String) async throws {
         let (runner, mock, session, store) = try mkRunner()
         let generation = ACPBrokerGeneration(rawValue: 7)
         mock.brokerGenerationForTesting = generation
@@ -1441,15 +1465,21 @@ struct ACPSessionRunnerQueueTests {
         let responseRelease = QueueTestGate()
         mock.scriptAsync(method: "session/prompt") { request in
             let operationKey = try store.loadQueue(sessionId: "s").first?.brokerOperationKey
+            #expect(request.brokerOperationKey != nil)
             #expect(request.brokerOperationKey == operationKey)
             await requestStarted.open()
             await responseRelease.wait()
             return Data("null".utf8)
         }
-        if nativeContinuation {
+        if route != "queued" {
             session.supportsSteering = true
             session.transcript.streamingState = .streaming
-            mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"promptRequired"}"#.utf8) }
+            mock.script(method: "_session/steering") { _ in
+                if route == "methodNotFound" {
+                    throw ACPClientError.jsonrpc(.init(code: -32601, message: "Method not found", data: nil))
+                }
+                return Data(#"{"outcome":"promptRequired"}"#.utf8)
+            }
             runner.send(blocks: [.text("queued")], intent: .steer)
         } else {
             session.enqueue(blocks: [.text("queued")])

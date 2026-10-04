@@ -3098,6 +3098,7 @@ extension ACPSessionRunner {
         normalUserTurn: Bool = true,
         recordedUserMessageID: UUID? = nil,
         draft: ACPComposerDraft? = nil,
+        recoveryQueueItemID: UUID? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
@@ -3167,6 +3168,35 @@ extension ACPSessionRunner {
                     self.pendingForceSendQueuedItemID = nil
                     onDispatchRegistered?()
                     onPromptFinished?(false)
+                    return
+                }
+                if let recoveryQueueItemID {
+                    guard let index = self.session.queue.firstIndex(where: { $0.id == recoveryQueueItemID }) else {
+                        self.steerInProgress = false
+                        onPromptFinished?(false)
+                        return
+                    }
+                    var head = self.session.queue.remove(at: index)
+                    head.status = .pending
+                    head.lastError = nil
+                    head.deliveryUncertain = false
+                    self.session.queue.insert(head, at: 0)
+                    guard let brokerOperationKey = self.session.markQueueHeadSending() else {
+                        self.steerInProgress = false
+                        onPromptFinished?(false)
+                        return
+                    }
+                    self.sendQueuedHead(head, brokerOperationKey: brokerOperationKey,
+                                        onPromptFinished: onPromptFinished,
+                                        onDispatchSettled: { [weak self] in
+                                            guard let self else { return }
+                                            self.steerInProgress = false
+                                            if let id = self.pendingForceSendQueuedItemID {
+                                                self.pendingForceSendQueuedItemID = nil
+                                                self.forceSendQueuedItem(id: id)
+                                            }
+                                            self.flushQueueIfIdle()
+                                        })
                     return
                 }
                 self.sendNow(
@@ -3403,6 +3433,13 @@ extension ACPSessionRunner {
                     finishPrompt(true)
                     self.finishNativeSteering(generation: generation)
                 case .startedNewTurn:
+                    guard self.session.supportsCodexSteeringCompletion || self.lastSteeringThreadStatus != nil else {
+                        let message = "The agent started a follow-up without a supported completion signal. Reattach before continuing."
+                        self.session.supportsSteering = false
+                        self.session.agentState = .failed(message)
+                        self.session.transcript.streamingState = .idle
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: message, data: nil))
+                    }
                     // Codex's legacy idle fallback starts a detached prompt.
                     // Hold the queue until its thread status reports completion,
                     // including status received before this acknowledgement.
@@ -3462,11 +3499,12 @@ extension ACPSessionRunner {
                             self.session.queue[index].status = .pending
                             self.persistQueue()
                         }
+                        ownedContinuationStarted = true
                         self.steer(
                             blocks: blocks, delegatedSource: delegatedSource,
                             recordUserPrompt: recordedMessageID == nil && recordUserPrompt,
                             normalUserTurn: normalUserTurn, recordedUserMessageID: recordedMessageID,
-                            draft: draft, onPromptFinished: finishPrompt)
+                            draft: draft, recoveryQueueItemID: durableQueueItem.item.id, onPromptFinished: finishPrompt)
                         return
                     }
                     if !(error is CancellationError) {

@@ -267,6 +267,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
     /// Relearned on attach; adapters must explicitly advertise this extension.
     @Published var supportsSteering = false
+    var supportsCodexSteeringCompletion = false
 
     var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering
