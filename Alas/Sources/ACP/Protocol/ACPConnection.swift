@@ -1,6 +1,6 @@
 import Foundation
 
-private final class ACPRequestHandoff: @unchecked Sendable {
+final class ACPRequestHandoff: @unchecked Sendable {
     private let lock = NSLock()
     private var hasFired = false
     private let action: @Sendable () -> Void
@@ -99,7 +99,7 @@ enum ACPSteeringOutcome: String, Decodable {
 }
 
 struct ACPSteeringResult {
-    let outcome: ACPSteeringOutcome
+    let outcome: Result<ACPSteeringOutcome, Error>
     let acknowledgement: ACPDurableConsumptionAcknowledgement?
 }
 
@@ -413,14 +413,29 @@ final class ACPConnection: @unchecked Sendable {
         return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
     }
 
-    func steer(sessionId: String, blocks: [ACPContentBlock]) async throws -> ACPSteeringResult {
-        let response = try await client.send(ACPRequest(
+    func steer(
+        sessionId: String, blocks: [ACPContentBlock],
+        onRequestHandoff: (@Sendable () -> Void)? = nil
+    ) async throws -> ACPSteeringResult {
+        let request = ACPRequest(
             method: "_session/steering",
             params: ACPSteeringParams(sessionId: sessionId, prompt: blocks)
-        ))
-        struct Result: Decodable { let outcome: ACPSteeringOutcome }
-        return try ACPSteeringResult(
-            outcome: JSONDecoder().decode(Result.self, from: response.body).outcome,
+        )
+        let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
+        let response: ACPResponse
+        do {
+            if let handoff {
+                response = try await client.send(request, onRequestHandoff: { handoff.fire() })
+            } else {
+                response = try await client.send(request)
+            }
+        } catch {
+            handoff?.fire()
+            throw error
+        }
+        struct DecodedResult: Decodable { let outcome: ACPSteeringOutcome }
+        return ACPSteeringResult(
+            outcome: Result { try JSONDecoder().decode(DecodedResult.self, from: response.body).outcome },
             acknowledgement: response.durableConsumptionAcknowledgement)
     }
 

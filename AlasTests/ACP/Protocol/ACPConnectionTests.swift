@@ -147,7 +147,7 @@ struct ACPConnectionTests {
             #expect(meta["steering"]?["idleBehavior"] == "promptRequired")
             return Data(#"{"outcome":"promptRequired","reason":"noRunningTurn"}"#.utf8)
         }
-        #expect(try await ACPConnection(client: mock).steer(sessionId: "s", blocks: [.text("redirect")]).outcome == .promptRequired)
+        #expect(try await ACPConnection(client: mock).steer(sessionId: "s", blocks: [.text("redirect")]).outcome.get() == .promptRequired)
     }
 
     @Test("initialize returns prompt capabilities")

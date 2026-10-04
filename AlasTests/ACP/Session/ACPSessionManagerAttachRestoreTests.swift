@@ -2404,8 +2404,8 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
     }
 
-    @Test("a later model pick waits for prompt RPC handoff")
-    func laterModelPickWaitsForPromptRPCHandoff() async throws {
+    @Test("a later model pick waits for prompt RPC handoff", arguments: [false, true])
+    func laterModelPickWaitsForPromptRPCHandoff(nativeSteering: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -2439,9 +2439,10 @@ struct ACPSessionManagerAttachRestoreTests {
             }
             return Data("{}".utf8)
         }
-        client.scriptAsync(method: "session/prompt") { _ in
+        let followupMethod = nativeSteering ? "_session/steering" : "session/prompt"
+        client.scriptAsync(method: followupMethod) { _ in
             await promptGate.waitInPrompt()
-            return Data("{}".utf8)
+            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data("{}".utf8)
         }
         let manager = manager(
             store: store,
@@ -2454,6 +2455,10 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: session.id)
         await manager.attach(to: session.id, freshlyCreated: false)
+        if nativeSteering {
+            session.supportsSteering = true
+            session.transcript.streamingState = .streaming
+        }
         let initialRequestCount = client.sent.count
 
         let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
@@ -2463,7 +2468,7 @@ struct ACPSessionManagerAttachRestoreTests {
             sessionId: session.id,
             text: "submit before changing the model again",
             attachments: [],
-            intent: .auto
+            intent: nativeSteering ? .steer : .auto
         ) { succeeded in
             promptCompleted = succeeded
         }
@@ -2476,14 +2481,14 @@ struct ACPSessionManagerAttachRestoreTests {
         await Task.yield()
 
         let beforeHandoff = client.sent.dropFirst(initialRequestCount).filter {
-            $0.method == "session/set_model" || $0.method == "session/prompt"
+            $0.method == "session/set_model" || $0.method == followupMethod
         }
         #expect(beforeHandoff.map(\.method) == ["session/set_model"])
         #expect((beforeHandoff.first?.params as? ACPSessionSetModelParams)?.modelId == "haiku")
 
         await checkpointGate.release()
         try await waitUntil {
-            client.sent.dropFirst(initialRequestCount).contains { $0.method == "session/prompt" }
+            client.sent.dropFirst(initialRequestCount).contains { $0.method == followupMethod }
         }
         try await waitUntil {
             client.sent.dropFirst(initialRequestCount).contains {
@@ -2495,11 +2500,11 @@ struct ACPSessionManagerAttachRestoreTests {
         await laterSelection.value
 
         let orderedRequests = client.sent.dropFirst(initialRequestCount).filter {
-            $0.method == "session/set_model" || $0.method == "session/prompt"
+            $0.method == "session/set_model" || $0.method == followupMethod
         }
         #expect(orderedRequests.map(\.method) == [
             "session/set_model",
-            "session/prompt",
+            followupMethod,
             "session/set_model",
         ])
         #expect(orderedRequests.compactMap {

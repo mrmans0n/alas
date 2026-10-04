@@ -539,7 +539,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
     }
 
-    @Test("steering acknowledgement observes durable queue removal", arguments: ["injected", "startedNewTurn"])
+    @Test("steering acknowledgement observes durable delivery or recovery", arguments: ["injected", "startedNewTurn", "unknown", "malformed"])
     func steeringAcknowledgementWaitsForDurableQueueRemoval(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner()
         session.supportsSteering = true
@@ -547,8 +547,16 @@ struct ACPSessionRunnerQueueTests {
         let acknowledgement = DurableAcknowledgementRecorder()
         let databasePath = store.path
         mock.scriptResponse(method: "_session/steering") { _ in
-            ACPResponse(body: Data("{\"outcome\":\"\(outcome)\"}".utf8), durableConsumptionAcknowledgement: {
-                #expect((try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s"))?.isEmpty == true)
+            let body = outcome == "malformed" ? Data("{".utf8) : Data("{\"outcome\":\"\(outcome)\"}".utf8)
+            return ACPResponse(body: body, durableConsumptionAcknowledgement: {
+                let queue = try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s")
+                if outcome == "injected" || outcome == "startedNewTurn" {
+                    #expect(queue?.isEmpty == true)
+                } else {
+                    #expect(queue?.count == 1)
+                    #expect(queue?.first?.status == .pending)
+                    #expect(queue?.first?.deliveryUncertain == true)
+                }
                 acknowledgement.record()
             })
         }

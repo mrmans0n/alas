@@ -3168,6 +3168,7 @@ extension ACPSessionRunner {
         onPromptFinished: (@MainActor (Bool) -> Void)?,
         recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
+        let dispatchHandoff = onDispatchRegistered.map(ACPRequestHandoff.init)
         let durableQueueItem = recoveryQueueItem ?? (
             item: QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource,
                                transcriptRecorded: !recordUserPrompt),
@@ -3190,11 +3191,11 @@ extension ACPSessionRunner {
         steeringSawActiveAfterIdle = false
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
-        onDispatchRegistered?()
         onPromptWorkChanged?()
 
         Task { [weak self] in
-            guard let self else { onPromptFinished?(false)
+            guard let self else { dispatchHandoff?.fire()
+            onPromptFinished?(false)
             return }
             var recordedMessageID = recordedUserMessageID
             var ownedContinuationStarted = false
@@ -3304,14 +3305,15 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 let result = try await self.connection.steer(
-                    sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks)
+                    sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks,
+                    onRequestHandoff: { dispatchHandoff?.fire() })
                 steeringAcknowledgement = result.acknowledgement
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-                switch result.outcome {
+                switch try result.outcome.get() {
                 case .injected:
                     self.session.lastError = nil
                     finishPrompt(true)
@@ -3364,6 +3366,7 @@ extension ACPSessionRunner {
                         code: -32000, message: "The agent could not inject the follow-up.", data: nil))
                 }
             } catch {
+                dispatchHandoff?.fire()
                 if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
                     if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
                         // Method-not-found proves the content was not consumed.
