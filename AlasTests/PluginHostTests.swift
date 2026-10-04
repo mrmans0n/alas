@@ -1495,36 +1495,55 @@ struct PluginHostTests {
         #expect(launcher.handles[1].signals == [SIGTERM])
     }
 
-    /// On a remote host, the run is answered once the helper started it, then shows in the Run tab, stops through
-    /// the helper, and reports its exit only to the instance that started it.
-    @Test func remoteLongRunningProcessesStartStopAndReportToTheirInstance() async throws {
+    /// On a remote host, the run is answered once the helper started it, as the manifest declares it, and shows its
+    /// output in the Run tab.
+    @Test func aRemoteStartReachesTheHelperAndShowsInTheRunTab() async throws {
         let launcher = FakeLauncher()
-        let start = processCall(1, "process/start", "dev", worktree: "far")
         let host = try makeHost(
-            [[.send(activateOK), .send(start), .send(start)]],
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
             grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
         await host.activate()
-        #expect(await awaitCondition { host.trace.contains { $0.text.contains(#""run":"p2""#) } })
+        #expect(await awaitCondition { host.trace.contains { $0.text.contains(#""run":"p1""#) } })
         let spawned = try #require(launcher.remoteHandles.first?.spawned)
         #expect(spawned.argv == ["pnpm", "dev"] && spawned.cwd == "/srv/wt" && spawned.longRunning)
-        #expect(host.processRuns.map(\.worktree) == ["far", "far"])
+        #expect(host.processRuns.map(\.worktree) == ["far"])
         launcher.remoteHandles[0].emit(.stdout(Data("ready".utf8)))
         #expect(await awaitCondition { host.processRuns.first?.output == "ready" })
+    }
+
+    /// Stopping a remote run asks the helper to stop it, and its exit reaches the plugin.
+    @Test func stoppingARemoteRunGoesThroughTheHelper() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition { host.processRuns.count == 1 })
         host.stopProcess("p1")
         #expect(launcher.remoteHandles[0].signals == [SIGTERM])
         launcher.remoteHandles[0].emit(.exit(143))
         #expect(await awaitCondition {
             host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""exit":143"#) }
         })
+    }
 
-        // A run still going when its instance ends is stopped, and only the next instance's own exit reaches it.
-        await host.deactivate()
-        #expect(launcher.remoteHandles[1].signals == [SIGTERM])
+    /// A remote run still going when its instance ends is stopped, and only the next instance's own exit reaches it.
+    @Test func anEndingInstanceStopsItsRemoteRunsAndHearsNoneOfThemLater() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
         await host.activate()
-        #expect(await awaitCondition { launcher.remoteHandles.count == 4 && host.processRuns.count == 2 })
-        launcher.remoteHandles[1].emit(.exit(137))
-        launcher.remoteHandles[2].emit(.exit(0))
-        #expect(await awaitCondition { host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""exit":0"#) } })
+        #expect(await awaitCondition { launcher.remoteHandles.count == 1 && host.processRuns.count == 1 })
+        await host.deactivate()
+        #expect(launcher.remoteHandles[0].signals == [SIGTERM])
+        await host.activate()
+        #expect(await awaitCondition { launcher.remoteHandles.count == 2 })
+        launcher.remoteHandles[0].emit(.exit(137))
+        launcher.remoteHandles[1].emit(.exit(0))
+        #expect(await awaitCondition {
+            host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""exit":0"#) }
+        })
         #expect(!host.trace.contains { $0.text.contains(#""exit":137"#) })
     }
 
