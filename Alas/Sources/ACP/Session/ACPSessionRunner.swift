@@ -140,6 +140,8 @@ final class ACPSessionRunner {
     private var activePromptStartedAt: Int64?
     /// The client's `yieldedUpdateCount` when the active prompt started: updates past it belong to the turn.
     private var activePromptStreamStart = 0
+    /// See `nextSentAt`.
+    private var lastSentAt: Int64 = 0
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
     private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
@@ -1922,6 +1924,13 @@ final class ACPSessionRunner {
             return
         }
         reportUsageWithoutResult(promptID)
+    }
+
+    /// When a prompt goes out, in epoch milliseconds, later than any before it: usage history orders turns by it, so
+    /// two prompts sent within one millisecond still get their order.
+    private func nextSentAt() -> Int64 {
+        lastSentAt = max(Int64(Date().timeIntervalSince1970 * 1000), lastSentAt + 1)
+        return lastSentAt
     }
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
@@ -4033,7 +4042,7 @@ extension ACPSessionRunner {
                 guard await MainActor.run(body: {
                     guard self.activePromptID == promptID else { return false }
                     // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
-                    let sentAt = Int64(Date().timeIntervalSince1970 * 1000)
+                    let sentAt = self.nextSentAt()
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
@@ -4279,7 +4288,7 @@ extension ACPSessionRunner {
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
-                let sentAt = Int64(Date().timeIntervalSince1970 * 1000)
+                let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
                     sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
                 return true

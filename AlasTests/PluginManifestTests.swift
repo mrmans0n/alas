@@ -155,6 +155,9 @@ struct PluginManifestTests {
         (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
         (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
         (manifest(api: 12, webTab + #","web":"./Plugin.JSON""#), .invalidWeb(#""web" can't use the name plugin.json"#)),
+        (manifest(api: 12, webTab + #","web":".""#), .invalidWeb(#""." must name a file"#)),
+        (manifest(api: 12, webTab + #","web":"dist/.""#), .invalidWeb(#""dist/." must name a file"#)),
+        (manifest(api: 12, webTab + #","web":"dist/""#), .invalidWeb(#""dist/" must name a file"#)),
         (manifest(api: 12, webTab + #","web":"dist/ui.js""#), nil),
     ])
     func webTabsNeedAPI12AndTheirOwnPageScript(json: String, expected: PluginManifestError?) throws {

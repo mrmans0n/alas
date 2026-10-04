@@ -335,6 +335,10 @@ struct PluginManifest: Equatable, Sendable {
         if let web = raw.web {
             guard api >= 12 else { throw .needsNewerAPI("\"web\"", api: 12) }
             guard isRelativePath(web), !web.isEmpty else { throw .invalidWeb("\"\(web)\" must be a relative path inside the plugin folder") }
+            // A file name, not the folder a trailing `/` or `.` would name.
+            guard !web.hasSuffix("/"), (web as NSString).lastPathComponent != "." else {
+                throw .invalidWeb("\"\(web)\" must name a file")
+            }
             // Installing writes each file in turn, so none may be another, or a folder holding another.
             guard !pathsCollide(web, entry) else {
                 throw .invalidWeb("\"web\" and \"entry\" must be different files, neither inside the other")
