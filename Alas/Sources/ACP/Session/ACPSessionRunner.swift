@@ -3459,10 +3459,10 @@ extension ACPSessionRunner {
                     self.finishNativeSteering(generation: generation)
                 case .startedNewTurn:
                     guard self.session.supportsCodexSteeringCompletion || self.lastSteeringThreadStatus != nil else {
-                        let message = "The agent started a follow-up without a supported completion signal. Reattach before continuing."
+                        let message = "The agent started a follow-up without a supported completion signal. Stop or restart before continuing."
                         self.session.supportsSteering = false
                         self.session.agentState = .failed(message)
-                        self.session.transcript.streamingState = .idle
+                        self.session.transcript.streamingState = .awaitingInput
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: message, data: nil))
                     }
                     // Codex's legacy idle fallback starts a detached prompt.

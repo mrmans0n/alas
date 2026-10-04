@@ -534,7 +534,7 @@ struct ACPSessionRunnerQueueTests {
         try await waitUntil { accepted != nil }
         await runner.flushPersistence()
         #expect(accepted == true)
-        #expect(session.transcript.streamingState == .idle)
+        #expect(session.transcript.streamingState == .awaitingInput)
         guard case .failed = session.agentState else {
             Issue.record("expected an explicit unsupported completion failure")
             return

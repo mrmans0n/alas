@@ -23,8 +23,9 @@ Codex 2.1.1 instead returns `startedNewTurn`; its continuation completes through
 The queue must remain held until that continuation ends. Alas uses this detached
 lifecycle only for an identified Codex adapter or a session that has emitted the
 Codex status signal. An untracked `startedNewTurn` retains uncertain recovery
-and reports an explicit completion error; the broker records ambiguity rather
-than holding streaming forever. An unknown or failed
+and reports an explicit completion error. The broker holds it as awaiting input
+across reattachment, so earlier queued work remains held until an explicit stop
+or restart establishes a safe boundary. An unknown or failed
 steering result must not trigger a blind resend. Before dispatch, Alas persists
 an unconfirmed steering item in the queue. If attachment or acknowledgement is
 lost, it restores as delivery uncertain and requires an explicit retry; Alas

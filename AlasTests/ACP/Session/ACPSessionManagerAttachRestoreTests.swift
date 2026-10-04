@@ -5,6 +5,38 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test("a broker turn awaiting recovery keeps earlier queued work held across reattachment")
+    func recoveryHeldBrokerTurnDoesNotDrainOnReattach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService(supportsPromptResponses: true, turnState: .awaitingInput)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+                                        setupEvaluator: { _ in .ready }, brokerServiceFactory: { service })
+        let session = manager.createSession(id: "local-session-1", agentId: "claude")
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+        session.enqueue(blocks: [.text("earlier queued prompt")])
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        let originalRunner = try #require(manager.runners[session.id])
+        await manager.flushAllPersistence()
+        await service.setSnapshotResults(initializeResult: .object([
+            "protocolVersion": .number(1), "authMethods": .array([]),
+            "agentCapabilities": .object(["loadSession": .bool(true)])
+        ]), remoteSessionResult: .object([
+            "sessionId": .string("remote-broker"), "availableModels": .array([]),
+            "availableModes": .array([]), "promptSuggestions": .array([]), "configOptions": .array([])
+        ]))
+        await manager.detach(sessionId: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil { session.agentState == .ready && manager.runners[session.id] != nil && manager.runners[session.id] !== originalRunner }
+        #expect(manager.runners[session.id] !== originalRunner)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        #expect(session.queue.first?.blocks == [.text("earlier queued prompt")])
+        #expect(await service.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("restart supersedes a suspended setup attempt and preserves the queued prompt")
     func restartSupersedesSuspendedSetupAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5859,6 +5891,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     let openGate = ManagerBrokerGate()
     private let generation: UInt64
     private let supportsPromptResponses: Bool
+    private let turnState: ACPBrokerTurnState
     private var shouldHoldNextOpen = false
     private var completedOperationKeys: Set<ACPBrokerOperationKey> = []
     private(set) var replayedPromptOperationKeys: [ACPBrokerOperationKey] = []
@@ -5873,9 +5906,10 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
 
-    init(generation: UInt64 = 7, supportsPromptResponses: Bool = false) {
+    init(generation: UInt64 = 7, supportsPromptResponses: Bool = false, turnState: ACPBrokerTurnState = .idle) {
         self.generation = generation
         self.supportsPromptResponses = supportsPromptResponses
+        self.turnState = turnState
     }
 
     func holdNextOpen() {
@@ -5989,7 +6023,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
             ),
             initializeResult: snapshotInitializeResult,
             remoteSessionResult: snapshotRemoteSessionResult,
-            turnState: .idle,
+            turnState: turnState,
             acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0),
             journalTail: ACPBrokerEventCursor(rawValue: 0),
             pendingRequests: [],
@@ -6014,7 +6048,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
             ),
             initializeResult: snapshotInitializeResult,
             remoteSessionResult: snapshotRemoteSessionResult,
-            turnState: .idle,
+            turnState: turnState,
             acknowledgedCursor: acknowledgedCursor,
             journalTail: ACPBrokerEventCursor(rawValue: 0),
             pendingRequests: [],
