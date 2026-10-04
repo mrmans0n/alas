@@ -80,6 +80,11 @@ final class StreamingText: ObservableObject {
         self.metadata = AnyCodable.mergingMetadata(self.metadata, metadata)
     }
 
+    func restoreMetadata(_ metadata: AnyCodable?) {
+        self.metadata = metadata
+        objectWillChange.send()
+    }
+
     private func scheduleThrottledPublish() {
         let now = ProcessInfo.processInfo.systemUptime
         switch ACPTranscript.streamingTickAction(

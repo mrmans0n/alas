@@ -11,6 +11,8 @@ struct ACPComposerActionButton: View {
     let onMenu: (ComposerMenuItem) -> Void
     let onSchedule: (Date) -> Void
     let queueBadgeCount: Int
+    var queueByDefault = true
+    var nativeSteering = false
 
     @Environment(\.theme) private var theme
     @State private var customScheduleDate = Date()
@@ -126,15 +128,18 @@ struct ACPComposerActionButton: View {
     private func queueSplitCapsule(menu: [ComposerMenuItem]) -> some View {
         HStack(spacing: 0) {
             Button(action: onPrimary) {
-                primaryHalf(title: "Queue", divider: theme.color("line"))
+                primaryHalf(title: queueByDefault ? "Queue" : steeringActionTitle(nativeSteering: nativeSteering),
+                            divider: theme.color("line"))
             }
             .buttonStyle(.plain)
-            .help("Queue (⏎). Hold ⌥ to steer.")
+            .help(queueByDefault
+                  ? "Queue (⏎). Hold ⌥ to \(steeringActionTitle(nativeSteering: nativeSteering).lowercased())."
+                  : "\(steeringActionTitle(nativeSteering: nativeSteering)) (⏎). Hold ⌥ to queue.")
 
             chevronHalf(help: "More actions") {
                 ForEach(menu, id: \.self) { item in
                     menuButton(for: item)
-                    if item == .steer, menu.contains(.stop) {
+                    if item != .stop, menu.contains(.stop) {
                         Divider()
                     }
                 }
@@ -218,11 +223,15 @@ struct ACPComposerActionButton: View {
     @ViewBuilder
     private func menuButton(for item: ComposerMenuItem) -> some View {
         switch item {
+        case .queue:
+            Button { onMenu(.queue) } label: {
+                Label("Queue follow-up (⌥⏎)", systemImage: "text.badge.plus")
+            }
         case .steer:
             Button {
                 onMenu(.steer)
             } label: {
-                Label("Steer running turn (⌥⏎)", systemImage: "arrow.turn.up.right")
+                Label("\(steeringActionTitle(nativeSteering: nativeSteering)) (⌥⏎)", systemImage: "arrow.turn.up.right")
             }
         case .stop:
             Button(role: .destructive) {

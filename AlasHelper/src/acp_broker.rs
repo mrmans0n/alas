@@ -381,6 +381,10 @@ impl ACPBrokerState {
         Ok(self.push_event(BrokerEventKind::RemoteSessionReady { result }))
     }
 
+    pub fn remote_session_id(&self) -> Option<&str> {
+        self.remote_session_result.as_ref()?.get("sessionId")?.as_str()
+    }
+
     pub fn begin_operation(
         &mut self,
         operation_key: OperationKey,

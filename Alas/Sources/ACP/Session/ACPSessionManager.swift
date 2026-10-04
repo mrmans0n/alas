@@ -5746,6 +5746,8 @@ extension ACPSessionManager {
         session.contextRecoveryStatus = nil
         session.providerCapabilities = nil
         session.goalCapability = nil
+        session.supportsSteering = false
+        session.supportsCodexSteeringCompletion = false
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -6046,6 +6048,8 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = attaching
             }
             session.promptCapabilities = initialized.promptCapabilities
+            session.supportsSteering = initialized.supportsSteering
+            session.supportsCodexSteeringCompletion = ["@agentclientprotocol/codex-acp", "codex-acp"].contains(initialized.agentInfo?.name ?? "")
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {

@@ -265,6 +265,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Relearned on attach; adapters must explicitly advertise this extension.
+    @Published var supportsSteering = false
+    var supportsCodexSteeringCompletion = false
+
+    var canSteerRunningTurn: Bool {
+        agentState == .ready && supportsSteering
+            && transcript.streamingState != .idle && transcript.streamingState != .sending
+    }
     /// Session capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used to select a fork
     /// mechanism for this session.
@@ -625,6 +633,119 @@ final class ACPSession: ObservableObject, Identifiable {
         return id
     }
 
+    private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
+    private static let steeringFollowingUsersMetadataKey = "_alas/steeringFollowingUserCount"
+
+    /// Split live text items at a follow-up without changing existing row IDs.
+    /// Persist the next segment's ID on its predecessor so subsequent chunks
+    /// keep the same binding after rehydration, including repeated steering.
+    func beginSteeringOutputBoundary(
+        beforeUserMessageAt end: Int? = nil,
+        followingUserCount: Int = 1,
+        beforeRebinding: ((StreamingText) -> Void)? = nil
+    ) -> Set<Int> {
+        var dirty = flushPendingReplayCandidates()
+        let end = end ?? transcript.messages.count
+        let previousUser = transcript.messages[..<end].lastIndex {
+            if case .user = $0 { return true }
+            return false
+        }
+        let start = (previousUser ?? -1) + 1
+        if followingUserCount > 0 {
+            // Consecutive follow-ups may arrive before the previous segment
+            // emits any text. Carry its unresolved binding across the next
+            // user boundary instead of leaving it scoped to the prior row.
+            for index in 0..<start {
+                let text: StreamingText
+                let kind: ACPTranscript.TextMessageKind
+                switch transcript.messages[index] {
+                case .agent(_, _, let value): text = value
+                kind = .agent
+                case .thought(_, _, let value): text = value
+                kind = .thought
+                default: continue
+                }
+                guard let metadata = text.metadata?.value as? [String: AnyCodable],
+                      let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String,
+                      next.hasPrefix("alas-steering:"),
+                      UUID(uuidString: String(next.dropFirst("alas-steering:".count))) != nil,
+                      transcript.messageIndex(messageId: next, kind: kind) == nil
+                else { continue }
+                let users = transcript.messages[(index + 1)..<end].filter {
+                    if case .user = $0 { return true }
+                    return false
+                }.count
+                guard users == (metadata[Self.steeringFollowingUsersMetadataKey]?.value as? Int ?? 1) else { continue }
+                beforeRebinding?(text)
+                text.adopt(phase: nil, metadata: AnyCodable([
+                    Self.steeringFollowingUsersMetadataKey: AnyCodable(users + followingUserCount),
+                ]))
+                transcript.noteStreamingChange(at: index)
+                dirty.insert(index)
+            }
+        }
+        for index in start..<end {
+            switch transcript.messages[index] {
+            case .agent(_, .some, let text), .thought(_, .some, let text):
+                beforeRebinding?(text)
+                let continuation = "alas-steering:\(UUID().uuidString)"
+                text.adopt(phase: nil, metadata: AnyCodable([
+                    Self.steeringContinuationMetadataKey: AnyCodable(continuation),
+                    Self.steeringFollowingUsersMetadataKey: AnyCodable(followingUserCount),
+                ]))
+                transcript.noteStreamingChange(at: index)
+                dirty.insert(index)
+            default:
+                break
+            }
+        }
+        transcript.lastContentTouchIndex = nil
+        return dirty
+    }
+
+    private func steeringMessageBinding(_ messageId: String?, kind: ACPTranscript.TextMessageKind) -> (id: String?, crossesBoundary: Bool) {
+        // Reattached turns have no local prompt task. Resolve only the saved
+        // steering chain whose final segment still belongs to the latest user
+        // boundary; a normal turn must not reactivate a historical binding.
+        guard allowsStreamingBoundaryCrossing || transcript.streamingState == .streaming,
+              var resolved = messageId else { return (messageId, allowsStreamingBoundaryCrossing) }
+        var visited: Set<String> = []
+        var lastBindingIndex: Int?
+        var followingUsers = 1
+        while visited.insert(resolved).inserted,
+              let index = transcript.messageIndex(messageId: resolved, kind: kind) {
+            let text: StreamingText
+            switch transcript.messages[index] {
+            case .agent(_, _, let value), .thought(_, _, let value): text = value
+            default: return (messageId, false)
+            }
+            guard let metadata = text.metadata?.value as? [String: AnyCodable],
+                  let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String,
+                  next.hasPrefix("alas-steering:"),
+                  UUID(uuidString: String(next.dropFirst("alas-steering:".count))) != nil
+            else { break }
+            lastBindingIndex = index
+            followingUsers = metadata[Self.steeringFollowingUsersMetadataKey]?.value as? Int ?? 1
+            resolved = next
+        }
+        guard let lastBindingIndex else { return (messageId, allowsStreamingBoundaryCrossing) }
+        if let index = transcript.messageIndex(messageId: resolved, kind: kind) {
+            guard !hasUserAfterMessage(at: index),
+                  !transcript.completedOutputBoundaryMessageIds.contains(transcript.messages[index].stableId)
+            else { return (messageId, false) }
+        } else {
+            // A binding can precede its first continuation chunk. Count users
+            // after its predecessor so pagination and regenerated local UUIDs
+            // do not change its scope. Recorded-row retries add no user row.
+            let users = transcript.messages[(lastBindingIndex + 1)...].filter {
+                if case .user = $0 { return true }
+                return false
+            }.count
+            guard users == followingUsers else { return (messageId, false) }
+        }
+        return (resolved, true)
+    }
+
     @discardableResult
     func attachCheckpoint(_ checkpointID: CheckpointID, toUserMessage id: UUID) -> Bool {
         guard let index = transcript.messages.firstIndex(where: {
@@ -718,16 +839,19 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            let binding = steeringMessageBinding(chunk.messageId, kind: .agent)
+            let messageId = binding.id
             var flushedForAgent: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
-                messageId: chunk.messageId,
+                messageId: messageId,
+                allowsStreamingBoundaryCrossing: binding.crossesBoundary,
                 replayKind: .agent,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
                 adoptContinuation: { candidate, phase, metadata in
-                    chunk.messageId.flatMap {
+                    messageId.flatMap {
                         adoptReplayContinuation(
                             kind: .agent, candidate: candidate, messageId: $0,
                             phase: phase, metadata: metadata)
@@ -737,7 +861,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 phase: chunk.phase,
                 metadata: chunk.metadata,
                 makeNew: { text, phase, metadata in
-                    .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                    .agent(id: UUID(), messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
                 }) else {
                 return flushedForAgent
             }
@@ -756,16 +880,19 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            let binding = steeringMessageBinding(chunk.messageId, kind: .thought)
+            let messageId = binding.id
             var flushedForThought: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
-                messageId: chunk.messageId,
+                messageId: messageId,
+                allowsStreamingBoundaryCrossing: binding.crossesBoundary,
                 replayKind: .thought,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
                 adoptContinuation: { candidate, phase, metadata in
-                    chunk.messageId.flatMap {
+                    messageId.flatMap {
                         adoptReplayContinuation(
                             kind: .thought, candidate: candidate, messageId: $0,
                             phase: phase, metadata: metadata)
@@ -775,7 +902,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 phase: chunk.phase,
                 metadata: chunk.metadata,
                 makeNew: { text, phase, metadata in
-                    .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                    .thought(id: UUID(), messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
                 }) else {
                 return flushedForThought
             }
@@ -3675,6 +3802,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                  messageId: String?,
+                                 allowsStreamingBoundaryCrossing: Bool,
                                  replayKind: TextMessageKind,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,

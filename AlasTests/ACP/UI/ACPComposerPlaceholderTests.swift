@@ -13,19 +13,14 @@ struct ACPComposerPlaceholderTests {
                 == "Plan, ask, or build — type / for commands")
     }
 
-    @Test("busy + sendOnEnter advertises ⏎ as queue and ⌥⏎ as steer")
-    func busyDefault() {
-        let queueText = "Queue a follow-up… (⌥⏎ to steer)"
+    @Test("busy placeholder advertises the default and the actual steering behavior", arguments: [
+        (true, "Queue a follow-up… (⌥⏎ to steer)", "Steer… (⌥⏎ to queue)"),
+        (false, "Queue a follow-up… (⌥⏎ to interrupt & send)", "Interrupt & send… (⌥⏎ to queue)")
+    ])
+    func busyMapping(nativeSteering: Bool, queueText: String, steerText: String) {
         for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission, .awaitingInput] {
-            #expect(ACPInputField.placeholder(for: state, sendOnEnter: true) == queueText)
-        }
-    }
-
-    @Test("busy + inverted mapping advertises ⏎ as steer and ⌥⏎ as queue")
-    func busyInverted() {
-        let steerText = "Steer the agent… (⌥⏎ to queue)"
-        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission, .awaitingInput] {
-            #expect(ACPInputField.placeholder(for: state, sendOnEnter: false) == steerText)
+            #expect(ACPInputField.placeholder(for: state, sendOnEnter: true, nativeSteering: nativeSteering) == queueText)
+            #expect(ACPInputField.placeholder(for: state, sendOnEnter: false, nativeSteering: nativeSteering) == steerText)
         }
     }
 }

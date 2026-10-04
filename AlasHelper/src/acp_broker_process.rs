@@ -210,15 +210,144 @@ struct Runtime {
 struct RuntimeState {
     broker: ACPBrokerState,
     pending_methods: HashMap<u64, PendingOperation>,
+    steering_turn: Option<SteeringTurn>,
+    last_thread_status: Option<String>,
     adapter_process_group_id: Option<u32>,
     adapter_exited: bool,
     closing: bool,
+}
+
+impl RuntimeState {
+    fn finish_untracked_cancel(&mut self) {
+        if self.steering_turn.as_ref().is_some_and(|turn| turn.untracked) {
+            self.steering_turn = None;
+            if !self.pending_methods.values().any(|pending| pending.method == "session/prompt") {
+                let _ = self.broker.set_turn_state(BrokerTurnState::Completed);
+            }
+        }
+    }
+
+    fn register_steering(&mut self, session_id: &str) {
+        if let Some(turn) = self.steering_turn.as_mut() {
+            turn.begin_followup();
+        } else {
+            let already_idle = matches!(
+                self.last_thread_status.as_deref(),
+                Some("idle" | "systemError")
+            ) || !self
+                .pending_methods
+                .values()
+                .any(|pending| pending.method == "session/prompt");
+            self.steering_turn =
+                Some(SteeringTurn::new(session_id.to_string(), already_idle));
+        }
+        if matches!(
+            self.broker.snapshot().turn_state,
+            BrokerTurnState::Idle | BrokerTurnState::Completed
+        ) {
+            if let Some(turn) = self.steering_turn.as_mut() {
+                turn.original_prompt_completed = true;
+            }
+            let _ = self.broker.set_turn_state(BrokerTurnState::Sending);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct PendingOperation {
     operation_key: OperationKey,
     method: String,
+}
+
+/// A legacy steering response can start a prompt without a prompt RPC to own
+/// completion. Keep that turn visible to polling and reattachment until the
+/// root session's Codex thread status reaches a terminal boundary.
+struct SteeringTurn {
+    session_id: String,
+    awaiting_response: bool,
+    original_prompt_completed: bool,
+    detached: bool,
+    untracked: bool,
+    saw_idle: bool,
+    saw_active: bool,
+    saw_new_active: bool,
+    last_status: Option<String>,
+}
+
+impl SteeringTurn {
+    fn new(session_id: String, already_idle: bool) -> Self {
+        Self {
+            session_id,
+            awaiting_response: true,
+            original_prompt_completed: false,
+            detached: false,
+            untracked: false,
+            saw_idle: already_idle,
+            saw_active: false,
+            saw_new_active: false,
+            last_status: None,
+        }
+    }
+
+    fn observe(&mut self, params: &Value) -> Option<BrokerTurnState> {
+        let status = codex_thread_status(params, &self.session_id)?;
+        match status {
+            "active" if self.saw_idle => {
+                self.saw_active = true;
+                self.saw_new_active = true;
+            }
+            "idle" | "systemError" => self.saw_idle = true,
+            "active" => {}
+            _ => return None,
+        }
+        self.last_status = Some(status.to_string());
+        (self.detached || self.saw_active).then(|| self.turn_state())
+    }
+
+    fn acknowledge(&mut self, outcome: Option<&str>, supports_completion: bool) {
+        self.awaiting_response = false;
+        self.untracked = !supports_completion && (self.untracked || outcome == Some("startedNewTurn"));
+        if outcome == Some("startedNewTurn") && supports_completion {
+            self.detached = true;
+            self.saw_active = self.saw_new_active;
+            self.saw_idle = true;
+        }
+    }
+
+    fn begin_followup(&mut self) {
+        self.awaiting_response = true;
+        self.saw_idle = matches!(self.last_status.as_deref(), Some("idle" | "systemError"));
+        self.saw_new_active = false;
+    }
+
+    fn turn_state(&self) -> BrokerTurnState {
+        if self.untracked {
+            return BrokerTurnState::AwaitingInput;
+        }
+        if !self.awaiting_response
+            && self.saw_active
+            && matches!(self.last_status.as_deref(), Some("idle" | "systemError"))
+        {
+            BrokerTurnState::Completed
+        } else {
+            BrokerTurnState::Streaming
+        }
+    }
+}
+
+fn codex_thread_status<'a>(params: &'a Value, session_id: &str) -> Option<&'a str> {
+    if params.get("sessionId").and_then(Value::as_str) != Some(session_id)
+        || params
+            .pointer("/update/sessionUpdate")
+            .and_then(Value::as_str)
+            != Some("session_info_update")
+    {
+        return None;
+    }
+    params
+        .pointer("/update/_meta/codex/threadStatus/type")?
+        .as_str()
+        .filter(|status| matches!(*status, "active" | "idle" | "systemError"))
 }
 
 /// Serializes requests per broker.
@@ -371,6 +500,8 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
             Mutex::new(RuntimeState {
                 broker: ACPBrokerState::new(metadata),
                 pending_methods: HashMap::new(),
+                steering_turn: None,
+                last_thread_status: None,
                 adapter_process_group_id,
                 adapter_exited: false,
                 closing: false,
@@ -1663,7 +1794,12 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                 },
             );
             if params.method == "session/prompt" {
+                state.steering_turn = None;
                 let _ = state.broker.set_turn_state(BrokerTurnState::Sending);
+            } else if params.method == "_session/steering" {
+                if let Some(session_id) = params.params.get("sessionId").and_then(Value::as_str) {
+                    state.register_steering(session_id);
+                }
             }
         }
         operation
@@ -1694,6 +1830,10 @@ fn broker_notify(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
         }
     }
     write_adapter_notification(runtime, &params.method, params.params)?;
+    if params.method == "session/cancel" {
+        let mut state = lock_runtime(runtime);
+        state.finish_untracked_cancel();
+    }
     Ok(json!({ "ok": true }))
 }
 
@@ -1825,13 +1965,30 @@ fn handle_adapter_stdout_line(runtime: &Runtime, line: &str) {
         let params = value.get("params").cloned().unwrap_or(Value::Null);
         let (lock, condvar) = &*runtime.state;
         let mut state = lock.lock().expect("broker state poisoned");
-        if method == "session/update"
-            && state
+        if method == "session/update" {
+            if let Some(status) = state
+                .broker
+                .remote_session_id()
+                .and_then(|session_id| codex_thread_status(&params, session_id))
+            {
+                state.last_thread_status = Some(status.to_string());
+            }
+            let steering_state = state
+                .steering_turn
+                .as_mut()
+                .and_then(|turn| turn.observe(&params));
+            if let Some(turn_state) = steering_state {
+                let _ = state.broker.set_turn_state(turn_state);
+                if turn_state == BrokerTurnState::Completed {
+                    state.steering_turn = None;
+                }
+            } else if state
                 .pending_methods
                 .values()
                 .any(|pending| pending.method == "session/prompt")
-        {
-            let _ = state.broker.set_turn_state(BrokerTurnState::Streaming);
+            {
+                let _ = state.broker.set_turn_state(BrokerTurnState::Streaming);
+            }
         }
         state.broker.add_adapter_notification(method, params);
         condvar.notify_all();
@@ -1864,7 +2021,37 @@ fn handle_adapter_response(runtime: &Runtime, value: Value) {
         }
     }
     if pending.method == "session/prompt" {
-        let _ = state.broker.set_turn_state(BrokerTurnState::Completed);
+        if let Some(turn) = state.steering_turn.as_mut() {
+            turn.original_prompt_completed = true;
+        }
+        let turn_state = state.steering_turn.as_ref()
+            .map(SteeringTurn::turn_state)
+            .unwrap_or(BrokerTurnState::Completed);
+        let _ = state.broker.set_turn_state(turn_state);
+    } else if pending.method == "_session/steering" {
+        if let Some(mut turn) = state.steering_turn.take() {
+            let steering_outcome = outcome.result.as_ref()
+                .and_then(|value| value.get("outcome"))
+                .and_then(Value::as_str);
+            let supports_completion = state.last_thread_status.is_some()
+                || matches!(state.broker.snapshot().initialize_result.as_ref()
+                    .and_then(|value| value.pointer("/agentInfo/name"))
+                    .and_then(Value::as_str), Some("@agentclientprotocol/codex-acp" | "codex-acp"));
+            turn.acknowledge(steering_outcome, supports_completion);
+            if turn.detached || turn.untracked {
+                let turn_state = turn.turn_state();
+                let _ = state.broker.set_turn_state(turn_state);
+                if turn_state != BrokerTurnState::Completed {
+                    state.steering_turn = Some(turn);
+                }
+            } else if (turn.original_prompt_completed || steering_outcome == Some("promptRequired")) && !state
+                .pending_methods
+                .values()
+                .any(|pending| pending.method == "session/prompt")
+            {
+                let _ = state.broker.set_turn_state(BrokerTurnState::Completed);
+            }
+        }
     }
     let _ = state
         .broker
@@ -2492,6 +2679,123 @@ fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untracked_started_turn_holds_queue_for_explicit_recovery() {
+        let mut turn = SteeringTurn::new("generic".to_string(), true);
+        turn.acknowledge(Some("startedNewTurn"), false);
+        assert_eq!(turn.turn_state(), BrokerTurnState::AwaitingInput);
+        turn.original_prompt_completed = true;
+        assert_eq!(turn.turn_state(), BrokerTurnState::AwaitingInput);
+        turn.begin_followup();
+        turn.acknowledge(Some("injected"), false);
+        assert_eq!(turn.turn_state(), BrokerTurnState::AwaitingInput);
+    }
+
+    #[test]
+    fn detached_steering_waits_for_root_completion_on_either_side_of_acknowledgement() {
+        fn status(session_id: &str, status: &str) -> Value {
+            json!({"sessionId": session_id, "update": {
+                "sessionUpdate": "session_info_update",
+                "_meta": {"codex": {"threadStatus": {"type": status}}}
+            }})
+        }
+        for (already_idle, completes_before_ack) in [(false, false), (false, true), (true, true)] {
+            let mut turn = SteeringTurn::new("root".to_string(), already_idle);
+            if !already_idle {
+                turn.observe(&status("root", "idle"));
+            }
+            turn.observe(&status("root", "active"));
+            assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+            if completes_before_ack {
+                turn.observe(&status("root", "idle"));
+                assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+            }
+            turn.acknowledge(Some("startedNewTurn"), true);
+            if !completes_before_ack {
+                assert_eq!(turn.observe(&status("child", "idle")), None);
+                assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+                turn.observe(&status("root", "idle"));
+            }
+            assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+        }
+        // An idle update from the old prompt cannot finish the new prompt.
+        let mut turn = SteeringTurn::new("root".to_string(), false);
+        turn.observe(&status("root", "idle"));
+        turn.acknowledge(Some("startedNewTurn"), true);
+        assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+        turn.observe(&status("root", "active"));
+        turn.observe(&status("root", "systemError"));
+        assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+    }
+
+    fn steering_runtime_state() -> RuntimeState {
+        RuntimeState {
+            broker: ACPBrokerState::new(ACPBrokerMetadata {
+                broker_id: BrokerId::new("steering"),
+                generation: BrokerGeneration::new(1),
+                alas_session_id: "root".to_string(),
+                adapter_program: "agent".to_string(),
+                adapter_args: vec![],
+                cwd: "/tmp".to_string(),
+                env_keys: vec![],
+                created_at_millis: 0,
+            }),
+            pending_methods: HashMap::new(),
+            steering_turn: None,
+            last_thread_status: Some("idle".to_string()),
+            adapter_process_group_id: None,
+            adapter_exited: false,
+            closing: false,
+        }
+    }
+
+    #[test]
+    fn explicit_stop_releases_an_untracked_turn_without_a_prompt_rpc() {
+        let mut state = steering_runtime_state();
+        state.register_steering("root");
+        state.steering_turn.as_mut().unwrap().acknowledge(Some("startedNewTurn"), false);
+        state.broker.set_turn_state(BrokerTurnState::AwaitingInput).unwrap();
+        state.finish_untracked_cancel();
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Completed);
+        assert!(state.steering_turn.is_none());
+    }
+
+    #[test]
+    fn registering_steering_keeps_reattached_clients_busy_during_the_idle_race() {
+        let mut state = steering_runtime_state();
+        for (before, expected) in [
+            (BrokerTurnState::Completed, BrokerTurnState::Sending),
+            (BrokerTurnState::AwaitingInput, BrokerTurnState::AwaitingInput),
+        ] {
+            state.broker.set_turn_state(before).unwrap();
+            state.register_steering("root");
+            assert_eq!(state.broker.snapshot().turn_state, expected);
+            assert!(state.steering_turn.as_ref().unwrap().awaiting_response);
+        }
+    }
+
+    #[test]
+    fn repeated_steering_does_not_reuse_the_old_continuations_active_boundary() {
+        let status = |status| json!({"sessionId": "root", "update": {
+            "sessionUpdate": "session_info_update",
+            "_meta": {"codex": {"threadStatus": {"type": status}}}
+        }});
+        for outcome in ["injected", "startedNewTurn"] {
+            let mut turn = SteeringTurn::new("root".to_string(), true);
+            turn.observe(&status("active"));
+            turn.acknowledge(Some("startedNewTurn"), true);
+            turn.begin_followup();
+            turn.observe(&status("idle"));
+            turn.acknowledge(Some(outcome), true);
+            if outcome == "startedNewTurn" {
+                assert_eq!(turn.turn_state(), BrokerTurnState::Streaming);
+                turn.observe(&status("active"));
+                turn.observe(&status("idle"));
+            }
+            assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+        }
+    }
 
     #[test]
     fn only_user_facing_pending_requests_move_turn_to_awaiting_input() {
