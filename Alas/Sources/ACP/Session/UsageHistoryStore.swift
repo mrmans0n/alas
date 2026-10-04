@@ -32,6 +32,8 @@ struct UsageTurn: Codable, Equatable, Sendable {
     let tokens: Tokens?
     /// What the turn added to the session's cost; nil when the adapter reports no cost.
     let cost: Cost?
+    /// True for a prompt Alas sent to restore the agent's context; absent otherwise.
+    var recovery: Bool? = nil
 }
 
 /// Where the next page of a `usage/*` read starts: after the row at `before` with id `beforeId`, newest first.
@@ -66,6 +68,7 @@ struct UsageTurnInput: Equatable, Sendable {
     var tokens: UsageTurn.Tokens?
     /// The session's cumulative cost as the adapter last reported it.
     var cumulativeCost: UsageTurn.Cost?
+    var recovery = false
 }
 
 /// Token, cost and usage-limit history of every agent session, across projects. One database for the whole app
@@ -111,19 +114,20 @@ actor UsageHistoryStore {
             INSERT INTO turn_usage (
                 session_id, project_id, worktree_id, agent_id, model, started_at, ended_at, result,
                 total_tokens, input_tokens, cached_input_tokens, cached_write_tokens, output_tokens,
-                reasoning_output_tokens, cost_total, cost_delta, currency
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reasoning_output_tokens, cost_total, cost_delta, currency, recovery
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING id
             """, bindings: [
                 input.session, input.project, input.worktree, input.agent, input.model,
                 input.startedAt, input.endedAt, input.result,
                 tokens?.total, tokens?.input, tokens?.cachedInput, tokens?.cachedWrite, tokens?.output,
                 tokens?.reasoningOutput, input.cumulativeCost?.amount, cost?.amount, input.cumulativeCost?.currency,
+                input.recovery ? 1 : 0,
             ])
             return UsageTurn(
                 id: rows.first?["id"] as? Int64 ?? 0, session: input.session, project: input.project,
                 worktree: input.worktree, agent: input.agent, model: input.model, startedAt: input.startedAt,
-                endedAt: input.endedAt, result: input.result, tokens: tokens, cost: cost)
+                endedAt: input.endedAt, result: input.result, tokens: tokens, cost: cost, recovery: input.recovery ? true : nil)
         }
     }
 
@@ -165,7 +169,8 @@ actor UsageHistoryStore {
                 project: row["project_id"] as? String, worktree: row["worktree_id"] as? String,
                 agent: row["agent_id"] as? String ?? "", model: row["model"] as? String,
                 startedAt: row["started_at"] as? Int64 ?? 0, endedAt: row["ended_at"] as? Int64 ?? 0,
-                result: row["result"] as? String ?? "", tokens: tokens, cost: cost)
+                result: row["result"] as? String ?? "", tokens: tokens, cost: cost,
+                recovery: (row["recovery"] as? Int64) == 1 ? true : nil)
         }
         return (Array(turns), rows.count > limit ? turns.last.map { UsageCursor(before: $0.endedAt, beforeId: $0.id) } : nil)
     }
@@ -234,7 +239,8 @@ actor UsageHistoryStore {
             reasoning_output_tokens INTEGER,
             cost_total REAL,
             cost_delta REAL,
-            currency TEXT
+            currency TEXT,
+            recovery INTEGER NOT NULL DEFAULT 0
         )
         """)
         try database.exec("CREATE INDEX IF NOT EXISTS turn_usage_ended_idx ON turn_usage(ended_at)")
@@ -284,7 +290,8 @@ extension UsageTurnInput {
                     total: $0.displayTotal, input: $0.inputTokens, cachedInput: $0.cachedInputTokens,
                     cachedWrite: $0.cachedWriteTokens, output: $0.outputTokens, reasoningOutput: $0.reasoningOutputTokens)
             },
-            cumulativeCost: cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) })
+            cumulativeCost: cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) },
+            recovery: completion.recovery)
     }
 }
 

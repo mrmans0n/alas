@@ -16,8 +16,8 @@ struct UsageHistoryStoreTests {
             result: "completed", cumulativeCost: cost.map { UsageTurn.Cost(amount: $0.0, currency: $0.1) })
     }
 
-    /// A finished turn keeps the counts of its own quota, the answering model and an end no earlier than its start,
-    /// and is still there after the store is reopened.
+    /// A finished turn keeps the counts of its own quota, the answering model, an end no earlier than its start and
+    /// whether it was a recovery prompt, and is still there after the store is reopened.
     @Test func aFinishedTurnIsRecordedAndSurvivesAReopen() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -27,7 +27,8 @@ struct UsageHistoryStoreTests {
         let started = Int64(Date().timeIntervalSince1970 * 1000)
         let completion = ACPTurnCompletion(
             sessionId: "s1", startedAt: started, result: .limited, delegatedSource: nil, lastAgentText: nil,
-            quota: ACPPromptQuota(tokenCount: tokens, modelUsage: [ACPModelUsage(model: "opus", tokenCount: tokens)]))
+            quota: ACPPromptQuota(tokenCount: tokens, modelUsage: [ACPModelUsage(model: "opus", tokenCount: tokens)]),
+            recovery: true)
         let input = UsageTurnInput(
             completion: completion, agent: "claude", model: "default", cumulativeCost: nil,
             project: "proj", worktree: "wt", endedAt: started - 1_000)
@@ -42,6 +43,7 @@ struct UsageHistoryStoreTests {
         #expect(turns.first?.startedAt == started)
         #expect(turns.first?.endedAt == started)
         #expect(turns.first?.cost == nil)
+        #expect(turns.first?.recovery == true)
     }
 
     /// Each turn's cost is what the session's cumulative cost grew by since its previous recorded turn; a lower

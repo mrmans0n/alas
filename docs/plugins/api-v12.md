@@ -181,7 +181,9 @@ agent ids, model names, times, token counts and cost.
 - `result` is `completed`, `failed`, `cancelled` or `limited` (stopped by a
   usage limit). A prompt replaced by a newer one (steering) is recorded as
   `cancelled` when its result arrives, with the tokens the agent reported for
-  it, and sent as `turn.finished` like any other turn.
+  it, and sent as `turn.finished` like any other turn. A turn you stop is
+  recorded when its result arrives too, so it keeps its tokens; if none
+  arrives within 10 seconds, it is recorded without them.
 - `tokens` is the turn's own usage as the agent reported it, or absent when it
   reported none. When the agent reports only per-model counts, they are
   summed. Turns that fail or are cancelled before the agent answers have none.
@@ -199,6 +201,9 @@ agent ids, model names, times, token counts and cost.
   otherwise the session's selected model, if any.
 - `project` and `worktree` are absent for sessions of a multi-project
   workspace; only `"scope": "all"` returns those.
+- `recovery` is `true` on a prompt Alas sent itself to restore the agent's
+  context (for example after the agent lost its session), and absent on every
+  other turn. Its `result` is `completed`, `cancelled` or `failed`.
 - `id` grows with each recorded turn.
 
 Alas keeps 400 days of history.

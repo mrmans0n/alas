@@ -36,6 +36,8 @@ struct ACPTurnCompletion: Equatable, Sendable {
     /// Epoch milliseconds when the prompt went to the agent; nil when it never did. Later than `startedAt` by the
     /// checkpoint, attachment and context work before sending.
     var sentAt: Int64? = nil
+    /// A context-recovery prompt Alas sent, reported only as usage.
+    var recovery = false
 }
 
 /// A finished turn's cumulative cost: the session's, when a `usage_update` with a cost arrived during the turn, and

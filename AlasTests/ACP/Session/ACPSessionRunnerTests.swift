@@ -199,22 +199,28 @@ struct ACPSessionRunnerTests {
     }
 
     /// A turn's usage starts when its prompt goes to the agent, after the work before sending (here a slow context
-    /// provider), not when it was submitted.
+    /// provider), not when it was submitted, in time and on the stream: a cost sent meanwhile is not the turn's.
     @Test func usageStartsWhenThePromptIsSent() async throws {
         var completions: [ACPTurnCompletion] = []
         let context = AsyncGate()
         var contextEnteredAt: Int64?
         func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+        // Long enough that the cost update is still buffered when the turn ends.
         let (runner, mock) = try makeRunner(
             onTurnCompleted: { completions.append($0) },
             pluginContext: { _ in
                 contextEnteredAt = now()
                 await context.wait()
                 return []
-            })
+            },
+            incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         runner.send(text: "hello", attachments: []) { _ in }
         #expect(await awaitCondition { contextEnteredAt != nil })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.5, currency: "USD")))))
+        #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 })
         // Released in a later millisecond than the turn's start, so the two can be told apart.
         let entered = try #require(contextEnteredAt)
         while now() <= entered { await Task.yield() }
@@ -227,6 +233,64 @@ struct ACPSessionRunnerTests {
             completion: completion, agent: "claude", model: nil, cumulativeCost: nil, project: nil, worktree: nil,
             endedAt: now())
         #expect(input.startedAt >= released)
+        #expect(await completion.cost?.resolve() == nil)
+    }
+
+    /// A context-recovery prompt's spend is usage of its own, flagged as recovery, and never a turn completion.
+    @Test func aRecoveryPromptIsReportedAsRecoveryUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        mock.script(method: "session/prompt") { _ in
+            Data(#"{"stopReason":"end_turn","_meta":{"quota":{"token_count":{"totalTokens":120}}}}"#.utf8)
+        }
+        #expect(runner.sendRecoveryContext("Here is the transcript."))
+        #expect(await awaitCondition { !usage.isEmpty })
+        #expect(usage.map(\.result) == [.completed])
+        #expect(usage.first?.recovery == true)
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == 120)
+        #expect(usage.first?.sentAt != nil)
+        #expect(completions.isEmpty)
+    }
+
+    /// Stopping a turn reports its completion at once, but its usage waits for the prompt's result, which carries its
+    /// tokens; if none comes within the bound it is recorded without them. Either way, once.
+    @Test(arguments: [true, false])
+    func aStoppedTurnsUsageWaitsForItsResult(settles: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let waited = AsyncGate()
+        var timedOut = false
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in
+                await waited.wait()
+                await MainActor.run { timedOut = true }
+            })
+        var responded = false
+        runner.onPromptResponseProcessedForTesting = { _ in responded = true }
+        let result = AsyncGate()
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await result.wait()
+            return Data(#"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120}}}}"#.utf8)
+        }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        #expect(completions.map(\.result) == [.cancelled])
+        #expect(usage.isEmpty)
+        await (settles ? result : waited).open()
+        #expect(await awaitCondition { usage.count == 1 })
+        // The other path then finds it reported.
+        await result.open()
+        await waited.open()
+        #expect(await awaitCondition { timedOut && responded })
+        await Task.yield()
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == (settles ? 120 : nil))
     }
 
     @Test("send attaches its checkpoint before the prompt RPC")
@@ -4104,7 +4168,8 @@ struct ACPSessionRunnerTests {
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
         pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
-        incomingUpdateCoalesceNanos: UInt64 = 16_000_000
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
+        usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -4129,6 +4194,7 @@ struct ACPSessionRunnerTests {
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent,
             incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
+            usageWaitSleep: usageWaitSleep,
             canWrite: canWrite,
             validateLease: validateLease
         )
