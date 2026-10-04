@@ -108,22 +108,37 @@ enum PluginWebPolicy {
         String(decoding: (try? JSONEncoder().encode(value)) ?? Data("null".utf8), as: UTF8.self)
     }
 
+    /// `alas.context` as JSON text: in the page script for a new document, and as the detail of `themeEvent` when the
+    /// theme changes, passed as data.
+    static func context(tab: Int, theme: Theme) -> String {
+        struct Context: Encodable {
+            let tab: Int
+            let theme: String
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let data = (try? encoder.encode(Context(tab: tab, theme: theme.darkMode ? "dark" : "light"))) ?? Data("null".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// The page world's only addition, `window.alas`, defined before any page script along with removing WebRTC,
     /// which CSP does not cover. `post` hands the JSON text to the bridge with a `CustomEvent` named `outEvent`;
-    /// messages arrive as `inEvent`. Both names are random per page.
-    static func pageScript(outEvent: String, inEvent: String, maxBytes: Int, tab: Int, theme: String) -> String {
+    /// messages arrive as `inEvent`, and a new `alas.context` as `themeEvent`. The names are random per page.
+    static func pageScript(
+        outEvent: String, inEvent: String, themeEvent: String, maxBytes: Int, context: String
+    ) -> String {
         """
         (() => {
           "use strict";
           for (const name of Object.getOwnPropertyNames(window)) {
             if (/^(webkit)?RTC/.test(name)) { try { delete window[name]; } catch (e) {} }
           }
-          const OUT = \(literal(outEvent)), IN = \(literal(inEvent)), MAX = \(maxBytes);
+          const OUT = \(literal(outEvent)), IN = \(literal(inEvent)), THEME = \(literal(themeEvent)), MAX = \(maxBytes);
           const apply = Reflect.apply, dispatch = EventTarget.prototype.dispatchEvent;
           const listen = EventTarget.prototype.addEventListener, Custom = CustomEvent, doc = document;
           const stringify = JSON.stringify, parse = JSON.parse, encoder = new TextEncoder();
           const encode = TextEncoder.prototype.encode;
-          let handler = null;
+          let handler = null, themeHandler = null, context = Object.freeze(parse(\(literal(context))));
           const alas = Object.freeze({
             post(value) {
               const text = stringify(value);
@@ -135,9 +150,17 @@ enum PluginWebPolicy {
               if (fn !== null && typeof fn !== "function") throw new TypeError("alas.onMessage takes a function");
               handler = fn;
             },
-            context: Object.freeze({ tab: \(tab), theme: \(literal(theme)) }),
+            onThemeChange(fn) {
+              if (fn !== null && typeof fn !== "function") throw new TypeError("alas.onThemeChange takes a function");
+              themeHandler = fn;
+            },
+            get context() { return context; },
           });
           apply(listen, doc, [IN, (event) => { if (handler) handler(parse(event.detail)); }]);
+          apply(listen, doc, [THEME, (event) => {
+            context = Object.freeze(parse(event.detail));
+            if (themeHandler) themeHandler(context);
+          }]);
           Object.defineProperty(window, "alas", { value: alas });
         })();
         """
@@ -246,6 +269,8 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     private let tab: Int
     private let pluginID: String
     private let inEvent = "alas-in-" + UUID().uuidString
+    private let outEvent = "alas-out-" + UUID().uuidString
+    private let themeEvent = "alas-theme-" + UUID().uuidString
     private let schemeHandler: PluginWebSchemeHandler
     private var token: UUID?
     private var isClosed = false
@@ -276,22 +301,14 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         configuration.preferences.isElementFullscreenEnabled = false
         configuration.preferences.isFraudulentWebsiteWarningEnabled = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
-        let outEvent = "alas-out-" + UUID().uuidString
         let controller = configuration.userContentController
-        controller.addUserScript(WKUserScript(
-            source: PluginWebPolicy.pageScript(
-                outEvent: outEvent, inEvent: inEvent, maxBytes: host.webMessageLimit(tab: tab), tab: tab,
-                theme: theme.darkMode ? "dark" : "light"),
-            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
-        controller.addUserScript(WKUserScript(
-            source: PluginWebPolicy.relayScript(outEvent: outEvent, maxBytes: host.webMessageLimit(tab: tab), queue: PluginHost.maxWebQueue),
-            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Self.bridgeWorld))
         webView = WKWebView(frame: .zero, configuration: configuration)
         #if DEBUG
         webView.isInspectable = true
         #endif
         webView.allowsLinkPreview = false
         super.init()
+        installScripts(theme)
         // Added after `super.init`, since the controller retains its handler; `close` removes it.
         controller.addScriptMessageHandler(self, contentWorld: Self.bridgeWorld, name: "alas")
         webView.navigationDelegate = self
@@ -334,9 +351,29 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard !isClosed else { return }
         let variables = PluginWebPolicy.cssVariables(theme)
         schemeHandler.shell = PluginWebPolicy.shell(pluginID: pluginID, variables: variables)
+        // The next document starts with the new context; the current one gets it as data.
+        installScripts(theme)
         webView.callAsyncJavaScript(
-            "for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value);",
-            arguments: ["variables": variables], in: nil, in: Self.bridgeWorld, completionHandler: nil)
+            """
+            for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value);
+            document.dispatchEvent(new CustomEvent(name, { detail: context }));
+            """,
+            arguments: ["variables": variables, "name": themeEvent, "context": PluginWebPolicy.context(tab: tab, theme: theme)],
+            in: nil, in: Self.bridgeWorld, completionHandler: nil)
+    }
+
+    private func installScripts(_ theme: Theme) {
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        let limit = host.webMessageLimit(tab: tab)
+        controller.addUserScript(WKUserScript(
+            source: PluginWebPolicy.pageScript(
+                outEvent: outEvent, inEvent: inEvent, themeEvent: themeEvent, maxBytes: limit,
+                context: PluginWebPolicy.context(tab: tab, theme: theme)),
+            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        controller.addUserScript(WKUserScript(
+            source: PluginWebPolicy.relayScript(outEvent: outEvent, maxBytes: limit, queue: PluginHost.maxWebQueue),
+            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Self.bridgeWorld))
     }
 
     /// A `web/post` from the plugin: dispatched to the page as data, a JSON string argument, never as code.
@@ -361,11 +398,8 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             if let url = PluginWebPolicy.externalLink(text) { openExternal(url) }
             replyHandler(nil, nil)
         } else if let json = body["post"] as? String, let token {
-            let host = host, tab = tab
-            Task {
-                let failure = await host.webMessage(tab: tab, page: token, json: json)
-                replyHandler(nil, failure)
-            }
+            // Queued synchronously, so posts reach the plugin in the order the page made them.
+            host.webMessage(tab: tab, page: token, json: json) { replyHandler(nil, $0) }
         } else {
             replyHandler(nil, "refused")
         }

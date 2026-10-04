@@ -1443,6 +1443,8 @@ final class PluginHost {
     /// Messages from each page that the plugin has not yet handled, by the page's token. Per page, as the page's
     /// bridge counts them, so a page under its own cap is never refused here because of another page.
     @ObservationIgnored private var webQueued: [UUID: Int] = [:]
+    /// Each page's latest delivery; the next waits for it, so a page's messages reach the plugin in order.
+    @ObservationIgnored private var webTails: [UUID: Task<Void, Never>] = [:]
 
     /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
     /// to detach with, or nil for a tab that is not a web tab.
@@ -1456,6 +1458,7 @@ final class PluginHost {
     func detachWebPage(tab: Int, _ token: UUID) {
         webPages[tab]?[token] = nil
         webQueued[token] = nil
+        webTails[token] = nil
     }
 
     /// The largest JSON text a page of `tab` may post: the `web/message` it becomes must fit in one message.
@@ -1470,8 +1473,34 @@ final class PluginHost {
 
     /// The page `page` of web tab `tab` called `alas.post`. The bridge already checked the size and the page's queue,
     /// and threw for the page if either was exceeded; they are checked again here, since nothing the page's process
-    /// sends is trusted. Returns once the plugin has handled it, with nil, or at once with why it was dropped.
+    /// sends is trusted. Checked and queued at once, in call order, then delivered after the page's earlier messages;
+    /// `done` gets nil once the plugin has handled it, or why it was dropped.
+    func webMessage(tab: Int, page: UUID, json: String, done: @escaping @MainActor (String?) -> Void) {
+        if let refusal = webMessageRefusal(tab: tab, page: page, json: json) {
+            done(refusal)
+            return
+        }
+        webQueued[page, default: 0] += 1
+        let previous = webTails[page]
+        webTails[page] = Task { [weak self] in
+            await previous?.value
+            guard let self else { return done("the plugin is not running") }
+            defer { if self.webQueued[page] != nil { self.webQueued[page, default: 1] -= 1 } }
+            // The page may have gone, or the plugin stopped, while earlier messages were delivered.
+            guard self.webPages[tab]?[page] != nil else { return done("the page is closed") }
+            guard self.state == .active else { return done("the plugin is not running") }
+            await self.deliver(Self.webMessage(tab: tab, json: json))
+            done(nil)
+        }
+    }
+
     func webMessage(tab: Int, page: UUID, json: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            webMessage(tab: tab, page: page, json: json) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private func webMessageRefusal(tab: Int, page: UUID, json: String) -> String? {
         guard state == .active else { return "the plugin is not running" }
         guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
         guard webPages[tab]?[page] != nil else { return "the page is closed" }
@@ -1480,9 +1509,6 @@ final class PluginHost {
             return "message is not JSON"
         }
         guard webQueued[page, default: 0] < Self.maxWebQueue else { return "busy" }
-        webQueued[page, default: 0] += 1
-        defer { if webQueued[page] != nil { webQueued[page, default: 1] -= 1 } }
-        await deliver(Self.webMessage(tab: tab, json: json))
         return nil
     }
 

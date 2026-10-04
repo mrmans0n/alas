@@ -42,6 +42,12 @@ struct PluginWebTests {
         #expect(plain["--alas-accent"] != overridden["--alas-accent"])
     }
 
+    /// What `alas.context` holds, sent as data to a running page when the theme changes.
+    @Test func theContextNamesTheTabAndWhetherTheThemeIsDark() {
+        #expect(PluginWebPolicy.context(tab: 2, theme: Theme(id: "light", name: "Light", tokens: [:])) == #"{"tab":2,"theme":"light"}"#)
+        #expect(PluginWebPolicy.context(tab: 0, theme: .fallback) == #"{"tab":0,"theme":"dark"}"#)
+    }
+
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
         #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id) == "default-src 'none'; "
             + "script-src alas-plugin://io.x.p/ui.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "

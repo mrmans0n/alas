@@ -1886,6 +1886,29 @@ struct PluginHostTests {
         let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: page, json: "\(index)") } }
         #expect(await host.webMessage(tab: 0, page: old, json: "0") == "the page is closed")
         for post in newPosts { #expect(await post.value == nil) }
-        for post in oldPosts { #expect(await post.value == nil) }
+        // The old document's messages still waiting behind the one being delivered are stale, so they are dropped.
+        for post in oldPosts { #expect([nil, "the page is closed"].contains(await post.value)) }
+    }
+
+    /// A burst of posts from one page reaches the plugin in the order the page made them.
+    @Test func aPagesPostsReachThePluginInOrder() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let count = 8
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var left = count
+            for index in 0..<count {
+                host.webMessage(tab: 0, page: page, json: "\(index)") { failure in
+                    #expect(failure == nil)
+                    left -= 1
+                    if left == 0 { continuation.resume() }
+                }
+            }
+        }
+        let delivered = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("web/message") }
+            .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any])?["params"] as? [String: Any] }
+            .compactMap { $0["message"] as? Int }
+        #expect(delivered == Array(0..<count))
     }
 }

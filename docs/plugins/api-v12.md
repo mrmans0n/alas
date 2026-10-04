@@ -46,9 +46,11 @@ A catalog release with a page publishes `ui.js` as a third asset; its record's
 ```js
 alas.post(value)          // send any JSON value to the plugin
 alas.onMessage((value) => { … })  // receive what the plugin sends; replaces the previous handler
-alas.context              // { tab, theme: "light" | "dark" }
+alas.context              // { tab, theme: "light" | "dark" }, updated when Alas's theme changes
+alas.onThemeChange((context) => { … })  // called with the new context; replaces the previous handler
 ```
 
+- Messages a page posts reach the plugin in the order it posted them.
 - `alas.post` throws a `TypeError` for a value `JSON.stringify` can't encode,
   a `RangeError` when the message would be too large, and an `Error("busy")`
   when 32 earlier messages from this page are still waiting for the plugin.
