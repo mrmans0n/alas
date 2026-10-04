@@ -2716,16 +2716,19 @@ final class ACPSession: ObservableObject, Identifiable {
         knownUnsentDispatches: Set<UUID> = []
     ) -> Bool {
         forceSendAfterSendingHeadId = nil
+        var newlyUncertain: Set<UUID> = []
         queue = items.map { item in
             guard knownUnsentDispatches.contains(item.id) else {
-                return item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+                let restored = item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+                if restored.deliveryUncertain, !item.deliveryUncertain { newlyUncertain.insert(item.id) }
+                return restored
             }
             var restored = item.normalizedAfterRestore(markLegacySendingUncertain: false)
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
         let count = queue.count
-        queue.removeAll { $0.deliveryUncertain && deliveredQueuedPromptIDs.contains($0.id) }
+        dropDeliveredQueuedPrompts(among: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
@@ -2752,22 +2755,31 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Retry would resend a prompt the agent holds, so they are dropped.
     var deliveredQueuedPromptIDs: Set<UUID> = []
 
+    /// Drops prompts that only just lost their dispatch provenance and that
+    /// the transcript shows answered. An item already persisted as uncertain
+    /// is left alone: a follow-up steered into a running turn records its row
+    /// before steering is confirmed, so output after it is not proof.
+    private func dropDeliveredQueuedPrompts(among newlyUncertain: Set<UUID>) {
+        let delivered = newlyUncertain.intersection(deliveredQueuedPromptIDs)
+        guard !delivered.isEmpty else { return }
+        queue.removeAll { delivered.contains($0.id) }
+    }
+
     /// Holds prompts dispatched on a broker generation that this connection
     /// cannot adopt. Queue items with no dispatch provenance remain eligible.
     @discardableResult
     func markQueuedPromptsUncertain(afterBrokerGeneration generation: ACPBrokerGeneration) -> Bool {
-        var changed = false
+        var newlyUncertain: Set<UUID> = []
         for index in queue.indices {
             guard let dispatchedGeneration = queue[index].dispatchedBrokerGeneration,
                   dispatchedGeneration != generation,
                   !queue[index].deliveryUncertain
             else { continue }
             queue[index].markDeliveryUncertain()
-            changed = true
+            newlyUncertain.insert(queue[index].id)
         }
-        let count = queue.count
-        queue.removeAll { $0.deliveryUncertain && deliveredQueuedPromptIDs.contains($0.id) }
-        return changed || queue.count != count
+        dropDeliveredQueuedPrompts(among: newlyUncertain)
+        return !newlyUncertain.isEmpty
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

@@ -374,6 +374,19 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].deliveryUncertain)
     }
 
+    @Test("a follow-up already awaiting steering confirmation survives restore despite later output")
+    func unconfirmedSteeredFollowUpSurvivesRestore() {
+        let s = mkSession()
+        // Steering records the row first and persists the item as uncertain;
+        // the running turn's output after that row does not prove delivery.
+        var followUp = QueuedPrompt(blocks: [.text("also this")], status: .sending, transcriptRecorded: true)
+        followUp.markDeliveryUncertain()
+        s.deliveredQueuedPromptIDs = [followUp.id]
+
+        #expect(!s.restoreQueue([followUp], markLegacySendingUncertain: true))
+        #expect(s.queue.map(\.id) == [followUp.id])
+    }
+
     @Test("deliveredRecordedPromptIDs needs agent output after the recorded prompt", arguments: [true, false])
     func deliveredRecordedPromptIDs(answered: Bool) {
         let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true)
