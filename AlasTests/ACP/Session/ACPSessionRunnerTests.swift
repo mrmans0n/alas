@@ -91,25 +91,33 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
-    /// A turn reports the session's cumulative cost only when a `usage_update` arrived during it; an earlier total
-    /// is not its own.
-    @Test(arguments: [false, true])
-    func aTurnReportsOnlyACostUpdatedDuringIt(updatedDuringTurn: Bool) async throws {
+    enum TurnCostUpdate: CaseIterable, Sendable { case none, applied, buffered }
+
+    /// A turn reports the session's cumulative cost only when a `usage_update` arrived during it, including one still
+    /// in the coalescing buffer when the prompt result arrives; an earlier total is not its own.
+    @Test(arguments: TurnCostUpdate.allCases)
+    func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
-        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        // Long enough that a buffered update is still waiting when the turn ends.
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
         runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
+        let later = ACPSessionUpdate.usageUpdate(.init(used: 2, size: 10, cost: .init(amount: 0.3, currency: "USD")))
         mock.scriptAsync(method: "session/prompt") { _ in
-            if updatedDuringTurn {
-                await MainActor.run {
-                    _ = runner.session.apply(.usageUpdate(.init(used: 2, size: 10, cost: .init(amount: 0.3, currency: "USD"))))
-                }
+            switch update {
+            case .none: break
+            case .applied: await MainActor.run { _ = runner.session.apply(later) }
+            case .buffered:
+                mock.emit(.init(sessionId: "s", update: later))
+                _ = await Task { @MainActor in await awaitCondition { runner.pendingIncomingUpdateCountForTesting > 0 } }.value
             }
             return Data("{}".utf8)
         }
-        await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { _ in continuation.resume() }
-        }
-        #expect(completions.map(\.cumulativeCost) == [updatedDuringTurn ? .init(amount: 0.3, currency: "USD") : nil])
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { !completions.isEmpty })
+        #expect(completions.map(\.cumulativeCost) == [update == .none ? nil : .init(amount: 0.3, currency: "USD")])
     }
 
     @Test("send attaches its checkpoint before the prompt RPC")
@@ -3984,7 +3992,8 @@ struct ACPSessionRunnerTests {
         canWrite: (() -> Bool)? = nil,
         validateLease: (() async -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -4006,6 +4015,7 @@ struct ACPSessionRunnerTests {
             onTurnCompleted: onTurnCompleted,
             onCheckpointCapture: onCheckpointCapture,
             isConnectionCurrent: isConnectionCurrent,
+            incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
             canWrite: canWrite,
             validateLease: validateLease
         )

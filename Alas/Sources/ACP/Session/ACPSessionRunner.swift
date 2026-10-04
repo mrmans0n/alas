@@ -1582,6 +1582,8 @@ final class ACPSessionRunner {
     }
 
     #if DEBUG
+    var pendingIncomingUpdateCountForTesting: Int { pendingIncomingUpdates.count }
+
     func applyIncomingUpdateForTesting(_ params: ACPSessionUpdateParams) {
         applyIncomingUpdate(params)
     }
@@ -1842,7 +1844,7 @@ final class ACPSessionRunner {
             delegatedSource: activePromptDelegatedSource,
             lastAgentText: lastAgentText,
             quota: quota,
-            cumulativeCost: session.usageUpdateCount != activePromptUsageUpdateCount ? session.contextUsage?.cost : nil
+            cumulativeCost: turnCumulativeCost()
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
@@ -1866,6 +1868,16 @@ final class ACPSessionRunner {
     /// Agent text still in the incoming-update coalescing buffer, not yet in
     /// the transcript. Read-only on purpose: draining the buffer at turn end
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
+    /// The session's cumulative cost if a `usage_update` came during the active turn, else nil. One still in the
+    /// coalescing buffer counts and is the latest, since the prompt result can overtake it.
+    private func turnCumulativeCost() -> ACPUsageInfo.Cost? {
+        for pending in pendingIncomingUpdates.reversed() {
+            // As `ACPSession.apply` does, a size of 0 is no data.
+            if case .usageUpdate(let info) = pending.params.update { return info.size > 0 ? info.cost : nil }
+        }
+        return session.usageUpdateCount != activePromptUsageUpdateCount ? session.contextUsage?.cost : nil
+    }
+
     private func bufferedAgentText() -> String? {
         let text = pendingIncomingUpdates.compactMap { pending -> String? in
             guard case .agentMessageChunk(let chunk) = pending.params.update,
