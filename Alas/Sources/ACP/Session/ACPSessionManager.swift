@@ -1335,6 +1335,7 @@ final class ACPSessionManager: ObservableObject {
     var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var beforePersistenceForTesting: (@MainActor () async -> Void)?
     var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces
@@ -1719,9 +1720,15 @@ final class ACPSessionManager: ObservableObject {
     ) -> Task<Void, Never> {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         let task = Task { @MainActor [weak self] in
             await previous?.value
+#if DEBUG
+            await beforePersistence?()
+#endif
             guard !Task.isCancelled else { return }
             do {
                 try await operation(persistence)
@@ -1738,9 +1745,15 @@ final class ACPSessionManager: ObservableObject {
     ) -> Task<Result?, Never> {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         let resultTask = Task<Result?, Never> { @MainActor [weak self] in
             await previous?.value
+#if DEBUG
+            await beforePersistence?()
+#endif
             guard !Task.isCancelled else { return nil }
             do {
                 return try await operation(persistence)
@@ -3165,6 +3178,14 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: sessionId)
     }
 
+    private func queueSnapshotForPersistence(for session: ACPSession) -> @MainActor @Sendable () async -> [QueuedPrompt] {
+        if let runner = runners[session.id], runner.session === session {
+            return runner.queueSnapshotForPersistence(waitForPendingConfirmations: true)
+        }
+        let items = session.queue
+        return { items }
+    }
+
     /// Persist the in-memory queue to SQLite. The runner has the same
     /// `persistQueue` method, but UI actions on a session that has no
     /// runner yet (setup nudge, launch failure) must still reach the
@@ -3184,9 +3205,10 @@ final class ACPSessionManager: ObservableObject {
             runner.persistQueue()
             return
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: sessionId)
         enqueuePersistence { persistence in
+            let items = await queueSnapshot()
             _ = try await persistence.upsertQueue(
                 sessionId: sessionId,
                 items: items,
@@ -7964,10 +7986,11 @@ extension ACPSessionManager {
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: sessionId)
         guard onPersisted != nil else {
             enqueuePersistence { persistence in
+                let items = await queueSnapshot()
                 _ = try await persistence.upsertQueue(
                     sessionId: sessionId,
                     items: items,
@@ -7977,7 +8000,8 @@ extension ACPSessionManager {
             return
         }
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
@@ -7986,9 +8010,10 @@ extension ACPSessionManager {
             session.pendingQueuePersistenceCount -= 1
             if !persisted, let scheduledId {
                 if session.removeFromQueue(id: scheduledId) {
-                    let items = session.queue
+                    let queueSnapshot = queueSnapshotForPersistence(for: session)
                     let fence = leaseFence(sessionId: sessionId)
                     let rollback = enqueuePersistence { persistence in
+                        let items = await queueSnapshot()
                         _ = try await persistence.upsertQueue(
                             sessionId: sessionId,
                             items: items,
@@ -8077,11 +8102,12 @@ extension ACPSessionManager {
             session.enqueue(id: itemID, blocks: blocks, delegatedSource: source, ahead: ahead)
         }
         let fence = deliveryFence ?? leaseFence(sessionId: sessionId)
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
@@ -8255,12 +8281,13 @@ extension ACPSessionManager {
            !session.removeFromQueue(id: item.id) {
             return false
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: id)
         beginManagerQueuePersistence(sessionId: id)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
@@ -8413,11 +8440,12 @@ extension ACPSessionManager {
             delegatedSource: source
         )
         let fence = leaseFence(sessionId: sessionId)
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1

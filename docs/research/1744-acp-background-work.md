@@ -269,6 +269,16 @@ Local validation passed:
   from the persistence callback. Queue writers now reconcile only confirming
   attempts after their earlier transaction settles, preserving failed-save
   recovery and unrelated or newer queued attempts.
+- Manager/runner persistence ordering passed **417 tests in seven suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`,
+  `ACPSessionPersistenceTests`, `ACPSessionTests`, `ACPSessionManagerTests`,
+  `ACPSessionEnqueueWhileRecoveringTests`, and `ACPSessionManagerSubmitTests`.
+  A gated regression reproduced delegated and recovery queue saves restoring
+  consumed wakes or overwriting failed-save recovery. It covers snapshots
+  captured before or during confirmation, successful/failed transactions,
+  and manager writes released before the confirmation callback completes.
+  All manager queue writers now preserve the settled background attempt
+  without changing captured ordinary prompts.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

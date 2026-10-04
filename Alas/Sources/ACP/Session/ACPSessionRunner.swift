@@ -2747,18 +2747,29 @@ extension ACPSessionRunner {
         )
     }
 
-    private func queueSnapshotForPersistence(consuming consumed: QueuedPrompt? = nil) -> @MainActor @Sendable () -> [QueuedPrompt] {
+    func queueSnapshotForPersistence(
+        consuming consumed: QueuedPrompt? = nil, waitForPendingConfirmations: Bool = false
+    ) -> @MainActor @Sendable () async -> [QueuedPrompt] {
         let items = session.queue.filter { item in
             guard let consumed else { return true }
             return item.id != consumed.id || item.brokerOperationAttempt != consumed.brokerOperationAttempt
         }
         let confirmations = backgroundWakeConfirmations
+        let confirmationTail = confirmations.isEmpty ? nil : persistenceTail
         return {
-            // Earlier confirmation settles before this snapshot is written.
+            // Manager writes have a separate persistence pipeline. Wait for
+            // the confirmation callback before either writer reads its result.
+            await confirmationTail?.value
+            if waitForPendingConfirmations {
+                let pendingTail = self.backgroundWakeConfirmations.isEmpty ? nil : self.persistenceTail
+                await pendingTail?.value
+            }
             // Preserve its removal or failed-save recovery, without changing
             // unrelated items or a newer retry captured under the same ID.
-            items.compactMap { item in
-                guard confirmations[item.id] == item.brokerOperationAttempt else { return item }
+            // A manager snapshot can precede the confirmation itself.
+            return items.compactMap { item in
+                guard confirmations[item.id] == item.brokerOperationAttempt
+                    || (waitForPendingConfirmations && item.backgroundTaskWake != nil) else { return item }
                 return self.session.queue.first { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
             }
         }
