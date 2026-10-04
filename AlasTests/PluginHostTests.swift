@@ -1160,15 +1160,19 @@ struct PluginHostTests {
 
     /// Holds every process until the test makes it print and exit.
     final class FakeLauncher: PluginProcessLauncher, @unchecked Sendable {
-        final class Handle: PluginProcessHandle, @unchecked Sendable {
+        final class Handle: PluginRemoteProcessHandle, @unchecked Sendable {
             let argv: [String]
             let directory: URL
             let events: AsyncStream<PluginProcessEvent>
             private let continuation: AsyncStream<PluginProcessEvent>.Continuation
             private let lock = NSLock()
             private var sent: [Int32] = []
+            /// For a remote process: what the helper was asked to start, or the refusal it answers.
+            private var spawn: (argv: [String], cwd: String, longRunning: Bool)?
+            var refusal: String?
 
             var signals: [Int32] { lock.withLock { sent } }
+            var spawned: (argv: [String], cwd: String, longRunning: Bool)? { lock.withLock { spawn } }
 
             init(argv: [String], directory: URL) {
                 self.argv = argv
@@ -1179,6 +1183,11 @@ struct PluginHostTests {
             func terminate() { lock.withLock { sent.append(SIGTERM) } }
             func kill() { lock.withLock { sent.append(SIGKILL) } }
 
+            func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws {
+                if let refusal { throw PluginProcessError.refused(refusal) }
+                lock.withLock { spawn = (argv, cwd, longRunning) }
+            }
+
             func emit(_ events: PluginProcessEvent...) {
                 for event in events { continuation.yield(event) }
                 if case .exit? = events.last { continuation.finish() }
@@ -1187,8 +1196,20 @@ struct PluginHostTests {
 
         private let lock = NSLock()
         private var launched: [Handle] = []
+        private var launchedRemote: [Handle] = []
+        var remoteRefusal: String?
 
         var handles: [Handle] { lock.withLock { launched } }
+        var remoteHandles: [Handle] { lock.withLock { launchedRemote } }
+
+        func launchRemote(
+            host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int
+        ) -> any PluginRemoteProcessHandle {
+            let handle = Handle(argv: [], directory: URL(fileURLWithPath: "/"))
+            handle.refusal = remoteRefusal
+            lock.withLock { launchedRemote.append(handle) }
+            return handle
+        }
 
         func launch(
             _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
@@ -1225,9 +1246,6 @@ struct PluginHostTests {
         ProcessCase(request: processCall(1, "process/start", "install"), reply: "use process/run"),
         ProcessCase(request: processCall(1, worktree: "other"), reply: "unknown worktree other"),
         ProcessCase(request: processCall(1, worktree: "far"), reply: "worktree far is on remote host devbox"),
-        ProcessCase(
-            request: processCall(1, "process/start", "dev", worktree: "far"), manifest: remoteProcessManifest,
-            reply: "process/start can't run on remote hosts yet"),
         ProcessCase(request: processCall(1, "process/start", "dev"), reply: #""run":"p1""#, argv: ["pnpm", "dev"]),
     ])
     func processesRunOnlyWhatTheManifestDeclares(_ c: ProcessCase) async throws {
@@ -1475,6 +1493,75 @@ struct PluginHostTests {
         #expect(host.processRuns.map(\.exit) == [143, nil])
         await host.deactivate()
         #expect(launcher.handles[1].signals == [SIGTERM])
+    }
+
+    /// On a remote host, the run is answered once the helper started it, as the manifest declares it, and shows its
+    /// output in the Run tab.
+    @Test func aRemoteStartReachesTheHelperAndShowsInTheRunTab() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition { host.trace.contains { $0.text.contains(#""run":"p1""#) } })
+        let spawned = try #require(launcher.remoteHandles.first?.spawned)
+        #expect(spawned.argv == ["pnpm", "dev"] && spawned.cwd == "/srv/wt" && spawned.longRunning)
+        #expect(host.processRuns.map(\.worktree) == ["far"])
+        launcher.remoteHandles[0].emit(.stdout(Data("ready".utf8)))
+        #expect(await awaitCondition { host.processRuns.first?.output == "ready" })
+    }
+
+    /// Stopping a remote run asks the helper to stop it, and its exit reaches the plugin.
+    @Test func stoppingARemoteRunGoesThroughTheHelper() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition { host.processRuns.count == 1 })
+        host.stopProcess("p1")
+        #expect(launcher.remoteHandles[0].signals == [SIGTERM])
+        launcher.remoteHandles[0].emit(.exit(143))
+        #expect(await awaitCondition {
+            host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""exit":143"#) }
+        })
+    }
+
+    /// A remote run still going when its instance ends is stopped, and only the next instance's own exit reaches it.
+    @Test func anEndingInstanceStopsItsRemoteRunsAndHearsNoneOfThemLater() async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1, "process/start", "dev", worktree: "far"))]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition { launcher.remoteHandles.count == 1 && host.processRuns.count == 1 })
+        await host.deactivate()
+        #expect(launcher.remoteHandles[0].signals == [SIGTERM])
+        await host.activate()
+        #expect(await awaitCondition { launcher.remoteHandles.count == 2 })
+        launcher.remoteHandles[0].emit(.exit(137))
+        launcher.remoteHandles[1].emit(.exit(0))
+        #expect(await awaitCondition {
+            host.trace.contains { $0.text.contains("process/exited") && $0.text.contains(#""exit":0"#) }
+        })
+        #expect(!host.trace.contains { $0.text.contains(#""exit":137"#) })
+    }
+
+    /// A start the host refuses answers why, and leaves neither a Run tab row nor a used process slot: each refusal
+    /// is answered in a delivery that starts one more.
+    @Test func refusedRemoteStartLeavesNothingBehind() async throws {
+        let launcher = FakeLauncher()
+        launcher.remoteRefusal = "plugin commands can't run on macOS SSH hosts"
+        let start = processCall(1, "process/start", "dev", worktree: "far")
+        let host = try makeHost(
+            [[.send(activateOK), .send(start), .send(start)], [.send(start)], [.send(start)]],
+            grants: [.processExec], manifest: Self.remoteProcessManifest, launcher: launcher)
+        await host.activate()
+        #expect(await awaitCondition {
+            host.trace.filter { $0.text.contains("could not start dev: plugin commands can't run on macOS SSH hosts") }.count == 4
+        })
+        #expect(!host.trace.contains { $0.text.contains("at most 2 processes running") })
+        #expect(host.processRuns.isEmpty)
     }
 
     /// One real process: the command is found on `PATH` and gets its stdin.

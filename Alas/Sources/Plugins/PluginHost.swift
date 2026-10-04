@@ -927,8 +927,6 @@ final class PluginHost {
         let route = PluginFiles.route(actions.worktreeLocation(params.worktree), worktree: params.worktree, remote: manifest.remote)
         switch route {
         case .refused(let reason): return errorReply(id, code: -32003, reason)
-        case .remote where longRunning:
-            return errorReply(id, code: -32003, "process/start can't run on remote hosts yet; process/run can")
         case .remote:
             if let refusal = RemotePluginProcess.argvRefusal(entry.command + args, process: entry.id) {
                 return errorReply(id, code: -32003, refusal)
@@ -938,8 +936,11 @@ final class PluginHost {
         guard processes.count < Self.maxProcessesRunning else {
             return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")
         }
-        // Checked before launching, so a refused reply never leaves a process behind.
-        guard longRunning || requests.count < Self.maxRequestsInFlight else {
+        // Checked before launching, so a refused reply never leaves a process behind. A remote start waits for the
+        // helper's answer, so it is in flight too.
+        let answersAtOnce: Bool
+        if case .local = route { answersAtOnce = longRunning } else { answersAtOnce = false }
+        guard answersAtOnce || requests.count < Self.maxRequestsInFlight else {
             return errorReply(id, code: -32003, "too many requests in flight")
         }
         let argv = entry.command + args
@@ -963,21 +964,24 @@ final class PluginHost {
             }
         case .remote(let host, let root):
             let lease = "\(processLease).\(instance)"
-            let remote = RemotePluginProcess(
+            let limit = longRunning ? Self.processRunOutputBytes : maxOutput
+            let remote = launcher.launchRemote(
                 host: host, procId: RemotePluginProcess.procId(plugin: manifest.id, project: project.id, lease: lease, run: run),
-                lease: lease, keep: .head, limit: maxOutput)
+                lease: lease, keep: longRunning ? .tail : .head, limit: limit)
             handle = remote
-            // The helper enforces the limit too, and its own kill grace, in case Alas is gone by then.
+            // The helper enforces a run's limit too, and its own kill grace, in case Alas is gone by then. A
+            // long-running process has no limit: its lease, renewed while Alas follows it, stops it once Alas is gone.
             startRemote = {
                 try await remote.start(
-                    argv: argv, cwd: root, stdin: stdin, longRunning: false, limit: maxOutput,
-                    timeout: Self.processTimeout)
+                    argv: argv, cwd: root, stdin: stdin, longRunning: longRunning, limit: limit,
+                    timeout: longRunning ? nil : Self.processTimeout)
             }
         case .refused: return nil
         }
         processes[run] = handle
         let instance = instance
-        if longRunning {
+        let started: @MainActor () -> Data = { [weak self] in
+            guard let self else { return Data() }
             processRuns.append(PluginProcessRun(id: run, process: entry.id, worktree: params.worktree, command: argv))
             if processRuns.count > Self.maxProcessRuns, let oldest = processRuns.firstIndex(where: { $0.exit != nil }) {
                 processRuns.remove(at: oldest)
@@ -986,6 +990,7 @@ final class PluginHost {
             Task { [weak self] in await self?.follow(run, handle, instance: instance) }
             return encode(PluginResponse(id: id, result: PluginProcessStartResult(run: run), error: nil))
         }
+        if answersAtOnce { return started() }
         let sleep = sleep
         return replyLater(id) { [weak self] in
             do {
@@ -994,6 +999,11 @@ final class PluginHost {
                 guard let self else { return Data() }
                 if self.instance == instance { self.processes[run] = nil }
                 return self.errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+            }
+            if longRunning {
+                // An instance that ended meanwhile has already stopped it, and hears nothing about it.
+                guard self?.instance == instance else { return Data() }
+                return started()
             }
             let timeout = Task { () -> Bool in
                 do { try await sleep(Self.processTimeout) } catch { return false }
