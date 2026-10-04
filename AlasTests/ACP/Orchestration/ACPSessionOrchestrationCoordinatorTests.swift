@@ -1298,7 +1298,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
             #expect(denied == .error("Only a direct parent, child, or this session's fork transcript can be read."))
         }
         let send = await fixture.coordinator.send(origin: origin, request: .init(targetSessionId: fork.id, prompt: "Run this"))
-        guard case .error = send else { Issue.record("Fork read access must not grant send access"); return }
+        guard case .error = send else { Issue.record("Fork read access must not grant send access")
+        return }
     }
 
     @Test("session_wait returns once a running child settles, or reports the timeout")

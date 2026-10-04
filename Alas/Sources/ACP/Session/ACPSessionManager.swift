@@ -1,3 +1,4 @@
+import CryptoKit
 import Combine
 import Foundation
 
@@ -1969,6 +1970,27 @@ final class ACPSessionManager: ObservableObject {
         defer { mergingForks.remove(id) }
         session.nextPromptWorkCount += 1
         defer { session.nextPromptWorkCount -= 1 }
+        let hadForkLease = _ownedLeases.contains(id)
+        guard await acquireWriterLease(sessionId: id) else {
+            throw ACPSessionForkMergeError.forkUnavailable
+        }
+        do {
+            guard await confirmedWriterLease(for: id) else {
+                throw ACPSessionForkMergeError.forkUnavailable
+            }
+            let sourceID = try await mergeOwnedForkBack(session: session, fork: fork, archive: archive)
+            if !hadForkLease { await releaseWriterLease(sessionId: id) }
+            return sourceID
+        } catch {
+            if !hadForkLease { await releaseWriterLease(sessionId: id) }
+            throw error
+        }
+    }
+
+    private func mergeOwnedForkBack(
+        session: ACPSession, fork: ACPSessionForkRecord, archive: Bool
+    ) async throws -> ACPSession.ID {
+        let id = session.id
         await awaitBackfill(id: id)
         await flushAllPersistence()
         guard session.transcript.streamingState == .idle, session.queue.isEmpty,
@@ -1997,7 +2019,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let accepted = await enqueueDelegatedPrompt(
             text: prompt,
-            source: .init(sessionId: id, messageId: "fork-merge-\(messageCount)"),
+            source: .init(sessionId: id, messageId: "fork-merge-" + SHA256.hash(data: Data(prompt.utf8)).map { String(format: "%02x", $0) }.joined()),
             into: sourceID,
             requiringWriter: true
         )
@@ -2009,13 +2031,11 @@ final class ACPSessionManager: ObservableObject {
                   session.queue.isEmpty, session.transcript.messages.count == messageCount else {
                 throw ACPSessionForkMergeError.forkBusy
             }
-            let hadForkLease = _ownedLeases.contains(id)
-            guard await acquireWriterLease(sessionId: id), let fence = leaseFence(sessionId: id) else {
+            guard await confirmedWriterLease(for: id), let fence = leaseFence(sessionId: id) else {
                 throw ACPSessionForkMergeError.archiveFailed
             }
             guard sessions[id] === session, session.transcript.streamingState == .idle,
                   session.queue.isEmpty, session.transcript.messages.count == messageCount else {
-                if !hadForkLease { await releaseWriterLease(sessionId: id) }
                 throw ACPSessionForkMergeError.forkBusy
             }
             // Subsequent session writes must carry the archive flag too.
@@ -2032,7 +2052,6 @@ final class ACPSessionManager: ObservableObject {
                 replaceRecentRow(row)
             }
             if archived { recent.removeAll { $0.id == id } }
-            if !hadForkLease { await releaseWriterLease(sessionId: id) }
             guard archived else { throw ACPSessionForkMergeError.archiveFailed }
         }
         return sourceID

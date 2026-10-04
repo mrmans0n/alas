@@ -33,6 +33,8 @@ struct ACPSessionForkManagerTests {
         #expect(try store.loadSession(id: fork.id)?.archived == archive)
         #expect(try store.loadMessages(sessionId: fork.id).count == 2)
         if !archive {
+            fork.transcript.appendMessage(.systemNotice(id: UUID(), text: "Reconnected"))
+            manager.persistTrailingMessages(fork, fromIndex: 2)
             _ = try await manager.mergeForkBack(id: fork.id, archive: false)
             #expect(try store.loadQueue(sessionId: source.id).count == 2)
         }
@@ -40,7 +42,7 @@ struct ACPSessionForkManagerTests {
     }
 
     @Test("rejected merges leave the fork unarchived and the source queue empty",
-          arguments: ["busy", "empty", "archived", "missing", "leased", "write"])
+          arguments: ["busy", "empty", "archived", "missing", "leased", "forkLeased", "write"])
     func rejectedMergeKeepsFork(reason: String) async throws {
         let (manager, store, source, fork) = try await mergeFixture()
         let expected: ACPSessionForkMergeError
@@ -57,6 +59,12 @@ struct ACPSessionForkManagerTests {
         case "missing":
             try store.deleteSession(id: source.id)
             expected = .sourceUnavailable
+        case "forkLeased":
+            // The mirror cache has not observed the other writer yet.
+            #expect(!manager.isMirror(sessionId: fork.id))
+            _ = try store.claimLease(sessionId: fork.id, instanceId: "other", pid: Int64(getpid()),
+                                     now: Int64(Date().timeIntervalSince1970), staleAfter: 15)
+            expected = .forkUnavailable
         case "write":
             try store.db.exec("""
                 CREATE TRIGGER reject_merge_queue BEFORE INSERT ON session_queue
@@ -69,7 +77,7 @@ struct ACPSessionForkManagerTests {
             expected = .sourceReadOnly
         }
         await #expect(throws: expected) {
-            try await manager.mergeForkBack(id: fork.id, archive: true)
+            try await manager.mergeForkBack(id: fork.id, archive: reason != "forkLeased")
         }
         #expect(try store.loadSession(id: fork.id)?.archived == false)
         #expect(try store.loadQueue(sessionId: source.id).isEmpty)
