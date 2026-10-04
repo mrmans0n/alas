@@ -48,7 +48,8 @@ struct ACPSessionRunnerQueueTests {
         onPromptWorkChanged: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
-        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true }
+        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
+        pluginContext: (@MainActor (String) async -> [String])? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -68,6 +69,7 @@ struct ACPSessionRunnerQueueTests {
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
+            pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
@@ -278,6 +280,38 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.map(\.blocks) == [[.text("second")]])
         #expect(session.queue.map(\.status) == [.pending])
         #expect(Self.sentPromptTexts(mock) == ["first"])
+    }
+
+    @Test("native steering prepends fresh plugin context without recording it", arguments: ["injected", "promptRequired"])
+    func nativeSteeringIncludesFreshPluginContext(outcome: String) async throws {
+        var requests = 0
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { sessionID in
+            #expect(sessionID == "s")
+            requests += 1
+            return ["context \(requests)"]
+        })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { request in
+            #expect((request.params as? ACPSteeringParams)?.prompt == [.text("context 1"), .text("redirect")])
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        mock.script(method: "session/prompt") { request in
+            #expect((request.params as? ACPSessionPromptParams)?.prompt == [.text("context 2"), .text("redirect")])
+            return Data("{}".utf8)
+        }
+        defer { runner.stop() }
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: [.text("redirect")], intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(accepted)
+        #expect(requests == (outcome == "injected" ? 1 : 2))
+        #expect(session.transcript.messages.count == 1)
+        guard case .user(_, _, let text, _, _) = session.transcript.messages.first else {
+            Issue.record("Missing user prompt")
+            return
+        }
+        #expect(text == "redirect")
     }
 
     @Test("native steering preserves the running prompt and queued tail", arguments: [true, false])

@@ -91,8 +91,8 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
-    @Test("send attaches its checkpoint before the prompt RPC")
-    func sendAttachesCheckpointBeforePrompt() async throws {
+    @Test("send attaches its checkpoint before dispatch", arguments: [false, true])
+    func sendAttachesCheckpointBeforePrompt(nativeSteering: Bool) async throws {
         let checkpointID = UUID()
         var capturedPrompt: String?
         var capturedHasAttachments: Bool?
@@ -101,16 +101,21 @@ struct ACPSessionRunnerTests {
             capturedHasAttachments = hasAttachments
             return checkpointID
         })
-        mock.script(method: "session/prompt") { _ in
+        if nativeSteering {
+            runner.session.agentState = .ready
+            runner.session.supportsSteering = true
+            runner.session.transcript.streamingState = .streaming
+        }
+        mock.script(method: nativeSteering ? "_session/steering" : "session/prompt") { _ in
             guard case .user(_, _, _, let attachments, _) = runner.session.transcript.messages.last,
                   attachments.map(\.checkpointID) == [checkpointID] else {
                 throw JSONRPCError(code: -32000, message: "checkpoint missing", data: nil)
             }
-            return Data("{}".utf8)
+            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data("{}".utf8)
         }
 
         let succeeded = await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { continuation.resume(returning: $0) }
+            runner.send(text: "hello", attachments: [], intent: nativeSteering ? .steer : .auto) { continuation.resume(returning: $0) }
         }
 
         #expect(succeeded)

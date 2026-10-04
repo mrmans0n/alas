@@ -3209,7 +3209,7 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
-                let wireBlocks = await Self.hydrate(
+                var wireBlocks = await Self.hydrate(
                     blocks, promptCapabilities: self.session.promptCapabilities,
                     worktreePath: self.worktreePath)
                 guard await self.hasConfirmedLeaseForSideEffect(),
@@ -3233,6 +3233,31 @@ extension ACPSessionRunner {
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 }
+                if recordUserPrompt, let messageID = recordedMessageID,
+                   let checkpointID = await self.onCheckpointCapture?(
+                       Self.textPreview(of: blocks), !Self.attachments(of: blocks).isEmpty) {
+                    guard !self.stopped, self.isConnectionCurrent(),
+                          self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    if self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
+                       let index = self.session.transcript.messages.firstIndex(where: {
+                           if case .user(let id, _, _, _, _) = $0 { return id == messageID }
+                           return false
+                       }) {
+                        self.persistIndices([index])
+                    }
+                }
+                // Match normal prompts' per-dispatch context, while keeping
+                // private context out of the recorded user message.
+                let context = await self.pluginContext?(self.sessionId) ?? []
+                wireBlocks.insert(contentsOf: context.map { .text($0) }, at: 0)
+                if self.session.readOnlyRestricted {
+                    wireBlocks.insert(.text(ACPSideQuestion.guidance), at: context.count)
+                }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
                 let outcome = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
