@@ -401,9 +401,14 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map(\.id) == [followUp.id])
     }
 
-    @Test("deliveredRecordedPromptIDs needs agent output after the recorded prompt", arguments: [true, false])
-    func deliveredRecordedPromptIDs(answered: Bool) {
-        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true)
+    @Test("deliveredRecordedPromptIDs needs agent output after a first-attempt recorded prompt",
+          arguments: [(answered: true, attempt: 0, delivered: true),
+                      (answered: false, attempt: 0, delivered: false),
+                      // A retry reuses the row: earlier output proves only attempt 0.
+                      (answered: true, attempt: 1, delivered: false)])
+    func deliveredRecordedPromptIDs(answered: Bool, attempt: Int, delivered: Bool) {
+        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true,
+                                brokerOperationAttempt: attempt)
         var transcript: [ACPMessageWire] = [
             .user(messageId: nil, text: "earlier", attachments: [], delegatedSource: nil),
             .agent(messageId: nil, text: "ok", phase: nil, metadata: nil),
@@ -415,7 +420,7 @@ struct ACPSessionQueueAPITests {
 
         let ids = QueuedPrompt.deliveredRecordedPromptIDs(in: [item], transcript: transcript)
 
-        #expect(ids == (answered ? [item.id] : []))
+        #expect(ids == (delivered ? [item.id] : []))
     }
 
     @Test("enqueue(blocks:draft:) stores the structured draft on the item")

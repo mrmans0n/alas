@@ -158,7 +158,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Recorded items the transcript proves the agent received: the latest
     /// user prompt is theirs and agent output follows it. Only the latest
     /// prompt can be a recorded queue item — nothing else is sent while its
-    /// turn runs — so earlier prompts are not considered.
+    /// turn runs — so earlier prompts are not considered. A retry reuses the
+    /// recorded row, so output after it proves only the first attempt; items
+    /// past their first attempt are never counted.
     static func deliveredRecordedPromptIDs(
         in queue: [QueuedPrompt],
         transcript: [ACPMessageWire]
@@ -173,6 +175,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
             guard answered else { return [] }
             return Set(queue.lazy.filter {
                 $0.transcriptRecorded
+                    && $0.brokerOperationAttempt == 0
                     && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
             }.map(\.id))
         }
