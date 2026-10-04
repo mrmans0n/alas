@@ -12785,24 +12785,23 @@ final class AppState {
     /// A session this instance knows, live or stored, made live with its
     /// whole transcript loaded. Nil when unknown or archived. Looked up in
     /// each worktree's store, not the recent-row snapshot: an attachment can
-    /// outlive the session's place among the recent rows. A session made
-    /// live here is retained until the caller calls the location's
-    /// `release`, which evicts it again once idle and unreferenced.
+    /// outlive the session's place among the recent rows. Every lookup
+    /// retains the session until the caller calls the location's `release`,
+    /// so concurrent readers share it and the last one out lets an idle,
+    /// otherwise unreferenced session be evicted again.
     func acpReferencedSessionLocation(_ sessionId: String) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (owner, manager) in acpManagers {
             guard let worktreeId = owner.worktreeID,
                   let worktree = worktree(withId: worktreeId),
-                  let row = await manager.persistedSessionRow(id: sessionId), !row.archived
+                  let row = await manager.persistedSessionRow(id: sessionId), !row.archived,
+                  manager.placeholderSession(id: sessionId) != nil
             else { continue }
-            var release: (() -> Void)?
-            if manager.liveSession(for: sessionId) == nil, manager.placeholderSession(id: sessionId) != nil {
-                manager.retainSession(id: sessionId)
-                release = { [weak manager] in manager?.releaseSession(id: sessionId) }
-            }
+            manager.retainSession(id: sessionId)
+            let release: () -> Void = { [weak manager] in manager?.releaseSession(id: sessionId) }
             await manager.hydrateIfNeeded(id: sessionId)
             await manager.awaitBackfill(id: sessionId)
             guard manager.liveSession(for: sessionId) != nil else {
-                release?()
+                release()
                 return nil
             }
             return .init(

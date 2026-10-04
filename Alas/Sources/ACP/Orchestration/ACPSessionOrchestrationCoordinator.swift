@@ -9,8 +9,8 @@ final class ACPSessionOrchestrationCoordinator {
     struct SessionLocation {
         let origin: ACPOrchestrationSessionOrigin
         let manager: ACPSessionManager
-        /// Lets go of a session the lookup made live just to read it; call
-        /// once done reading. Nil when the session was already live.
+        /// Lets go of the session a lookup retained to read it; call once
+        /// done reading. Nil when the lookup retained nothing.
         var release: (() -> Void)? = nil
     }
 
