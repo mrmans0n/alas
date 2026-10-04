@@ -44,11 +44,16 @@ struct ACPSessionForkManagerTests {
     @Test("merge reserves the fork against local prompts while source delivery is suspended",
           arguments: [false, true])
     func mergeBlocksLocalTurns(archive: Bool) async throws {
-        let (manager, store, source, fork) = try await mergeFixture()
+        let (manager, store, source, fork) = try await mergeFixture(attachFork: true)
+        fork.contextRestoreWarning = .init(message: "Restore context", canSendTranscript: true)
+        #expect(manager.runners[fork.id] != nil)
+        #expect(fork.agentState == .ready)
         // The merge enters its reservation synchronously; its lease acquisition
         // then yields to this task before source delivery can complete.
         let admission = Task { @MainActor in
             #expect(fork.nextPromptWorkCount > 0)
+            #expect(manager.sendTranscriptAsContext(sessionId: fork.id, agentName: "Codex") == false)
+            #expect(fork.contextRecoveryStatus != .sendingTranscript)
             let accepted = manager.submit(sessionId: fork.id, text: "New turn", attachments: [], intent: .auto,
                                           onCompleted: { _ in })
             #expect(!accepted)
@@ -74,11 +79,12 @@ struct ACPSessionForkManagerTests {
         let (manager, store, source, fork) = try await mergeFixture()
         let takeover = Task { @MainActor in
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-            while !manager._ownedLeases.contains(source.id), ContinuousClock.now < deadline {
+            while manager._heartbeatTasks[source.id] == nil, ContinuousClock.now < deadline {
                 await Task.yield()
             }
             #expect(manager._ownedLeases.contains(source.id))
             #expect(manager._heartbeatTasks[fork.id] != nil)
+            #expect(manager._heartbeatTasks[source.id] != nil)
             // Advance the contender's clock past expiry, without a real sleep,
             // to exercise takeover even if a renewal task is stalled.
             let claimed = try store.claimLease(sessionId: fork.id, instanceId: "other", pid: Int64(getpid()),
@@ -92,6 +98,7 @@ struct ACPSessionForkManagerTests {
         #expect(try store.loadQueue(sessionId: source.id).isEmpty)
         #expect(try store.loadSession(id: fork.id)?.archived == false)
         #expect(manager._heartbeatTasks[fork.id] == nil)
+        #expect(manager._heartbeatTasks[source.id] == nil)
         await manager.releaseAllOwnedLeases()
     }
 
@@ -139,9 +146,21 @@ struct ACPSessionForkManagerTests {
         await manager.releaseAllOwnedLeases()
     }
 
-    private func mergeFixture() async throws -> (ACPSessionManager, ACPSessionStore, ACPSession, ACPSession) {
+    private func mergeFixture(attachFork: Bool = false) async throws -> (ACPSessionManager, ACPSessionStore, ACPSession, ACPSession) {
         let store = try ACPSessionStore(path: temporaryPath())
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1, agentCapabilities: nil, authMethods: []))
+        }
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(sessionId: "remote-fork", availableModels: [],
+                                                        availableModes: [], currentModel: nil, currentMode: nil,
+                                                        promptSuggestions: []))
+        }
+        client.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+                                        setupEvaluator: { _ in .ready },
+                                        connectionFactory: { _, _, _ in ACPConnection(client: client) })
         let source = manager.createSession(agentId: "claude")
         source.transcript.appendMessage(.agent(id: UUID(), StreamingText("Inherited answer")))
         manager.persistTrailingMessages(source, fromIndex: 0)
@@ -154,6 +173,7 @@ struct ACPSessionForkManagerTests {
         fork.transcript.appendMessage(.agent(id: UUID(), StreamingText("New finding")))
         manager.persistTrailingMessages(fork, fromIndex: 1)
         await manager.flushAllPersistence()
+        if attachFork { await manager.attach(to: fork.id, freshlyCreated: true) }
         return (manager, store, source, fork)
     }
 

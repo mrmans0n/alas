@@ -2015,7 +2015,12 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionForkMergeError.sourceReadOnly
         }
         let hadLease = _ownedLeases.contains(sourceID)
-        guard await acquireWriterLease(sessionId: sourceID), await confirmedWriterLease(for: sourceID) else {
+        guard await acquireWriterLease(sessionId: sourceID) else {
+            throw ACPSessionForkMergeError.sourceReadOnly
+        }
+        startHeartbeat(sessionId: sourceID)
+        guard await confirmedWriterLease(for: sourceID) else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
             throw ACPSessionForkMergeError.sourceReadOnly
         }
         guard await confirmedWriterLease(for: id) else {
@@ -7958,7 +7963,7 @@ extension ACPSessionManager {
 
     @discardableResult
     func sendTranscriptAsContext(sessionId: ACPSession.ID, agentName: String?) -> Bool {
-        guard let session = sessions[sessionId],
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId],
               session.contextRestoreWarning?.canSendTranscript == true,
               session.agentState == .ready,
@@ -8018,7 +8023,7 @@ extension ACPSessionManager {
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
-        guard let session = sessions[sessionId] else {
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else {
             Task { @MainActor in onPersisted?(false) }
             return
         }
