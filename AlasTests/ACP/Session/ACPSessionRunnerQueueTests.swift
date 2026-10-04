@@ -608,6 +608,42 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
     }
 
+    @Test("steering chunks stay after the follow-up while its row save is paused", arguments: [false, true])
+    func steeringBoundaryPrecedesPausedRowSave(thought: Bool) async throws {
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop()
+        Task { await release.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.allowsStreamingBoundaryCrossing = true
+        let text = StreamingText("before")
+        session.transcript.appendMessage(thought
+            ? .thought(id: UUID(), messageId: "shared", text)
+            : .agent(id: UUID(), messageId: "shared", text))
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if !paused, session.transcript.messages.contains(where: { $0.kind == "user" }) {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        await saving.wait()
+        let chunk = ACPTextChunk(messageId: "shared", content: .text("after"))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: thought ? .agentThoughtChunk(chunk) : .agentMessageChunk(chunk)))
+        await release.open()
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(text.value == "before")
+        #expect(session.transcript.messages.map(\.kind) == [thought ? "thought" : "agent", "user", thought ? "thought" : "agent"])
+        #expect(try store.loadMessages(sessionId: "s").map(\.kind) == [thought ? "thought" : "agent", "user", thought ? "thought" : "agent"])
+    }
+
     @Test("forced steering keeps the saved prompt when recovery persistence fails")
     func forcedSteeringKeepsSavedPromptUntilRecoveryCommit() async throws {
         let (runner, mock, session, store) = try mkRunner()

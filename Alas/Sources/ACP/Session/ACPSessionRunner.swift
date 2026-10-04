@@ -288,6 +288,7 @@ final class ACPSessionRunner {
     private var nativeSteeringGeneration = 0
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
+    private var steeringRowPersistencePending = false
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -1137,7 +1138,7 @@ final class ACPSessionRunner {
             pendingIncomingUpdates.removeAll()
             return
         }
-        guard !pendingIncomingUpdates.isEmpty else { return }
+        guard !steeringRowPersistencePending, !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
         for update in updates {
@@ -1156,6 +1157,11 @@ final class ACPSessionRunner {
         flushQueueWhenBoundaryReady: Bool = true,
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
+        if steeringRowPersistencePending {
+            pendingIncomingUpdates.append(.init(params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease))
+            return
+        }
+
         guard isConnectionCurrent() else { return }
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
@@ -3333,6 +3339,7 @@ extension ACPSessionRunner {
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
                 if recordUserPrompt {
+                    self.flushStreamingPersist()
                     let before = self.session.transcript.messages.count
                     let titleBefore = self.session.title
                     let titleSourceBefore = self.session.titleSource
@@ -3347,12 +3354,23 @@ extension ACPSessionRunner {
                         delegatedSource: delegatedSource)
                     recordedMessageID = userMessageID
                     let recordedTitle = self.session.title
-                    guard await self.persistSteeringUserRow(from: before, userMessageID: userMessageID, queueItemID: durableQueueItem.item.id) else {
+                    let userIndex = self.session.transcript.messages.count - 1
+                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    let boundaryDirty = self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex) { text in
+                        boundaryMetadata.append((text, text.metadata))
+                    }
+                    // Defer incoming mutations until commit/rollback so they
+                    // cannot persist a provisional row or boundary separately.
+                    self.steeringRowPersistencePending = true
+                    guard await self.persistSteeringUserRow(from: before, userMessageID: userMessageID,
+                                                           boundaryDirty: boundaryDirty, queueItemID: durableQueueItem.item.id) else {
                         if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation,
                            let index = self.session.transcript.messages.firstIndex(where: {
                                if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
                                return false
                            }) {
+                            boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
                             self.session.transcript.messages.remove(at: index)
                             self.session.transcript.lastContentTouchIndex = nil
                             self.session.transcript.completedOutputBoundaryMessageIds = completedBoundaryBefore
@@ -3361,20 +3379,17 @@ extension ACPSessionRunner {
                                 self.session.titleSource = titleSourceBefore
                             }
                         }
+                        self.steeringRowPersistencePending = false
+                        self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
                         recordedMessageID = nil
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
                     }
                     recordedMessagePersisted = true
                     recoveryPersisted = true
+                    self.steeringRowPersistencePending = false
+                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
-                    self.session.allowsStreamingBoundaryCrossing = true
-                    if let userIndex = self.session.transcript.messages.firstIndex(where: {
-                        if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
-                        return false
-                    }) {
-                        self.persistIndices(self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex))
-                    }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 } else {
                     self.session.allowsStreamingBoundaryCrossing = true
@@ -3533,8 +3548,7 @@ extension ACPSessionRunner {
         }
     }
 
-    private func persistSteeringUserRow(from index: Int, userMessageID: UUID, queueItemID: UUID) async -> Bool {
-        flushStreamingPersist()
+    private func persistSteeringUserRow(from index: Int, userMessageID: UUID, boundaryDirty: Set<Int>, queueItemID: UUID) async -> Bool {
         guard holdsLeaseForWrite(),
               let userIndex = session.transcript.messages.firstIndex(where: {
                   if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
@@ -3546,7 +3560,7 @@ extension ACPSessionRunner {
         // Persist them and the identified user row in the same transaction.
         let rows: [ACPStoredMessage]
         do {
-            rows = try (index...userIndex).map { index in
+            rows = try boundaryDirty.union(index...userIndex).sorted().map { index in
                 let message = session.transcript.messages[index]
                 return ACPStoredMessage(id: messageRowID(index), sessionId: self.sessionId, kind: message.kind,
                                         seq: Int64(index), payload: try ACPMessageCodec.encode(message),
