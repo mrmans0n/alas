@@ -126,7 +126,7 @@ struct AlasCLICommandRouter {
                 return await service.agentList(origin: acpOrigin, worktree: worktree)
             case .sessionList:
                 return await service.sessionList(origin: acpOrigin)
-            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning):
+            case .sessionNew(let prompt, let agentID, let worktree, let model, let reasoning, let role):
                 let target: ACPDelegatedSessionWorktreeTarget
                 switch worktree {
                 case .current:
@@ -142,7 +142,8 @@ struct AlasCLICommandRouter {
                         prompt: prompt,
                         agentId: agentID,
                         worktree: target,
-                        modelSelection: ACPDelegatedModelSelection(model: model, reasoning: reasoning)
+                        modelSelection: ACPDelegatedModelSelection(model: model, reasoning: reasoning),
+                        role: role
                     )
                 )
             case .sessionSend(let sessionID, let prompt):

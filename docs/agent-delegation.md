@@ -316,10 +316,26 @@ themselves and running `omp` from the shell.
 Delegated children are leaves in every case. Their MCP discovery does not list
 `session_new`, and Alas still rejects a direct `session_new` call from a child.
 
+## Child roles
+
+`session_new` accepts an optional `role`, such as `planner`, `implementer`, or
+`reviewer`. The CLI equivalent is `alas session new --role reviewer --prompt
+"Review the parser changes"`. Alas stores the role with the delegation, shows
+it on the child row and in `session_list`, and includes it in the child's
+initial task context, including when startup resumes after an app restart.
+Roles describe the task; they do not change the child's permissions or tools.
+
 ## Messages between parent and child
 
 `session_send` (or `alas session send`) reaches only a direct parent or a
 direct child. Alas queues the message as a prompt in the target session.
+
+Child reports and wake notices received within 250 ms share one parent prompt.
+Reports arriving while the parent is busy join its pending child-results
+prompt. Each result keeps its labelled child section and delivery identity,
+so reopening a session does not deliver the same result again. Informational
+notices remain transcript notices and do not wake the parent. A result that
+has already started sending, failed, or needs recovery is kept intact.
 
 A child's message to its parent starts with one header line, so the parent
 agent can tell a report from its user's prompt:

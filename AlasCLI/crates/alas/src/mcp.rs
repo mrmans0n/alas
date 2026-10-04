@@ -258,6 +258,7 @@ fn all_tool_definitions() -> Vec<Value> {
                     "prompt": { "type": "string", "description": "Initial text-only task for the child session." },
                     "agent": { "type": "string", "description": "Optional agent id from agent_list with available=true. Defaults to this session's agent." },
                     "model": { "type": "string", "description": "Optional model id for the child, taken from that agent's agent_list model_catalog. Alas sets it and waits for the agent to acknowledge it before sending the prompt. An id the agent does not offer fails the child instead of falling back to its default model. Omit to keep the agent's default." },
+                    "role": { "type": "string", "description": "Optional child role, such as planner, implementer, or reviewer. Shown in Alas and included in the child context." },
                     "reasoning": { "type": "string", "description": "Optional reasoning level (for example low, medium, high) for agents that expose a reasoning config option. Applied before the prompt. Agents without one reject it instead of ignoring it." },
                     "worktree": { "type": "string", "description": "Existing project worktree name or branch. Mutually exclusive with new_worktree." },
                     "new_worktree": {
@@ -774,6 +775,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             let agent = optional_non_blank_string(args, "agent")?;
             let model = optional_non_blank_string(args, "model")?;
             let reasoning = optional_non_blank_string(args, "reasoning")?;
+            let role = optional_non_blank_string(args, "role")?;
             let new_worktree = match args.get("new_worktree") {
                 None => None,
                 Some(Value::Object(new_worktree)) => {
@@ -802,6 +804,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 worktree,
                 model,
                 reasoning,
+                role,
             })
         }
         "session_send" => Ok(Command::SessionSend {
@@ -2558,6 +2561,18 @@ mod tests {
     }
 
     #[test]
+    fn child_role_reaches_the_session_request() {
+        let command = command_for_tool(
+            "session_new",
+            &json!({"prompt": "Review", "role": "reviewer"}),
+            "/wt",
+        )
+        .unwrap();
+        let request = alas_client::build_session_request(&command, "parent".into(), "/wt".into());
+        assert_eq!(request.params.unwrap()["role"], "reviewer");
+    }
+
+    #[test]
     fn delegated_child_discovery_omits_session_new_but_calls_still_reach_alas() {
         let tool_names = |parent: Option<&str>| -> Vec<String> {
             let list = handle_line_with_parent(
@@ -2962,12 +2977,15 @@ mod tests {
                 },
                 model: Some("gpt-5.2".into()),
                 reasoning: Some("high".into()),
+                role: None,
             }
         );
         for invalid in [
             json!({ "prompt": "Task", "model": " " }),
             json!({ "prompt": "Task", "model": 5 }),
             json!({ "prompt": "Task", "reasoning": ["high"] }),
+            json!({ "prompt": "Task", "role": " " }),
+            json!({ "prompt": "Task", "role": 5 }),
         ] {
             assert!(command_for_tool("session_new", &invalid, "/wt").is_err());
         }
