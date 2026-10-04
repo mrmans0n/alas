@@ -282,6 +282,29 @@ struct ACPSessionRunnerTests {
         #expect(completions.isEmpty)
     }
 
+    /// A stopped recovery prompt whose result never comes is still recorded, without tokens, once the wait is over.
+    @Test func aStoppedRecoveryPromptIsRecordedWithoutItsResult() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in })
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await never.wait()
+            return Data("{}".utf8)
+        }
+        #expect(runner.sendRecoveryContext("Here is the transcript."))
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        #expect(await awaitCondition { !usage.isEmpty })
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.recovery == true && usage.first?.quota == nil)
+        #expect(completions.isEmpty)
+        await never.open()
+    }
+
     /// Stopping a turn reports its completion at once, but its usage waits for the prompt's result, which carries its
     /// tokens; if none comes within the bound it is recorded without them. Either way, once, with the model it was
     /// sent with.

@@ -141,7 +141,7 @@ final class ACPSessionRunner {
     /// The client's `yieldedUpdateCount` when the active prompt started: updates past it belong to the turn.
     private var activePromptStreamStart = 0
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
-    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?)] = [:]
+    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
@@ -1874,7 +1874,11 @@ final class ACPSessionRunner {
         } else {
             session.turnFailure = nil
         }
-        guard let startedAt = activePromptStartedAt else { return }
+        guard let startedAt = activePromptStartedAt else {
+            // A recovery prompt is no turn, but a stopped one's usage still waits for its result only so long.
+            if usageAwaitsResult { reportUsageWithoutResult(promptID) }
+            return
+        }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever
         // this turn's final `agentMessageChunk` is still sitting in the
@@ -1917,7 +1921,12 @@ final class ACPSessionRunner {
             onTurnUsage?(completion)
             return
         }
-        // Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or here without tokens.
+        reportUsageWithoutResult(promptID)
+    }
+
+    /// Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or after
+    /// `cancelledUsageWait` without tokens.
+    private func reportUsageWithoutResult(_ promptID: Int) {
         let sleep = usageWaitSleep
         Task { @MainActor [weak self] in
             await sleep(Self.cancelledUsageWait)
@@ -1929,7 +1938,7 @@ final class ACPSessionRunner {
     /// with its own tokens and the cost sent before the next prompt started. A steered one is not a turn completion:
     /// `onTurnCompleted` never hears of it.
     private func reportSupersededTurnUsage(
-        _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result = .cancelled, recovery: Bool = false
+        _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result = .cancelled
     ) {
         guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return }
         onTurnUsage?(ACPTurnCompletion(
@@ -1937,7 +1946,7 @@ final class ACPSessionRunner {
             quota: quota,
             // Capped where a successor was sent: one still preparing has not started its usage yet.
             cost: turnCost(streamStart: prompt.streamStart, end: activePromptID.flatMap { unreportedPrompts[$0]?.streamStart }),
-            sentAt: prompt.sentAt, model: prompt.model, recovery: recovery))
+            sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
     }
 
     /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
@@ -4018,7 +4027,7 @@ extension ACPSessionRunner {
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
-                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel)
+                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
                     if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
@@ -4260,7 +4269,8 @@ extension ACPSessionRunner {
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
                 let sentAt = Int64(Date().timeIntervalSince1970 * 1000)
-                self.unreportedPrompts[promptID] = (sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel)
+                self.unreportedPrompts[promptID] = (
+                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
                 return true
             }
             guard proceeded else {
@@ -4296,7 +4306,7 @@ extension ACPSessionRunner {
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
                     self.reportSupersededTurnUsage(
-                        promptID, quota: promptOutcome.quota, result: wasCancelled ? .cancelled : .completed, recovery: true)
+                        promptID, quota: promptOutcome.quota, result: wasCancelled ? .cancelled : .completed)
                     onCompleted?(isActivePrompt && !wasCancelled)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
@@ -4314,7 +4324,7 @@ extension ACPSessionRunner {
                         self.onPromptWorkChanged?()
                     }
                     self.reportSupersededTurnUsage(
-                        promptID, quota: nil, result: .failed(error.localizedDescription), recovery: true)
+                        promptID, quota: nil, result: .failed(error.localizedDescription))
                     // See the success path above: the recovery status must
                     // resolve regardless of supersession or the spinner strands.
                     onCompleted?(false)
