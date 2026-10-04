@@ -353,6 +353,44 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("a")], [.text("b")]])
     }
 
+    @Test("an uncertain recorded prompt the transcript shows answered is dropped", arguments: [false, true])
+    func uncertainDeliveredPromptDropped(viaBrokerGenerationChange: Bool) {
+        let s = mkSession()
+        let delivered = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: viaBrokerGenerationChange ? ACPBrokerGeneration(rawValue: 7) : nil)
+        let unsent = QueuedPrompt(
+            blocks: [.text("second")], status: .sending,
+            dispatchedBrokerGeneration: viaBrokerGenerationChange ? ACPBrokerGeneration(rawValue: 7) : nil)
+        s.deliveredQueuedPromptIDs = [delivered.id]
+
+        let dropped = viaBrokerGenerationChange
+            ? (s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+                || s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8)))
+            : s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+
+        #expect(dropped)
+        #expect(s.queue.map(\.id) == [unsent.id])
+        #expect(s.queue[0].deliveryUncertain)
+    }
+
+    @Test("deliveredRecordedPromptIDs needs agent output after the recorded prompt", arguments: [true, false])
+    func deliveredRecordedPromptIDs(answered: Bool) {
+        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true)
+        var transcript: [ACPMessageWire] = [
+            .user(messageId: nil, text: "earlier", attachments: [], delegatedSource: nil),
+            .agent(messageId: nil, text: "ok", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "ship it", attachments: [], delegatedSource: nil),
+        ]
+        if answered {
+            transcript.append(.agent(messageId: nil, text: "shipping", phase: nil, metadata: nil))
+        }
+
+        let ids = QueuedPrompt.deliveredRecordedPromptIDs(in: [item], transcript: transcript)
+
+        #expect(ids == (answered ? [item.id] : []))
+    }
+
     @Test("enqueue(blocks:draft:) stores the structured draft on the item")
     func enqueueWithDraft() {
         let s = mkSession()

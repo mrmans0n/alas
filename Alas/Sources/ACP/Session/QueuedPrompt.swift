@@ -155,6 +155,30 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         draft ?? ACPComposerDraft(blocks: blocks)
     }
 
+    /// Recorded items the transcript proves the agent received: the latest
+    /// user prompt is theirs and agent output follows it. Only the latest
+    /// prompt can be a recorded queue item — nothing else is sent while its
+    /// turn runs — so earlier prompts are not considered.
+    static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        transcript: [ACPMessageWire]
+    ) -> Set<UUID> {
+        var answered = false
+        for message in transcript.reversed() {
+            if message.isAgentSideProgress {
+                answered = true
+                continue
+            }
+            guard case .user(_, let text, let attachments, _) = message else { continue }
+            guard answered else { return [] }
+            return Set(queue.lazy.filter {
+                $0.transcriptRecorded
+                    && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
+            }.map(\.id))
+        }
+        return []
+    }
+
     var brokerOperationKey: String {
         "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):session/prompt"
     }

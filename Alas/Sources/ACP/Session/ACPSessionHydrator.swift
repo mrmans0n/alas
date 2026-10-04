@@ -100,6 +100,8 @@ actor ACPSessionHydrator {
             draftAwaitsAgentReply = sawRecordedSubmittedDraft
         }
         let recent = (try? store.recentSessions()) ?? []
+        let deliveredQueuedPromptIDs = QueuedPrompt.deliveredRecordedPromptIDs(
+            in: queue, transcript: messages.map(\.wire))
 
         // Child transcripts, in child-local order. A session that never
         // spawned a subagent reads an empty table and pays one query.
@@ -121,6 +123,7 @@ actor ACPSessionHydrator {
             queue: queue,
             draft: draft,
             draftAwaitsAgentReply: draftAwaitsAgentReply,
+            deliveredQueuedPromptIDs: deliveredQueuedPromptIDs,
             forkRecord: forkRecord,
             recent: recent,
             subagentMessages: subagentMessages)
@@ -139,6 +142,8 @@ struct HydrationResult: Sendable {
     /// no agent output after it yet. Kept for recovery, since the agent may
     /// never have received it; the manager drops it once the agent replies.
     let draftAwaitsAgentReply: Bool
+    /// Recorded queued prompts the full transcript shows the agent answered.
+    let deliveredQueuedPromptIDs: Set<UUID>
     let forkRecord: ACPSessionForkRecord?
     let recent: [ACPSessionRow]
     /// Child transcripts of the session's native subagents, flattened and
@@ -151,6 +156,7 @@ struct HydrationResult: Sendable {
         queue: [QueuedPrompt],
         draft: ACPComposerDraft?,
         draftAwaitsAgentReply: Bool = false,
+        deliveredQueuedPromptIDs: Set<UUID> = [],
         forkRecord: ACPSessionForkRecord?,
         recent: [ACPSessionRow],
         subagentMessages: [ACPHydratedSubagentMessage] = []
@@ -160,6 +166,7 @@ struct HydrationResult: Sendable {
         self.queue = queue
         self.draft = draft
         self.draftAwaitsAgentReply = draftAwaitsAgentReply
+        self.deliveredQueuedPromptIDs = deliveredQueuedPromptIDs
         self.forkRecord = forkRecord
         self.recent = recent
         self.subagentMessages = subagentMessages
@@ -176,6 +183,7 @@ struct HydrationResult: Sendable {
             queue: queue,
             draft: draft,
             draftAwaitsAgentReply: draftAwaitsAgentReply,
+            deliveredQueuedPromptIDs: deliveredQueuedPromptIDs,
             forkRecord: forkRecord,
             recent: recent,
             subagentMessages: subagentMessages)
@@ -188,6 +196,7 @@ struct HydrationResult: Sendable {
             queue: queue,
             draft: draft,
             draftAwaitsAgentReply: draftAwaitsAgentReply,
+            deliveredQueuedPromptIDs: deliveredQueuedPromptIDs,
             forkRecord: forkRecord,
             recent: recent,
             subagentMessages: subagentMessages)

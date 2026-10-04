@@ -2326,11 +2326,14 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
-        session.restoreQueue(
+        session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
+        if session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
-        )
+        ) {
+            persistQueue(for: session)
+        }
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
         // Only restore the draft when the live composer is still pristine

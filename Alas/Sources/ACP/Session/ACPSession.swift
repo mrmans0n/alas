@@ -2706,11 +2706,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// from `ACPSessionManager.openSession` after pulling rows from the
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
+    ///
+    /// Returns whether an uncertain item was dropped as already delivered,
+    /// so the caller can persist the shorter queue.
+    @discardableResult
     func restoreQueue(
         _ items: [QueuedPrompt],
         markLegacySendingUncertain: Bool = false,
         knownUnsentDispatches: Set<UUID> = []
-    ) {
+    ) -> Bool {
         forceSendAfterSendingHeadId = nil
         queue = items.map { item in
             guard knownUnsentDispatches.contains(item.id) else {
@@ -2720,23 +2724,33 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
+        let count = queue.count
+        queue.removeAll { $0.deliveryUncertain && deliveredQueuedPromptIDs.contains($0.id) }
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
+        return queue.count != count
     }
 
     /// Restore a persisted queue and Limited state as one snapshot. The queue
     /// is published first, so an observer never sees the limit without the
     /// resume item that makes it non-actionable. The row's limit wins; the
     /// resume item covers rows written before `usage_limit` existed.
+    @discardableResult
     func restoreQueue(
         _ items: [QueuedPrompt],
         markLegacySendingUncertain: Bool,
         persistedUsageLimit: ACPUsageLimit?
-    ) {
-        restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
+    ) -> Bool {
+        let dropped = restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
         usageLimit = persistedUsageLimit ?? usageLimitResumeItem?.usageLimit
+        return dropped
     }
+
+    /// Recorded queued prompts the stored transcript shows the agent already
+    /// answered, set at hydration. Their delivery is not uncertain: offering
+    /// Retry would resend a prompt the agent holds, so they are dropped.
+    var deliveredQueuedPromptIDs: Set<UUID> = []
 
     /// Holds prompts dispatched on a broker generation that this connection
     /// cannot adopt. Queue items with no dispatch provenance remain eligible.
@@ -2751,7 +2765,9 @@ final class ACPSession: ObservableObject, Identifiable {
             queue[index].markDeliveryUncertain()
             changed = true
         }
-        return changed
+        let count = queue.count
+        queue.removeAll { $0.deliveryUncertain && deliveredQueuedPromptIDs.contains($0.id) }
+        return changed || queue.count != count
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
