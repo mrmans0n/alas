@@ -56,7 +56,10 @@ agent ids, model names, times, token counts and cost.
   failed or cancelled one), and then the next turn that sees an update is
   given all the growth since. It is also absent when the currency changed. If
   the agent restarts its count, the first turn after it counts the whole new
-  total.
+  total. The first cost-bearing turn recorded for a session has no per-turn
+  cost, since its total may include turns from before Alas recorded them; it
+  becomes the baseline for the next. The same holds once the session's earlier
+  turns have passed the retention.
 - `model` is the model that answered when the agent named exactly one, and
   otherwise the session's selected model, if any.
 - `project` and `worktree` are absent for sessions of a multi-project

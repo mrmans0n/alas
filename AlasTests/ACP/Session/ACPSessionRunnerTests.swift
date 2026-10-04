@@ -91,11 +91,13 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
-    enum TurnCostUpdate: CaseIterable, Sendable { case none, applied, buffered, appliedThenBufferedWithoutCost }
+    enum TurnCostUpdate: CaseIterable, Sendable {
+        case none, applied, buffered, appliedThenBufferedWithoutCost, appliedThenAppliedWithoutCost
+    }
 
-    /// A turn reports the session's cumulative cost only when a `usage_update` arrived during it, including one still
-    /// in the coalescing buffer when the prompt result arrives, and a newer buffered update without a cost does not hide
-    /// an applied one's; an earlier total is not its own.
+    /// A turn reports the session's cumulative cost only when a `usage_update` with one arrived during it, including
+    /// one still in the coalescing buffer when the prompt result arrives; a newer update without a cost, applied or
+    /// buffered, does not hide it, and an earlier total is not the turn's own.
     @Test(arguments: TurnCostUpdate.allCases)
     func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
@@ -106,15 +108,20 @@ struct ACPSessionRunnerTests {
         defer { runner.stop() }
         runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
         let later = ACPSessionUpdate.usageUpdate(.init(used: 2, size: 10, cost: .init(amount: 0.3, currency: "USD")))
+        let withoutCost = ACPSessionUpdate.usageUpdate(.init(used: 3, size: 10, cost: nil))
         mock.scriptAsync(method: "session/prompt") { _ in
-            switch update {
-            case .none: break
-            case .applied: await MainActor.run { _ = runner.session.apply(later) }
-            case .buffered, .appliedThenBufferedWithoutCost:
-                if update == .appliedThenBufferedWithoutCost {
-                    await MainActor.run { _ = runner.session.apply(later) }
-                }
-                let buffered = update == .buffered ? later : .usageUpdate(.init(used: 3, size: 10, cost: nil))
+            let applied: [ACPSessionUpdate] = switch update {
+            case .none, .buffered: []
+            case .applied, .appliedThenBufferedWithoutCost: [later]
+            case .appliedThenAppliedWithoutCost: [later, withoutCost]
+            }
+            await MainActor.run { for item in applied { _ = runner.session.apply(item) } }
+            let buffered: ACPSessionUpdate? = switch update {
+            case .buffered: later
+            case .appliedThenBufferedWithoutCost: withoutCost
+            default: nil
+            }
+            if let buffered {
                 mock.emit(.init(sessionId: "s", update: buffered))
                 _ = await Task { @MainActor in await awaitCondition { runner.pendingIncomingUpdateCountForTesting > 0 } }.value
             }

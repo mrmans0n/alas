@@ -184,8 +184,10 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
-    /// `usage_update`s applied so far, so a turn can tell whether its cost is fresh. Runtime only.
-    private(set) var usageUpdateCount = 0
+    /// The latest cumulative cost a `usage_update` carried; one without a cost keeps it. Runtime only.
+    private(set) var lastCost: ACPUsageInfo.Cost?
+    /// Bumped with `lastCost`, so a turn can tell whether a cost arrived during it.
+    private(set) var costRevision = 0
     /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
     /// detection for a structured reset time. Runtime only.
     @Published private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
@@ -875,7 +877,10 @@ final class ACPSession: ObservableObject, Identifiable {
         case .usageUpdate(let info):
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
-            usageUpdateCount += 1
+            if let cost = info.cost {
+                lastCost = cost
+                costRevision += 1
+            }
             if let rateLimit = info.claudeRateLimit {
                 latestClaudeRateLimit = rateLimit
             }

@@ -45,7 +45,7 @@ struct UsageHistoryStoreTests {
     }
 
     /// Each turn's cost is what the session's cumulative cost grew by since its previous recorded turn; a lower
-    /// total is a restarted count, and a change of currency or no cost at all leaves it unknown.
+    /// total is a restarted count, and the first total, a change of currency or no cost at all leave it unknown.
     @Test func aTurnsCostIsTheGrowthOfTheSessionsCumulativeCost() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
@@ -59,7 +59,7 @@ struct UsageHistoryStoreTests {
         _ = try await store.record(turn(session: "s2", cost: (1, "USD")))
         let read = try await store.turns(project: nil, since: 0, until: nil, limit: 10).turns.filter { $0.session == "s1" }
         // Newest first, in cents.
-        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, 5, 15, nil, 10])
+        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, 5, 15, nil, nil])
     }
 
     @Test(arguments: [

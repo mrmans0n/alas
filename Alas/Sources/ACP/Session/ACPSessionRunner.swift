@@ -135,8 +135,8 @@ final class ACPSessionRunner {
     /// decides that, not the runner.
     private let onPermissionBlocked: ((ACPChildBlocker) -> Void)?
     private var activePromptStartedAt: Int64?
-    /// `session.usageUpdateCount` when the active prompt started.
-    private var activePromptUsageUpdateCount = 0
+    /// `session.costRevision` when the active prompt started.
+    private var activePromptCostRevision = 0
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -1866,13 +1866,12 @@ final class ACPSessionRunner {
     }
 
     /// The session's cumulative cost if a `usage_update` with one came during the active turn, else nil. The newest
-    /// one still in the coalescing buffer wins, since the prompt result can overtake it; then the one already applied.
+    /// one still in the coalescing buffer wins, since the prompt result can overtake it; then the latest applied.
     private func turnCumulativeCost() -> ACPUsageInfo.Cost? {
         for pending in pendingIncomingUpdates.reversed() {
-            // As `ACPSession.apply` does, a size of 0 is no data.
-            if case .usageUpdate(let info) = pending.params.update, info.size > 0, let cost = info.cost { return cost }
+            if case .usageUpdate(let info) = pending.params.update, let cost = info.cost { return cost }
         }
-        return session.usageUpdateCount != activePromptUsageUpdateCount ? session.contextUsage?.cost : nil
+        return session.costRevision != activePromptCostRevision ? session.lastCost : nil
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
@@ -3266,7 +3265,7 @@ extension ACPSessionRunner {
                     self.session.queue.first(where: { $0.id == qid && $0.transcriptRecorded })?.turnStartedAt
                 }
                 self.activePromptStartedAt = queuedTurnStartedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
-                self.activePromptUsageUpdateCount = self.session.usageUpdateCount
+                self.activePromptCostRevision = self.session.costRevision
                 self.activePromptDelegatedSource = delegatedSource
                 // Captured before the user prompt is recorded below, so the
                 // floor points at this turn's own first transcript entry.

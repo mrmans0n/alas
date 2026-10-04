@@ -88,7 +88,8 @@ actor UsageHistoryStore {
 
     /// Stores the turn, with its cost as the change in the session's cumulative cost since its previous recorded turn
     /// that had one. A turn that saw no fresh total records no cost and keeps that baseline, so the next turn that
-    /// sees one is given all the growth since.
+    /// sees one is given all the growth since. Without a baseline (the session's first cost, or one pruned by the
+    /// retention) the turn's cost is unknown: its total may include turns from before recording, and becomes the baseline.
     func record(_ input: UsageTurnInput) throws -> UsageTurn {
         try database.transaction {
             let previous = try database.query("""
@@ -98,10 +99,10 @@ actor UsageHistoryStore {
             """, bindings: [input.session]).first
             var cost: UsageTurn.Cost?
             // A change of currency leaves the turn's cost unknown.
-            if let current = input.cumulativeCost, previous == nil || previous?["currency"] as? String == current.currency {
+            if let current = input.cumulativeCost, let previous, previous["currency"] as? String == current.currency,
+               let previousTotal = previous["cost_total"] as? Double {
                 // ponytail: a lower total means the adapter restarted its count, so all of it is new; a restart
                 // that already passed the old total is indistinguishable and undercounts once.
-                let previousTotal = previous?["cost_total"] as? Double ?? 0
                 let amount = current.amount >= previousTotal ? current.amount - previousTotal : current.amount
                 cost = UsageTurn.Cost(amount: amount, currency: current.currency)
             }
