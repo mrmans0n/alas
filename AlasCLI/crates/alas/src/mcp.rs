@@ -2046,7 +2046,7 @@ fn build_http_response(
             return http_response(202, "application/json", "");
         }
         match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
-            Ok(Some((id, command))) if is_preview_command(&command) => {
+            Ok(Some((id, command))) if runs_on_worker(&command) => {
                 let limit = if is_preview_cancel_command(&command) {
                     MAX_MCP_WORKERS
                 } else {
@@ -2056,17 +2056,31 @@ fn build_http_response(
                     return http_response(
                         200,
                         "application/json",
-                        &error_reply(id, -32000, "too many concurrent Alas MCP preview calls")
+                        &error_reply(id, -32000, "too many concurrent Alas MCP worker calls")
                             .to_string(),
                     );
                 }
                 let key = register_pending_preview(&runtime.pending, &id, &command);
-                let result = match dispatch(env, &command) {
+                let still_pending = || {
+                    key.as_ref().is_none_or(|key| {
+                        runtime
+                            .pending
+                            .lock()
+                            .map_or(true, |pending| pending.contains_key(key))
+                    })
+                };
+                let dispatched = dispatch_session_wait(env, &command, still_pending);
+                remove_pending_preview(&runtime.pending, key.as_deref());
+                release_worker(&runtime.active_workers);
+                // An HTTP request still needs a reply once its wait is cancelled.
+                let Some(dispatched) = dispatched else {
+                    let reply = error_reply(id, -32800, "request cancelled");
+                    return http_response(200, "application/json", &reply.to_string());
+                };
+                let result = match dispatched {
                     Ok(resp) => tool_result(&command, resp),
                     Err(err) => transport_error_result(&err),
                 };
-                remove_pending_preview(&runtime.pending, key.as_deref());
-                release_worker(&runtime.active_workers);
                 let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
                 return http_response(200, "application/json", &reply.to_string());
             }
