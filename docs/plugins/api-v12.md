@@ -255,8 +255,11 @@ of multi-project workspaces, are not sent; read them with `"scope": "all"`.
 - When a stopped turn's result arrives only after a following turn has
   finished, cost growth around that boundary can be credited to the wrong
   one of the two. Token counts are per turn and unaffected.
+- An update the agent sends right after a turn's result, while Alas is busy,
+  can count toward that turn, so its cost may include the next turn's first
+  cost growth.
 
-Both are tracked in https://github.com/mrmans0n/alas/issues/1764.
+All are tracked in https://github.com/mrmans0n/alas/issues/1764.
 
 ### Errors
 
