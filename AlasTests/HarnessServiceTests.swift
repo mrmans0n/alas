@@ -49,6 +49,27 @@ struct HarnessServiceTests {
         #expect(summary?.sessions.map(\.state) == [.awaiting, .failed, .running, .limited])
     }
 
+    @Test("a failed turn and background work keep separate state in either order", arguments: [false, true])
+    func failedTurnCoexistsWithBackgroundWork(backgroundFirst: Bool) {
+        let (service, _) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        let startBackground = {
+            service.handleSocketEvent(
+                self.makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
+                stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+            )
+        }
+        let fail = { service.setExternalActivity(sessionId: "session-1", agent: .pi, state: .failed, body: "boom") }
+
+        if backgroundFirst { startBackground(); fail() } else { fail(); startBackground() }
+
+        #expect(service.activityBySession["session-1"]?.state == .failed)
+        #expect(service.hasBackgroundActivity(sessionId: "session-1"))
+        // Leaving `.failed` would acknowledge the failure as if a new turn began.
+        #expect(transitions.last?.state == .failed)
+    }
+
     @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {
         let (service, collector) = makeService()
         var transitions: [HarnessActivityTransition] = []

@@ -11133,20 +11133,27 @@ final class AppState {
             case .terminal(let state):
                 for leaf in state.root.leaves() {
                     counts.total += 1
-                    if Self.harnessActivityIsBusy(harness.activityBySession[leaf.sessionId]?.state)
+                    if harnessSessionIsBusy(leaf.sessionId)
                         || terminal.registry.session(for: leaf.sessionId)?.surface.foregroundPid != nil {
                         counts.busy += 1
                     }
                 }
             case .acpSession(let state):
                 counts.total += 1
-                if Self.harnessActivityIsBusy(harness.activityBySession[state.sessionId]?.state) {
+                if harnessSessionIsBusy(state.sessionId) {
                     counts.busy += 1
                 }
             default:
                 break
             }
         }
+    }
+
+    /// A failed foreground turn can coexist with live background work, so
+    /// liveness checks both.
+    private func harnessSessionIsBusy(_ sessionId: String) -> Bool {
+        Self.harnessActivityIsBusy(harness.activityBySession[sessionId]?.state)
+            || harness.hasBackgroundActivity(sessionId: sessionId)
     }
     nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
         switch state {

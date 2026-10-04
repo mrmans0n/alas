@@ -224,7 +224,10 @@ final class HarnessService {
             }
             backgroundActivityIdsBySession[event.sessionId, default: []].insert(activityId)
             let foregroundState = activityBySession[event.sessionId]?.state
-            if foregroundState != .awaitingInput, foregroundState != .permissionRequest {
+            // Background work does not answer a question or a failed turn;
+            // `hasBackgroundActivity` reports its liveness instead.
+            if foregroundState != .awaitingInput, foregroundState != .permissionRequest,
+               foregroundState != .failed {
                 activityBySession[event.sessionId] = HarnessActivityState(
                     agent: event.agent, state: .busy, pid: event.pid,
                     lastBody: nil, updatedAt: Date()
@@ -419,6 +422,12 @@ final class HarnessService {
         activeSocketLifecycleBySession.removeAll()
         latestSocketLifecycleOrderBySession.removeAll()
         retiredSocketLifecycleIdsBySession.removeAll()
+    }
+
+    /// Whether a hook-reported background workflow is still running for the
+    /// session, independent of the foreground state it shows.
+    func hasBackgroundActivity(sessionId: String) -> Bool {
+        backgroundActivityIdsBySession[sessionId]?.isEmpty == false
     }
 
     func forgetSession(_ sessionId: String) {
