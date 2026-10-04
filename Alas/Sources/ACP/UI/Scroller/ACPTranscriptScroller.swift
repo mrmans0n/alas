@@ -1040,13 +1040,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
 
             let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(queue: session.queue)
+            let canClearQueue = session.queue.contains { $0.isShownToUser && $0.canRemoveFromQueue }
             if queueHeaderCount > 0 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_header__",
-                    equalityToken: token(queueHeaderCount, host: host),
+                    equalityToken: token([queueHeaderCount, canClearQueue ? 1 : 0], host: host),
                     build: {
                         wrapRow(host: host) {
-                            ACPQueueHeader(count: queueHeaderCount, onClear: host.onQueueClearAll)
+                            ACPQueueHeader(count: queueHeaderCount, canClear: canClearQueue, onClear: host.onQueueClearAll)
                         }
                     }
                 ))

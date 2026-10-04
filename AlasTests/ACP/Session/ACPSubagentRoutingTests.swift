@@ -5,6 +5,29 @@ import Testing
 @MainActor
 @Suite("ACP subagent routing")
 struct ACPSubagentRoutingTests {
+    @Test("async tasks belong to a known child and retain terminal state across replay", arguments: [false, true])
+    func backgroundTaskRouting(knownChild: Bool) async throws {
+        let (runner, _, _) = try makeRunner()
+        if knownChild {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "remote-parent",
+                update: .subagentSpawned(.init(subagentSessionId: "child"))))
+        }
+        let spawn = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "shell", name: "Build", canStop: true)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "child", update: .asyncTask(spawn)))
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "child", update: .asyncTask(.init(
+            sessionUpdate: "async_task_state_update", asyncTaskId: "shell", state: "completed"))))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "child", update: .asyncTask(spawn)))
+        await runner.flushPersistence()
+        #expect(runner.session.backgroundTasks.count == (knownChild ? 1 : 0))
+        if knownChild {
+            #expect(runner.session.backgroundTasks[0].ownerSessionId == "child")
+            #expect(runner.session.backgroundTasks[0].state == "completed")
+            #expect(runner.session.subagentRun("child")?.messages.isEmpty == true)
+            #expect(runner.session.transcript.messages.count == 2)
+        }
+    }
+
     @Test("an update addressed to a known child never reaches the parent transcript")
     func childUpdateIsRoutedToItsChild() async throws {
         let (runner, _, _) = try makeRunner()

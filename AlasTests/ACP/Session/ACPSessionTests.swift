@@ -26,6 +26,71 @@ struct ACPSessionTests {
         #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
     }
 
+    @Test("a task can notify again after a loss report", arguments: [("completed", true), ("completed", false), ("lost", true), ("lost", false)])
+    func backgroundTaskCanNotifyAfterReobservation(state: String, delivered: Bool) {
+        var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")
+        task.loseObservation()
+        let previousWake = task.wakeId
+        task.wakeDelivered = delivered
+        if state == "lost" {
+            task.merge(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "watch"), wakeOnCompletion: true)
+            task.loseObservation()
+        } else {
+            task.merge(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "watch", state: state), wakeOnCompletion: true)
+        }
+        #expect(task.state == state)
+        #expect(task.needsWake)
+        #expect(task.wakeId != previousWake)
+    }
+
+    @Test("sparse task updates preserve facts and terminal replay cannot reopen a task", arguments: ["claude", "codex"])
+    func backgroundTaskReplay(agentID: String) throws {
+        let session = ACPSession(id: "s", agentId: agentID, worktreeId: "w", title: "t")
+        var spawn = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "one",
+            name: "Build", canStop: true)
+        spawn.outputFilePath = "/tmp/build-output"
+        spawn.toolCallId = "tool-1"
+        session.applyBackgroundTask(spawn, ownerSessionId: "s")
+        session.applyBackgroundTask(spawn, ownerSessionId: "child")
+        let completion = ACPAsyncTaskUpdate(sessionUpdate: "async_task_state_update", asyncTaskId: "one",
+            state: "completed", summary: "Build passed")
+        session.applyBackgroundTask(completion, ownerSessionId: "s")
+        let finished = try #require(session.backgroundTasks.first)
+        session.applyBackgroundTask(spawn, ownerSessionId: "s")
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_progress", asyncTaskId: "one"), ownerSessionId: "s")
+        session.applyBackgroundTask(completion, ownerSessionId: "s")
+        #expect(session.backgroundTasks.count == 2)
+        #expect(session.transcript.messages.count == 2)
+        #expect(session.backgroundTasks[0] == finished)
+        #expect(finished.state == "completed")
+        #expect(finished.outputFilePath == "/tmp/build-output")
+        #expect(finished.toolCallId == "tool-1")
+        #expect(finished.needsWake == (agentID == "codex"))
+        #expect(session.backgroundTasks[1].isActive)
+        #expect(session.backgroundTasks[1].id != finished.id)
+        let rows = session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
+            if case .toolCall(let row) = message { return row }
+            return nil
+        }
+        let restored = ACPSession(id: "s", agentId: agentID, worktreeId: "w", title: "t")
+        restored.restoreBackgroundTasks(rows: rows)
+        #expect(restored.backgroundTasks == session.backgroundTasks)
+    }
+
+    @Test("foreground cancellation preserves observed background rows and their original tool call")
+    func foregroundCancelPreservesBackgroundTasks() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(toolCallId: "bg-tool", title: "Build", kind: "execute", status: "in_progress")))
+        session.apply(.toolCall(.init(toolCallId: "fg-tool", title: "Read", kind: "read", status: "in_progress")))
+        var spawn = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "bg", name: "Build", canStop: true)
+        spawn.toolCallId = "bg-tool"
+        session.applyBackgroundTask(spawn, ownerSessionId: "s")
+        #expect(session.cancelInFlightToolCalls() == [1])
+        #expect(session.backgroundTasks[0].isActive)
+        #expect(!session.backgroundTasks[0].needsWake)
+        if case .toolCall(let row) = session.transcript.messages[0] { #expect(row.status == "in_progress") }
+    }
+
     @Test("compaction updates with the same ID replace one transcript row")
     func compactionUpdatesMergeInPlace() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

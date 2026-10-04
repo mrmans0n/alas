@@ -248,6 +248,16 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         case .toolCall(let tc):
             if let compaction = ACPContextCompaction(toolCall: tc) {
                 ACPContextCompactionView(compaction: compaction)
+            } else if let task = ACPBackgroundTask(toolCall: tc) {
+                if task.showInTranscript {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("\(task.name) · \(task.state)", systemImage: "clock.arrow.circlepath")
+                        if let summary = task.stopError ?? task.summary ?? task.description {
+                            Text(summary).foregroundStyle(.secondary).lineLimit(3)
+                        }
+                    }
+                    .font(.callout)
+                }
             } else if let descriptor = ACPSubagentRowDescriptor(toolCall: tc),
                       let run = session.subagentRun(descriptor.subagentSessionId) {
                 ACPSubagentRowView(

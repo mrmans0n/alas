@@ -4,6 +4,24 @@ import Testing
 
 @Suite("ACPConnection")
 struct ACPConnectionTests {
+    @Test("async tasks require both opt-in and the adapter capability", arguments: [false, true])
+    func backgroundTaskNegotiation(optIn: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { request in
+            let params = try #require(request.params as? ACPInitializeParams)
+            #expect(params.clientCapabilities.meta.jetbrains?.air.capabilities == (optIn ? ["asyncTasks"] : nil))
+            #expect(params.clientCapabilities.meta.terminalOutputDelta == (optIn ? true : nil))
+            return Data(#"{"protocolVersion":1,"_meta":{"jetbrains":{"air":{"version":1,"capabilities":["asyncTasks"]}}}}"#.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+        connection.backgroundTaskLifecycleEnabled = optIn
+        _ = try await connection.initialize()
+        #expect(connection.supportsBackgroundTasks == optIn)
+        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1}"#.utf8) }
+        _ = try await connection.initialize()
+        #expect(!connection.supportsBackgroundTasks)
+    }
+
     @Test("deleteSession sends session/delete with the wire id and accepts an empty result")
     func deleteSessionRPC() async throws {
         let mock = ACPMockClient()

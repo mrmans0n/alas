@@ -186,7 +186,8 @@ enum ACPToolCallGrouping {
               isFinished(status: toolCall.status)
                 || toolCall.status == "in_progress" || toolCall.status == "pending",
               ACPContextCompaction(toolCall: toolCall) == nil,
-              ACPSubagentRowDescriptor(toolCall: toolCall) == nil
+              ACPSubagentRowDescriptor(toolCall: toolCall) == nil,
+              ACPBackgroundTask(toolCall: toolCall) == nil
         else { return false }
         return true
     }

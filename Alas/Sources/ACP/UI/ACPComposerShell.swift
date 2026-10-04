@@ -1215,7 +1215,8 @@ struct ACPComposer: View {
             streamingState: session.transcript.streamingState,
             hasText: hasText,
             agentState: session.agentState,
-            queueByDefault: sendOnEnter
+            queueByDefault: sendOnEnter,
+            hasCancellableBackgroundWork: session.hasCancellableBackgroundWork
         )
     }
 

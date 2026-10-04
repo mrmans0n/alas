@@ -5,6 +5,32 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager hydration")
 struct ACPSessionManagerHydrationTests {
+    @Test("background tasks hydrate before their older transcript rows are backfilled")
+    func backgroundTasksHydrateBeforeBackfill() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let task = ACPBackgroundTask(ownerSessionId: "remote", asyncTaskId: "watch", name: "Watch")
+        let messages = [ACPMessage.toolCall(task.transcriptRow)] + (0..<ACPTranscript.tailWindow).map {
+            ACPMessage.user(id: UUID(), text: "message \($0)", attachments: [])
+        }
+        try store.upsertMessages(try messages.enumerated().map { index, message in
+            .init(id: "m\(index)", sessionId: "s", kind: message.kind, seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message), createdAt: 0)
+        })
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = try #require(manager.placeholderSession(id: "s"))
+        let gate = HydrationBackfillGate()
+        manager.beforeBackfill = { await gate.wait() }
+        await manager.hydrateIfNeeded(id: "s")
+        #expect(session.backgroundTasks == [task])
+        #expect(!session.transcript.messages.contains { $0.stableId == "tc-\(task.id)" })
+        gate.open()
+        await manager.awaitBackfill(id: "s")
+        #expect(session.transcript.messages.count == messages.count)
+    }
+
     private func tmpStorePath() -> String {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-hydration-\(UUID()).sqlite").path

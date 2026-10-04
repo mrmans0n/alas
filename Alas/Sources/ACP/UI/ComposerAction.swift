@@ -70,7 +70,8 @@ func composerAction(
     streamingState: ACPSession.StreamingState,
     hasText: Bool,
     agentState: ACPSession.AgentState,
-    queueByDefault: Bool = true
+    queueByDefault: Bool = true,
+    hasCancellableBackgroundWork: Bool = false
 ) -> ComposerAction {
     switch agentState {
     case .idle, .spawning, .ready, .disconnected, .failed(_):
@@ -79,7 +80,7 @@ func composerAction(
 
     switch streamingState {
     case .idle:
-        return hasText ? .send : .hidden
+        return hasText ? .send : (hasCancellableBackgroundWork ? .stop : .hidden)
     case .sending, .streaming, .awaitingPermission, .awaitingInput:
         return hasText ? .queue(menu: [queueByDefault ? .steer : .queue, .stop]) : .stop
     }

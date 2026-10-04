@@ -202,7 +202,7 @@ struct ACPQueueItemRow: View {
                 }
                 // Editing the resume item would pull it out of the queue and
                 // silently drop auto-resume.
-                if item.usageLimit == nil {
+                if item.canRemoveFromQueue, item.usageLimit == nil {
                     actionButton(
                         systemName: "pencil",
                         foreground: theme.color("fg-muted"),
@@ -210,12 +210,14 @@ struct ACPQueueItemRow: View {
                         action: onEdit
                     )
                 }
-                actionButton(
-                    systemName: "xmark",
-                    foreground: theme.color("fg-muted"),
-                    help: "Remove from queue",
-                    action: onRemove
-                )
+                if item.canRemoveFromQueue {
+                    actionButton(
+                        systemName: "xmark",
+                        foreground: theme.color("fg-muted"),
+                        help: "Remove from queue",
+                        action: onRemove
+                    )
+                }
             }
         }
         .opacity(toolbarVisible ? 1 : 0)
@@ -258,10 +260,12 @@ struct ACPQueueItemRow: View {
             if item.lastError != nil {
                 Button("Retry", action: onRetry)
             }
-            if item.usageLimit == nil {
+            if item.canRemoveFromQueue, item.usageLimit == nil {
                 Button("Edit", action: onEdit)
             }
-            Button("Remove from queue", role: .destructive, action: onRemove)
+            if item.canRemoveFromQueue {
+                Button("Remove from queue", role: .destructive, action: onRemove)
+            }
         }
     }
 }

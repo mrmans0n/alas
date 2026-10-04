@@ -331,6 +331,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// its live child transcript from here; `subagentOrder` keeps spawn
     /// order for the rare consumer that wants the list rather than a row.
     @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
+    @Published var backgroundTasks: [ACPBackgroundTask] = []
+    @Published var backgroundTaskStopSupported = false
     private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
@@ -1015,6 +1017,8 @@ final class ACPSession: ObservableObject, Identifiable {
             return registerSubagent(spawn, at: timestamp)
         case .subagentStateUpdate(let update):
             return applySubagentState(update, at: timestamp)
+        case .asyncTask(let update):
+            return applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .unknown:
             return []
         }
@@ -1412,6 +1416,8 @@ final class ACPSession: ObservableObject, Identifiable {
             // arrives only in this replay. Dropping it would leave the row
             // spinning against a child that finished long ago.
             dirty = applySubagentState(update, replaying: true)
+        case .asyncTask(let update):
+            dirty = applyBackgroundTask(update, ownerSessionId: remoteSessionId ?? id)
         case .agentMessageChunk(let chunk):
             dirty = []
             matchedIndex = chunk.messageId
@@ -2511,7 +2517,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func removeFromQueue(id: UUID) -> Bool {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
-        if queue[idx].status == .sending { return false }
+        guard queue[idx].canRemoveFromQueue else { return false }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
@@ -2528,7 +2534,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// flusher-promoted item be duplicated into the composer.
     func takeForEditing(id: UUID) -> ACPComposerDraft? {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return nil }
-        guard queue[idx].status == .pending else { return nil }
+        guard queue[idx].canRemoveFromQueue else { return nil }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
@@ -2560,7 +2566,8 @@ final class ACPSession: ObservableObject, Identifiable {
         let protectedPrefixCount = (queue.first?.status == .sending) ? 1 : 0
         for bypassedIndex in protectedPrefixCount ..< idx {
             if queue[bypassedIndex].status == .pending,
-               queue[bypassedIndex].lastError != nil {
+               queue[bypassedIndex].lastError != nil,
+               queue[bypassedIndex].backgroundTaskWake == nil {
                 queue[bypassedIndex].transcriptRecorded = false
             }
         }
@@ -2593,7 +2600,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// now-stale `draft` survives and mis-restores on the next edit.
     func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
-        if queue[idx].status == .sending { return }
+        guard queue[idx].canRemoveFromQueue else { return }
         queue[idx].blocks = blocks
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
@@ -2627,7 +2634,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// prompts stay: their inbox row is already gone, so dropping one here
     /// would lose it for good.
     func clearPendingQueue() -> [QueuedPrompt] {
-        let isCleared: (QueuedPrompt) -> Bool = { $0.status == .pending && $0.isShownToUser }
+        let isCleared: (QueuedPrompt) -> Bool = { $0.canRemoveFromQueue && $0.isShownToUser }
         let snapshot = queue.filter(isCleared)
         queue.removeAll(where: isCleared)
         forceSendAfterSendingHeadId = nil
@@ -2804,8 +2811,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persist them.
     func cancelInFlightToolCalls(at timestamp: Date = Date()) -> [Int] {
         var changed: [Int] = []
+        let backgroundToolIds = Set(activeBackgroundTasks.compactMap(\.toolCallId))
         for i in transcript.messages.indices {
             if case .toolCall(var tc) = transcript.messages[i],
+               ACPBackgroundTask(toolCall: tc) == nil,
+               !backgroundToolIds.contains(tc.toolCallId),
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
                 if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
@@ -3424,6 +3434,8 @@ final class ACPSession: ObservableObject, Identifiable {
             applyGoalValue(goal)
         } else if let codex = Self.metadataObject(root["codex"]),
                   let goal = codex["goal"] {
+            applyGoalValue(goal)
+        } else if let goal = metadata.airFields["goal"] {
             applyGoalValue(goal)
         }
     }

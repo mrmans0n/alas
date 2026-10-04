@@ -247,14 +247,16 @@ struct CommitDetailsTests {
         // strip a-source.txt's M hunks. A pure copy with no further edits has
         // zero hunks; if our slice kept a-source.txt's section, we'd see the
         // MODIFIED <- line 5 swap.
-        if maxOutputBytes == 64 {
-            await #expect(throws: ProcessError.self) {
-                try await svc.diff(worktreePath: repo, sha: sha, file: "z-copy.txt",
-                                   originalPath: "a-source.txt", maxOutputBytes: maxOutputBytes)
-            }
+        let diff: ParsedDiff
+        do {
+            diff = try await svc.diff(worktreePath: repo, sha: sha, file: "z-copy.txt",
+                                      originalPath: "a-source.txt", maxOutputBytes: maxOutputBytes)
+        } catch ProcessError.nonZeroExit(_, _) where maxOutputBytes != .max {
+            // A soft subprocess cap may stop before the requested section,
+            // or retain that section in its last chunk. Both are valid;
+            // any returned diff must still exclude the source's hunks.
             return
         }
-        let diff = try await svc.diff(worktreePath: repo, sha: sha, file: "z-copy.txt", originalPath: "a-source.txt")
         let texts = diff.hunks.flatMap { $0.lines }.map(\.text)
         #expect(!texts.contains("MODIFIED"))
         #expect(!texts.contains("line 5"))

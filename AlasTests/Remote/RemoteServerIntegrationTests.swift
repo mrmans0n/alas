@@ -153,7 +153,7 @@ struct RemoteServerIntegrationTests {
             return
         }
         let second = try await receiveServerMessage(task)
-        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _) = second else {
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _) = second else {
             Issue.record("expected snapshot frame, got \(second)")
             task.cancel(with: .goingAway, reason: nil)
             server.stop()

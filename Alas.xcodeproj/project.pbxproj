@@ -378,6 +378,7 @@
 		2A2388EC5DA3A5B6E26D533C /* RevisionFollowCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D9414B19B769D162BA9ED9 /* RevisionFollowCapabilityTests.swift */; };
 		2AAC240F65ED92790BF834B9 /* ACPChildBlocker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D35645975B884B0DCAB7A76 /* ACPChildBlocker.swift */; };
 		2ABA47D0AEE8C286572B2490 /* ShortcutBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B9E3F080F847EF069137844 /* ShortcutBinding.swift */; };
+		2B17D14970DB4C4DE9EEB19A /* ACPBackgroundTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BD83107C9ABA7DAF0337EA /* ACPBackgroundTask.swift */; };
 		2B4CBD06D1568EBC1BD327E0 /* SemanticVersionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF2EE8A6AAA7F9B45DACC0C /* SemanticVersionTests.swift */; };
 		2B823A7361BB54D8D93D7C99 /* ACPMentionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49006251DFBE67CCD0C4008 /* ACPMentionPicker.swift */; };
 		2B85898841D3090D3C7E3169 /* RunScriptMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D93ED8BA7A9EE46B37ED48EC /* RunScriptMetadataTests.swift */; };
@@ -837,6 +838,7 @@
 		5C9EB59AAA68656BD7190044 /* DiffOpenFileAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76C02E43360C0BCFEDF5428 /* DiffOpenFileAvailability.swift */; };
 		5D0F5A5C09A7EF59D3C3A96B /* RemotePeerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06D1E5BACEAA01D0CD23C0EA /* RemotePeerConnection.swift */; };
 		5D2A45DB652AD797E2276A7A /* AgentRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7544FD20BC61E587CAFAC099 /* AgentRegistry.swift */; };
+		5D3100D880E00DF9D7037FE2 /* ACPBackgroundTaskList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98303857AFDAAD4074500742 /* ACPBackgroundTaskList.swift */; };
 		5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C486F9097A2B145D101E2C /* AlasButton.swift */; };
 		5D8DF496FC722EE24F69A60A /* AgentHookSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976B145EAC17A395380DFB47 /* AgentHookSocketServer.swift */; };
 		5DF3F01E3DC672E4C6CBEDBC /* CommitEditorTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7268D601058775FE02B6B06 /* CommitEditorTabView.swift */; };
@@ -3084,6 +3086,7 @@
 		6268BF1F9E209D1716CB6EE3 /* WorkspaceAutomationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceAutomationServiceTests.swift; sourceTree = "<group>"; };
 		6269BFECABC37EE4156D7A88 /* WorkspaceStateFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStateFile.swift; sourceTree = "<group>"; };
 		626DBFF220D347A36859AB17 /* ZmxSessionNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxSessionNameTests.swift; sourceTree = "<group>"; };
+		62BD83107C9ABA7DAF0337EA /* ACPBackgroundTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBackgroundTask.swift; sourceTree = "<group>"; };
 		62EF0E5E7C9E3D16D0E053E7 /* LocalTextAppleFirstRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextAppleFirstRouter.swift; sourceTree = "<group>"; };
 		631A43599B405E7E263CE825 /* ACPSessionForkDivider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionForkDivider.swift; sourceTree = "<group>"; };
 		63376280CA1D01F9D564A6F6 /* ACPSessionDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionDiscovery.swift; sourceTree = "<group>"; };
@@ -3519,6 +3522,7 @@
 		97F583F8CF79ACE9161D4E93 /* AgentConfiguredCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConfiguredCatalog.swift; sourceTree = "<group>"; };
 		97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MasonSnapshotTests.swift; sourceTree = "<group>"; };
 		980DF534CC718ACEB60FCB6F /* DiffReviewImageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewImageProvider.swift; sourceTree = "<group>"; };
+		98303857AFDAAD4074500742 /* ACPBackgroundTaskList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBackgroundTaskList.swift; sourceTree = "<group>"; };
 		9877AAC39AAB55596495B816 /* ACPConfigOptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOptionTests.swift; sourceTree = "<group>"; };
 		98796FD86FE05979A2BCBCF3 /* ACPImageStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPImageStaging.swift; sourceTree = "<group>"; };
 		987FAB1E4DB4B81D5D0902B1 /* AppConfigMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigMarkdownTests.swift; sourceTree = "<group>"; };
@@ -6087,6 +6091,7 @@
 			isa = PBXGroup;
 			children = (
 				559867F5F114D9A3EC88E6C9 /* ACPAgentModelCatalog.swift */,
+				62BD83107C9ABA7DAF0337EA /* ACPBackgroundTask.swift */,
 				B2F3473392B284B69E6621DB /* ACPBareURLLinkifier.swift */,
 				419EF533C4D29448483045DA /* ACPChangeNotifier.swift */,
 				DF9310EAA75C6B6567F303B6 /* ACPChipState.swift */,
@@ -6498,6 +6503,7 @@
 				02D54F829B479A9F4F36E5E4 /* ACPAbsolutePathDetector.swift */,
 				CE2AD8D0539591C434F51418 /* ACPAuthNudgeBanner.swift */,
 				D3EDEEB00185F9C717205540 /* ACPAutoRunToggle.swift */,
+				98303857AFDAAD4074500742 /* ACPBackgroundTaskList.swift */,
 				6D8E02BB3FEB3C71AEEBBE6F /* ACPChatLayout.swift */,
 				5DC558BE723378DCC7AA5B55 /* ACPChatTypography.swift */,
 				530767799372FE03C3695656 /* ACPCodeBlockHighlighter.swift */,
@@ -8315,6 +8321,8 @@
 				6E66AD13D1763D61F619F3D1 /* ACPAuthNudgeBanner.swift in Sources */,
 				15DB04713B1BA8F97FD489C3 /* ACPAuthStatus.swift in Sources */,
 				56B6EF95B863B557992AE9DA /* ACPAutoRunToggle.swift in Sources */,
+				2B17D14970DB4C4DE9EEB19A /* ACPBackgroundTask.swift in Sources */,
+				5D3100D880E00DF9D7037FE2 /* ACPBackgroundTaskList.swift in Sources */,
 				0722316C2ADB93575221246D /* ACPBareURLLinkifier.swift in Sources */,
 				68D58F9361C2C31EE200479A /* ACPBrokerClient.swift in Sources */,
 				ED629C6FCCAE2D79FBB3014C /* ACPBrokerProtocol.swift in Sources */,
