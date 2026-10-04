@@ -59,6 +59,9 @@ final class ACPSessionOrchestrationCoordinator {
         let rememberParent: (String, String) -> Void
         let autoRunDefault: () -> Bool
         let notifyChanged: () -> Void
+        /// Suspends `session_wait` between polls. Tests replace it to change
+        /// state between polls instead of sleeping.
+        let pause: (Duration) async -> Void
 
         init(
             persistence: ACPOrchestrationPersistence,
@@ -84,7 +87,8 @@ final class ACPSessionOrchestrationCoordinator {
             createWorktree: @escaping (String, String, String?, @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>,
             rememberParent: @escaping (String, String) -> Void,
             autoRunDefault: @escaping () -> Bool,
-            notifyChanged: @escaping () -> Void
+            notifyChanged: @escaping () -> Void,
+            pause: @escaping (Duration) async -> Void = { try? await Task.sleep(for: $0) }
         ) {
             self.persistence = persistence
             self.instanceId = instanceId
@@ -108,6 +112,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.rememberParent = rememberParent
             self.autoRunDefault = autoRunDefault
             self.notifyChanged = notifyChanged
+            self.pause = pause
         }
     }
 
@@ -513,6 +518,258 @@ final class ACPSessionOrchestrationCoordinator {
             )
         }
         return json(ACPOrchestrationSendResponse(messageId: message.id, state: "queued"))
+    }
+
+    func perform(origin: ACPOrchestrationSessionOrigin, _ action: ACPDelegatedSessionAction) async -> AlasCLIResponse {
+        switch action {
+        case .read(let request): await read(origin: origin, request: request)
+        case .search(let request): await search(origin: origin, request: request)
+        case .wait(let request): await wait(origin: origin, request: request)
+        case .interrupt(let targetSessionId): await interrupt(origin: origin, targetSessionId: targetSessionId)
+        }
+    }
+
+    /// `session_read`: one page of a direct parent's or child's transcript.
+    func read(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionReadRequest
+    ) async -> AlasCLIResponse {
+        let session: ACPSession
+        switch await readableSession(origin: origin, targetSessionId: request.targetSessionId) {
+        case .success(let readable): session = readable
+        case .failure(let error): return .error(error.message)
+        }
+        let page = ACPSessionTranscriptReader.page(
+            ACPSessionTranscriptReader.entries(session.transcript.messages),
+            offset: request.offset,
+            limit: request.limit,
+            maxChars: request.maxChars,
+            lastEntryIsLive: Self.runtimeState(session) != .idle
+        )
+        return json(ACPOrchestrationReadResponse(
+            sessionId: request.targetSessionId,
+            entries: page.entries,
+            start: page.start,
+            end: page.end,
+            total: page.total
+        ))
+    }
+
+    /// `session_search`: text matches across the caller's direct parent and
+    /// children, the same sessions `session_list` shows. Sessions without a
+    /// readable transcript are skipped.
+    func search(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionSearchRequest
+    ) async -> AlasCLIResponse {
+        let query = request.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return .error("query must not be blank") }
+        let targets: [ACPOrchestrationVisibleSession]
+        do {
+            targets = ACPSessionOrchestrationPolicy.visibleSessions(
+                callerSessionId: origin.sessionId,
+                parent: try await environment.persistence.parent(childSessionId: origin.sessionId),
+                children: try await environment.persistence.children(parentSessionId: origin.sessionId)
+            ).filter { $0.relationship != nil }
+        } catch {
+            return .error("Could not load delegated sessions.")
+        }
+        var matches: [ACPOrchestrationSearchResponse.Match] = []
+        var truncated = false
+        search: for target in targets {
+            guard case .success(let session) = await readableSession(
+                origin: origin, targetSessionId: target.sessionId
+            ) else { continue }
+            let entries = ACPSessionTranscriptReader.entries(session.transcript.messages)
+            for match in ACPSessionTranscriptReader.search(entries, query: query) {
+                guard matches.count < request.limit else {
+                    truncated = true
+                    break search
+                }
+                matches.append(.init(
+                    sessionId: target.sessionId, index: match.index, role: match.role, snippet: match.snippet
+                ))
+            }
+        }
+        return json(ACPOrchestrationSearchResponse(matches: matches, truncated: truncated))
+    }
+
+    static let waitPollInterval: Duration = .milliseconds(250)
+
+    /// `session_wait`: returns once every listed direct child has settled
+    /// (see `ACPSessionOrchestrationPolicy.waitSettled`) or the timeout
+    /// passes, with each child's state and latest agent text either way.
+    func wait(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionWaitRequest
+    ) async -> AlasCLIResponse {
+        var sessionIds: [String] = []
+        for id in request.targetSessionIds where !sessionIds.contains(id) {
+            sessionIds.append(id)
+        }
+        do {
+            for id in sessionIds {
+                guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+                    callerSessionId: origin.sessionId,
+                    callerProjectId: origin.projectId,
+                    target: try await environment.persistence.delegation(childSessionId: id)
+                ) else {
+                    return .error("Only direct child sessions can be waited on: \(id)")
+                }
+            }
+        } catch {
+            return .error("Could not verify session delegation.")
+        }
+        let deadline = environment.nowMillis() + Int64(request.timeoutMillis)
+        while true {
+            var sessions: [ACPOrchestrationWaitResponse.Session] = []
+            for id in sessionIds {
+                sessions.append(await waitSnapshot(sessionId: id))
+            }
+            let settled = sessions.allSatisfy(\.settled)
+            if settled || environment.nowMillis() >= deadline || Task.isCancelled {
+                return json(ACPOrchestrationWaitResponse(sessions: sessions, timedOut: !settled))
+            }
+            await environment.pause(Self.waitPollInterval)
+        }
+    }
+
+    /// `session_interrupt`: cancels a direct child's running turn, as the
+    /// Stop button would. A pending permission request is cancelled with the
+    /// turn, never approved.
+    func interrupt(
+        origin: ACPOrchestrationSessionOrigin,
+        targetSessionId: String
+    ) async -> AlasCLIResponse {
+        do {
+            guard case .success = ACPSessionOrchestrationPolicy.authorizeChildControl(
+                callerSessionId: origin.sessionId,
+                callerProjectId: origin.projectId,
+                target: try await environment.persistence.delegation(childSessionId: targetSessionId)
+            ) else {
+                return .error("Only a direct child session can be interrupted.")
+            }
+        } catch {
+            return .error("Could not verify session delegation.")
+        }
+        guard let location = environment.sessionLocation(targetSessionId),
+              let session = location.manager.liveSession(for: targetSessionId),
+              Self.runtimeState(session) != .idle
+        else {
+            return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: false))
+        }
+        // False when another Alas instance holds the child's writer lease and
+        // this one only mirrors it.
+        let cancelRequested = await location.manager.interrupt(for: targetSessionId)
+        return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: cancelRequested))
+    }
+
+    private struct ObservationError: Error {
+        let message: String
+    }
+
+    /// A direct parent or child whose transcript may be read, the same edge
+    /// `session_send` may use. A session that is not live is hydrated from
+    /// its stored transcript; an archived one is not readable.
+    private func readableSession(
+        origin: ACPOrchestrationSessionOrigin,
+        targetSessionId: String
+    ) async -> Result<ACPSession, ObservationError> {
+        let callerParent: ACPDelegationRecord?
+        let targetParent: ACPDelegationRecord?
+        do {
+            callerParent = try await environment.persistence.parent(childSessionId: origin.sessionId)
+            targetParent = try await environment.persistence.parent(childSessionId: targetSessionId)
+        } catch {
+            return .failure(.init(message: "Could not verify session delegation."))
+        }
+        guard let targetProjectId = environment.sessionLocation(targetSessionId)?.origin.projectId
+            ?? targetParent?.projectId ?? callerParent?.projectId,
+            case .success = ACPSessionOrchestrationPolicy.authorizeSend(
+                callerSessionId: origin.sessionId,
+                callerProjectId: origin.projectId,
+                targetSessionId: targetSessionId,
+                targetProjectId: targetProjectId,
+                callerParent: callerParent,
+                targetParent: targetParent
+            )
+        else {
+            return .failure(.init(message: "Only a direct parent or child session's transcript can be read."))
+        }
+        guard let location = await resolveDeliveryTarget(
+            sessionID: targetSessionId,
+            callerParent: callerParent,
+            targetParent: targetParent
+        ) else {
+            return .failure(.init(message: "The target ACP session has no transcript available."))
+        }
+        // A restored tab can still be loading its stored transcript, and
+        // hydration applies only the tail before backfilling older messages,
+        // which would shift every entry index between pages.
+        await location.manager.hydrateIfNeeded(id: targetSessionId)
+        await location.manager.awaitBackfill(id: targetSessionId)
+        guard let session = location.manager.liveSession(for: targetSessionId) else {
+            return .failure(.init(message: "The target ACP session has no transcript available."))
+        }
+        return .success(session)
+    }
+
+    private func waitSnapshot(sessionId: String) async -> ACPOrchestrationWaitResponse.Session {
+        let record = try? await environment.persistence.delegation(childSessionId: sessionId)
+        let session = environment.sessionLocation(sessionId)?.manager.liveSession(for: sessionId)
+        let runtime = session.map(Self.runtimeState)
+        let phase = record?.phase ?? .closed
+        var queued = session.map { ACPSessionOrchestrationPolicy.queueOwesTurn($0.queue) } ?? false
+        var archived = false
+        if session == nil, phase == .ready, let record {
+            // Not live here: restored later, or driven by another instance.
+            // Judge it by its stored queue, whose head stays until the turn
+            // ends, and keep it unsettled when its store is out of reach.
+            switch await storedTurnState(record) {
+            case .archived: archived = true
+            case .queue(let stored): queued = ACPSessionOrchestrationPolicy.queueOwesTurn(stored)
+            case nil: queued = true
+            }
+        }
+        let undelivered = !((try? await environment.persistence.pendingMessages(targetSessionId: sessionId)) ?? []).isEmpty
+        let settled = archived || ACPSessionOrchestrationPolicy.waitSettled(
+            phase: phase, runtime: runtime, hasPendingPrompts: queued || undelivered
+        )
+        // A settled child that is not live here still has its result in its
+        // stored transcript; load it only now, not on every poll.
+        var transcriptSession = session
+        if transcriptSession == nil, settled, !archived, phase == .ready, let record,
+           let location = await resolveDeliveryTarget(sessionID: sessionId, callerParent: record, targetParent: record) {
+            await location.manager.hydrateIfNeeded(id: sessionId)
+            transcriptSession = location.manager.liveSession(for: sessionId)
+        }
+        return .init(
+            sessionId: sessionId,
+            state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived).rawValue,
+            settled: settled,
+            lastAgentText: transcriptSession.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
+            failure: record?.failureMessage
+        )
+    }
+
+    private enum StoredTurnState {
+        case archived
+        case queue([QueuedPrompt])
+    }
+
+    /// A child's persisted state when it has no live session here, or nil
+    /// when its worktree or stored session cannot be reached.
+    private func storedTurnState(_ record: ACPDelegationRecord) async -> StoredTurnState? {
+        guard let worktreeId = record.childWorktreeId,
+              let worktree = environment.worktree(worktreeId),
+              let manager = environment.manager(worktree),
+              let row = await manager.persistedSessionRow(id: record.childSessionId)
+        else { return nil }
+        if row.archived { return .archived }
+        guard let queue = try? await manager.persistence.loadQueue(sessionId: record.childSessionId) else {
+            return nil
+        }
+        return .queue(queue)
     }
 
     /// Entry point for a delegated child's finished turn. Non-children and
@@ -1092,14 +1349,7 @@ final class ACPSessionOrchestrationCoordinator {
         role: String? = nil
     ) async -> ACPOrchestrationSessionSummary {
         let location = environment.sessionLocation(sessionId)
-        let runtime = location.flatMap { location -> ACPOrchestrationRuntimeState? in
-            guard let session = location.manager.liveSession(for: sessionId) else { return nil }
-            switch session.transcript.streamingState {
-            case .idle: return .idle
-            case .sending, .streaming: return .running
-            case .awaitingPermission, .awaitingInput: return .awaitingInput
-            }
-        }
+        let runtime = location?.manager.liveSession(for: sessionId).map(Self.runtimeState)
         let archived: Bool
         if location != nil {
             archived = false
@@ -1121,6 +1371,14 @@ final class ACPSessionOrchestrationCoordinator {
             createdAt: createdAt,
             role: role
         )
+    }
+
+    private static func runtimeState(_ session: ACPSession) -> ACPOrchestrationRuntimeState {
+        switch session.transcript.streamingState {
+        case .idle: .idle
+        case .sending, .streaming: .running
+        case .awaitingPermission, .awaitingInput: .awaitingInput
+        }
     }
 
     private func json<T: Encodable>(_ value: T) -> AlasCLIResponse {

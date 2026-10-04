@@ -103,11 +103,13 @@ struct ACPMCPPromptPreambleTests {
         #expect(text?.contains("`alas` CLI") == true)
     }
 
-    @Test("delegated preamble omits session_new and explains delegation")
+    @Test("delegated preamble omits child-only session tools and explains delegation")
     func delegated() throws {
         let text = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: true, isDelegated: true, userServerNames: []))
         #expect(!text.contains("session_new"))
+        #expect(!text.contains("session_wait"))
+        #expect(!text.contains("session_interrupt"))
         #expect(text.contains("delegated by a parent session"))
         #expect(text.contains("only with the session_send tool of the \"alas\" MCP server"))
         #expect(text.contains("do not use SendMessage, ListAgents, or any other messaging or agent tool"))
@@ -139,6 +141,7 @@ struct ACPMCPPromptPreambleTests {
         #expect(ACPMCPPromptPreamble.builtInToolNames == [
             "open", "notify",
             "agent_list", "session_list", "session_new", "session_send",
+            "session_read", "session_search", "session_wait", "session_interrupt",
             "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
             "review", "review_comments", "review_reply", "review_resolve",
             "review_comment_add", "review_finish",

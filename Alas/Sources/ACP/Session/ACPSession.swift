@@ -454,6 +454,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// the next turn that completes. See `ACPUsageLimitResumePolicy`.
     @Published var usageLimit: ACPUsageLimit?
 
+    /// Error message of the last turn when it failed; cleared by the next
+    /// turn that ends any other way. Runtime only, like the sidebar badge it
+    /// drives.
+    @Published var turnFailure: String?
+
     var usageLimitResumeItem: QueuedPrompt? {
         queue.first { $0.usageLimit != nil }
     }

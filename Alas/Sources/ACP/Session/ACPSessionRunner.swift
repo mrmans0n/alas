@@ -1861,14 +1861,19 @@ final class ACPSessionRunner {
         }
     }
 
-    /// Snapshot the finished turn and hand it to `onTurnCompleted`. Must be
-    /// called on the main actor inside the `isActivePrompt` branch so a
-    /// superseded prompt never reports.
+    /// Snapshot the finished turn, record whether it failed, and hand it to
+    /// `onTurnCompleted`. Must be called on the main actor inside the
+    /// `isActivePrompt` branch so a superseded prompt never reports.
     /// `usageAwaitsResult`: the prompt's result has not arrived yet (a user cancel), so a sent prompt's usage waits
     /// for it, which carries its tokens, for at most `cancelledUsageWait`; `onTurnCompleted` does not.
     private func emitTurnCompleted(
         _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
     ) {
+        if case .failed(let message) = result {
+            session.turnFailure = message
+        } else {
+            session.turnFailure = nil
+        }
         guard let startedAt = activePromptStartedAt else { return }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever
@@ -2306,8 +2311,11 @@ final class ACPSessionRunner {
     /// any pending permission continuation, marks in-flight tool calls as
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
-    func userCancel(confirmingLease: Bool = true) async {
-        guard isConnectionCurrent() else { return }
+    /// Returns whether the cancel reached the agent: false when the runner
+    /// lost its connection or writer lease before sending it.
+    @discardableResult
+    func userCancel(confirmingLease: Bool = true) async -> Bool {
+        guard isConnectionCurrent() else { return false }
         invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
@@ -2341,20 +2349,20 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         if confirmingLease {
             // A former writer that lost the lease must not send a cancel RPC to
             // the agent for a session another instance now owns. The local
             // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
             // it only affects this runner's own sendNow catch path and has no
             // cross-instance side effects.
-            guard await hasConfirmedLeaseForSideEffect() else { return }
+            guard await hasConfirmedLeaseForSideEffect() else { return false }
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return true }
         await MainActor.run {
             guard self.isConnectionCurrent() else { return }
             flushStreamingPersist()
@@ -2412,6 +2420,7 @@ final class ACPSessionRunner {
             }
             flushQueueIfIdle()
         }
+        return true
     }
 }
 

@@ -79,6 +79,7 @@ extension PluginWorkspaceSnapshot {
         case .awaitingInput: "awaiting_input"
         case .permissionRequest: "permission_request"
         case .idle: "idle"
+        case .failed: "failed"
         case .detached: "detached"
         case .unknown: "unknown"
         }

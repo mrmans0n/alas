@@ -299,3 +299,120 @@ struct ACPOrchestrationSendResponse: Codable, Equatable, Sendable {
         case state
     }
 }
+
+/// The session tools that look at or stop another session's turns, routed
+/// through one entry point (`ACPSessionOrchestrationCoordinator.perform`).
+enum ACPDelegatedSessionAction: Equatable, Sendable {
+    case read(ACPDelegatedSessionReadRequest)
+    case search(ACPDelegatedSessionSearchRequest)
+    case wait(ACPDelegatedSessionWaitRequest)
+    case interrupt(targetSessionId: String)
+}
+
+struct ACPDelegatedSessionReadRequest: Equatable, Sendable {
+    static let defaultLimit = 20
+    static let maxLimit = 100
+    static let defaultMaxChars = 8_000
+    static let maxMaxChars = 100_000
+
+    let targetSessionId: String
+    /// First entry to return; nil reads the latest entries.
+    var offset: Int? = nil
+    var limit: Int = defaultLimit
+    var maxChars: Int = defaultMaxChars
+}
+
+struct ACPDelegatedSessionSearchRequest: Equatable, Sendable {
+    static let defaultLimit = 20
+    static let maxLimit = 100
+
+    let query: String
+    var limit: Int = defaultLimit
+}
+
+struct ACPDelegatedSessionWaitRequest: Equatable, Sendable {
+    /// Below the CLI client's 30-second socket read timeout.
+    static let maxTimeoutMillis = 20_000
+    static let maxSessions = 20
+
+    let targetSessionIds: [String]
+    var timeoutMillis: Int = maxTimeoutMillis
+}
+
+/// `session_read`: one page of a session's text-only transcript.
+struct ACPOrchestrationReadResponse: Codable, Equatable, Sendable {
+    let sessionId: String
+    let entries: [ACPSessionTranscriptReader.Entry]
+    let start: Int
+    /// Pass as `offset` to read on from the last returned entry.
+    let end: Int
+    let total: Int
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case entries
+        case start
+        case end
+        case total
+    }
+}
+
+struct ACPOrchestrationSearchResponse: Codable, Equatable, Sendable {
+    struct Match: Codable, Equatable, Sendable {
+        let sessionId: String
+        let index: Int
+        let role: String
+        let snippet: String
+
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case index
+            case role
+            case snippet
+        }
+    }
+
+    let matches: [Match]
+    /// True when more matches existed than `limit` allowed.
+    let truncated: Bool
+}
+
+struct ACPOrchestrationWaitResponse: Codable, Equatable, Sendable {
+    struct Session: Codable, Equatable, Sendable {
+        let sessionId: String
+        let state: String
+        /// False while the session still has a turn running or queued.
+        let settled: Bool
+        let lastAgentText: String?
+        let failure: String?
+
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case state
+            case settled
+            case lastAgentText = "last_agent_text"
+            case failure
+        }
+    }
+
+    let sessions: [Session]
+    let timedOut: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case sessions
+        case timedOut = "timed_out"
+    }
+}
+
+struct ACPOrchestrationInterruptResponse: Codable, Equatable, Sendable {
+    let sessionId: String
+    /// False when the session had no turn to cancel, or another Alas
+    /// instance drives it. The child's turn outcome still arrives the usual
+    /// way once the agent stops.
+    let cancelRequested: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case cancelRequested = "cancel_requested"
+    }
+}

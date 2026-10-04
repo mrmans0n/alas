@@ -18,52 +18,59 @@ enum AttentionProducer {
         display: AttentionWorktreeDisplaySnapshot,
         requiresUserInput: Bool = false
     ) -> [AttentionObservation] {
-        let awaitingKey = AttentionSourceKey(rawValue: "session:\(sessionID):awaiting")
-        let permissionKey = AttentionSourceKey(rawValue: "session:\(sessionID):permission")
-        let limitedKey = AttentionSourceKey(rawValue: "session:\(sessionID):limited")
         let fingerprint = harnessFingerprint(state: state, body: body, requiresUserInput: requiresUserInput)
-
+        let active: AttentionSignal?
         switch state {
         case .awaitingInput:
-            return [
-                .active(signal(
-                    sourceKey: awaitingKey, fingerprint: fingerprint, owner: owner,
-                    kind: requiresUserInput ? .agentAwaiting : .agentReady,
-                    title: requiresUserInput ? "\(agent.displayName) is waiting for input" : "\(agent.displayName) is ready for another prompt",
-                    body: body,
-                    jumpTarget: .session(sessionID: sessionID), display: display
-                )),
-                .inactive(sourceKey: permissionKey),
-                .inactive(sourceKey: limitedKey)
-            ]
+            active = signal(
+                sourceKey: harnessSourceKey(sessionID: sessionID, suffix: "awaiting"), fingerprint: fingerprint, owner: owner,
+                kind: requiresUserInput ? .agentAwaiting : .agentReady,
+                title: requiresUserInput ? "\(agent.displayName) is waiting for input" : "\(agent.displayName) is ready for another prompt",
+                body: body,
+                jumpTarget: .session(sessionID: sessionID), display: display
+            )
         case .permissionRequest:
-            return [
-                .inactive(sourceKey: awaitingKey),
-                .active(signal(
-                    sourceKey: permissionKey, fingerprint: fingerprint, owner: owner,
-                    kind: .agentPermission, title: "\(agent.displayName) needs permission", body: body,
-                    jumpTarget: .session(sessionID: sessionID), display: display
-                )),
-                .inactive(sourceKey: limitedKey)
-            ]
+            active = signal(
+                sourceKey: harnessSourceKey(sessionID: sessionID, suffix: "permission"), fingerprint: fingerprint, owner: owner,
+                kind: .agentPermission, title: "\(agent.displayName) needs permission", body: body,
+                jumpTarget: .session(sessionID: sessionID), display: display
+            )
         case .limited:
-            return [
-                .inactive(sourceKey: awaitingKey),
-                .inactive(sourceKey: permissionKey),
-                .active(signal(
-                    sourceKey: limitedKey, fingerprint: fingerprint, owner: owner,
-                    // Gave up or auto-resume is off: it needs the user.
-                    kind: requiresUserInput ? .agentAwaiting : .agentLimited,
-                    title: requiresUserInput
-                        ? "\(agent.displayName) hit its usage limit"
-                        : "\(agent.displayName) hit its usage limit · resuming after reset",
-                    body: body,
-                    jumpTarget: .session(sessionID: sessionID), display: display
-                ))
-            ]
+            active = signal(
+                sourceKey: harnessSourceKey(sessionID: sessionID, suffix: "limited"), fingerprint: fingerprint, owner: owner,
+                // Gave up or auto-resume is off: it needs the user.
+                kind: requiresUserInput ? .agentAwaiting : .agentLimited,
+                title: requiresUserInput
+                    ? "\(agent.displayName) hit its usage limit"
+                    : "\(agent.displayName) hit its usage limit · resuming after reset",
+                body: body,
+                jumpTarget: .session(sessionID: sessionID), display: display
+            )
+        case .failed:
+            active = signal(
+                sourceKey: harnessSourceKey(sessionID: sessionID, suffix: "failed"), fingerprint: fingerprint, owner: owner,
+                kind: .agentFailed, title: "\(agent.displayName) turn failed", body: body,
+                jumpTarget: .session(sessionID: sessionID), display: display
+            )
         case .busy, .idle:
-            return [.inactive(sourceKey: awaitingKey), .inactive(sourceKey: permissionKey), .inactive(sourceKey: limitedKey)]
+            active = nil
         }
+        return harnessSourceKeys(sessionID: sessionID).map { key in
+            if let active, active.sourceKey == key { return .active(active) }
+            return .inactive(sourceKey: key)
+        }
+    }
+
+    private static let harnessSourceKeySuffixes = ["awaiting", "permission", "limited", "failed"]
+
+    private static func harnessSourceKey(sessionID: String, suffix: String) -> AttentionSourceKey {
+        AttentionSourceKey(rawValue: "session:\(sessionID):\(suffix)")
+    }
+
+    /// Every source key a session's harness state can occupy, so callers can
+    /// clear them all when the session goes away.
+    static func harnessSourceKeys(sessionID: String) -> [AttentionSourceKey] {
+        harnessSourceKeySuffixes.map { harnessSourceKey(sessionID: sessionID, suffix: $0) }
     }
 
     static func scriptSourceKey(scriptKey: String, owner: AttentionWorktreeIdentity) -> AttentionSourceKey {

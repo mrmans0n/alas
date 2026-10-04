@@ -22,6 +22,7 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == false)
         #expect(runner.session.lastError?.contains("prompt failed") == true)
+        #expect(runner.session.turnFailure != nil)
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(completions.count == 1)
@@ -73,6 +74,7 @@ struct ACPSessionRunnerTests {
             "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
         ])])])
         runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+        runner.session.turnFailure = "previous turn failed"
 
         let succeeded = await withCheckedContinuation { continuation in
             runner.send(text: "hello", attachments: []) { succeeded in
@@ -81,6 +83,7 @@ struct ACPSessionRunnerTests {
         }
 
         #expect(succeeded == true)
+        #expect(runner.session.turnFailure == nil)
         #expect(runner.session.lastError == nil)
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
@@ -383,6 +386,13 @@ struct ACPSessionRunnerTests {
         await runner.userCancel()
 
         #expect(runner.session.retryStatus == nil)
+    }
+
+    @Test("user cancellation reports whether the cancel reached the agent", arguments: [true, false])
+    func userCancellationReportsWhetherItWasSent(leaseConfirmed: Bool) async throws {
+        let (runner, _) = try makeRunner(validateLease: { leaseConfirmed })
+
+        #expect(await runner.userCancel() == leaseConfirmed)
     }
 
     @Test("recording a submitted prompt keeps the suspended composer draft until prompt completion")

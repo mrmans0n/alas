@@ -88,6 +88,21 @@ struct AgentSidebarRollupTests {
         #expect(row.activityAt == Date(timeIntervalSince1970: 2))
     }
 
+    @Test("an idle live session whose last turn failed shows Failed, not Idle", arguments: [false, true])
+    @MainActor
+    func idleLiveSessionReflectsItsLastTurnFailure(failed: Bool) {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        session.agentState = .ready
+        session.turnFailure = failed ? "overloaded" : nil
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        #expect(rollup.active.first?.state == (failed ? .failed : .idle))
+    }
+
     @Test @MainActor
     func builderFiltersOtherWorktreesAndUsesUnknownForUnhookedTerminal() {
         let rollup = AgentSidebarRollupBuilder.build(.init(

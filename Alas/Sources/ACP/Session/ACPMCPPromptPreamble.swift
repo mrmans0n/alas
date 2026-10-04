@@ -49,6 +49,7 @@ enum ACPMCPPromptPreamble {
     static let builtInToolNames: [String] = [
         "open", "notify",
         "agent_list", "session_list", "session_new", "session_send",
+        "session_read", "session_search", "session_wait", "session_interrupt",
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
         "review", "review_comments", "review_reply", "review_resolve",
         "review_comment_add", "review_finish",
@@ -151,9 +152,11 @@ enum ACPMCPPromptPreamble {
         }
         if builtInInjected {
             let sessionTools = isDelegated
-                ? "session_list/session_send"
+                ? "session_list/session_send/session_read/session_search"
                 : "agent_list/session_list/session_new/session_send (delegate direct child agent sessions; "
-                    + "call agent_list first and pass an available agent id to session_new)"
+                    + "call agent_list first and pass an available agent id to session_new), "
+                    + "session_read/session_search (read a child's transcript), "
+                    + "session_wait/session_interrupt (block on or stop children's turns)"
             var line = "The MCP server \"alas\" (built-in) drives the Alas UI: "
                 + "open (reveal files to the user), notify (macOS notification), "
                 + "worktree_list/worktree_switch/worktree_new/worktree_delete, "
@@ -223,8 +226,8 @@ enum ACPMCPPromptPreamble {
         lines.append(intro)
         if builtInInjected {
             let sessionCLI = isDelegated
-                ? "alas session send <session-id> <prompt>"
-                : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] | alas session send <session-id> <prompt>"
+                ? "alas session send <session-id> <prompt> | alas session read <session-id> | alas session search <query>"
+                : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] | alas session send <session-id> <prompt> | alas session read <session-id> | alas session search <query> | alas session wait <session-id>... | alas session interrupt <session-id>"
             var line = "Use the `alas` CLI via your shell tool to drive the Alas UI: "
                 + "`alas open <path>` reveals a file to the user, "
                 + "`alas notify <body>` posts a macOS notification, "

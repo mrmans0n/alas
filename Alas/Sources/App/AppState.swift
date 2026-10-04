@@ -7434,6 +7434,9 @@ final class AppState {
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
             },
+            performDelegatedSessionAction: { origin, action in
+                await orchestration.perform(origin: origin, action)
+            },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)
@@ -11136,20 +11139,27 @@ final class AppState {
             case .terminal(let state):
                 for leaf in state.root.leaves() {
                     counts.total += 1
-                    if Self.harnessActivityIsBusy(harness.activityBySession[leaf.sessionId]?.state)
+                    if harnessSessionIsBusy(leaf.sessionId)
                         || terminal.registry.session(for: leaf.sessionId)?.surface.foregroundPid != nil {
                         counts.busy += 1
                     }
                 }
             case .acpSession(let state):
                 counts.total += 1
-                if Self.harnessActivityIsBusy(harness.activityBySession[state.sessionId]?.state) {
+                if harnessSessionIsBusy(state.sessionId) {
                     counts.busy += 1
                 }
             default:
                 break
             }
         }
+    }
+
+    /// A failed foreground turn can coexist with live background work, so
+    /// liveness checks both.
+    private func harnessSessionIsBusy(_ sessionId: String) -> Bool {
+        Self.harnessActivityIsBusy(harness.activityBySession[sessionId]?.state)
+            || harness.hasBackgroundActivity(sessionId: sessionId)
     }
     nonisolated static func blocksWorktreeSessionAdmission(_ state: WorktreeOperationState?) -> Bool {
         switch state {
@@ -11161,8 +11171,13 @@ final class AppState {
     }
 
     nonisolated static func harnessActivityIsBusy(_ state: ActivityState?) -> Bool {
-        guard let state else { return false }
-        return state != .idle
+        switch state {
+        case nil, .idle, .failed:
+            // A failed turn has stopped; its badge just outlives it.
+            return false
+        case .busy, .awaitingInput, .permissionRequest, .limited:
+            return true
+        }
     }
     private func worktreeCleanupWorkspaceOwners(
         for worktree: Worktree
