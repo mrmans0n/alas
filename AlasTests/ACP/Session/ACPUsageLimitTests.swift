@@ -55,6 +55,16 @@ struct ACPUsageLimitTests {
         #expect(ACPUsageLimitResetParser.resetDate(in: c.text, now: c.now, calendar: Self.madrid) == c.expected)
     }
 
+    @Test("provider dates are Gregorian whatever the user's calendar",
+          arguments: [Calendar.Identifier.buddhist, .japanese, .islamicUmmAlQura])
+    func parsesResetTimeWithNonGregorianCalendar(_ identifier: Calendar.Identifier) {
+        var calendar = Calendar(identifier: identifier)
+        calendar.timeZone = Self.madrid.timeZone
+        let text = "You've hit your usage limit. Try again at Sep 21st, 2026 4:35 PM."
+        #expect(ACPUsageLimitResetParser.resetDate(in: text, now: Self.date(2026, 9, 20, 10, 0), calendar: calendar)
+            == Self.date(2026, 9, 21, 16, 35))
+    }
+
     struct DetectCase: Sendable, CustomTestStringConvertible {
         let name: String
         let error: JSONRPCError

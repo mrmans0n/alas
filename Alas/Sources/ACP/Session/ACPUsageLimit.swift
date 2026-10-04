@@ -91,7 +91,10 @@ enum ACPUsageLimitResetParser {
             let range = match.range(at: index)
             return range.location == NSNotFound ? nil : ns.substring(with: range)
         }
-        var cal = calendar
+        // Provider dates are Gregorian; only the zone comes from the caller,
+        // whose own calendar may be Buddhist, Japanese, Islamic, ...
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = calendar.timeZone
         if let zone = group(7).flatMap(TimeZone.init(identifier:)) {
             cal.timeZone = zone
         }
