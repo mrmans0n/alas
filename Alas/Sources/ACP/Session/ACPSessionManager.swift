@@ -5746,6 +5746,7 @@ extension ACPSessionManager {
         session.contextRecoveryStatus = nil
         session.providerCapabilities = nil
         session.goalCapability = nil
+        session.supportsSteering = false
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -6046,6 +6047,7 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = attaching
             }
             session.promptCapabilities = initialized.promptCapabilities
+            session.supportsSteering = initialized.supportsSteering
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {

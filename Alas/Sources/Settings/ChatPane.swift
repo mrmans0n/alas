@@ -16,7 +16,7 @@ struct ChatPane: View {
         static let fontSize = "Font size"
         static let collapseFinishedToolCalls = "Collapse activity"
         static let defaultLaunchSurface = "Default launch surface"
-        static let sendOnEnter = "While busy, ⏎ queues; ⌥⏎ steers"
+        static let sendOnEnter = "Follow-up behavior"
         static let dictationLanguage = "Dictation language"
         static let confirmCloseChatTabs = "Confirm before closing chat tabs"
         static let autoRun = "⚡ Auto-run"
@@ -102,14 +102,19 @@ struct ChatPane: View {
 
                 SettingsGroup(title: GroupTitles.composer) {
                     SettingsRow(name: RowLabels.sendOnEnter,
-                                desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn while preserving pending queue items.") {
-                        AlasToggle(on: Binding(
+                                desc: "While busy, ⏎ and the send button use this action. Hold ⌥ for the other action. Steer joins the running turn when supported; otherwise it interrupts and sends a new prompt.") {
+                        Picker("", selection: Binding(
                             get: { state.config.harness.acpSendOnEnter },
                             set: {
                                 state.config.harness.acpSendOnEnter = $0
                                 state.saveConfig()
                             }
-                        ))
+                        )) {
+                            Text("Queue").tag(true)
+                            Text("Steer").tag(false)
+                        }
+                        .labelsHidden()
+                        .frame(width: 220)
                     }
                     if !dictationLocales.isEmpty {
                         SettingsRow(

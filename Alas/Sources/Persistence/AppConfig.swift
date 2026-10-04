@@ -294,8 +294,8 @@ struct AppConfig: Codable, Equatable {
         var dismissedACPSetupNudges: [String]
         var confirmCloseChatTabs: Bool
         /// When true (default): ⏎ submits with .auto intent, ⌥⏎ steers.
-        /// When false: the two are inverted — ⏎ steers, ⌥⏎ queues. The
-        /// label in Settings is "Send on ⏎, queue on ⌥⏎ while busy".
+        /// When false: ⏎ steers and ⌥⏎ queues. The busy send button follows
+        /// the same preference. Kept under its original key for compatibility.
         var acpSendOnEnter: Bool
         /// When true, newly created chat sessions start with auto-run enabled
         /// (the agent runs tools without asking). Seeds the per-session value

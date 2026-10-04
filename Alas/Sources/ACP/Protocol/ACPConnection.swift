@@ -56,6 +56,7 @@ struct ACPInitializeOutcome: Equatable {
     let supportsSubagents: Bool
     /// Whether the agent advertised the `_auth/status_update` extension marker.
     let advertisesAuthStatus: Bool
+    let supportsSteering: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     let agentInfo: ACPImplementationInfo?
 
@@ -69,7 +70,8 @@ struct ACPInitializeOutcome: Equatable {
         goalCapability: ACPGoalCapability? = nil,
         supportsSubagents: Bool = false,
         advertisesAuthStatus: Bool = false,
-        agentInfo: ACPImplementationInfo? = nil
+        agentInfo: ACPImplementationInfo? = nil,
+        supportsSteering: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -81,6 +83,7 @@ struct ACPInitializeOutcome: Equatable {
         self.supportsSubagents = supportsSubagents
         self.advertisesAuthStatus = advertisesAuthStatus
         self.agentInfo = agentInfo
+        self.supportsSteering = supportsSteering
     }
 }
 
@@ -89,6 +92,22 @@ struct ACPInitializeOutcome: Equatable {
 struct ACPPromptOutcome {
     let acknowledgement: ACPDurableConsumptionAcknowledgement?
     let quota: ACPPromptQuota?
+}
+
+enum ACPSteeringOutcome: String, Decodable {
+    case injected, startedNewTurn, promptRequired, failed
+}
+
+struct ACPSteeringParams: Encodable {
+    let sessionId: String
+    let prompt: [ACPContentBlock]
+    // Claude honors this opt-in. Older adapters may still return startedNewTurn.
+    var meta = ["steering": ["idleBehavior": "promptRequired"]]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, prompt
+        case meta = "_meta"
+    }
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -136,7 +155,8 @@ final class ACPConnection: @unchecked Sendable {
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
-            agentInfo: result.agentInfo
+            agentInfo: result.agentInfo,
+            supportsSteering: result.supportsSteering
         )
     }
 
@@ -386,6 +406,16 @@ final class ACPConnection: @unchecked Sendable {
             return ACPPromptOutcome(acknowledgement: nil, quota: quota)
         }
         return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
+    }
+
+    func steer(sessionId: String, blocks: [ACPContentBlock]) async throws -> ACPSteeringOutcome {
+        let response = try await client.send(ACPRequest(
+            method: "_session/steering",
+            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks)
+        ))
+        defer { response.acknowledgeDurableConsumption() }
+        struct Result: Decodable { let outcome: ACPSteeringOutcome }
+        return try JSONDecoder().decode(Result.self, from: response.body).outcome
     }
 
     func acknowledgeDurableSessionResponses() {

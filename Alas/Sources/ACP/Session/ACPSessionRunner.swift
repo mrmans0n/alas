@@ -283,6 +283,12 @@ final class ACPSessionRunner {
     /// ahead of the steer's replacement prompt. Once the redirect is in
     /// flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    private var nativeSteeringGeneration = 0
+    private var nativeSteeringInProgress = false
+    private var detachedSteeringTurn = false
+    private var lastSteeringThreadStatus: String?
+    private var steeringSawIdle = false
+    private var steeringSawActive = false
     private var pendingForceSendQueuedItemID: UUID?
     /// Holds an idle source session at its persisted remote head while
     /// `session/fork` is in flight. New prompts remain queued until the
@@ -1328,6 +1334,8 @@ final class ACPSessionRunner {
         switch params.update {
         case .availableModelsUpdate, .sessionConfigOptionsUpdate:
             onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
+        case .sessionInfoUpdate(let info):
+            observeSteeringThreadStatus(info)
         default:
             break
         }
@@ -1616,6 +1624,7 @@ final class ACPSessionRunner {
 
     func stop() {
         stopped = true
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         localTitleTask?.cancel()
@@ -1797,6 +1806,7 @@ final class ACPSessionRunner {
     /// attach's `flushQueueIfIdle` would skip it (guard requires
     /// `lastError == nil`), forcing the user to click Retry.
     func invalidateActivePrompt() {
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         if let promptID = activePromptID {
@@ -2204,6 +2214,7 @@ final class ACPSessionRunner {
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel(confirmingLease: Bool = true) async {
         guard isConnectionCurrent() else { return }
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -2567,7 +2578,7 @@ extension ACPSessionRunner {
             blocksEmpty: blocks.isEmpty,
             hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
             inFlightSteer: steerInProgress,
-            hasActivePrompt: activePromptID != nil
+            hasActivePrompt: activePromptID != nil || detachedSteeringTurn
         )
         switch route {
         case .noOp:
@@ -2774,6 +2785,7 @@ extension ACPSessionRunner {
         guard !nativeForkBarrierActive,
               !session.holdsPromptsForDelegatedSelection,
               !steerInProgress,
+              !detachedSteeringTurn,
               session.agentState == .ready,
               session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
@@ -2956,11 +2968,8 @@ extension ACPSessionRunner {
             && session.queue.isEmpty
     }
 
-    /// User clicked the row-local "send now" affordance for a queued item.
-    /// While idle this just promotes the item to the drainable head. While a
-    /// turn is active, it behaves like steering: cancel the current turn and
-    /// send the selected queued prompt, leaving every other pending item
-    /// untouched (same non-destructive contract as a composer steer).
+    /// Send a queued item next, steering the active turn where supported.
+    /// Preserve every other pending item, including during fallback interruption.
     func forceSendQueuedItem(id: UUID) {
         guard holdsLeaseForWrite() else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
@@ -3035,12 +3044,9 @@ extension ACPSessionRunner {
         return true
     }
 
-    /// Cancel the in-flight turn (if any), then send the new prompt as a
-    /// fresh turn without disturbing pending queued prompts. A `.sending`
-    /// queue head is still removed because it is the prompt being
-    /// cancelled — every other pending item is left exactly where it is,
-    /// whether the redirect came from the composer (⌥⏎) or from a queued
-    /// item's row-local "Send now".
+    /// Inject into the running turn where supported, otherwise interrupt and
+    /// send a fresh turn. Only the fallback removes the cancelled queue head;
+    /// every other pending item keeps its position.
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
@@ -3051,6 +3057,14 @@ extension ACPSessionRunner {
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if session.canSteerRunningTurn {
+            steerRunningTurn(
+                blocks: blocks, delegatedSource: delegatedSource,
+                recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,
+                recordedUserMessageID: recordedUserMessageID, draft: draft,
+                onDispatchRegistered: onDispatchRegistered, onPromptFinished: onPromptFinished)
+            return
+        }
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -3131,15 +3145,187 @@ extension ACPSessionRunner {
         }
     }
 
+    /// The extension acknowledges delivery; the original prompt still owns
+    /// completion. Preserve its tool state and every item in the queue.
+    private func steerRunningTurn(
+        blocks: [ACPContentBlock],
+        delegatedSource: ACPDelegatedPromptSource?,
+        recordUserPrompt: Bool,
+        normalUserTurn: Bool,
+        recordedUserMessageID: UUID?,
+        draft: ACPComposerDraft?,
+        onDispatchRegistered: (@Sendable () -> Void)?,
+        onPromptFinished: (@MainActor (Bool) -> Void)?
+    ) {
+        nativeSteeringGeneration += 1
+        let generation = nativeSteeringGeneration
+        let originalPromptTask = activePromptID == nil ? nil : latestPromptTask
+        let hadOwnedPrompt = activePromptID != nil
+        nativeSteeringInProgress = true
+        steerInProgress = true
+        steeringSawIdle = lastSteeringThreadStatus == "idle" || !hadOwnedPrompt
+        steeringSawActive = detachedSteeringTurn && lastSteeringThreadStatus == "active"
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
+        onDispatchRegistered?()
+        onPromptWorkChanged?()
+
+        Task { [weak self] in
+            guard let self else { onPromptFinished?(false)
+            return }
+            var recordedMessageID = recordedUserMessageID
+            do {
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                let wireBlocks = await Self.hydrate(
+                    blocks, promptCapabilities: self.session.promptCapabilities,
+                    worktreePath: self.worktreePath)
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                if recordUserPrompt {
+                    let before = self.session.transcript.messages.count
+                    let titleBefore = self.session.title
+                    if !self.session.followsTranscriptTail {
+                        self.session.followsTranscriptTail = true
+                        self.onResumeTranscriptTail?()
+                    }
+                    recordedMessageID = self.session.recordUserPrompt(
+                        text: Self.textPreview(of: blocks),
+                        attachments: Self.attachments(of: blocks, draft: draft),
+                        delegatedSource: delegatedSource)
+                    self.persistFromIndex(before)
+                    if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
+                }
+                let outcome = try await self.connection.steer(
+                    sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks)
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                switch outcome {
+                case .injected:
+                    self.session.lastError = nil
+                    onPromptFinished?(true)
+                    self.finishNativeSteering(generation: generation)
+                case .startedNewTurn:
+                    // Codex's legacy idle fallback starts a detached prompt.
+                    // Hold the queue until its thread status reports completion,
+                    // including status received before this acknowledgement.
+                    self.detachedSteeringTurn = true
+                    self.steeringSawIdle = true
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    self.session.transcript.streamingState = .streaming
+                    self.session.lastError = nil
+                    onPromptFinished?(true)
+                    self.finishNativeSteering(generation: generation)
+                case .promptRequired:
+                    // No content was consumed. Install an owned continuation
+                    // before releasing the queue, without recording another row.
+                    await originalPromptTask?.value
+                    guard await self.hasConfirmedLeaseForSideEffect(),
+                          !self.stopped, self.isConnectionCurrent(),
+                          self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    self.nativeSteeringInProgress = false
+                    self.detachedSteeringTurn = false
+                    self.sendNow(
+                        blocks: blocks, queuedItemId: nil, delegatedSource: delegatedSource,
+                        recordUserPrompt: false, normalUserTurn: normalUserTurn,
+                        recordedUserMessageID: recordedMessageID, draft: draft,
+                        onPromptFinished: onPromptFinished)
+                    self.finishNativeSteering(generation: generation)
+                case .failed:
+                    throw ACPClientError.jsonrpc(.init(
+                        code: -32000, message: "The agent could not inject the follow-up.", data: nil))
+                }
+            } catch {
+                if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
+                    if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
+                        // Method-not-found proves the content was not consumed.
+                        self.session.supportsSteering = false
+                        self.nativeSteeringInProgress = false
+                        self.steerInProgress = false
+                        self.steer(
+                            blocks: blocks, delegatedSource: delegatedSource,
+                            recordUserPrompt: recordedMessageID == nil && recordUserPrompt,
+                            normalUserTurn: normalUserTurn, recordedUserMessageID: recordedMessageID,
+                            draft: draft, onPromptFinished: onPromptFinished)
+                        return
+                    }
+                    if !(error is CancellationError) {
+                        self.session.lastError = "Follow-up failed: \(error.localizedDescription)"
+                    }
+                    self.finishNativeSteering(generation: generation)
+                }
+                // An ambiguous failure may have consumed the content. Restore
+                // the caller's draft without blindly sending it again.
+                onPromptFinished?(false)
+            }
+        }
+    }
+
+    private func invalidateNativeSteering() {
+        nativeSteeringGeneration += 1
+        if nativeSteeringInProgress { steerInProgress = false }
+        nativeSteeringInProgress = false
+        detachedSteeringTurn = false
+    }
+
+    private func finishNativeSteering(generation: Int) {
+        guard nativeSteeringGeneration == generation else { return }
+        nativeSteeringInProgress = false
+        finishDetachedSteeringIfReady()
+        steerInProgress = false
+        applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: false)
+        if let id = pendingForceSendQueuedItemID {
+            pendingForceSendQueuedItemID = nil
+            forceSendQueuedItem(id: id)
+        }
+        flushQueueIfIdle()
+        onPromptWorkChanged?()
+    }
+
+    private func observeSteeringThreadStatus(_ info: ACPSessionInfoUpdate) {
+        guard let root = info.metadata?.value as? [String: AnyCodable],
+              let codex = root["codex"]?.value as? [String: AnyCodable],
+              let status = codex["threadStatus"]?.value as? [String: AnyCodable],
+              let type = status["type"]?.value as? String,
+              ["active", "idle", "systemError"].contains(type)
+        else { return }
+        lastSteeringThreadStatus = type
+        if nativeSteeringInProgress || detachedSteeringTurn {
+            if type == "active", steeringSawIdle { steeringSawActive = true }
+            if type == "idle" || type == "systemError" { steeringSawIdle = true }
+            finishDetachedSteeringIfReady()
+        }
+    }
+
+    private func finishDetachedSteeringIfReady() {
+        guard detachedSteeringTurn, !nativeSteeringInProgress, steeringSawActive,
+              lastSteeringThreadStatus == "idle" || lastSteeringThreadStatus == "systemError"
+        else { return }
+        detachedSteeringTurn = false
+        if lastSteeringThreadStatus == "systemError" { session.lastError = "Steered turn failed." }
+        deferCompletedOutputBoundaryUntilUpdatesDrain()
+        onPromptWorkChanged?()
+    }
+
     var hasRetainedCleanupPromptWork: Bool {
         steerInProgress
+            || detachedSteeringTurn
             || activePromptID != nil
             || session.transcript.streamingState != .idle
             || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)
     }
 
     var hasRetainedCleanupSteerWork: Bool {
-        steerInProgress
+        steerInProgress || detachedSteeringTurn
     }
 
     var hasRetainedCleanupForkBarrierWork: Bool {
@@ -3710,7 +3896,8 @@ extension ACPSessionRunner {
     }
 
     private func applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: Bool) {
-        guard let boundary = pendingCompletedOutputBoundary,
+        guard !nativeSteeringInProgress, !detachedSteeringTurn,
+              let boundary = pendingCompletedOutputBoundary,
               appliedUpdateCount >= boundary.updateCount
         else { return }
         pendingCompletedOutputBoundary = nil

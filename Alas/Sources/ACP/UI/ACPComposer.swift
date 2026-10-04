@@ -154,7 +154,8 @@ struct ACPInputField: NSViewRepresentable {
             tv.markdownCodeBlockStyle = style
             context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
-            tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
+            tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
+                                                  nativeSteering: session.canSteerRunningTurn)
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {
@@ -227,16 +228,15 @@ struct ACPInputField: NSViewRepresentable {
 
     /// When busy, the placeholder advertises whichever action ⏎ will
     /// trigger under the current settings — so a user who inverted the
-    /// shortcut (sendOnEnter = false) sees "Steer the agent…" instead of
-    /// being told ⏎ queues.
+    /// shortcut sees the selected action and the adapter's actual behavior.
     static func placeholder(for state: ACPSession.StreamingState,
-                            sendOnEnter: Bool) -> String {
+                            sendOnEnter: Bool, nativeSteering: Bool = false) -> String {
         switch state {
         case .idle: return "Plan, ask, or build — type / for commands"
         case .sending, .streaming, .awaitingPermission, .awaitingInput:
             return sendOnEnter
-                ? "Queue a follow-up… (⌥⏎ to steer)"
-                : "Steer the agent… (⌥⏎ to queue)"
+                ? "Queue a follow-up… (⌥⏎ to \(steeringActionTitle(nativeSteering: nativeSteering).lowercased()))"
+                : "\(steeringActionTitle(nativeSteering: nativeSteering))… (⌥⏎ to queue)"
         }
     }
 

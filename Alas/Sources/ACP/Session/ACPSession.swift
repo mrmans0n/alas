@@ -265,6 +265,13 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
     @Published var promptCapabilities: ACPInitializeResult.ACPPromptCapabilities = .init()
+    /// Relearned on attach; adapters must explicitly advertise this extension.
+    @Published var supportsSteering = false
+
+    var canSteerRunningTurn: Bool {
+        agentState == .ready && supportsSteering
+            && transcript.streamingState != .idle && transcript.streamingState != .sending
+    }
     /// Session capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used to select a fork
     /// mechanism for this session.
