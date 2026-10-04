@@ -12787,7 +12787,10 @@ final class AppState {
         _ sessionId: String, projectId: String
     ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
-            guard let row = await manager.persistedSessionRow(id: sessionId), !row.archived,
+            // Read the store, not the cached row: another instance may have
+            // archived the session since this one cached it.
+            guard let stored = try? await manager.persistence.loadSession(id: sessionId), !stored.archived,
+                  await manager.persistedSessionRow(id: sessionId) != nil,
                   manager.placeholderSession(id: sessionId) != nil
             else { continue }
             manager.retainSession(id: sessionId)
