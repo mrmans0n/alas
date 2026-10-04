@@ -146,9 +146,8 @@ Local validation passed:
   `ACPSessionTests`, `ACPSessionRunnerQueueTests`, `ComposerActionTests`,
   `ACPSubagentRoutingTests`, `ACPSessionManagerHydrationTests`,
   `ACPSessionTerminalRoutingTests`, and `ACPToolCallGroupingTests`.
-- Before rebasing, the additional Claude/Codex completion-policy variant
-  was verified in an
-  `ACPSessionTests` rerun passed **126 tests in one suite**.
+- Before rebasing, an `ACPSessionTests` rerun verified the additional
+  Claude/Codex completion-policy variant: **126 tests in one suite** passed.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 
