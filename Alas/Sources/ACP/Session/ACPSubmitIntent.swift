@@ -10,10 +10,8 @@ enum ACPSubmitRoute: Equatable {
     /// flusher's FIFO order intact even if the user submits another prompt
     /// in the microsecond gap between state→.idle and the flusher firing.
     case enqueue
-    /// User explicitly steered: cancel the in-flight turn (if any), preserve
-    /// the queue, and send the new prompt as a fresh turn. Falls back to
-    /// `.sendNow` only when there's literally nothing to interrupt
-    /// (idle + empty queue) — handled by the resolver.
+    /// Inject into the running turn where supported, otherwise interrupt and
+    /// resend. Preserve the queue. An idle, queue-empty session sends normally.
     case steer
     /// Empty composer — nothing to send. Never cancels a turn.
     case noOp
@@ -29,12 +27,8 @@ enum ACPSubmitRoute: Equatable {
     ) -> ACPSubmitRoute
     {
         if blocksEmpty { return .noOp }
-        // While a steer is mid-flight, `userCancel` has already flipped
-        // streamingState to .idle but the redirect's `sendNow` hasn't
-        // installed itself yet. Forcing every non-empty submit through
-        // the queue closes that window — the redirect fires first, and
-        // whatever the user typed during it drains afterwards instead of
-        // racing the redirect.
+        // A steer can outlive the original prompt's completion or cancellation.
+        // Queue subsequent submits until the follow-up's delivery is settled.
         if inFlightSteer { return .enqueue }
         let canSendNow = state == .idle && queueEmpty && !hasPendingInput && !hasActivePrompt
         switch intent {

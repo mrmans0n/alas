@@ -283,6 +283,17 @@ final class ACPSessionRunner {
     /// ahead of the steer's replacement prompt. Once the redirect is in
     /// flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    private var queueSaveGeneration = 0
+    private var deferredQueueAcknowledgements: [(generation: Int, acknowledgement: ACPDurableConsumptionAcknowledgement?)] = []
+    private var nativeSteeringGeneration = 0
+    private var nativeSteeringInProgress = false
+    private var nativeSteeringQueueItemID: UUID?
+    private var steeringRowPersistencePending = false
+    private var detachedSteeringTurn = false
+    private var lastSteeringThreadStatus: String?
+    private var steeringSawIdle = false
+    private var steeringSawActive = false
+    private var steeringSawActiveAfterIdle = false
     private var pendingForceSendQueuedItemID: UUID?
     /// Holds an idle source session at its persisted remote head while
     /// `session/fork` is in flight. New prompts remain queued until the
@@ -1127,7 +1138,7 @@ final class ACPSessionRunner {
             pendingIncomingUpdates.removeAll()
             return
         }
-        guard !pendingIncomingUpdates.isEmpty else { return }
+        guard !steeringRowPersistencePending, !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
         for update in updates {
@@ -1146,6 +1157,11 @@ final class ACPSessionRunner {
         flushQueueWhenBoundaryReady: Bool = true,
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
+        if steeringRowPersistencePending {
+            pendingIncomingUpdates.append(.init(params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease))
+            return
+        }
+
         guard isConnectionCurrent() else { return }
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
@@ -1328,6 +1344,8 @@ final class ACPSessionRunner {
         switch params.update {
         case .availableModelsUpdate, .sessionConfigOptionsUpdate:
             onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
+        case .sessionInfoUpdate(let info):
+            observeSteeringThreadStatus(info)
         default:
             break
         }
@@ -1606,9 +1624,8 @@ final class ACPSessionRunner {
     private func finishLoadReplaySuppression() {
         suppressingLoadReplay = false
         session.endSuppressedReplaySideEffects()
-        // Disallow streaming boundary crossings until the next prompt starts.
-        // If the prompt already started while a delayed replay flush was still
-        // pending, keep its live-stream boundary setting intact.
+        // Keep late replay behind the boundary unless this runner owns a
+        // new prompt. Live steering bindings resolve per chunk independently.
         if activePromptID == nil {
             session.allowsStreamingBoundaryCrossing = false
         }
@@ -1616,6 +1633,9 @@ final class ACPSessionRunner {
 
     func stop() {
         stopped = true
+        session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
+        deferredQueueAcknowledgements.removeAll()
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         localTitleTask?.cancel()
@@ -1797,6 +1817,7 @@ final class ACPSessionRunner {
     /// attach's `flushQueueIfIdle` would skip it (guard requires
     /// `lastError == nil`), forcing the user to click Retry.
     func invalidateActivePrompt() {
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         if let promptID = activePromptID {
@@ -2207,6 +2228,7 @@ final class ACPSessionRunner {
     @discardableResult
     func userCancel(confirmingLease: Bool = true) async -> Bool {
         guard isConnectionCurrent() else { return false }
+        invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -2571,7 +2593,7 @@ extension ACPSessionRunner {
             blocksEmpty: blocks.isEmpty,
             hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
             inFlightSteer: steerInProgress,
-            hasActivePrompt: activePromptID != nil
+            hasActivePrompt: activePromptID != nil || detachedSteeringTurn
         )
         switch route {
         case .noOp:
@@ -2640,6 +2662,7 @@ extension ACPSessionRunner {
     /// honor its result before proceeding.
     func persistQueue(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
+        retainOnFailure: Bool = false,
         completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
         guard holdsLeaseForWrite() else {
@@ -2649,34 +2672,37 @@ extension ACPSessionRunner {
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        if acknowledgement != nil || completion != nil {
-            session.pendingQueuePersistenceCount += 1
-            enqueuePersistence({ persistence in
-                try await persistence.upsertQueue(
-                    sessionId: sessionId,
-                    items: items,
-                    fence: fence
-                )
-            }, completion: { persisted in
-                let didPersist = persisted == true
-                self.session.pendingQueuePersistenceCount -= 1
-                if didPersist {
-                    acknowledgement?()
-                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil {
+        queueSaveGeneration += 1
+        let generation = queueSaveGeneration
+        let counted = acknowledgement != nil || completion != nil || retainOnFailure
+        if counted { session.pendingQueuePersistenceCount += 1 }
+        enqueuePersistence({ persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }, completion: { persisted in
+            let didPersist = persisted == true
+            if counted { self.session.pendingQueuePersistenceCount -= 1 }
+            if didPersist {
+                // A newer committed snapshot durably supersedes failed saves.
+                // Release their protected cursors before permitting dispatch.
+                let deferred = self.deferredQueueAcknowledgements.filter { $0.generation <= generation }
+                self.deferredQueueAcknowledgements.removeAll { $0.generation <= generation }
+                self.session.pendingQueuePersistenceCount -= deferred.count
+                deferred.forEach { $0.acknowledgement?() }
+                acknowledgement?()
+                if !deferred.isEmpty, self.session.lastError == "Could not save follow-up delivery confirmation." {
+                    self.session.lastError = nil
+                }
+                if counted || !deferred.isEmpty {
+                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil || !deferred.isEmpty {
                         self.flushQueueIfIdle()
                     }
                 }
-                completion?(didPersist)
-            })
-        } else {
-            enqueuePersistence { persistence in
-                _ = try await persistence.upsertQueue(
-                    sessionId: sessionId,
-                    items: items,
-                    fence: fence
-                )
+            } else if retainOnFailure, self.isConnectionCurrent(), !self.stopped {
+                self.deferredQueueAcknowledgements.append((generation, acknowledgement))
+                self.session.pendingQueuePersistenceCount += 1
             }
-        }
+            completion?(didPersist)
+        })
     }
 
     /// Persist that the one-time MCP context preamble has been delivered:
@@ -2778,6 +2804,7 @@ extension ACPSessionRunner {
         guard !nativeForkBarrierActive,
               !session.holdsPromptsForDelegatedSelection,
               !steerInProgress,
+              !detachedSteeringTurn,
               session.agentState == .ready,
               session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
@@ -2801,27 +2828,60 @@ extension ACPSessionRunner {
         guard let brokerOperationKey = session.markQueueHeadSending() else {
             return
         }
+        sendQueuedHead(head, brokerOperationKey: brokerOperationKey)
+    }
+
+    /// Shared durable dispatch boundary for ordinary queue drains and owned
+    /// continuations whose steering request did not consume the content.
+    private func sendQueuedHead(
+        _ head: QueuedPrompt,
+        brokerOperationKey: String,
+        onPromptFinished: (@MainActor (Bool) -> Void)? = nil,
+        onDispatchSettled: (@MainActor @Sendable () -> Void)? = nil
+    ) {
         persistQueue(completion: { [weak self] persisted in
-            guard let self else { return }
+            guard let self else {
+                onPromptFinished?(false)
+                onDispatchSettled?()
+                return
+            }
             guard persisted else {
                 guard self.isConnectionCurrent(),
                       !self.stopped,
                       self.session.queue.first?.id == head.id,
                       self.session.queue.first?.status == .sending
-                else { return }
+                else {
+                    onPromptFinished?(false)
+                    onDispatchSettled?()
+                    return
+                }
                 self.session.setQueueHeadError(
                     "Could not save queued message; it was not sent.",
                     clearDispatchProvenance: true
                 )
                 self.persistQueue()
                 self.onPromptWorkChanged?()
+                onPromptFinished?(false)
+                onDispatchSettled?()
                 return
             }
             guard self.isConnectionCurrent(),
                   !self.stopped,
                   self.session.queue.first?.id == head.id,
                   self.session.queue.first?.status == .sending
-            else { return }
+            else {
+                onPromptFinished?(false)
+                onDispatchSettled?()
+                return
+            }
+            var onDispatchRegistered = self.queuedPromptDispatchRegistration(for: head.id)
+            if let onDispatchSettled {
+                let registration = onDispatchRegistered
+                onDispatchRegistered = {
+                    registration?()
+                    Task { @MainActor in onDispatchSettled() }
+                }
+            }
             self.sendNow(
                 blocks: head.blocks,
                 queuedItemId: head.id,
@@ -2835,9 +2895,10 @@ extension ACPSessionRunner {
                 // offset instead of leaving `textOffset` nil as documented on
                 // `ACPMessage.Attachment.textOffset`.
                 draft: head.draft,
-                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
+                onDispatchRegistered: onDispatchRegistered,
                 beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id),
-                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id)
+                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id),
+                onPromptFinished: onPromptFinished
             )
         })
     }
@@ -2960,11 +3021,8 @@ extension ACPSessionRunner {
             && session.queue.isEmpty
     }
 
-    /// User clicked the row-local "send now" affordance for a queued item.
-    /// While idle this just promotes the item to the drainable head. While a
-    /// turn is active, it behaves like steering: cancel the current turn and
-    /// send the selected queued prompt, leaving every other pending item
-    /// untouched (same non-destructive contract as a composer steer).
+    /// Send a queued item next, steering the active turn where supported.
+    /// Preserve every other pending item, including during fallback interruption.
     func forceSendQueuedItem(id: UUID) {
         guard holdsLeaseForWrite() else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
@@ -3003,9 +3061,18 @@ extension ACPSessionRunner {
         }
 
         let item = session.queue.remove(at: idx)
-        persistQueue()
         let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
         let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
+        if session.canSteerRunningTurn {
+            steerRunningTurn(
+                blocks: item.blocks, delegatedSource: item.delegatedSource,
+                recordUserPrompt: !item.transcriptRecorded, normalUserTurn: normalUserTurn,
+                recordedUserMessageID: recordedUserMessageID, draft: item.draft,
+                onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id),
+                onPromptFinished: nil, recoveryQueueItem: (item, idx))
+            return
+        }
+        persistQueue()
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
@@ -3039,12 +3106,9 @@ extension ACPSessionRunner {
         return true
     }
 
-    /// Cancel the in-flight turn (if any), then send the new prompt as a
-    /// fresh turn without disturbing pending queued prompts. A `.sending`
-    /// queue head is still removed because it is the prompt being
-    /// cancelled — every other pending item is left exactly where it is,
-    /// whether the redirect came from the composer (⌥⏎) or from a queued
-    /// item's row-local "Send now".
+    /// Inject into the running turn where supported, otherwise interrupt and
+    /// send a fresh turn. Only the fallback removes the cancelled queue head;
+    /// every other pending item keeps its position.
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
@@ -3052,9 +3116,18 @@ extension ACPSessionRunner {
         normalUserTurn: Bool = true,
         recordedUserMessageID: UUID? = nil,
         draft: ACPComposerDraft? = nil,
+        recoveryQueueItemID: UUID? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if session.canSteerRunningTurn {
+            steerRunningTurn(
+                blocks: blocks, delegatedSource: delegatedSource,
+                recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,
+                recordedUserMessageID: recordedUserMessageID, draft: draft,
+                onDispatchRegistered: onDispatchRegistered, onPromptFinished: onPromptFinished)
+            return
+        }
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -3115,6 +3188,38 @@ extension ACPSessionRunner {
                     onPromptFinished?(false)
                     return
                 }
+                if let recoveryQueueItemID {
+                    guard let index = self.session.queue.firstIndex(where: { $0.id == recoveryQueueItemID }) else {
+                        self.steerInProgress = false
+                        onDispatchRegistered?()
+                        onPromptFinished?(false)
+                        return
+                    }
+                    var head = self.session.queue.remove(at: index)
+                    head.status = .pending
+                    head.lastError = nil
+                    head.deliveryUncertain = false
+                    self.session.queue.insert(head, at: 0)
+                    guard let brokerOperationKey = self.session.markQueueHeadSending() else {
+                        self.steerInProgress = false
+                        onDispatchRegistered?()
+                        onPromptFinished?(false)
+                        return
+                    }
+                    self.sendQueuedHead(head, brokerOperationKey: brokerOperationKey,
+                                        onPromptFinished: onPromptFinished,
+                                        onDispatchSettled: { [weak self] in
+                                            onDispatchRegistered?()
+                                            guard let self else { return }
+                                            self.steerInProgress = false
+                                            if let id = self.pendingForceSendQueuedItemID {
+                                                self.pendingForceSendQueuedItemID = nil
+                                                self.forceSendQueuedItem(id: id)
+                                            }
+                                            self.flushQueueIfIdle()
+                                        })
+                    return
+                }
                 self.sendNow(
                     blocks: blocks,
                     queuedItemId: nil,
@@ -3135,15 +3240,461 @@ extension ACPSessionRunner {
         }
     }
 
+    /// The extension acknowledges delivery; the original prompt still owns
+    /// completion. Preserve its tool state and every item in the queue.
+    private func steerRunningTurn(
+        blocks: [ACPContentBlock],
+        delegatedSource: ACPDelegatedPromptSource?,
+        recordUserPrompt: Bool,
+        normalUserTurn: Bool,
+        recordedUserMessageID: UUID?,
+        draft: ACPComposerDraft?,
+        onDispatchRegistered: (@Sendable () -> Void)?,
+        onPromptFinished: (@MainActor (Bool) -> Void)?,
+        recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
+    ) {
+        let dispatchHandoff = onDispatchRegistered.map(ACPRequestHandoff.init)
+        let durableQueueItem = recoveryQueueItem ?? (
+            item: QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource,
+                               transcriptRecorded: !recordUserPrompt),
+            index: session.queue.count)
+        var pendingDelivery = durableQueueItem.item
+        pendingDelivery.status = .sending
+        pendingDelivery.lastError = "Follow-up delivery is awaiting confirmation. Retry if it cannot be confirmed."
+        pendingDelivery.markDeliveryUncertain()
+        session.queue.insert(pendingDelivery, at: min(durableQueueItem.index, session.queue.count))
+        if normalUserTurn { session.normalQueuedTurnIDs.insert(pendingDelivery.id) }
+        let initialRecoveryPersistence = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await withCheckedContinuation { continuation in
+                self.persistQueue(completion: { continuation.resume(returning: $0) })
+            }
+        }
+        nativeSteeringGeneration += 1
+        nativeSteeringQueueItemID = durableQueueItem.item.id
+        let generation = nativeSteeringGeneration
+        let originalPromptTask = activePromptID == nil ? nil : latestPromptTask
+        let hadOwnedPrompt = activePromptID != nil
+        nativeSteeringInProgress = true
+        steerInProgress = true
+        steeringSawIdle = lastSteeringThreadStatus == "idle" || (!hadOwnedPrompt && !detachedSteeringTurn)
+        steeringSawActive = detachedSteeringTurn && lastSteeringThreadStatus == "active"
+        steeringSawActiveAfterIdle = false
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
+        onPromptWorkChanged?()
+
+        Task { [weak self] in
+            var recoveryPersisted = await initialRecoveryPersistence.value
+            guard let self else { dispatchHandoff?.fire()
+            onPromptFinished?(recoveryPersisted)
+            return }
+            var recordedMessageID = recordedUserMessageID
+            var recordedMessagePersisted = durableQueueItem.item.transcriptRecorded
+            var ownedContinuationStarted = false
+            var steeringAcknowledgement: ACPDurableConsumptionAcknowledgement?
+            let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
+                if let self, !self.stopped, self.isConnectionCurrent() {
+                    if succeeded {
+                        self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
+                        self.session.normalQueuedTurnIDs.remove(durableQueueItem.item.id)
+                        self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: durableQueueItem.item.id)
+                    } else if !ownedContinuationStarted {
+                        var item = durableQueueItem.item
+                        item.transcriptRecorded = recordedMessagePersisted
+                        item.status = .pending
+                        item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
+                        item.markDeliveryUncertain()
+                        if let index = self.session.queue.firstIndex(where: { $0.id == item.id }) {
+                            self.session.queue[index] = item
+                        } else {
+                            self.session.queue.insert(item, at: min(durableQueueItem.index, self.session.queue.count))
+                        }
+                        if normalUserTurn {
+                            self.session.normalQueuedTurnIDs.insert(item.id)
+                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessagePersisted ? recordedMessageID : nil
+                        }
+                    }
+                    // Submission is accepted if its content is retained for
+                    // retry; restoring the draft as well would duplicate it.
+                    let accepted = succeeded || self.session.queue.contains { $0.id == durableQueueItem.item.id }
+                    self.persistQueue(acknowledging: steeringAcknowledgement, retainOnFailure: true, completion: { persisted in
+                        if !persisted, self.isConnectionCurrent(), !self.stopped {
+                            self.session.lastError = "Could not save follow-up delivery confirmation."
+                        }
+                        if succeeded, persisted { self.flushQueueIfIdle() }
+                        onPromptFinished?(accepted)
+                    })
+                } else {
+                    // A replacement owns the persisted recovery item. Keep
+                    // its submitted draft cleared without touching its state.
+                    onPromptFinished?(succeeded || recoveryPersisted)
+                }
+            }
+            do {
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                var wireBlocks = await Self.hydrate(
+                    blocks, promptCapabilities: self.session.promptCapabilities,
+                    worktreePath: self.worktreePath)
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                let boundaryCrossingBefore = self.session.allowsStreamingBoundaryCrossing
+                if recordUserPrompt {
+                    self.flushStreamingPersist()
+                    let before = self.session.transcript.messages.count
+                    let titleBefore = self.session.title
+                    let titleSourceBefore = self.session.titleSource
+                    let completedBoundaryBefore = self.session.transcript.completedOutputBoundaryMessageIds
+                    if !self.session.followsTranscriptTail {
+                        self.session.followsTranscriptTail = true
+                        self.onResumeTranscriptTail?()
+                    }
+                    let userMessageID = self.session.recordUserPrompt(
+                        text: Self.textPreview(of: blocks),
+                        attachments: Self.attachments(of: blocks, draft: draft),
+                        delegatedSource: delegatedSource)
+                    recordedMessageID = userMessageID
+                    let recordedTitle = self.session.title
+                    let userIndex = self.session.transcript.messages.count - 1
+                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    let boundaryDirty = self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex) { text in
+                        boundaryMetadata.append((text, text.metadata))
+                    }
+                    // Defer incoming mutations until commit/rollback so they
+                    // cannot persist a provisional row or boundary separately.
+                    self.steeringRowPersistencePending = true
+                    guard await self.persistSteeringUserRow(from: before, userMessageID: userMessageID,
+                                                           boundaryDirty: boundaryDirty, queueItemID: durableQueueItem.item.id) else {
+                        // Invalidation cancels delivery, not rollback of this
+                        // exact provisional row. A replacement connection owns
+                        // its own rows and remains fenced out here.
+                        if self.isConnectionCurrent(),
+                           let index = self.session.transcript.messages.firstIndex(where: {
+                               if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
+                               return false
+                           }) {
+                            boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
+                            self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                            self.session.transcript.messages.remove(at: index)
+                            // Replay output materialized before this user row
+                            // belongs to the preceding turn, even if steering
+                            // persistence failed. Save it independently.
+                            self.persistFromIndex(before)
+                            self.session.transcript.lastContentTouchIndex = nil
+                            self.session.transcript.completedOutputBoundaryMessageIds = completedBoundaryBefore
+                            if self.session.title == recordedTitle, self.session.titleSource == .fallback {
+                                self.session.title = titleBefore
+                                self.session.titleSource = titleSourceBefore
+                            }
+                        }
+                        self.steeringRowPersistencePending = false
+                        self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                        recordedMessageID = nil
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
+                    }
+                    recordedMessagePersisted = true
+                    recoveryPersisted = true
+                    self.steeringRowPersistencePending = false
+                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
+                } else {
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+                    let dirty = self.session.beginSteeringOutputBoundary(followingUserCount: 0) { text in
+                        boundaryMetadata.append((text, text.metadata))
+                    }
+                    self.steeringRowPersistencePending = true
+                    let persisted = await withCheckedContinuation { continuation in
+                        if !self.persistIndices(dirty, completion: { continuation.resume(returning: $0) }) {
+                            continuation.resume(returning: false)
+                        }
+                    }
+                    if !persisted, self.isConnectionCurrent() {
+                        boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
+                        self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                    }
+                    self.steeringRowPersistencePending = false
+                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    guard persisted else {
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up boundary; it was not sent.", data: nil))
+                    }
+                }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                if recordUserPrompt, let messageID = recordedMessageID,
+                   let checkpointID = await self.onCheckpointCapture?(
+                       Self.textPreview(of: blocks), !Self.attachments(of: blocks).isEmpty) {
+                    guard !self.stopped, self.isConnectionCurrent(),
+                          self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    if self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
+                       let index = self.session.transcript.messages.firstIndex(where: {
+                           if case .user(let id, _, _, _, _) = $0 { return id == messageID }
+                           return false
+                       }) {
+                        self.persistIndices([index])
+                    }
+                }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                // Match normal prompts' per-dispatch context, while keeping
+                // private context out of the recorded user message.
+                let context = await self.pluginContext?(self.sessionId) ?? []
+                wireBlocks.insert(contentsOf: context.map { .text($0) }, at: 0)
+                if self.session.readOnlyRestricted {
+                    wireBlocks.insert(.text(ACPSideQuestion.guidance), at: context.count)
+                }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                guard let queueIndex = self.session.queue.firstIndex(where: { $0.id == durableQueueItem.item.id })
+                else { throw CancellationError() }
+                self.session.queue[queueIndex].transcriptRecorded = pendingDelivery.transcriptRecorded || recordedMessageID != nil
+                if normalUserTurn { self.session.normalQueuedTurnUserMessageIDs[durableQueueItem.item.id] = recordedMessageID }
+                let persisted = await withCheckedContinuation { continuation in
+                    self.persistQueue(completion: { continuation.resume(returning: $0) })
+                }
+                guard persisted else {
+                    throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
+                }
+                recoveryPersisted = true
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                let result = try await self.connection.steer(
+                    sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks,
+                    brokerOperationKey: durableQueueItem.item.steeringBrokerOperationKey)
+                steeringAcknowledgement = result.acknowledgement
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
+                self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+                switch try result.outcome.get() {
+                case .injected:
+                    dispatchHandoff?.fire()
+                    self.session.lastError = nil
+                    finishPrompt(true)
+                    self.finishNativeSteering(generation: generation)
+                case .startedNewTurn:
+                    dispatchHandoff?.fire()
+                    guard self.session.supportsCodexSteeringCompletion || self.lastSteeringThreadStatus != nil else {
+                        let message = "The agent started a follow-up without a supported completion signal. Stop or restart before continuing."
+                        self.session.supportsSteering = false
+                        self.session.agentState = .failed(message)
+                        self.session.transcript.streamingState = .awaitingInput
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: message, data: nil))
+                    }
+                    // Codex's legacy idle fallback starts a detached prompt.
+                    // Hold the queue until its thread status reports completion,
+                    // including status received before this acknowledgement.
+                    self.detachedSteeringTurn = true
+                    self.steeringSawActive = self.steeringSawActiveAfterIdle
+                    self.steeringSawIdle = true
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    self.session.transcript.streamingState = .streaming
+                    self.session.lastError = nil
+                    finishPrompt(true)
+                    self.finishNativeSteering(generation: generation)
+                case .promptRequired:
+                    // No content was consumed. Install an owned continuation
+                    // before releasing the queue, without recording another row.
+                    await originalPromptTask?.value
+                    guard await self.hasConfirmedLeaseForSideEffect(),
+                          !self.stopped, self.isConnectionCurrent(),
+                          self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    self.detachedSteeringTurn = false
+                    // An owned continuation uses the queue's normal failure
+                    // handling, which retains its head before releasing output.
+                    ownedContinuationStarted = true
+                    self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
+                    var continuationItem = durableQueueItem.item
+                    continuationItem.status = .pending
+                    continuationItem.transcriptRecorded = continuationItem.transcriptRecorded || recordedMessageID != nil
+                    continuationItem.lastError = nil
+                    continuationItem.deliveryUncertain = false
+                    self.session.queue.insert(continuationItem, at: 0)
+                    if normalUserTurn {
+                        self.session.normalQueuedTurnIDs.insert(continuationItem.id)
+                        self.session.normalQueuedTurnUserMessageIDs[continuationItem.id] = recordedMessageID
+                    }
+                    guard let brokerOperationKey = self.session.markQueueHeadSending() else {
+                        throw CancellationError()
+                    }
+                    self.sendQueuedHead(
+                        continuationItem, brokerOperationKey: brokerOperationKey,
+                        onPromptFinished: finishPrompt,
+                        onDispatchSettled: { [weak self] in
+                            dispatchHandoff?.fire()
+                            self?.finishNativeSteering(generation: generation)
+                        })
+                case .failed:
+                    throw ACPClientError.jsonrpc(.init(
+                        code: -32000, message: "The agent could not inject the follow-up.", data: nil))
+                }
+            } catch {
+                if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
+                    if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
+                        // Method-not-found proves the content was not consumed.
+                        self.session.supportsSteering = false
+                        self.nativeSteeringInProgress = false
+                        self.steerInProgress = false
+                        // Preserve recovery through fallback cancellation,
+                        // which discards the interrupted sending queue head.
+                        if let index = self.session.queue.firstIndex(where: { $0.id == durableQueueItem.item.id }) {
+                            self.session.queue[index].status = .pending
+                            self.persistQueue()
+                        }
+                        ownedContinuationStarted = true
+                        self.steer(
+                            blocks: blocks, delegatedSource: delegatedSource,
+                            recordUserPrompt: recordedMessageID == nil && recordUserPrompt,
+                            normalUserTurn: normalUserTurn, recordedUserMessageID: recordedMessageID,
+                            draft: draft, recoveryQueueItemID: durableQueueItem.item.id,
+                            onDispatchRegistered: { dispatchHandoff?.fire() }, onPromptFinished: finishPrompt)
+                        return
+                    }
+                    dispatchHandoff?.fire()
+                    if !(error is CancellationError) {
+                        self.session.lastError = "Follow-up failed: \(error.localizedDescription)"
+                    }
+                    // Restore a forced queue item before releasing the barrier;
+                    // it must not be dropped or automatically sent again.
+                    finishPrompt(false)
+                    self.finishNativeSteering(generation: generation)
+                    return
+                }
+                // An ambiguous failure may have consumed the content. Restore
+                // the caller's draft without blindly sending it again.
+                dispatchHandoff?.fire()
+                finishPrompt(false)
+            }
+        }
+    }
+
+    private func persistSteeringUserRow(from index: Int, userMessageID: UUID, boundaryDirty: Set<Int>, queueItemID: UUID) async -> Bool {
+        guard holdsLeaseForWrite(),
+              let userIndex = session.transcript.messages.firstIndex(where: {
+                  if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
+                  return false
+              }), userIndex >= index,
+              let queueIndex = session.queue.firstIndex(where: { $0.id == queueItemID })
+        else { return false }
+        // Recording the prompt may first materialize held replay candidates.
+        // Persist them and the identified user row in the same transaction.
+        let rows: [ACPStoredMessage]
+        do {
+            rows = try boundaryDirty.union(index...userIndex).sorted().map { index in
+                let message = session.transcript.messages[index]
+                return ACPStoredMessage(id: messageRowID(index), sessionId: self.sessionId, kind: message.kind,
+                                        seq: Int64(index), payload: try ACPMessageCodec.encode(message),
+                                        createdAt: createdAt(forMessageAt: index))
+            }
+        } catch { return false }
+        session.queue[queueIndex].transcriptRecorded = true
+        let items = session.queue
+        let sessionId = sessionId
+        let fence = leaseFenceProvider()
+        session.pendingQueuePersistenceCount += 1
+        return await withCheckedContinuation { continuation in
+            enqueuePersistence({ persistence in
+                try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
+            }, completion: { persisted in
+                self.session.pendingQueuePersistenceCount -= 1
+                if persisted == true { self.commitPersistedMessageRows(rows) }
+                continuation.resume(returning: persisted == true)
+            })
+        }
+    }
+
+    private func invalidateNativeSteering() {
+        if !stopped, isConnectionCurrent(), holdsLeaseForWrite(),
+           let id = nativeSteeringQueueItemID,
+           let index = session.queue.firstIndex(where: { $0.id == id }),
+           session.queue[index].status == .sending, session.queue[index].deliveryUncertain {
+            // The invalidated task no longer owns recovery. Keep it actionable
+            // even when an earlier queued prompt occupies the head.
+            session.queue[index].status = .pending
+            session.queue[index].lastError = "Follow-up delivery was interrupted. Retry if it cannot be confirmed."
+            persistQueue()
+        }
+        nativeSteeringQueueItemID = nil
+        nativeSteeringGeneration += 1
+        if nativeSteeringInProgress { steerInProgress = false }
+        nativeSteeringInProgress = false
+        detachedSteeringTurn = false
+    }
+
+    private func finishNativeSteering(generation: Int) {
+        guard nativeSteeringGeneration == generation else { return }
+        nativeSteeringQueueItemID = nil
+        nativeSteeringInProgress = false
+        finishDetachedSteeringIfReady()
+        steerInProgress = false
+        applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: false)
+        if let id = pendingForceSendQueuedItemID {
+            pendingForceSendQueuedItemID = nil
+            forceSendQueuedItem(id: id)
+        }
+        flushQueueIfIdle()
+        onPromptWorkChanged?()
+    }
+
+    private func observeSteeringThreadStatus(_ info: ACPSessionInfoUpdate) {
+        guard let root = info.metadata?.value as? [String: AnyCodable],
+              let codex = root["codex"]?.value as? [String: AnyCodable],
+              let status = codex["threadStatus"]?.value as? [String: AnyCodable],
+              let type = status["type"]?.value as? String,
+              ["active", "idle", "systemError"].contains(type)
+        else { return }
+        lastSteeringThreadStatus = type
+        if nativeSteeringInProgress || detachedSteeringTurn {
+            if type == "active", steeringSawIdle {
+                steeringSawActive = true
+                steeringSawActiveAfterIdle = true
+            }
+            if type == "idle" || type == "systemError" { steeringSawIdle = true }
+            finishDetachedSteeringIfReady()
+        }
+    }
+
+    private func finishDetachedSteeringIfReady() {
+        guard detachedSteeringTurn, !nativeSteeringInProgress, steeringSawActive,
+              lastSteeringThreadStatus == "idle" || lastSteeringThreadStatus == "systemError"
+        else { return }
+        detachedSteeringTurn = false
+        if lastSteeringThreadStatus == "systemError" { session.lastError = "Steered turn failed." }
+        deferCompletedOutputBoundaryUntilUpdatesDrain()
+        onPromptWorkChanged?()
+    }
+
     var hasRetainedCleanupPromptWork: Bool {
         steerInProgress
+            || detachedSteeringTurn
+            || !deferredQueueAcknowledgements.isEmpty
             || activePromptID != nil
             || session.transcript.streamingState != .idle
             || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)
     }
 
     var hasRetainedCleanupSteerWork: Bool {
-        steerInProgress
+        steerInProgress || detachedSteeringTurn
     }
 
     var hasRetainedCleanupForkBarrierWork: Bool {
@@ -3379,6 +3930,15 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
+                    onTransportHandoff: { [weak self] in
+                        Task { @MainActor in
+                            guard let self, !self.stopped, self.isConnectionCurrent(),
+                                  self.activePromptID == promptID,
+                                  self.session.transcript.streamingState == .sending
+                            else { return }
+                            self.session.transcript.streamingState = .streaming
+                        }
+                    },
                     beforeRequestHandoff: beforeRequestHandoff,
                     onRequestHandoffDidOccur: onRequestHandoffDidOccur
                 )
@@ -3714,7 +4274,8 @@ extension ACPSessionRunner {
     }
 
     private func applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: Bool) {
-        guard let boundary = pendingCompletedOutputBoundary,
+        guard !nativeSteeringInProgress, !detachedSteeringTurn,
+              let boundary = pendingCompletedOutputBoundary,
               appliedUpdateCount >= boundary.updateCount
         else { return }
         pendingCompletedOutputBoundary = nil

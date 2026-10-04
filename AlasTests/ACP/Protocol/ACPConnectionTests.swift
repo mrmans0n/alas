@@ -122,6 +122,34 @@ struct ACPConnectionTests {
         #expect(params.mcpServers == mcpServers)
     }
 
+    @Test("initialize requires explicit top-level steering support", arguments: [
+        (#""_meta":{"steering":{"supported":true}}"#, true),
+        (#""_meta":{"steering":{"supported":false}}"#, false),
+        (#""_meta":{"steering":{"supported":"true"}}"#, false),
+        (#""_meta":{"steering":null}"#, false),
+        (#""agentCapabilities":{"_meta":{"steering":{"supported":true}}}"#, false),
+        (#""authMethods":[]"#, false)
+    ])
+    func initializeRequiresExplicitSteeringSupport(metadata: String, supported: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in Data("{\"protocolVersion\":1,\(metadata)}".utf8) }
+        #expect(try await ACPConnection(client: mock).initialize().supportsSteering == supported)
+    }
+
+    @Test("steering requests leave idle fallback delivery owned by the host")
+    func steeringRequestsHostOwnedIdleFallback() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "_session/steering") { request in
+            let data = try JSONEncoder().encode(try #require(request.params as? ACPSteeringParams))
+            let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(json["sessionId"] as? String == "s")
+            let meta = try #require(json["_meta"] as? [String: [String: String]])
+            #expect(meta["steering"]?["idleBehavior"] == "promptRequired")
+            return Data(#"{"outcome":"promptRequired","reason":"noRunningTurn"}"#.utf8)
+        }
+        #expect(try await ACPConnection(client: mock).steer(sessionId: "s", blocks: [.text("redirect")]).outcome.get() == .promptRequired)
+    }
+
     @Test("initialize returns prompt capabilities")
     func initializeReturnsPromptCapabilities() async throws {
         let mock = ACPMockClient()

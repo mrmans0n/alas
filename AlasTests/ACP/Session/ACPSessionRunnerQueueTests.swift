@@ -48,7 +48,9 @@ struct ACPSessionRunnerQueueTests {
         onPromptWorkChanged: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
-        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true }
+        autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
+        pluginContext: (@MainActor (String) async -> [String])? = nil,
+        onCheckpointCapture: (@MainActor (String, Bool) async -> CheckpointID?)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -59,6 +61,7 @@ struct ACPSessionRunnerQueueTests {
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        session.supportsCodexSteeringCompletion = true
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -68,6 +71,8 @@ struct ACPSessionRunnerQueueTests {
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
+            onCheckpointCapture: onCheckpointCapture,
+            pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
@@ -280,6 +285,1005 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
+    @Test("native steering prepends fresh plugin context without recording it", arguments: ["injected", "promptRequired"])
+    func nativeSteeringIncludesFreshPluginContext(outcome: String) async throws {
+        var requests = 0
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { sessionID in
+            #expect(sessionID == "s")
+            requests += 1
+            return ["context \(requests)"]
+        })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { request in
+            #expect((request.params as? ACPSteeringParams)?.prompt == [.text("context 1"), .text("redirect")])
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        mock.script(method: "session/prompt") { request in
+            #expect((request.params as? ACPSessionPromptParams)?.prompt == [.text("context 2"), .text("redirect")])
+            return Data("{}".utf8)
+        }
+        defer { runner.stop() }
+        let accepted = await withCheckedContinuation { continuation in
+            runner.send(blocks: [.text("redirect")], intent: .steer) { continuation.resume(returning: $0) }
+        }
+        #expect(accepted)
+        #expect(requests == (outcome == "injected" ? 1 : 2))
+        #expect(session.transcript.messages.count == 1)
+        guard case .user(_, _, let text, _, _) = session.transcript.messages.first else {
+            Issue.record("Missing user prompt")
+            return
+        }
+        #expect(text == "redirect")
+    }
+
+    @Test("native steering preserves the running prompt and queued tail", arguments: [true, false])
+    func nativeSteeringPreservesRunningPrompt(queuedOriginal: Bool) async throws {
+        let preparing = QueueTestGate()
+        let releasePreparation = QueueTestGate()
+        var holdPreparation = true
+        let (runner, mock, session, store) = try mkRunner(pluginContext: { _ in
+            if holdPreparation {
+                holdPreparation = false
+                await preparing.open()
+                await releasePreparation.wait()
+            }
+            return []
+        })
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { request in
+            if (request.params as? ACPSessionPromptParams)?.prompt == [.text("running")] {
+                await started.open()
+                await finish.wait()
+            }
+            return Data("{}".utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        if queuedOriginal {
+            session.transcript.streamingState = .streaming
+            runner.send(blocks: [.text("running")], intent: .auto)
+            await runner.flushPersistence()
+            session.transcript.streamingState = .idle
+            runner.flushQueueIfIdle()
+        } else {
+            runner.send(blocks: [.text("running")], intent: .auto)
+        }
+        await preparing.wait()
+        #expect(!session.canSteerRunningTurn)
+        await releasePreparation.open()
+        await started.wait()
+        try await waitUntil { session.canSteerRunningTurn }
+        #expect(session.canSteerRunningTurn)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text("before")))))
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil || mock.sent.contains { $0.method == "session/cancel" } }
+        #expect(accepted == true)
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(session.transcript.streamingState == .streaming)
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text("after")))))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "shared", content: .text(" continued")))))
+        #expect(session.queue.map(\.blocks) == (queuedOriginal ? [[.text("running")], [.text("tail")]] : [[.text("tail")]]))
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        await finish.open()
+        try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 && session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
+        let users = session.transcript.messages.compactMap { message -> String? in
+            if case .user(_, _, let text, _, _) = message { return text }
+            return nil
+        }
+        #expect(users == ["running", "redirect", "tail"])
+        func timeline(_ messages: [ACPMessage]) -> [String] {
+            messages.compactMap {
+                switch $0 {
+                case .user(_, _, let text, _, _): "user:\(text)"
+                case .agent(_, _, let text): "agent:\(text.value)"
+                default: nil
+                }
+            }
+        }
+        let expected = ["user:running", "agent:before", "user:redirect", "agent:after continued", "user:tail"]
+        #expect(timeline(session.transcript.messages) == expected)
+        await runner.flushPersistence()
+        let restored = try store.loadMessages(sessionId: "s").map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+        }
+        #expect(timeline(restored) == expected)
+    }
+
+    @Test("injection into an adapter-owned turn leaves completion with the adapter")
+    func injectionWithoutOwnedPromptDoesNotRetainQueue() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        await runner.flushPersistence()
+        // Reattachment and adapter-owned turns finish through broker events.
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(accepted == true)
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("tail")]])
+    }
+
+    @Test("native steering owns a completion race before draining the queue", arguments: [
+        ("promptRequired", false), ("startedNewTurn", false), ("startedNewTurn", true)
+    ])
+    func nativeSteeringOwnsCompletionRace(outcome: String, completedBeforeAck: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        let finishSteering = QueueTestGate()
+        let finishContinuation = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { request in
+            switch (request.params as? ACPSessionPromptParams)?.prompt {
+            case [.text("running")]:
+                await started.open()
+                await finishOriginal.wait()
+            case [.text("redirect")]:
+                await finishContinuation.wait()
+            default: break
+            }
+            return Data("{}".utf8)
+        }
+        mock.scriptAsync(method: "_session/steering") { _ in
+            await finishSteering.wait()
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        defer {
+            runner.stop()
+            Task { await finishOriginal.open()
+            await finishSteering.open()
+            await finishContinuation.open() }
+        }
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { mock.sent.contains { ["_session/steering", "session/cancel"].contains($0.method) } }
+        await finishOriginal.open()
+        try await waitUntil { session.queue.first?.status == .pending }
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        if completedBeforeAck {
+            for status in ["idle", "active", "idle"] {
+                let info = try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data("{\"_meta\":{\"codex\":{\"threadStatus\":{\"type\":\"\(status)\"}}}}".utf8))
+                runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+            }
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        }
+        await finishSteering.open()
+        if outcome == "promptRequired" {
+            try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
+            #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("redirect")]])
+            await finishContinuation.open()
+        } else {
+            try await waitUntil { accepted != nil }
+            if !completedBeforeAck {
+                #expect(session.transcript.streamingState != .idle)
+                for status in ["active", "idle"] {
+                    let info = try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data("{\"_meta\":{\"codex\":{\"threadStatus\":{\"type\":\"\(status)\"}}}}".utf8))
+                    runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+                }
+            }
+        }
+        try await waitUntil { accepted == true && session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }.last == [.text("tail")])
+        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
+        return false }.count == 1)
+    }
+
+    @Test("Stop leaves steering recovery behind queued prompts retryable", arguments: ["preparation", "request"])
+    func stoppingSteeringKeepsTrailingRecoveryRetryable(stage: String) async throws {
+        let entered = QueueTestGate()
+        let release = QueueTestGate()
+        var preparationHeld = false
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { _ in
+            if stage == "preparation", !preparationHeld {
+                preparationHeld = true
+                await entered.open()
+                await release.wait()
+            }
+            return []
+        })
+        defer { runner.stop()
+        Task { await release.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("tail")])
+        mock.scriptAsync(method: "_session/steering") { _ in
+            if stage == "request" {
+                await entered.open()
+                await release.wait()
+            }
+            return Data(#"{"outcome":"injected"}"#.utf8)
+        }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        await entered.wait()
+        let recoveryID = try #require(session.queue.last?.id)
+        await runner.userCancel()
+        try await waitUntil { mock.sent.contains { ($0.params as? ACPSessionPromptParams)?.prompt == [.text("tail")] } }
+        try await waitUntil { session.queue.first?.id == recoveryID }
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        await release.open()
+        try await waitUntil { accepted != nil }
+        #expect(session.retryQueueItem(id: recoveryID))
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("tail")], [.text("redirect")]])
+    }
+
+    @Test("an unsupported detached steering lifecycle retains recovery without holding streaming")
+    func unknownDetachedSteeringLifecycleFailsExplicitly() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.supportsCodexSteeringCompletion = false
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"startedNewTurn"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        guard case .failed = session.agentState else {
+            Issue.record("expected an explicit unsupported completion failure")
+            return
+        }
+        #expect(!session.supportsSteering)
+        #expect(try store.loadQueue(sessionId: "s").first?.deliveryUncertain == true)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("repeated steering waits for the new continuation's active boundary", arguments: ["injected", "startedNewTurn"])
+    func repeatedSteeringWaitsForNewActiveBoundary(outcome: String) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        let firstAcknowledgement = QueueTestGate()
+        let secondAcknowledgement = QueueTestGate()
+        var originalFinished = false
+        mock.scriptAsync(method: "session/prompt") { request in
+            if (request.params as? ACPSessionPromptParams)?.prompt == [.text("running")] {
+                await started.open()
+                await finishOriginal.wait()
+            }
+            return Data("{}".utf8)
+        }
+        mock.scriptAsync(method: "_session/steering") { request in
+            if (request.params as? ACPSteeringParams)?.prompt == [.text("first")] {
+                await firstAcknowledgement.wait()
+                return Data(#"{"outcome":"startedNewTurn"}"#.utf8)
+            }
+            await secondAcknowledgement.wait()
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        defer {
+            runner.stop()
+            Task { await finishOriginal.open()
+            await firstAcknowledgement.open()
+            await secondAcknowledgement.open() }
+        }
+        func observe(_ status: String) throws {
+            let info = try JSONDecoder().decode(ACPSessionInfoUpdate.self, from: Data("{\"_meta\":{\"codex\":{\"threadStatus\":{\"type\":\"\(status)\"}}}}".utf8))
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .sessionInfoUpdate(info)))
+        }
+        runner.send(blocks: [.text("running")], intent: .auto) { originalFinished = $0 }
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        var firstAccepted: Bool?
+        runner.send(blocks: [.text("first")], intent: .steer) { firstAccepted = $0 }
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        await finishOriginal.open()
+        try await waitUntil { originalFinished }
+        try observe("idle")
+        await firstAcknowledgement.open()
+        try await waitUntil { firstAccepted == true }
+        try observe("active")
+
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("second")], intent: .steer) { secondAccepted = $0 }
+        try await waitUntil { mock.sent.filter { $0.method == "_session/steering" }.count == 2 }
+        try observe("idle")
+        await secondAcknowledgement.open()
+        try await waitUntil { secondAccepted == true }
+        if outcome == "startedNewTurn" {
+            #expect(session.queue.map(\.status) == [.pending])
+            #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+            try observe("active")
+            try observe("idle")
+        }
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
+    }
+
+    @Test("steering chunks stay after the follow-up while its row save is paused", arguments: [false, true])
+    func steeringBoundaryPrecedesPausedRowSave(thought: Bool) async throws {
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop()
+        Task { await release.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.allowsStreamingBoundaryCrossing = true
+        let text = StreamingText("before")
+        session.transcript.appendMessage(thought
+            ? .thought(id: UUID(), messageId: "shared", text)
+            : .agent(id: UUID(), messageId: "shared", text))
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if !paused, session.transcript.messages.contains(where: { $0.kind == "user" }) {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        await saving.wait()
+        let chunk = ACPTextChunk(messageId: "shared", content: .text("after"))
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: thought ? .agentThoughtChunk(chunk) : .agentMessageChunk(chunk)))
+        await release.open()
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(text.value == "before")
+        #expect(session.transcript.messages.map(\.kind) == [thought ? "thought" : "agent", "user", thought ? "thought" : "agent"])
+        #expect(try store.loadMessages(sessionId: "s").map(\.kind) == [thought ? "thought" : "agent", "user", thought ? "thought" : "agent"])
+    }
+
+    @Test("forced steering keeps the saved prompt when recovery persistence fails")
+    func forcedSteeringKeepsSavedPromptUntilRecoveryCommit() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("redirect")])
+        let id = try #require(session.queue.first?.id)
+        try store.upsertQueue(sessionId: "s", items: session.queue)
+        try store.db.exec("""
+            CREATE TRIGGER fail_recovery_insert BEFORE INSERT ON session_queue
+            BEGIN SELECT RAISE(ABORT, 'recovery write failed'); END;
+            """)
+        let persistenceStarted = QueueTestGate()
+        runner.beforePersistenceForTesting = { await persistenceStarted.open() }
+        runner.forceSendQueuedItem(id: id)
+        await persistenceStarted.wait()
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s").first?.id == id)
+        #expect(!mock.sent.contains { $0.method == "_session/steering" })
+    }
+
+    @Test("a failed steering confirmation save holds dispatch and retains its acknowledgement")
+    func failedSteeringConfirmationSaveRetainsAcknowledgement() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "_session/steering") { _ in
+            try store.db.exec("""
+                CREATE TRIGGER fail_confirmation_delete BEFORE DELETE ON session_queue
+                BEGIN SELECT RAISE(ABORT, 'confirmation write failed'); END;
+                """)
+            return ACPResponse(body: Data(#"{"outcome":"injected"}"#.utf8),
+                               durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(acknowledgement.recordedCount == 0)
+        session.transcript.streamingState = .idle
+        session.enqueue(blocks: [.text("tail")])
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        try store.db.exec("DROP TRIGGER fail_confirmation_delete")
+        runner.persistQueue()
+        try await waitUntil { acknowledgement.recordedCount == 1 && session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("tail")]])
+    }
+
+    @Test("steering acknowledgement observes durable delivery or recovery", arguments: ["injected", "startedNewTurn", "unknown", "malformed"])
+    func steeringAcknowledgementWaitsForDurableQueueRemoval(outcome: String) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let databasePath = store.path
+        mock.scriptResponse(method: "_session/steering") { _ in
+            let body = outcome == "malformed" ? Data("{".utf8) : Data("{\"outcome\":\"\(outcome)\"}".utf8)
+            return ACPResponse(body: body, durableConsumptionAcknowledgement: {
+                let queue = try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s")
+                if outcome == "injected" || outcome == "startedNewTurn" {
+                    #expect(queue?.isEmpty == true)
+                } else {
+                    #expect(queue?.count == 1)
+                    #expect(queue?.first?.status == .pending)
+                    #expect(queue?.first?.deliveryUncertain == true)
+                }
+                acknowledgement.record()
+            })
+        }
+        defer { runner.stop() }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil && acknowledgement.recordedCount > 0 }
+        #expect(accepted == true)
+        #expect(acknowledgement.recordedCount == 1)
+    }
+
+    @Test("native steering refusal preserves the original turn", arguments: ["failed", "unknown"])
+    func nativeSteeringRefusalPreservesOriginalTurn(outcome: String) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finish.wait()
+            return Data("{}".utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"\(outcome)\"}".utf8) }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil || mock.sent.contains { $0.method == "session/cancel" } }
+        #expect(accepted == true)
+        #expect(session.queue.count == 1)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(session.transcript.streamingState == .streaming)
+        #expect(session.lastError != nil)
+    }
+
+    @Test("force-sent native steering failures retain a retryable queued prompt", arguments: ["failed", "unknown", "promptRequired"])
+    func forceSentSteeringFailureRetainsQueueItem(outcome: String) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        var originalFinished = false
+        var promptCalls = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            promptCalls += 1
+            if promptCalls == 2, outcome == "promptRequired" {
+                throw ACPClientError.jsonrpc(.init(code: -32000, message: "refused", data: nil))
+            }
+            await started.open()
+            await finish.wait()
+            return Data("{}".utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"\(outcome)\"}".utf8) }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto) { originalFinished = $0 }
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("selected")], intent: .auto)
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        await runner.flushPersistence()
+        let selected = try #require(session.queue.first)
+        let tailID = try #require(session.queue.last?.id)
+        runner.forceSendQueuedItem(id: selected.id)
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        if outcome == "promptRequired" { await finish.open() }
+        try await waitUntil { session.queue.contains { $0.id == selected.id && $0.status == .pending && $0.lastError != nil } }
+        #expect(session.queue.map(\.id) == [selected.id, tailID])
+        let retained = try #require(session.queue.first(where: { $0.id == selected.id }))
+        #expect(retained.blocks == selected.blocks)
+        #expect(retained.status == .pending)
+        #expect(retained.transcriptRecorded)
+        #expect(retained.deliveryUncertain == (outcome != "promptRequired"))
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s").first?.id == selected.id)
+        await finish.open()
+        try await waitUntil { originalFinished }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == (outcome == "promptRequired" ? 2 : 1))
+        _ = session.retryQueueItem(id: selected.id)
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(session.transcript.streamingState == .idle)
+        #expect(session.transcript.messages.filter {
+            if case .user(_, _, "selected", _, _) = $0 { return true }
+            return false
+        }.count == 1)
+    }
+
+    @Test("unacknowledged native follow-ups survive detach without automatic resend", arguments: [false, true])
+    func unacknowledgedNativeFollowupSurvivesDetach(forcedQueueItem: Bool) async throws {
+        let current = ConnectionCurrentFlag(true)
+        let (runner, mock, session, store) = try mkRunner(isConnectionCurrent: { current.isCurrent })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let response = QueueTestGate()
+        mock.scriptAsync(method: "_session/steering") { _ in
+            await response.wait()
+            return Data(#"{"outcome":"promptRequired"}"#.utf8)
+        }
+        var completed = false
+        if forcedQueueItem {
+            runner.send(blocks: [.text("redirect")], intent: .auto)
+            await runner.flushPersistence()
+            runner.forceSendQueuedItem(id: try #require(session.queue.first?.id))
+        } else {
+            runner.send(blocks: [.text("redirect")], intent: .steer) { _ in completed = true }
+        }
+        defer { runner.stop()
+        Task { await response.open() } }
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        await runner.flushPersistence()
+        let recovered = try #require(store.loadQueue(sessionId: "s").first)
+        #expect(recovered.blocks == [.text("redirect")])
+        #expect(recovered.deliveryUncertain)
+        #expect(recovered.transcriptRecorded)
+        current.set(false)
+        runner.stop()
+        session.restoreQueue([recovered])
+        session.transcript.streamingState = .idle
+        let replacementMock = ACPMockClient()
+        replacementMock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let replacement = ACPSessionRunner(session: session, connection: ACPConnection(client: replacementMock),
+                                          store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+        defer { replacement.stop() }
+        replacement.flushQueueIfIdle()
+        #expect(replacementMock.sent.isEmpty)
+        await response.open()
+        if !forcedQueueItem { try await waitUntil { completed } }
+        #expect(try store.loadQueue(sessionId: "s").first?.id == recovered.id)
+        #expect(session.retryQueueItem(id: recovered.id))
+        replacement.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(replacementMock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(session.transcript.messages.count == 1)
+    }
+
+    @Test("steering recovery binds the recorded row before preparation suspends", arguments: ["checkpoint", "plugin"])
+    func steeringRecoveryBindsRowBeforePreparation(stage: String) async throws {
+        let preparing = QueueTestGate()
+        let release = QueueTestGate()
+        let current = ConnectionCurrentFlag(true)
+        let (runner, mock, session, store) = try mkRunner(
+            isConnectionCurrent: { current.isCurrent },
+            pluginContext: { _ in
+                if stage == "plugin" { await preparing.open()
+                await release.wait() }
+                return []
+            },
+            onCheckpointCapture: { _, _ in
+                if stage == "checkpoint" { await preparing.open()
+                await release.wait() }
+                return nil
+            })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        defer { runner.stop()
+        Task { await release.open() } }
+        await preparing.wait()
+        await runner.flushPersistence()
+        let recovered = try #require(store.loadQueue(sessionId: "s").first)
+        #expect(recovered.transcriptRecorded)
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
+        #expect(mock.sent.isEmpty)
+        current.set(false)
+        runner.stop()
+        session.restoreQueue([recovered])
+        session.transcript.streamingState = .idle
+        let replacementMock = ACPMockClient()
+        replacementMock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let replacement = ACPSessionRunner(session: session, connection: ACPConnection(client: replacementMock),
+                                          store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+        defer { replacement.stop() }
+        await release.open()
+        try await waitUntil { accepted != nil }
+        #expect(accepted == true)
+        #expect(session.retryQueueItem(id: recovered.id))
+        replacement.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        await replacement.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
+        #expect(session.transcript.messages.count == 1)
+    }
+
+    @Test("steering persists a held replay row and its following user row")
+    func steeringPersistsUserAfterHeldReplayCandidate() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "old", StreamingText("hello there")))
+        session.allowsStreamingBoundaryCrossing = false
+        session.apply(.agentMessageChunk(.init(messageId: "replay", content: .text("hello"))))
+        #expect(session.transcript.messages.count == 1)
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.map(\.kind) == ["agent", "agent", "user"])
+        let user = try #require(rows.last)
+        guard case .user(_, _, let text, _, _) = try ACPMessageCodec.decode(kind: user.kind, payload: user.payload) else {
+            Issue.record("expected the persisted steering user row")
+            return
+        }
+        #expect(text == "redirect")
+        #expect(user.seq == 2)
+    }
+
+    @Test("a failed steering row transaction preserves replay output and one retryable submission", arguments: [(false, false), (true, false), (false, true)])
+    func failedSteeringRowTransactionDoesNotDuplicateRetry(heldReplay: Bool, cancelled: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        defer { runner.stop()
+        Task { await release.open() } }
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if cancelled, !paused, session.transcript.messages.contains(where: { $0.kind == "user" }) {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let text = StreamingText("working")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
+        if heldReplay {
+            session.allowsStreamingBoundaryCrossing = false
+            session.apply(.agentMessageChunk(.init(messageId: "replay", content: .text("work"))))
+        }
+        try store.db.exec("""
+            CREATE TRIGGER fail_steering_user BEFORE INSERT ON messages
+            WHEN NEW.kind = 'user'
+            BEGIN SELECT RAISE(ABORT, 'transient row failure'); END;
+            """)
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        if cancelled {
+            await saving.wait()
+            await runner.userCancel()
+            await release.open()
+        }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(session.transcript.messages.filter { $0.kind == "agent" }.count == (heldReplay ? 2 : 1))
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.isEmpty)
+        #expect(text.metadata == nil)
+        let retry = try #require(session.queue.first)
+        #expect(!retry.transcriptRecorded)
+        #expect(!mock.sent.contains { $0.method == "_session/steering" || $0.method == "session/prompt" })
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.isEmpty)
+        if heldReplay {
+            let rows = try store.loadMessages(sessionId: "s")
+            let replay = try #require(rows.first { $0.seq == 1 })
+            guard case .agent(_, _, let text) = try ACPMessageCodec.decode(kind: replay.kind, payload: replay.payload) else {
+                Issue.record("expected the preserved replay output")
+                return
+            }
+            #expect(text.value == "work")
+        }
+        try store.db.exec("DROP TRIGGER fail_steering_user")
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.forceSendQueuedItem(id: retry.id)
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
+    }
+
+    @Test("retrying a recorded follow-up requires its steering boundary to be durable")
+    func recordedFollowupRequiresDurableSteeringBoundary() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        defer { runner.stop()
+        Task { await release.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let previous = StreamingText("earlier")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "old", previous))
+        session.recordUserPrompt(text: "redirect", attachments: [])
+        let text = StreamingText("working")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
+        runner.persistIndices(Set(session.transcript.messages.indices))
+        session.enqueue(blocks: [.text("redirect")])
+        session.queue[0].transcriptRecorded = true
+        let id = try #require(session.queue.first?.id)
+        runner.persistQueue()
+        await runner.flushPersistence()
+        try store.db.exec("""
+            CREATE TRIGGER fail_steering_boundary BEFORE UPDATE ON messages
+            WHEN NEW.kind = 'agent'
+            BEGIN SELECT RAISE(ABORT, 'boundary save failed'); END;
+            """)
+        session.allowsStreamingBoundaryCrossing = false
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if !paused, text.metadata != nil {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.forceSendQueuedItem(id: id)
+        await saving.wait()
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+            messageId: "old", content: .text(" replay")))))
+        await release.open()
+        await runner.flushPersistence()
+        try await waitUntil { session.queue.isEmpty || session.queue.first?.status == .pending }
+        await runner.flushPersistence()
+        #expect(!mock.sent.contains { $0.method == "_session/steering" })
+        #expect(text.metadata == nil)
+        #expect(!session.allowsStreamingBoundaryCrossing)
+        #expect(previous.value == "earlier")
+        let retry = try #require(session.queue.first)
+        #expect(retry.id == id && retry.transcriptRecorded)
+        #expect(try store.loadQueue(sessionId: "s").first?.id == id)
+        try store.db.exec("DROP TRIGGER fail_steering_boundary")
+        runner.forceSendQueuedItem(id: id)
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        #expect(mock.sent.filter { $0.method == "_session/steering" }.count == 1)
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+        let row = try #require(store.loadMessages(sessionId: "s").last)
+        guard case .agent(_, _, let saved) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload) else {
+            Issue.record("Missing persisted output boundary")
+            return
+        }
+        #expect(saved.metadata != nil)
+    }
+
+    @Test("native steering keeps selection ordering through the consuming handoff", arguments: ["injected", "promptRequired", "methodNotFound"])
+    func steeringRegistrationFollowsConsumingHandoff(outcome: String) async throws {
+        let requested = QueueTestGate()
+        let releaseResponse = QueueTestGate()
+        let preparing = QueueTestGate()
+        let releasePreparation = QueueTestGate()
+        let prompted = QueueTestGate()
+        let finishPrompt = QueueTestGate()
+        var contextCalls = 0
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { _ in
+            contextCalls += 1
+            if contextCalls == 2 {
+                await preparing.open()
+                await releasePreparation.wait()
+            }
+            return []
+        })
+        defer { runner.stop()
+        Task { await releaseResponse.open()
+        await releasePreparation.open()
+        await finishPrompt.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.scriptAsync(method: "_session/steering") { _ in
+            await requested.open()
+            await releaseResponse.wait()
+            if outcome == "methodNotFound" {
+                throw ACPClientError.jsonrpc(.init(code: -32601, message: "unsupported", data: nil))
+            }
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await prompted.open()
+            await finishPrompt.wait()
+            return Data("{}".utf8)
+        }
+        let registration = DispatchRegistrationFlag()
+        runner.sendRegistered(text: "redirect", attachments: [], intent: .steer,
+                              onDispatchRegistered: { registration.markRegistered() })
+        await requested.wait()
+        #expect(!registration.isRegistered)
+        await releaseResponse.open()
+        if outcome != "injected" {
+            await preparing.wait()
+            #expect(!registration.isRegistered)
+            await releasePreparation.open()
+            await prompted.wait()
+        }
+        try await waitUntil { registration.isRegistered }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == (outcome == "injected" ? 0 : 1))
+    }
+
+    @Test("a second steer stays queued until the owned continuation reaches handoff")
+    func secondSteerWaitsForContinuationHandoff() async throws {
+        var steeringReturned = false
+        var continuationChecks = 0
+        let preparing = QueueTestGate()
+        let releaseLease = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let (runner, mock, session, _) = try mkRunner(validateLease: {
+            if steeringReturned {
+                continuationChecks += 1
+                if continuationChecks == 3 {
+                    await preparing.open()
+                    await releaseLease.wait()
+                }
+            }
+            return true
+        })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in
+            steeringReturned = true
+            return Data(#"{"outcome":"promptRequired"}"#.utf8)
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await releasePrompt.wait()
+            return Data("{}".utf8)
+        }
+        defer { runner.stop()
+        Task { await releaseLease.open()
+        await releasePrompt.open() } }
+        runner.send(blocks: [.text("first")], intent: .steer)
+        await preparing.wait()
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("second")], intent: .steer) { secondAccepted = $0 }
+        try await waitUntil { secondAccepted == true || mock.sent.filter { $0.method == "_session/steering" }.count > 1 }
+        #expect(mock.sent.filter { $0.method == "_session/steering" }.count == 1)
+        #expect(secondAccepted == true)
+        await releaseLease.open()
+        await releasePrompt.open()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("first")], [.text("second")]])
+    }
+
+    @Test("a late steering response cannot restart a stopped runner")
+    func lateSteeringResponseCannotRestartStoppedRunner() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        let finishSteering = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finishOriginal.wait()
+            return Data("{}".utf8)
+        }
+        mock.scriptAsync(method: "_session/steering") { _ in
+            await finishSteering.wait()
+            return Data(#"{"outcome":"promptRequired"}"#.utf8)
+        }
+        defer { runner.stop()
+        Task { await finishOriginal.open()
+        await finishSteering.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        runner.invalidateActivePrompt()
+        runner.stop()
+        await finishSteering.open()
+        try await waitUntil { accepted != nil }
+        #expect(accepted == true)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(session.lastError == nil)
+    }
+
+    @Test("method-not-found falls back without duplicating the follow-up")
+    func unsupportedSteeringFallsBackWithoutDuplicateUserRow() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { request in
+            if (request.params as? ACPSessionPromptParams)?.prompt == [.text("running")] {
+                await started.open()
+                await finishOriginal.wait()
+            }
+            return Data("{}".utf8)
+        }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in await finishOriginal.open() }
+        mock.script(method: "_session/steering") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32601, message: "Method not found", data: nil))
+        }
+        defer { runner.stop()
+        Task { await finishOriginal.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        await runner.flushPersistence()
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        #expect(accepted == true)
+        try await waitUntil { session.queue.isEmpty }
+        #expect(!session.supportsSteering)
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("redirect")], [.text("tail")]])
+        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
+        return false }.count == 1)
+    }
+
+    @Test("Send now during native steering takes priority over the queued tail")
+    func forceSendDuringNativeSteeringPrecedesQueuedTail() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = true
+        let started = QueueTestGate()
+        let finishOriginal = QueueTestGate()
+        let finishSteering = QueueTestGate()
+        var originalFinished = false
+        mock.scriptAsync(method: "session/prompt") { request in
+            if (request.params as? ACPSessionPromptParams)?.prompt == [.text("running")] {
+                await started.open()
+                await finishOriginal.wait()
+            }
+            return Data("{}".utf8)
+        }
+        mock.scriptAsync(method: "_session/steering") { request in
+            if (request.params as? ACPSteeringParams)?.prompt == [.text("redirect")] {
+                await finishSteering.wait()
+                return Data(#"{"outcome":"injected"}"#.utf8)
+            }
+            return Data(#"{"outcome":"promptRequired"}"#.utf8)
+        }
+        defer { runner.stop()
+        Task { await finishOriginal.open()
+        await finishSteering.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto) { originalFinished = $0 }
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("tail")], intent: .auto)
+        runner.send(blocks: [.text("selected")], intent: .auto)
+        await runner.flushPersistence()
+        let selectedID = try #require(session.queue.last?.id)
+        runner.send(blocks: [.text("redirect")], intent: .steer)
+        try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+        runner.forceSendQueuedItem(id: selectedID)
+        await finishOriginal.open()
+        try await waitUntil { originalFinished }
+        await finishSteering.open()
+        try await waitUntil { session.queue.isEmpty && mock.sent.filter { $0.method == "session/prompt" }.count >= 2 }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("selected")], [.text("tail")]])
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+    }
+
     @Test("queued user turn publishes only after the queue head is removed")
     func queuedUserTurnPublishesAfterQueueReconciliation() async throws {
         let observed = QueueTestGate()
@@ -359,7 +1363,8 @@ struct ACPSessionRunnerQueueTests {
         await leaseGate.release()
         await probe.waitUntilFirstStarted()
         #expect(dispatchFlag.isRegistered)
-        #expect(session.transcript.streamingState == .sending)
+        try await waitUntil { session.transcript.streamingState == .streaming }
+        #expect(session.transcript.streamingState == .streaming)
         #expect(await probe.callCount == 1)
         await probe.releaseFirst()
         for _ in 0 ..< 100 {
@@ -747,21 +1752,35 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.first?.deliveryUncertain == false)
     }
 
-    @Test("queue dispatch provenance is durable before broker handoff")
-    func queueDispatchProvenanceIsPersistedBeforeHandoff() async throws {
+    @Test("queue dispatch provenance is durable before broker handoff", arguments: ["queued", "promptRequired", "methodNotFound"])
+    func queueDispatchProvenanceIsPersistedBeforeHandoff(route: String) async throws {
         let (runner, mock, session, store) = try mkRunner()
         let generation = ACPBrokerGeneration(rawValue: 7)
         mock.brokerGenerationForTesting = generation
         let requestStarted = QueueTestGate()
         let responseRelease = QueueTestGate()
-        mock.scriptAsync(method: "session/prompt") { _ in
+        mock.scriptAsync(method: "session/prompt") { request in
+            let operationKey = try store.loadQueue(sessionId: "s").first?.brokerOperationKey
+            #expect(request.brokerOperationKey != nil)
+            #expect(request.brokerOperationKey == operationKey)
             await requestStarted.open()
             await responseRelease.wait()
             return Data("null".utf8)
         }
-        session.enqueue(blocks: [.text("queued")])
-
-        runner.flushQueueIfIdle()
+        if route != "queued" {
+            session.supportsSteering = true
+            session.transcript.streamingState = .streaming
+            mock.script(method: "_session/steering") { _ in
+                if route == "methodNotFound" {
+                    throw ACPClientError.jsonrpc(.init(code: -32601, message: "Method not found", data: nil))
+                }
+                return Data(#"{"outcome":"promptRequired"}"#.utf8)
+            }
+            runner.send(blocks: [.text("queued")], intent: .steer)
+        } else {
+            session.enqueue(blocks: [.text("queued")])
+            runner.flushQueueIfIdle()
+        }
         await requestStarted.wait()
 
         #expect(session.queue.first?.dispatchedBrokerGeneration == generation)
@@ -1096,7 +2115,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
-    @Test("steer waits for the cancelled prompt RPC before sending its replacement")
+    @Test("unsupported steering waits for cancellation before resending")
     func steerWaitsForCancelledPromptToSettle() async throws {
         let (runner, mock, session, _) = try mkRunner()
         let probe = StrictSingleFlightPromptProbe()

@@ -463,7 +463,9 @@ struct ACPComposer: View {
             onPrimary: handlePrimary,
             onMenu: handleMenu,
             onSchedule: { actions.submitWithIntent?(.schedule($0)) },
-            queueBadgeCount: session.visibleQueueCount
+            queueBadgeCount: session.visibleQueueCount,
+            queueByDefault: sendOnEnter,
+            nativeSteering: session.canSteerRunningTurn
         )
         .fixedSize(horizontal: true, vertical: false)
         .layoutPriority(1)
@@ -1208,12 +1210,13 @@ struct ACPComposer: View {
         composerAction(
             streamingState: session.transcript.streamingState,
             hasText: hasText,
-            agentState: session.agentState
+            agentState: session.agentState,
+            queueByDefault: sendOnEnter
         )
     }
 
     private func handlePrimary() {
-        if let intent = primarySubmitIntent(for: currentAction, optionPressed: optionPressed) {
+        if let intent = primarySubmitIntent(for: currentAction, optionPressed: optionPressed, queueByDefault: sendOnEnter) {
             actions.submitWithIntent?(intent)
             return
         }
@@ -1232,6 +1235,8 @@ struct ACPComposer: View {
 
     private func handleMenu(_ item: ComposerMenuItem) {
         switch item {
+        case .queue:
+            actions.submitWithIntent?(.auto)
         case .steer:
             actions.submitWithIntent?(.steer)
         case .stop:
