@@ -47,7 +47,7 @@ final class ACPTurnCost: Equatable {
         let settled: @MainActor () -> Bool
         /// More can still be taken off it.
         let live: @MainActor () -> Bool
-        /// The newest cost among those taken off since the result; never one sent after it.
+        /// The turn's cost from the updates taken off so far; never one sent after the result.
         let sentBeforeResult: @MainActor () -> ACPUsageInfo.Cost?
     }
 

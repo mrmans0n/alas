@@ -92,20 +92,27 @@ struct ACPSessionRunnerTests {
     }
 
     enum TurnCostUpdate: CaseIterable, Sendable {
-        case none, applied, buffered, appliedThenBufferedWithoutCost, appliedThenAppliedWithoutCost, notYetDequeued
+        case none
+        /// Taken off the stream during the turn and still in the coalescing buffer at its result.
+        case duringTurn
+        /// Then a newer one without a cost.
+        case duringTurnThenWithoutCost
+        /// Still on the stream at the result.
+        case notYetDequeued
         /// Still on the stream when the connection is replaced.
         case replacedBeforeDequeued
         /// Still on the stream when a later update with another cost is sent.
         case laterCostBeforeResolve
+        /// Sent before the prompt started and still buffered during it.
+        case bufferedBeforePrompt
     }
 
-    /// A turn reports the session's cumulative cost only when a `usage_update` with one arrived during it, including
-    /// one still in the coalescing buffer when the prompt result arrives; a newer update without a cost, applied or
-    /// buffered, does not hide it, and an earlier total is not the turn's own. One still on the stream when the
-    /// prompt result arrives counts once taken off; the completion is delivered at once either way, and a connection
-    /// replaced meanwhile leaves the cost unknown rather than losing the turn, and one sent after the result never counts.
+    /// A turn's cost is the newest cost-bearing `usage_update` sent after its prompt started and before its result,
+    /// whether applied, buffered or still on the stream then; a newer one without a cost does not hide it, and one
+    /// sent before the prompt or after the result never counts. The completion is delivered at once either way, and
+    /// a connection replaced meanwhile leaves the cost unknown rather than losing the turn.
     @Test(arguments: TurnCostUpdate.allCases)
-    func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
+    func aTurnReportsOnlyACostSentDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
         var current = true
         let held = [.notYetDequeued, .replacedBeforeDequeued, .laterCostBeforeResolve].contains(update)
@@ -117,25 +124,24 @@ struct ACPSessionRunnerTests {
         if held { runner.beforeDequeueForTesting = { await dequeue.wait() } }
         runner.start()
         defer { runner.stop() }
-        runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
-        let later = ACPSessionUpdate.usageUpdate(.init(used: 2, size: 10, cost: .init(amount: 0.3, currency: "USD")))
-        let withoutCost = ACPSessionUpdate.usageUpdate(.init(used: 3, size: 10, cost: nil))
+        func usage(_ cost: Double?) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: cost.map { .init(amount: $0, currency: "USD") })))
+        }
+        if update == .bufferedBeforePrompt {
+            mock.emit(usage(0.3))
+            #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 })
+        }
         mock.scriptAsync(method: "session/prompt") { _ in
-            let applied: [ACPSessionUpdate] = switch update {
-            case .none, .buffered, .notYetDequeued, .replacedBeforeDequeued, .laterCostBeforeResolve: []
-            case .applied, .appliedThenBufferedWithoutCost: [later]
-            case .appliedThenAppliedWithoutCost: [later, withoutCost]
+            let sent: [Double?] = switch update {
+            case .none, .bufferedBeforePrompt: []
+            case .duringTurn, .notYetDequeued, .replacedBeforeDequeued, .laterCostBeforeResolve: [0.3]
+            case .duringTurnThenWithoutCost: [0.3, nil]
             }
-            await MainActor.run { for item in applied { _ = runner.session.apply(item) } }
-            if held { mock.emit(.init(sessionId: "s", update: later)) }
-            let buffered: ACPSessionUpdate? = switch update {
-            case .buffered: later
-            case .appliedThenBufferedWithoutCost: withoutCost
-            default: nil
-            }
-            if let buffered {
-                mock.emit(.init(sessionId: "s", update: buffered))
-                _ = await Task { @MainActor in await awaitCondition { runner.pendingIncomingUpdateCountForTesting > 0 } }.value
+            for cost in sent { mock.emit(usage(cost)) }
+            if !held, !sent.isEmpty {
+                _ = await Task { @MainActor in
+                    await awaitCondition { runner.pendingIncomingUpdateCountForTesting == sent.count }
+                }.value
             }
             return Data("{}".utf8)
         }
@@ -145,16 +151,14 @@ struct ACPSessionRunnerTests {
         #expect(await awaitCondition { completedFirst != nil })
         #expect(completedFirst == true)
         if update == .replacedBeforeDequeued { current = false }
-        if update == .laterCostBeforeResolve {
-            mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 4, size: 10, cost: .init(amount: 0.9, currency: "USD")))))
-        }
+        if update == .laterCostBeforeResolve { mock.emit(usage(0.9)) }
         if update == .notYetDequeued || update == .laterCostBeforeResolve {
             await dequeue.open()
             #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == (update == .notYetDequeued ? 1 : 2) })
         }
         let cost = await completions.first?.cost?.resolve()
         await dequeue.open()
-        let expected: ACPUsageInfo.Cost? = [.none, .replacedBeforeDequeued].contains(update)
+        let expected: ACPUsageInfo.Cost? = [.none, .replacedBeforeDequeued, .bufferedBeforePrompt].contains(update)
             ? nil : .init(amount: 0.3, currency: "USD")
         #expect(completions.count == 1)
         #expect(cost == expected)

@@ -135,12 +135,12 @@ final class ACPSessionRunner {
     /// decides that, not the runner.
     private let onPermissionBlocked: ((ACPChildBlocker) -> Void)?
     private var activePromptStartedAt: Int64?
-    /// `session.costRevision` when the active prompt started.
-    private var activePromptCostRevision = 0
+    /// The client's `yieldedUpdateCount` when the active prompt started: updates past it belong to the turn.
+    private var activePromptStreamStart = 0
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
-    /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost never takes one sent
-    /// after its result.
+    /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
+    /// between its prompt and its result.
     private var costLog: [(index: Int, cost: ACPUsageInfo.Cost)] = []
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
@@ -1868,21 +1868,21 @@ final class ACPSessionRunner {
         onTurnCompleted?(completion)
     }
 
-    /// The active turn's cost, read once the updates already sent before its result have been taken off the stream
-    /// (the last `usage_update` may not have been). Only reads; never flushes the coalescing buffer (see above).
+    /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
+    /// and before its result, applied or still buffered alike. The last may not be off the stream yet, so it is read
+    /// again once it is. Only reads; never flushes the coalescing buffer (see above).
     private func turnCost() -> ACPTurnCost {
-        let known = turnCumulativeCost(since: activePromptCostRevision)
+        let start = activePromptStreamStart
         let watermark = connection.client.yieldedUpdateCount
-        let seen = dequeuedUpdateCount
-        // Everything sent before the result is already in `known`.
-        guard seen < watermark else { return ACPTurnCost(known: known) }
+        let logged: @MainActor (ACPSessionRunner?) -> ACPUsageInfo.Cost? = { runner in
+            runner?.costLog.last { $0.index > start && $0.index <= watermark }?.cost
+        }
+        let known = logged(self)
+        guard dequeuedUpdateCount < watermark else { return ACPTurnCost(known: known) }
         return ACPTurnCost(known: known, later: .init(
             settled: { [weak self] in (self?.dequeuedUpdateCount ?? 0) >= watermark },
             live: { [weak self] in self.map { $0.updatesTask?.isCancelled == false && $0.isConnectionCurrent() } ?? false },
-            // Only updates sent before the result and taken off the stream after it.
-            sentBeforeResult: { [weak self] in
-                self?.costLog.last { $0.index > seen && $0.index <= watermark }?.cost
-            }))
+            sentBeforeResult: { [weak self] in logged(self) }))
     }
 
     /// Tail of the last agent message this turn produced, or nil. Only rows at
@@ -1896,15 +1896,6 @@ final class ACPSessionRunner {
                 return tail.isEmpty ? nil : tail
             }
             .first
-    }
-
-    /// The session's cumulative cost if a `usage_update` with one came during the active turn, else nil. The newest
-    /// one still in the coalescing buffer wins, since the prompt result can overtake it; then the latest applied.
-    private func turnCumulativeCost(since costRevision: Int) -> ACPUsageInfo.Cost? {
-        for pending in pendingIncomingUpdates.reversed() {
-            if case .usageUpdate(let info) = pending.params.update, let cost = info.cost { return cost }
-        }
-        return session.costRevision != costRevision ? session.lastCost : nil
     }
 
     /// Agent text still in the incoming-update coalescing buffer, not yet in
@@ -3298,7 +3289,7 @@ extension ACPSessionRunner {
                     self.session.queue.first(where: { $0.id == qid && $0.transcriptRecorded })?.turnStartedAt
                 }
                 self.activePromptStartedAt = queuedTurnStartedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
-                self.activePromptCostRevision = self.session.costRevision
+                self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                 self.activePromptDelegatedSource = delegatedSource
                 // Captured before the user prompt is recorded below, so the
                 // floor points at this turn's own first transcript entry.
