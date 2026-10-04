@@ -1859,6 +1859,19 @@ final class ACPSessionRunner {
             .first
     }
 
+    /// Agent text still in the incoming-update coalescing buffer, not yet in
+    /// the transcript. Read-only on purpose: draining the buffer at turn end
+    /// collides with queued-successor dispatch (see `emitTurnCompleted`).
+    private func bufferedAgentText() -> String? {
+        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+            guard case .agentMessageChunk(let chunk) = pending.params.update,
+                  case .text(let value) = chunk.content
+            else { return nil }
+            return value
+        }.joined()
+        return text.isEmpty ? nil : text
+    }
+
     /// A usage limit stopped the active prompt. The prompt itself reached the
     /// agent (it is in the agent's history), so a queued one is consumed like
     /// a success; resuming sends a short continue prompt instead.
@@ -3475,7 +3488,8 @@ extension ACPSessionRunner {
                             ? nil
                             : ACPUsageLimitDetector.detect(
                                 error: error,
-                                turnAgentText: self.currentTurnLastAgentText(),
+                                // The limit message may still be buffered.
+                                turnAgentText: self.bufferedAgentText() ?? self.currentTurnLastAgentText(),
                                 claudeRateLimit: self.session.latestClaudeRateLimit,
                                 now: Date()
                             )

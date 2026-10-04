@@ -202,6 +202,26 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
+    @Test("a Claude limit announced only in agent text still in the coalescing buffer is detected")
+    func bufferedClaudeLimitTextIsDetected() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        runner.start()
+        defer { runner.stop() }
+        mock.script(method: "session/prompt") { _ in
+            // Claude's error_during_execution path builds the error from
+            // `errors`, so the limit text arrives only as an agent chunk.
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.init(
+                content: .text("You've hit your limit · resets 3pm (Europe/Madrid)")
+            ))))
+            throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: error_during_execution", data: nil))
+        }
+        session.enqueue(blocks: [.text("first")])
+        runner.persistQueue()
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.usageLimit != nil || session.queue.first?.lastError != nil }
+        #expect(session.usageLimit != nil)
+    }
+
     @Test("a limit with no resume item survives close and reopen and keeps the pre-limit queue held")
     func usageLimitWithoutResumeItemSurvivesReopen() async throws {
         let (runner, mock, session, store) = try mkRunner(autoResumeAfterUsageLimit: { false })
