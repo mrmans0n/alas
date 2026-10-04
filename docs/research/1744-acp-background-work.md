@@ -148,10 +148,19 @@ Local validation passed:
   `ACPSessionTerminalRoutingTests`, and `ACPToolCallGroupingTests`.
 - Before rebasing, an `ACPSessionTests` rerun verified the additional
   Claude/Codex completion-policy variant: **126 tests in one suite** passed.
+- The review fixes passed **248 tests in four suites**. After integrating the
+  updated base branch, **396 tests in six suites** passed:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`,
+  `ACPSessionManagerAttachRestoreTests`, `ACPSubagentRoutingTests`,
+  `ACPTranscriptRowWindowTests`, and `ACPToolCallGroupingTests`. The new
+  regressions failed before the fixes: buffered task reannouncements must
+  drain before loss reconciliation, and hidden snapshots must create no
+  rendered row or anchor. Idle cancellation also reports denied leases and
+  transport errors accurately through the new MCP session controls.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 
-Both Xcode runs used the local `.build/xcode/DerivedData` directory,
+The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing
 Ghostty build script populated its artifact from the shared cache, and
 `xcodegen generate` registered the two new Swift source files.
