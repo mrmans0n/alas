@@ -12764,6 +12764,10 @@ final class AppState {
             result.append((candidate(id: row.id, agentId: row.agentId, title: title), row.updatedAt))
         }
         for session in manager.sessions.values where !seen.contains(session.id) && !session.readOnlyRestricted {
+            // A cached session can outlive its row's place among the recent
+            // rows after being archived, e.g. by another instance.
+            if let row = manager.cachedPersistedSessionRow(id: session.id),
+               row.archived || row.ephemeralParentId != nil { continue }
             result.append((
                 candidate(id: session.id, agentId: session.agentId, title: session.title),
                 Int64(session.createdAt.timeIntervalSince1970)

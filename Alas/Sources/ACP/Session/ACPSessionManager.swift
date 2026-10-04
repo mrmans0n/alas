@@ -2356,6 +2356,11 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    /// The stored row already loaded for `id`, without touching the store.
+    func cachedPersistedSessionRow(id: ACPSession.ID) -> ACPSessionRow? {
+        persistedRows[id]
+    }
+
     /// Loads one row for an explicit open request. Unlike `sessionRows`, this
     /// covers rows outside the lazy recent-session cache before a tab title is
     /// chosen.
