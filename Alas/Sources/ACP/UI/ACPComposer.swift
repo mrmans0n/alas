@@ -2567,7 +2567,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
             // (its own, another project's, an archived one, a terminal's)
             // resolve to nothing.
             let point = convert(sender.draggingLocation, from: nil)
-            let location = characterIndexForInsertion(at: point)
+            setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
+            let dropSelection = selectedRange()
             let coordinator = coordinator
             let source = coordinator?.sessionMentions
             // Held like an async image insertion: submit waits for it, and
@@ -2583,7 +2584,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 }
                 guard let self, !sessions.isEmpty else { return }
                 if let generation, coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
-                self.setSelectedRange(NSRange(location: min(location, self.string.utf16.count), length: 0))
+                // Typing or moving the caret while the lookup ran wins over
+                // the drop point, as for async image drops.
+                if self.selectedRange() == dropSelection {
+                    self.setSelectedRange(NSRange(location: min(dropSelection.location, self.string.utf16.count), length: 0))
+                }
                 sessions.forEach { self.insertSessionMention($0) }
             }
             return true

@@ -81,6 +81,25 @@ struct ACPSessionReferenceTests {
         #expect(context.hasSuffix("</alas-session-reference>"))
     }
 
+    @Test("the block stays within budget when the latest entry lands right at the text budget's edge")
+    func contextBlockFitsAtBudgetEdge() {
+        for length in stride(from: ACPSessionReference.contextMaxChars - 700, through: ACPSessionReference.contextMaxChars, by: 1) {
+            let entries = [ACPSessionTranscriptReader.Entry(index: 0, role: "agent", text: String(repeating: "z", count: length))]
+            let size = ACPSessionReference.context(for: target, entries: entries).count
+            #expect(size <= ACPSessionReference.contextMaxChars, "entry length \(length) built \(size) characters")
+        }
+    }
+
+    @Test("a link to the sending session itself is dropped")
+    func selfReferenceIsDropped() {
+        let blocks: [ACPContentBlock] = [
+            .text("See @Me "),
+            .resourceLink(uri: ACPSessionReference.uri(sessionId: "me"), name: "Me"),
+        ]
+
+        #expect(ACPSessionReference.replacingReferences(in: blocks, contexts: [:], selfSessionId: "me") == [.text("See @Me ")])
+    }
+
     @Test("context of a session with no messages says so")
     func contextOfEmptySession() {
         #expect(ACPSessionReference.context(for: target, entries: []).contains("no messages yet"))

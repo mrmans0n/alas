@@ -2622,10 +2622,10 @@ extension ACPSessionRunner {
         let ids = ACPSessionReference.sessionIds(in: blocks)
         guard !ids.isEmpty else { return blocks }
         var contexts: [String: String] = [:]
-        for id in ids {
+        for id in ids where id != sessionId {
             contexts[id] = await sessionReferenceContext?(id)
         }
-        return ACPSessionReference.replacingReferences(in: blocks, contexts: contexts)
+        return ACPSessionReference.replacingReferences(in: blocks, contexts: contexts, selfSessionId: sessionId)
     }
 
     /// Backwards-compatible helper for existing image-only tests.

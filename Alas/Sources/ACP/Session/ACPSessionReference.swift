@@ -81,11 +81,16 @@ enum ACPSessionReference {
     /// `contexts`, or by a short note naming the session when it could not
     /// be resolved. Agents never see the `alas-session` scheme: some treat
     /// every resource link as a path to read.
-    static func replacingReferences(in blocks: [ACPContentBlock], contexts: [String: String]) -> [ACPContentBlock] {
-        blocks.map { block in
+    /// A link to `selfSessionId`, the sending session (a chip pasted into
+    /// its own composer), is dropped: it has nothing to add.
+    static func replacingReferences(
+        in blocks: [ACPContentBlock], contexts: [String: String], selfSessionId: String? = nil
+    ) -> [ACPContentBlock] {
+        blocks.compactMap { block in
             guard case .resourceLink(let uri, let name) = block, let id = sessionId(fromURI: uri) else {
                 return block
             }
+            if id == selfSessionId { return nil }
             if let context = contexts[id] { return .text(context) }
             let title = name.map { " \"\($0)\"" } ?? ""
             return .text("""
@@ -122,19 +127,21 @@ enum ACPSessionReference {
         // is what remains of `contextMaxChars`.
         let wrapper = (header + [intro(contextEntryLimit), footer]).map(\.count).reduce(0, +) + 3
         let textBudget = max(1, contextMaxChars - wrapper)
-        // Each entry adds a blank separator line and its label; when those
-        // push the block over budget, page again with them reserved. The
-        // second page holds no more entries than the first, so it fits.
-        func overhead(_ page: ACPSessionTranscriptReader.Page) -> Int {
-            page.entries.map { line($0).count - $0.text.count + 2 }.reduce(0, +)
+        // Each entry adds a blank separator line and its label (with a
+        // marker once cut). While those push the block over budget, page
+        // again with the overrun taken off the text budget; every pass
+        // shrinks it, so this settles in a few passes.
+        func size(_ page: ACPSessionTranscriptReader.Page) -> Int {
+            page.entries.map { line($0).count + 2 }.reduce(0, +)
         }
+        var maxChars = textBudget
         var page = ACPSessionTranscriptReader.page(
-            entries, offset: nil, limit: contextEntryLimit, maxChars: textBudget
+            entries, offset: nil, limit: contextEntryLimit, maxChars: maxChars
         )
-        let firstOverhead = overhead(page)
-        if page.entries.map(\.text.count).reduce(0, +) + firstOverhead > textBudget {
+        while size(page) > textBudget, maxChars > 1 {
+            maxChars = max(1, maxChars - (size(page) - textBudget))
             page = ACPSessionTranscriptReader.page(
-                entries, offset: nil, limit: contextEntryLimit, maxChars: max(1, textBudget - firstOverhead)
+                entries, offset: nil, limit: contextEntryLimit, maxChars: maxChars
             )
         }
         var lines = header
