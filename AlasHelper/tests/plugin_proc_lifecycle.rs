@@ -584,3 +584,37 @@ fn a_retry_joins_a_started_run_whose_worktree_is_gone() {
     helper.request("pproc/kill", json!({ "procId": "moved", "lease": LEASE }));
     let _ = std::fs::rename(format!("{}.moved", worktree.display()), &worktree);
 }
+
+#[test]
+fn a_slow_spawn_does_not_hold_up_other_requests() {
+    let mut helper = Helper::start();
+    // The first spawn captures the login environment; a slow profile makes it wait.
+    std::fs::write(helper.home.join(".profile"), "sleep 3\n").unwrap();
+    writeln!(
+        helper.stdin,
+        "{}",
+        json!({ "jsonrpc": "2.0", "id": 9000, "method": "pproc/spawn", "params": {
+            "procId": "slow", "lease": LEASE, "argv": ["/bin/sh", "-c", "true"],
+            "cwd": helper.worktree, "outputLimit": 65536, "leaseMs": 20000,
+        } })
+    )
+    .unwrap();
+    helper.stdin.flush().unwrap();
+    let asked = Instant::now();
+    helper.request("ping", json!({}));
+    assert!(
+        asked.elapsed() < std::time::Duration::from_secs(2),
+        "ping waited for the spawn"
+    );
+    let deadline = Instant::now() + BUDGET;
+    loop {
+        let line = helper
+            .lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the spawn is answered");
+        if line["id"] == json!(9000) {
+            assert!(line.get("error").is_none(), "{line}");
+            break;
+        }
+    }
+}

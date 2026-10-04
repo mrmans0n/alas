@@ -369,6 +369,14 @@ fn serve() -> io::Result<()> {
                 // request — so a single slow or wedged broker would stall the
                 // whole app. Run them off this thread and let the response
                 // come back through the same channel the watchers use.
+                // A plugin spawn can wait seconds for the login environment and
+                // the process to start: run it off this thread too.
+                if let (Some((id, params)), Some(sender)) =
+                    (plugin_spawn_request(&line), state.event_sender.clone())
+                {
+                    answer_plugin_spawn_off_thread(id, params, sender);
+                    continue;
+                }
                 match AcpJob::from_line(&line) {
                     Some(job) => match state.event_sender.clone() {
                         Some(sender) => dispatch_acp_job(job, &sender, &mut acp_queues),
@@ -672,6 +680,39 @@ fn dispatch_acp_job(
     if let Err(returned) = queue.send(job) {
         queues.remove(&broker_id);
         answer_off_thread(returned.0, responses);
+    }
+}
+
+/// A `pproc/spawn` request's id and params, for the worker that answers it.
+fn plugin_spawn_request(line: &str) -> Option<(Value, Option<Value>)> {
+    let request: JsonRpcRequest = serde_json::from_str(line).ok()?;
+    (request.method.as_deref() == Some("pproc/spawn")).then_some(())?;
+    Some((request.id?, request.params))
+}
+
+/// Answers a plugin spawn on a thread of its own, through the channel the
+/// watchers and ACP workers answer on. A thread that can't start answers the
+/// caller with an error rather than leaving it waiting.
+fn answer_plugin_spawn_off_thread(
+    id: Value,
+    params: Option<Value>,
+    responses: Sender<ServerMessage>,
+) {
+    let worker = responses.clone();
+    let failed_id = id.clone();
+    let spawned = std::thread::Builder::new().spawn(move || {
+        let response = match plugin_proc::handle("pproc/spawn", params, Some(worker.clone())) {
+            Ok(result) => success_response(id, result),
+            Err(error) => error_response(id, error.code, error.message),
+        };
+        let _ = worker.send(ServerMessage::Response(response));
+    });
+    if spawned.is_err() {
+        let _ = responses.send(ServerMessage::Response(error_response(
+            failed_id,
+            -32000,
+            "helper could not start a worker for this request",
+        )));
     }
 }
 
