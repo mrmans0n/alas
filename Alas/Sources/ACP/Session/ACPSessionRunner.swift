@@ -3456,8 +3456,9 @@ extension ACPSessionRunner {
                     self.unreportedPrompts[promptID] = (
                         self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
+                    // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
                     if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
-                        self.unreportedPrompts[oldest] = nil
+                        self.reportSupersededTurnUsage(oldest, quota: nil)
                     }
                     return true
                 }) else {

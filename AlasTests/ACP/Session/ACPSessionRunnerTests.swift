@@ -293,6 +293,28 @@ struct ACPSessionRunnerTests {
         #expect(usage.first?.quota?.tokenCount?.totalTokens == (settles ? 120 : nil))
     }
 
+    /// More stopped turns waiting on their results than the runner keeps: the oldest is still recorded, without
+    /// tokens, when it makes room.
+    @Test func aStoppedTurnPastTheKeptOnesIsStillRecorded() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered += 1 }
+            await never.wait()
+            return Data("{}".utf8)
+        }
+        for sent in 1...9 {
+            runner.send(text: "hello \(sent)", attachments: []) { _ in }
+            #expect(await awaitCondition { entered == sent })
+            await runner.userCancel()
+        }
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(usage.first?.result == .cancelled && usage.first?.quota == nil)
+        await never.open()
+    }
+
     @Test("send attaches its checkpoint before the prompt RPC")
     func sendAttachesCheckpointBeforePrompt() async throws {
         let checkpointID = UUID()
