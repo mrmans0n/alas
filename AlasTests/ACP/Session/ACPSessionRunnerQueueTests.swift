@@ -1359,6 +1359,32 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    @Test("background completion wakes precede future schedules without overtaking ordinary prompts", arguments: [false, true])
+    func backgroundWakesPrecedeScheduledPrompts(ordinaryPrompt: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        defer { runner.stop() }
+        session.transcript.streamingState = .awaitingPermission
+        let scheduledID = session.enqueueScheduled(blocks: [.text("Scheduled")], scheduledAt: Date().addingTimeInterval(3600))
+        let ordinaryID = UUID()
+        if ordinaryPrompt { session.enqueue(id: ordinaryID, blocks: [.text("Ordinary")]) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "completed"))))
+        await runner.flushPersistence()
+        let wake = try #require(session.queue.first(where: { $0.backgroundTaskWake != nil }))
+        let expectedIDs = (ordinaryPrompt ? [ordinaryID] : []) + [wake.id, scheduledID]
+        try #require(session.queue.map(\.id) == expectedIDs)
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.backgroundTasks[0].wakeDelivered }
+        await runner.flushPersistence()
+        #expect(session.queue.map(\.id) == [scheduledID])
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        let prompts = mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }
+        #expect(prompts == (ordinaryPrompt ? [[.text("Ordinary")]] : []) + [wake.blocks])
+    }
+
     @Test("Codex completion enriches pending wakes and delivers corrected results once after prior delivery", arguments: [("completed", "summary"), ("failed", "state"), ("completed", "output")])
     func backgroundCompletionQueue(finalState: String, correction: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")

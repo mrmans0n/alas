@@ -297,6 +297,19 @@ Local validation passed:
   The new native regression reproduced older pages replacing newer hidden and
   visible entries with the same stable ID. Backfill now preserves the newer
   row while still adding unrelated older rows and advancing the page cursor.
+- Scheduled-wake ordering and remote snapshot deduplication passed **674
+  distinct tests in ten suites** across two focused runs: 664 tests in nine
+  suites, then 89 tests in `ACPSessionPersistenceTests` and
+  `RemoteSessionGatewayTests`, with the gateway suite repeated. The selection
+  also included `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`,
+  `ACPSessionTests`, `RemoteProtocolTests`, `NativePeerTranscriptTests`,
+  `NativePeerSessionsTests`, `RemoteWebAssetTests`, and `CommitDetailsTests`.
+  Both new regressions failed before their fixes. Immediate wakes now precede
+  scheduled and usage-limit-held entries while preserving ordinary FIFO.
+  Remote projection checks the full transcript for the latest background
+  snapshot, sends hidden markers for superseded positional rows, and retires
+  older rows when a newer snapshot arrives through a delta. The regression
+  covers visible/hidden latest snapshots in tails, older pages and deltas.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

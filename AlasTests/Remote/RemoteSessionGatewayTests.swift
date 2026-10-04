@@ -913,6 +913,64 @@ struct RemoteSessionGatewayTests {
         #expect(mirror.messages.count == (showInTranscript ? 0 : 1))
     }
 
+    @Test("latest background snapshots suppress older positional rows across tail, backfill and deltas", .timeLimit(.minutes(1)), arguments: [("snapshot", false), ("snapshot", true), ("page", false), ("page", true), ("delta", false), ("delta", true)])
+    func latestBackgroundSnapshotsSuppressOlderRows(path: String, latestVisible: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("unused")
+        var task = ACPBackgroundTask(ownerSessionId: "s1", asyncTaskId: "job", name: "Older")
+        session.transcript.messages = [.toolCall(task.transcriptRow)]
+        if path == "page" {
+            for index in 0...RemoteTranscriptSync.tailWindow {
+                session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Filler \(index)")))
+            }
+        }
+        task.name = "Latest"
+        task.showInTranscript = latestVisible
+        let latest = ACPMessage.toolCall(task.transcriptRow)
+        if path != "delta" { session.transcript.appendMessage(latest) }
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gw = RemoteSessionGateway(provider: provider) { frame in
+            sent.append(frame)
+            if case .transcriptDelta = frame, let waiter = nextDelta {
+                nextDelta = nil
+                waiter.resume(returning: frame)
+            }
+        }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        mirror.apply(try #require(sent.first))
+        if path != "delta" {
+            #expect(mirror.messages.filter { $0.kind == "toolCall" }.map(\.index)
+                == (latestVisible ? [session.transcript.messages.count - 1] : []))
+        }
+        let frame: RemoteServerMessage
+        if path == "delta" {
+            frame = await withCheckedContinuation { nextDelta = $0
+                session.transcript.appendMessage(latest) }
+        } else {
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: session.transcript.messages.count - 1, limit: 200))
+            frame = try #require(sent.last)
+        }
+        let rows: [RemoteWireMessage]
+        switch frame {
+        case .transcriptDelta(_, _, _, let upserts, _, _, _): rows = upserts
+        case .transcriptPage(_, _, let first, let page):
+            #expect(first == 0)
+            rows = page
+        default: Issue.record("Expected a delta or page")
+            return
+        }
+        let older = try #require(rows.first(where: { $0.index == 0 }))
+        #expect(older.stableId == "m0")
+        #expect(older.isHidden == true && older.json == nil && older.text == nil)
+        mirror.apply(frame)
+        let visibleTasks = mirror.messages.filter { $0.kind == "toolCall" }
+        #expect(visibleTasks.map(\.index) == (latestVisible ? [session.transcript.messages.count - 1] : []))
+        #expect(mirror.olderPageBeforeIndex == nil)
+    }
+
     @Test("remote snapshots and state-only deltas advertise cancellable background work while idle", .timeLimit(.minutes(1)), arguments: [false, true])
     func idleBackgroundStopSnapshot(supported: Bool) async throws {
         let provider = FakeSessionsProvider()

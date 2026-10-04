@@ -27,6 +27,7 @@ final class RemoteTranscriptSync {
     var epoch = 0           // transcript epoch the client knows
     var revision = 0        // per-connection outgoing delta counter
     var sentBackgroundWorkCancellable = false
+    var sentSupersededBackgroundRows: Set<Int> = []
     /// Bumped every time `sendSnapshot` runs, regardless of whether `epoch`
     /// itself changed. A same-epoch snapshot (e.g. from `takeOver` or a
     /// client resubscribe with no intervening structural change) still

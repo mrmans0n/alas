@@ -5071,8 +5071,11 @@ extension ACPSessionRunner {
             // one. A sending/failed/uncertain item retains its own snapshot.
             session.queue.removeAll { $0.backgroundTaskWake == task.id && $0.status == .pending
                 && $0.lastError == nil && !$0.deliveryUncertain }
-            session.queue.append(.init(id: id, blocks: [.text(task.wakeText)],
-                backgroundTaskWake: task.id, transcriptRecorded: true))
+            let insertAt = session.queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: session.usageLimit))
+            } ?? session.queue.endIndex
+            session.queue.insert(.init(id: id, blocks: [.text(task.wakeText)],
+                backgroundTaskWake: task.id, transcriptRecorded: true), at: insertAt)
         }
         persistQueue(completion: { [weak self] persisted in
             guard let self, self.isConnectionCurrent() else { return }
