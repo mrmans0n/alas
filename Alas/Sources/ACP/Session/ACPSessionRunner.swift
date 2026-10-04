@@ -285,6 +285,7 @@ final class ACPSessionRunner {
     private var steerInProgress: Bool = false
     private var nativeSteeringGeneration = 0
     private var nativeSteeringInProgress = false
+    private var nativeSteeringQueueItemID: UUID?
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -3250,6 +3251,7 @@ extension ACPSessionRunner {
             }
         }
         nativeSteeringGeneration += 1
+        nativeSteeringQueueItemID = durableQueueItem.item.id
         let generation = nativeSteeringGeneration
         let originalPromptTask = activePromptID == nil ? nil : latestPromptTask
         let hadOwnedPrompt = activePromptID != nil
@@ -3560,6 +3562,17 @@ extension ACPSessionRunner {
     }
 
     private func invalidateNativeSteering() {
+        if !stopped, isConnectionCurrent(), holdsLeaseForWrite(),
+           let id = nativeSteeringQueueItemID,
+           let index = session.queue.firstIndex(where: { $0.id == id }),
+           session.queue[index].status == .sending, session.queue[index].deliveryUncertain {
+            // The invalidated task no longer owns recovery. Keep it actionable
+            // even when an earlier queued prompt occupies the head.
+            session.queue[index].status = .pending
+            session.queue[index].lastError = "Follow-up delivery was interrupted. Retry if it cannot be confirmed."
+            persistQueue()
+        }
+        nativeSteeringQueueItemID = nil
         nativeSteeringGeneration += 1
         if nativeSteeringInProgress { steerInProgress = false }
         nativeSteeringInProgress = false
@@ -3568,6 +3581,7 @@ extension ACPSessionRunner {
 
     private func finishNativeSteering(generation: Int) {
         guard nativeSteeringGeneration == generation else { return }
+        nativeSteeringQueueItemID = nil
         nativeSteeringInProgress = false
         finishDetachedSteeringIfReady()
         steerInProgress = false

@@ -478,6 +478,49 @@ struct ACPSessionRunnerQueueTests {
         return false }.count == 1)
     }
 
+    @Test("Stop leaves steering recovery behind queued prompts retryable", arguments: ["preparation", "request"])
+    func stoppingSteeringKeepsTrailingRecoveryRetryable(stage: String) async throws {
+        let entered = QueueTestGate()
+        let release = QueueTestGate()
+        var preparationHeld = false
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { _ in
+            if stage == "preparation", !preparationHeld {
+                preparationHeld = true
+                await entered.open()
+                await release.wait()
+            }
+            return []
+        })
+        defer { runner.stop()
+        Task { await release.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("tail")])
+        mock.scriptAsync(method: "_session/steering") { _ in
+            if stage == "request" {
+                await entered.open()
+                await release.wait()
+            }
+            return Data(#"{"outcome":"injected"}"#.utf8)
+        }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        await entered.wait()
+        let recoveryID = try #require(session.queue.last?.id)
+        await runner.userCancel()
+        try await waitUntil { mock.sent.contains { ($0.params as? ACPSessionPromptParams)?.prompt == [.text("tail")] } }
+        try await waitUntil { session.queue.first?.id == recoveryID }
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        await release.open()
+        try await waitUntil { accepted != nil }
+        #expect(session.retryQueueItem(id: recoveryID))
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("tail")], [.text("redirect")]])
+    }
+
     @Test("an unsupported detached steering lifecycle retains recovery without holding streaming")
     func unknownDetachedSteeringLifecycleFailsExplicitly() async throws {
         let (runner, mock, session, store) = try mkRunner()
