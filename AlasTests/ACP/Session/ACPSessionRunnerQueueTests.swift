@@ -539,6 +539,27 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
     }
 
+    @Test("steering acknowledgement observes durable queue removal", arguments: ["injected", "startedNewTurn"])
+    func steeringAcknowledgementWaitsForDurableQueueRemoval(outcome: String) async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let databasePath = store.path
+        mock.scriptResponse(method: "_session/steering") { _ in
+            ACPResponse(body: Data("{\"outcome\":\"\(outcome)\"}".utf8), durableConsumptionAcknowledgement: {
+                #expect((try? ACPSessionStore(path: databasePath).loadQueue(sessionId: "s"))?.isEmpty == true)
+                acknowledgement.record()
+            })
+        }
+        defer { runner.stop() }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil && acknowledgement.recordedCount > 0 }
+        #expect(accepted == true)
+        #expect(acknowledgement.recordedCount == 1)
+    }
+
     @Test("native steering refusal preserves the original turn", arguments: ["failed", "unknown"])
     func nativeSteeringRefusalPreservesOriginalTurn(outcome: String) async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -559,7 +580,9 @@ struct ACPSessionRunnerQueueTests {
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
         try await waitUntil { accepted != nil || mock.sent.contains { $0.method == "session/cancel" } }
-        #expect(accepted == false)
+        #expect(accepted == true)
+        #expect(session.queue.count == 1)
+        #expect(session.queue.first?.deliveryUncertain == true)
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
         #expect(session.transcript.streamingState == .streaming)
         #expect(session.lastError != nil)

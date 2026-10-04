@@ -3198,6 +3198,7 @@ extension ACPSessionRunner {
             return }
             var recordedMessageID = recordedUserMessageID
             var ownedContinuationStarted = false
+            var steeringAcknowledgement: ACPDurableConsumptionAcknowledgement?
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
                 if let self, !self.stopped, self.isConnectionCurrent() {
                     if succeeded {
@@ -3220,10 +3221,19 @@ extension ACPSessionRunner {
                             self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
                         }
                     }
-                    self.persistQueue()
-                    if succeeded { self.flushQueueIfIdle() }
+                    // Submission is accepted if its content is retained for
+                    // retry; restoring the draft as well would duplicate it.
+                    let accepted = succeeded || self.session.queue.contains { $0.id == durableQueueItem.item.id }
+                    self.persistQueue(acknowledging: steeringAcknowledgement, completion: { persisted in
+                        if !persisted, self.isConnectionCurrent(), !self.stopped {
+                            self.session.lastError = "Could not save follow-up delivery confirmation."
+                        }
+                        if succeeded { self.flushQueueIfIdle() }
+                        onPromptFinished?(accepted)
+                    })
+                } else {
+                    onPromptFinished?(succeeded)
                 }
-                onPromptFinished?(succeeded)
             }
             do {
                 guard await self.hasConfirmedLeaseForSideEffect(),
@@ -3293,14 +3303,15 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
-                let outcome = try await self.connection.steer(
+                let result = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks)
+                steeringAcknowledgement = result.acknowledgement
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-                switch outcome {
+                switch result.outcome {
                 case .injected:
                     self.session.lastError = nil
                     finishPrompt(true)

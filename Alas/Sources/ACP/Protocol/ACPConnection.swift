@@ -98,6 +98,11 @@ enum ACPSteeringOutcome: String, Decodable {
     case injected, startedNewTurn, promptRequired, failed
 }
 
+struct ACPSteeringResult {
+    let outcome: ACPSteeringOutcome
+    let acknowledgement: ACPDurableConsumptionAcknowledgement?
+}
+
 struct ACPSteeringParams: Encodable {
     let sessionId: String
     let prompt: [ACPContentBlock]
@@ -408,14 +413,15 @@ final class ACPConnection: @unchecked Sendable {
         return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
     }
 
-    func steer(sessionId: String, blocks: [ACPContentBlock]) async throws -> ACPSteeringOutcome {
+    func steer(sessionId: String, blocks: [ACPContentBlock]) async throws -> ACPSteeringResult {
         let response = try await client.send(ACPRequest(
             method: "_session/steering",
             params: ACPSteeringParams(sessionId: sessionId, prompt: blocks)
         ))
-        defer { response.acknowledgeDurableConsumption() }
         struct Result: Decodable { let outcome: ACPSteeringOutcome }
-        return try JSONDecoder().decode(Result.self, from: response.body).outcome
+        return try ACPSteeringResult(
+            outcome: JSONDecoder().decode(Result.self, from: response.body).outcome,
+            acknowledgement: response.durableConsumptionAcknowledgement)
     }
 
     func acknowledgeDurableSessionResponses() {
