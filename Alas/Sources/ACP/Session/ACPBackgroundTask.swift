@@ -91,7 +91,7 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
 
     var id: String { "background:\(ownerSessionId.utf8.count):\(ownerSessionId):\(asyncTaskId)" }
     var isActive: Bool { !["completed", "failed", "stopped", "lost"].contains(state) }
-    var needsWake: Bool { wakeId != nil && !wakeDelivered }
+    var needsWake: Bool { !isActive && wakeId != nil && !wakeDelivered }
 
     mutating func merge(_ update: ACPAsyncTaskUpdate, wakeOnCompletion: Bool) {
         let wasActive = isActive
@@ -139,10 +139,8 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
         finishedAt = Date()
         canStop = false
         summary = "The adapter was replaced; this task's process and completion can no longer be observed."
-        if wakeId == nil || wakeDelivered {
-            wakeId = UUID()
-            wakeDelivered = false
-        }
+        wakeId = UUID()
+        wakeDelivered = false
     }
 
     var wakeText: String {

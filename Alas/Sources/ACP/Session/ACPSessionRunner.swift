@@ -4999,12 +4999,13 @@ extension ACPSessionRunner {
                 dirty.formUnion(session.saveBackgroundTask(task))
             }
         }
-        // Persist even an already-pending completion before recreating its queue
-        // entry; this also covers a crash between snapshot and queue creation.
-        for task in session.backgroundTasks where task.needsWake {
+        // Recover both pending completions and obsolete loss wakes after a
+        // crash between the task snapshot write and its queue update.
+        let wakeTasks = session.backgroundTasks.filter { $0.needsWake || ($0.isActive && $0.wakeId != nil) }
+        for task in wakeTasks {
             if let index = session.transcript.toolCallIndex(toolCallId: task.id) { dirty.insert(index) }
         }
-        let wakeIds = Set(session.backgroundTasks.filter(\.needsWake).compactMap(\.wakeId))
+        let wakeIds = Set(wakeTasks.compactMap(\.wakeId))
         persistIndices(dirty, completion: { [weak self] persisted in
             if persisted { self?.enqueuePendingBackgroundWakes(persistedWakeIds: wakeIds) }
         })
@@ -5012,12 +5013,21 @@ extension ACPSessionRunner {
 
     private func enqueuePendingBackgroundWakes(persistedWakeIds: Set<UUID>) {
         guard isConnectionCurrent(), !stopped, !suppressingLoadReplay, holdsLeaseForWrite() else { return }
+        let reobservedTaskIds = Set(session.backgroundTasks.filter { task in
+            task.isActive && task.wakeId.map { persistedWakeIds.contains($0) } == true
+        }.map(\.id))
+        let previousQueueCount = session.queue.count
+        session.queue.removeAll { item in
+            guard let taskId = item.backgroundTaskWake else { return false }
+            return reobservedTaskIds.contains(taskId) && item.status == .pending
+                && item.lastError == nil && !item.deliveryUncertain
+        }
         let pending = session.backgroundTasks.filter { task in
             guard task.needsWake, let id = task.wakeId, persistedWakeIds.contains(id) else { return false }
             guard let item = session.queue.first(where: { $0.id == id }) else { return true }
             return item.status == .pending && item.lastError == nil && !item.deliveryUncertain
         }
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty || session.queue.count != previousQueueCount else { return }
         for task in pending {
             guard let id = task.wakeId else { continue }
             if let index = session.queue.firstIndex(where: { $0.id == id }) {

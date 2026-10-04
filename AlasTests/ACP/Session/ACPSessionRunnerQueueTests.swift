@@ -1683,6 +1683,52 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.isEmpty)
     }
 
+    @Test("reobserved work retires clean pending loss wakes and preserves retry-held snapshots", arguments: [("async_task_spawned", "pending"), ("async_task_progress", "pending"), ("async_task_progress", "failed"), ("async_task_progress", "uncertain")])
+    func reobservationRetiresPendingLossWake(update: String, delivery: String) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")
+        task.loseObservation()
+        session.saveBackgroundTask(task)
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.queue[0].lastError = delivery == "failed" ? "Retry required" : nil
+        if delivery == "uncertain" { session.queue[0].markDeliveryUncertain() }
+        let loss = session.queue[0]
+        runner.persistQueue()
+        await runner.flushPersistence()
+        mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: update, asyncTaskId: "watch"))))
+        try await waitUntil { session.backgroundTasks[0].isActive }
+        await runner.flushPersistence()
+        #expect(!session.backgroundTasks[0].needsWake)
+        #expect(session.queue == (delivery == "pending" ? [] : [loss]))
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        if delivery == "pending" {
+            session.queue = [loss]
+            runner.persistQueue()
+            await runner.flushPersistence()
+        }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        #expect(session.queue == (delivery == "pending" ? [] : [loss]))
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(mock.sent.isEmpty)
+        session.transcript.streamingState = .awaitingPermission
+        mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: "async_task_state_update", asyncTaskId: "watch", state: "completed"))))
+        try await waitUntil { session.backgroundTasks[0].state == "completed" }
+        await runner.flushPersistence()
+        let completion = try #require(session.queue.last)
+        #expect(completion.id != loss.id)
+        #expect(session.queue.count == (delivery == "pending" ? 1 : 2))
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+    }
+
     @Test("an in-flight loss notification cannot consume a later completion notification", arguments: ["none", "async_task_spawned", "async_task_progress"])
     func completionWhileLossNotificationIsSending(reannouncement: String) async throws {
         let (runner, mock, session, _) = try mkRunner(agentID: "codex")

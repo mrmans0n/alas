@@ -248,6 +248,13 @@ Local validation passed:
   interrupted wakes disappearing during fallback steering. They cover direct
   fallback and rejected native steering, successful atomic confirmation, and
   SQLite failure retaining the wake for explicit retry.
+- Late reobservation and pending-loss retirement passed **359 tests in four
+  suites**: `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`,
+  `ACPSessionPersistenceTests`, and `ACPSessionTests`. Spawn/progress regressions
+  first reproduced a running snapshot being sent as a loss notification.
+  They now cover durable retirement, recovery between snapshot and queue
+  writes, preserving failed/uncertain snapshots, and a fresh notification
+  identity for later completion or renewed observation loss.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

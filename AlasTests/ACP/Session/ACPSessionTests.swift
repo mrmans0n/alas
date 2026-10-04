@@ -5,7 +5,7 @@ import Testing
 @MainActor
 @Suite("ACPSession")
 struct ACPSessionTests {
-    @Test("a task can notify again after a loss report", arguments: [("completed", true), ("completed", false), ("lost", true)])
+    @Test("a task can notify again after a loss report", arguments: [("completed", true), ("completed", false), ("lost", true), ("lost", false)])
     func backgroundTaskCanNotifyAfterReobservation(state: String, delivered: Bool) {
         var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")
         task.loseObservation()
