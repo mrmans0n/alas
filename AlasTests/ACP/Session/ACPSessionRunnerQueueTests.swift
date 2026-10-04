@@ -1308,8 +1308,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
-    @Test("Codex completion wakes once through the queue after blockers clear and survives replay")
-    func backgroundCompletionQueue() async throws {
+    @Test("Codex completion wakes once with the latest pending snapshot after blockers clear and survives replay", arguments: ["completed", "failed"])
+    func backgroundCompletionQueue(finalState: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
@@ -1325,11 +1325,26 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.isEmpty)
         #expect(!session.queue[0].isShownToUser)
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        let queuedID = session.queue[0].id
+        let enqueuedAt = session.queue[0].enqueuedAt
+        let corrected = ACPAsyncTaskUpdate(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: finalState, summary: "Final result")
+        mock.emit(.init(sessionId: "s", update: .asyncTask(corrected)))
+        try await waitUntil { session.backgroundTasks.first?.summary == "Final result" }
+        await runner.flushPersistence()
+        #expect(session.queue[0].id == queuedID)
+        #expect(session.queue[0].enqueuedAt == enqueuedAt)
+        guard case .text(let pendingText) = session.queue[0].blocks.first else { throw CocoaError(.coderInvalidValue) }
+        let facts = try JSONDecoder().decode(ACPBackgroundTask.self, from: Data(try #require(pendingText.split(separator: "\n").last).utf8))
+        #expect(facts.state == finalState)
+        #expect(facts.summary == "Final result")
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
         session.transcript.streamingState = .idle
         runner.flushQueueIfIdle()
         try await waitUntil { session.backgroundTasks.first?.wakeDelivered == true && session.queue.isEmpty }
         await runner.flushPersistence()
         #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text(pendingText)]])
         #expect(session.transcript.messages.count == 1)
         let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         let persisted = try #require(store.loadMessages(sessionId: "s").first)
@@ -1341,6 +1356,28 @@ struct ACPSessionRunnerQueueTests {
         await runner.flushPersistence()
         #expect(session.queue.isEmpty)
         #expect(mock.sent.count == 1)
+    }
+
+    @Test("task corrections preserve dispatched and retry-held notification snapshots", arguments: ["sending", "failed", "uncertain"])
+    func backgroundCorrectionPreservesDeliverySnapshot(delivery: String) async throws {
+        let (runner, mock, session, _) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed", summary: "Original result"), ownerSessionId: "s")
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        session.queue[0].status = delivery == "sending" ? .sending : .pending
+        session.queue[0].lastError = delivery == "failed" ? "Retry required" : nil
+        session.queue[0].deliveryUncertain = delivery == "uncertain"
+        let original = session.queue[0]
+        mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "failed", summary: "Corrected result"))))
+        try await waitUntil { session.backgroundTasks.first?.summary == "Corrected result" }
+        await runner.flushPersistence()
+        #expect(session.queue == [original])
+        #expect(mock.sent.isEmpty)
     }
 
     @Test("an in-flight loss notification cannot consume a later completion notification")

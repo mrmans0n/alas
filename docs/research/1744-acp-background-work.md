@@ -157,6 +157,11 @@ Local validation passed:
   drain before loss reconciliation, and hidden snapshots must create no
   rendered row or anchor. Idle cancellation also reports denied leases and
   transport errors accurately through the new MCP session controls.
+- The pending-notification review fix passed **214 tests in two suites**:
+  `ACPSessionRunnerQueueTests` and `ACPSessionRunnerTests`. Its regression
+  reproduced stale summary and terminal-state data before the fix. Pending
+  notifications now retain their delivery identity while refreshing their
+  persisted text; sending, failed, and uncertain deliveries keep their snapshot.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 

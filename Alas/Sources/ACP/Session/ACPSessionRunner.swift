@@ -4962,13 +4962,20 @@ extension ACPSessionRunner {
 
     private func enqueuePendingBackgroundWakes(persistedWakeIds: Set<UUID>) {
         guard isConnectionCurrent(), !stopped, !suppressingLoadReplay, holdsLeaseForWrite() else { return }
-        let missing = session.backgroundTasks.filter { task in
-            task.needsWake && task.wakeId.map { persistedWakeIds.contains($0) } == true
-                && !session.queue.contains(where: { $0.id == task.wakeId })
+        let pending = session.backgroundTasks.filter { task in
+            guard task.needsWake, let id = task.wakeId, persistedWakeIds.contains(id) else { return false }
+            guard let item = session.queue.first(where: { $0.id == id }) else { return true }
+            return item.status == .pending && item.lastError == nil && !item.deliveryUncertain
         }
-        guard !missing.isEmpty else { return }
-        for task in missing {
+        guard !pending.isEmpty else { return }
+        for task in pending {
             guard let id = task.wakeId else { continue }
+            if let index = session.queue.firstIndex(where: { $0.id == id }) {
+                // Enrich an undispatched wake without moving it in the queue
+                // or changing the identity used for durable delivery.
+                session.queue[index].blocks = [.text(task.wakeText)]
+                continue
+            }
             // Replace an undispatched observation for this task with the newer
             // one. A sending/failed/uncertain item retains its own snapshot.
             session.queue.removeAll { $0.backgroundTaskWake == task.id && $0.status == .pending
@@ -4981,7 +4988,7 @@ extension ACPSessionRunner {
             if persisted {
                 self.flushQueueIfIdle()
             } else {
-                for task in missing {
+                for task in pending {
                     if let index = self.session.queue.firstIndex(where: { $0.id == task.wakeId }) {
                         self.session.queue[index].lastError = "Could not save background work notification; retry to deliver it."
                     }
