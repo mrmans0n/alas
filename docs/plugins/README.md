@@ -74,7 +74,7 @@ The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 | Add a configure screen, storage shared across projects, runtime slash prompts, tab visibility and Markdown | [API v9](api-v9.md) |
 | Learn which SSH host a project runs on | [API v10](api-v10.md) |
 | Use files and run commands on a remote project's SSH host | [API v11](api-v11.md) |
-| Read agents' token usage, cost and usage-limit history (in progress) | [API v12](api-v12.md) |
+| Show web tabs, and read agents' token usage, cost and usage-limit history (in progress) | [API v12](api-v12.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
