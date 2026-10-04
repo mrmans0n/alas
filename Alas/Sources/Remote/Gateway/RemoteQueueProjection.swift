@@ -29,7 +29,8 @@ enum RemoteQueueProjection {
                 resourceCount: resourceCount,
                 status: item.status.rawValue,
                 lastError: item.lastError,
-                scheduledAt: item.scheduledAt.map { $0.timeIntervalSince1970 * 1_000 })
+                scheduledAt: item.scheduledAt.map { $0.timeIntervalSince1970 * 1_000 },
+                canRemove: item.canRemoveFromQueue)
         }
     }
 

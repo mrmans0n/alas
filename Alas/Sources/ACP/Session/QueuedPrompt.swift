@@ -59,6 +59,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
     }
 
+    /// Internal task notifications retain their persisted delivery identity.
+    /// Failed ones offer Retry/Send now, rather than dropping only the queue half.
+    var canRemoveFromQueue: Bool { status == .pending && backgroundTaskWake == nil }
+
     static let deliveryUncertaintyMessage =
         "Delivery is uncertain because the previous connection ended before confirming this prompt. Retry to send it again."
 

@@ -2515,7 +2515,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func removeFromQueue(id: UUID) -> Bool {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
-        if queue[idx].status == .sending { return false }
+        guard queue[idx].canRemoveFromQueue else { return false }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
@@ -2532,7 +2532,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// flusher-promoted item be duplicated into the composer.
     func takeForEditing(id: UUID) -> ACPComposerDraft? {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return nil }
-        guard queue[idx].status == .pending else { return nil }
+        guard queue[idx].canRemoveFromQueue else { return nil }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
@@ -2597,7 +2597,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// now-stale `draft` survives and mis-restores on the next edit.
     func editQueueItem(id: UUID, blocks: [ACPContentBlock]) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
-        if queue[idx].status == .sending { return }
+        guard queue[idx].canRemoveFromQueue else { return }
         queue[idx].blocks = blocks
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
@@ -2631,7 +2631,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// prompts stay: their inbox row is already gone, so dropping one here
     /// would lose it for good.
     func clearPendingQueue() -> [QueuedPrompt] {
-        let isCleared: (QueuedPrompt) -> Bool = { $0.status == .pending && $0.isShownToUser }
+        let isCleared: (QueuedPrompt) -> Bool = { $0.canRemoveFromQueue && $0.isShownToUser }
         let snapshot = queue.filter(isCleared)
         queue.removeAll(where: isCleared)
         forceSendAfterSendingHeadId = nil

@@ -141,6 +141,11 @@ prompt completion cannot consume the same wake twice.
 Confirmation reconciles the cached session even after its runner stops or is
 replaced, while preserving a newer retry attempt. Retired runners do not
 dispatch successor work or issue recovery writes.
+Native steering and interruption fallback retain the wake identity and use
+the same delivery transaction, including the owned continuation when an
+adapter requires a prompt. Failed wakes offer Retry and Send now. Generic
+Remove, Edit, and Clear preserve them in both native and remote queues so
+those actions cannot discard only the queue half of a pending notification.
 Replayed spawns cannot reopen completed work. A successful attach to a
 surviving broker retains running tasks; replacement marks only prior tasks
 that the new adapter has not reported again as lost observation.
@@ -195,6 +200,14 @@ Local validation passed:
   newer retries retain their identity and data.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
+- Integration with `origin/main` at `63be43c2` and the steering/queue-action
+  fixes passed **312 tests in six suites**: `ACPSessionRunnerQueueTests`,
+  `ACPSessionRunnerTests`, `ACPSessionPersistenceTests`,
+  `ACPSessionQueueAPITests`, `ACPSessionManagerHydrationTests`, and
+  `RemoteQueueProjectionTests`. The new regressions first reproduced lost
+  delivery state in native steering and fallback, and generic mutations
+  dropping retry-held wakes. Success and SQLite failure variants now cover
+  durable task/queue state, response acknowledgement, and replay.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

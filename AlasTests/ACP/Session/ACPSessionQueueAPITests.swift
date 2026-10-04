@@ -55,6 +55,21 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].blocks == [.text("b")])
     }
 
+    @Test("generic queue mutations preserve retry-held background wakes", arguments: ["remove", "clear", "edit", "replace"])
+    func genericMutationsPreserveBackgroundWake(action: String) {
+        let session = mkSession()
+        let wake = QueuedPrompt(blocks: [.text("Background result")], lastError: "Retry required",
+                                backgroundTaskWake: "task", transcriptRecorded: true, deliveryUncertain: true)
+        session.queue = [wake]
+        switch action {
+        case "remove": #expect(!session.removeFromQueue(id: wake.id))
+        case "clear": #expect(session.clearPendingQueue().isEmpty)
+        case "edit": #expect(session.takeForEditing(id: wake.id) == nil)
+        default: session.editQueueItem(id: wake.id, blocks: [.text("User replacement")])
+        }
+        #expect(session.queue == [wake])
+    }
+
     @Test("move(from:to:) reorders within pending region")
     func move() {
         let s = mkSession()

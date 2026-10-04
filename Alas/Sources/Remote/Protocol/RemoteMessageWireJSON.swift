@@ -77,6 +77,7 @@ struct RemoteQueuedPrompt: Codable, Equatable, Sendable {
     let status: String      // "pending" | "sending"
     let lastError: String?
     let scheduledAt: Double? // Unix milliseconds for JavaScript Date
+    var canRemove: Bool? = nil // Absent from older peers, which allow generic queue actions.
 }
 
 struct RemoteWorktreeSummary: Codable, Equatable, Sendable {

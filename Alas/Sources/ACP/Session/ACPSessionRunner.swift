@@ -490,6 +490,7 @@ final class ACPSessionRunner {
     private var observedBackgroundTaskIds: Set<String> = []
     private var backgroundStopRequests: Set<String> = []
     private var backgroundWakeConfirmations: Set<UUID> = []
+    private var backgroundWakeAcknowledgements: [UUID: [ACPDurableConsumptionAcknowledgement]] = [:]
     private var backgroundCancellationInProgress = false
 
     func start() {
@@ -3151,6 +3152,9 @@ extension ACPSessionRunner {
                 onPromptFinished: nil, recoveryQueueItem: (item, idx))
             return
         }
+        if item.backgroundTaskWake != nil {
+            session.queue.insert(item, at: min(idx, session.queue.count))
+        }
         persistQueue()
         steer(
             blocks: item.blocks,
@@ -3161,6 +3165,7 @@ extension ACPSessionRunner {
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
+            recoveryQueueItemID: item.backgroundTaskWake == nil ? nil : item.id,
             onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id)
         )
     }
@@ -3381,6 +3386,17 @@ extension ACPSessionRunner {
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
                 if let self, !self.stopped, self.isConnectionCurrent() {
                     if succeeded {
+                        if let wake = self.session.queue.first(where: {
+                            $0.id == durableQueueItem.item.id && $0.backgroundTaskWake != nil
+                        }) {
+                            self.session.normalQueuedTurnIDs.remove(wake.id)
+                            self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: wake.id)
+                            self.persistBackgroundWakeAndQueue(
+                                rows: self.markBackgroundWakeDelivered(id: wake.id), consuming: wake,
+                                acknowledging: steeringAcknowledgement)
+                            onPromptFinished?(true)
+                            return
+                        }
                         self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
                         self.session.normalQueuedTurnIDs.remove(durableQueueItem.item.id)
                         self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: durableQueueItem.item.id)
@@ -5021,7 +5037,11 @@ extension ACPSessionRunner {
         rows: Set<Int>, consuming item: QueuedPrompt, deliveredForkContext: Bool = false,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
-        guard holdsLeaseForWrite(), backgroundWakeConfirmations.insert(item.id).inserted else { return }
+        guard holdsLeaseForWrite() else { return }
+        if let acknowledgement {
+            backgroundWakeAcknowledgements[item.id, default: []].append(acknowledgement)
+        }
+        guard backgroundWakeConfirmations.insert(item.id).inserted else { return }
         let messages = rows.sorted().compactMap { index -> ACPStoredMessage? in
             guard let payload = try? ACPMessageCodec.encode(session.transcript.messages[index]) else { return nil }
             return .init(id: messageRowID(index), sessionId: self.sessionId,
@@ -5038,13 +5058,14 @@ extension ACPSessionRunner {
                 deliveredForkContext: deliveredForkContext, fence: fence)
         }, completion: { persisted in
             self.backgroundWakeConfirmations.remove(item.id)
+            let acknowledgements = self.backgroundWakeAcknowledgements.removeValue(forKey: item.id) ?? []
             self.session.pendingQueuePersistenceCount -= 1
             if persisted == true {
                 self.commitPersistedMessageRows(messages)
                 // Committed delivery survives teardown; a newer retry under
                 // the same wake ID still owns its separate attempt.
                 self.session.queue.removeAll { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
-                acknowledgement?()
+                acknowledgements.forEach { $0() }
                 guard self.isConnectionCurrent(), !self.stopped else { return }
                 self.onPromptWorkChanged?()
                 if !self.sendPendingQueueForceSendsAfterPersistence() { self.flushQueueIfIdle() }

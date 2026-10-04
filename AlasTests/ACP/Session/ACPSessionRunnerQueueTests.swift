@@ -1366,6 +1366,55 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.count == 1)
     }
 
+    @Test("force-sent background wakes confirm delivery atomically through steering and fallback", arguments: [("injected", true), ("startedNewTurn", true), ("promptRequired", true), ("unsupported", true), ("fallback", true), ("injected", false), ("promptRequired", false), ("fallback", false)])
+    func forcedBackgroundWakeConfirmsDelivery(outcome: String, committed: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed", summary: "Result"), ownerSessionId: "s")
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        let wakeID = try #require(session.queue.first?.id)
+        session.queue[0].lastError = "Retry required"
+        session.queue[0].deliveryUncertain = true
+        session.supportsSteering = outcome != "fallback"
+        session.transcript.streamingState = .streaming
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "_session/steering") { _ in
+            if outcome == "unsupported" {
+                throw ACPClientError.jsonrpc(.init(code: -32601, message: "Method not found", data: nil))
+            }
+            return ACPResponse(body: Data("{\"outcome\":\"\(outcome)\"}".utf8),
+                               durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        mock.scriptResponse(method: "session/prompt") { _ in
+            ACPResponse(body: Data("{}".utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        if !committed { try rejectWakeDeliveryWrites(in: store) }
+        runner.forceSendQueuedItem(id: wakeID)
+        try await waitUntil {
+            if committed { return !session.queue.contains { $0.id == wakeID } }
+            return session.queue.first?.lastError?.contains("save background work delivery confirmation") == true
+        }
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        #expect(acknowledgement.recordedCount == (committed ? (outcome == "promptRequired" ? 2 : 1) : 0))
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        restored.restoreBackgroundTasks(rows: try store.loadMessages(sessionId: "s").compactMap {
+            try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload)
+        })
+        #expect(restored.backgroundTasks.first?.wakeDelivered == committed)
+        let queueBeforeReplay = session.queue
+        let requestsBeforeReplay = mock.sent.count
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        #expect(session.queue == queueBeforeReplay)
+        #expect(mock.sent.count == requestsBeforeReplay)
+    }
+
     @Test("a failed delivery transaction retains a visible background wake without automatic replay", arguments: ["completed", "cancelled", "cancelDuringConfirmation"])
     func backgroundDeliveryPersistenceFailure(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")

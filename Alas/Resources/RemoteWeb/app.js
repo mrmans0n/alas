@@ -2007,9 +2007,11 @@ function renderQueue() {
   if (waiting > 1) {
     const header = el("div", "queued-header");
     header.appendChild(el("span", null, waiting + " queued"));
-    const clear = el("button", "queued-clear", "Clear queue");
-    clear.onclick = () => queueAction("queueClear", null);
-    header.appendChild(clear);
+    if (visible.some(item => item.canRemove !== false)) {
+      const clear = el("button", "queued-clear", "Clear queue");
+      clear.onclick = () => queueAction("queueClear", null);
+      header.appendChild(clear);
+    }
     box.appendChild(header);
   }
 
@@ -2067,12 +2069,14 @@ function queuedActions(item) {
   // Editing an item whose images or file mentions the web client never
   // received would silently drop them, so the pencil is withheld rather
   // than made lossy.
-  if (item.imageCount === 0 && item.resourceCount === 0) {
+  if (item.canRemove !== false && item.imageCount === 0 && item.resourceCount === 0) {
     actions.appendChild(button("qa-edit", "✎", "Edit",
       () => queueAction("queueEdit", item.id)));
   }
-  actions.appendChild(button("qa-remove", "✕", "Remove from queue",
-    () => queueAction("queueRemove", item.id)));
+  if (item.canRemove !== false) {
+    actions.appendChild(button("qa-remove", "✕", "Remove from queue",
+      () => queueAction("queueRemove", item.id)));
+  }
   return actions;
 }
 
