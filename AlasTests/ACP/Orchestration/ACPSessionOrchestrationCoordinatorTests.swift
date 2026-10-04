@@ -860,7 +860,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         parentReachable: Bool = true,
         blockedKeys: Set<String> = [],
         escalationSeconds: Int = 30,
-        scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
+        scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
+        pause: @escaping (Duration) async -> Void = { _ in }
     ) throws -> OutcomeFixture {
         let orchestrationPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
@@ -893,8 +894,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
             configuredAgents: { [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
             availableAgents: { _, _ in [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
             sessionLocation: { sessionId in
-                parentReachable && sessionId == "parent"
-                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
+                parentReachable && manager.liveSession(for: sessionId) != nil
+                    ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
                     : nil
             },
             manager: { _ in parentReachable ? manager : nil },
@@ -902,7 +903,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
             createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
-            notifyChanged: {}
+            notifyChanged: {},
+            pause: pause
         ))
         return .init(coordinator: coordinator, persistence: persistence, manager: manager)
     }
@@ -1064,6 +1066,89 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(pending.map(\.prompt) == [
             "[alas system] Report from delegated session child (codex, worktree feature-x) via session_send:\nDone: parser fixed."
         ])
+    }
+
+    private let parentOrigin = ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "project", worktreeId: "worktree")
+
+    /// A ready child with a live session whose transcript holds `messages`.
+    private func insertLiveChild(_ fixture: OutcomeFixture, messages: [ACPMessage]) async throws -> ACPSession {
+        try await insertReadyChild(fixture.persistence)
+        let session = fixture.manager.createSession(id: "child", agentId: "codex", autoRunDefault: false)
+        session.transcript.messages = messages
+        return session
+    }
+
+    private func decoded<T: Decodable>(_ type: T.Type, _ response: AlasCLIResponse) throws -> T {
+        guard case .text(let lines) = response, let line = lines.first else {
+            Issue.record("Expected a JSON response, got \(response)")
+            throw CancellationError()
+        }
+        return try JSONDecoder().decode(T.self, from: Data(line.utf8))
+    }
+
+    @Test("a parent reads and searches its child's transcript; a sibling cannot")
+    func readAndSearchChildTranscript() async throws {
+        let fixture = try makeOutcomeFixture()
+        _ = try await insertLiveChild(fixture, messages: [
+            .user(id: UUID(), text: "Fix the parser", attachments: []),
+            .agent(id: UUID(), StreamingText("Parser fixed.")),
+        ])
+
+        let read = try decoded(ACPOrchestrationReadResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .read(.init(targetSessionId: "child"))
+        ))
+        let search = try decoded(ACPOrchestrationSearchResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .search(.init(query: "PARSER", limit: 1))
+        ))
+        let sibling = await fixture.coordinator.perform(
+            origin: .init(sessionId: "sibling", projectId: "project", worktreeId: "worktree"),
+            .read(.init(targetSessionId: "child"))
+        )
+
+        #expect(read.entries.map(\.text) == ["Fix the parser", "Parser fixed."])
+        #expect(search.matches.map(\.sessionId) == ["child"])
+        #expect(search.truncated)
+        #expect(sibling == .error("Only a direct parent or child session's transcript can be read."))
+    }
+
+    @Test("session_wait returns once a running child settles, or reports the timeout")
+    func waitForRunningChild() async throws {
+        var child: ACPSession?
+        // The child's turn ends while the wait is paused between polls.
+        let fixture = try makeOutcomeFixture(pause: { _ in child?.transcript.streamingState = .idle })
+        child = try await insertLiveChild(fixture, messages: [.agent(id: UUID(), StreamingText("Parser fixed."))])
+
+        child?.transcript.streamingState = .streaming
+        let timedOut = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+        let settled = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child", "child"]))
+        ))
+
+        #expect(timedOut.timedOut)
+        #expect(timedOut.sessions.map(\.state) == ["running"])
+        #expect(!settled.timedOut)
+        #expect(settled.sessions == [.init(
+            sessionId: "child", state: "idle", settled: true, lastAgentText: "Parser fixed.", failure: nil
+        )])
+    }
+
+    @Test("only a direct parent may wait on or interrupt a session")
+    func childControlRequiresParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        _ = try await insertLiveChild(fixture, messages: [])
+        let childOrigin = ACPOrchestrationSessionOrigin(sessionId: "child", projectId: "project", worktreeId: "worktree")
+
+        let interruptParent = await fixture.coordinator.perform(origin: childOrigin, .interrupt(targetSessionId: "parent"))
+        let waitParent = await fixture.coordinator.perform(origin: childOrigin, .wait(.init(targetSessionIds: ["parent"])))
+        let idleChild = try decoded(ACPOrchestrationInterruptResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .interrupt(targetSessionId: "child")
+        ))
+
+        #expect(interruptParent == .error("Only a direct child session can be interrupted."))
+        #expect(waitParent == .error("Only direct child sessions can be waited on: parent"))
+        #expect(idleChild == .init(sessionId: "child", cancelRequested: false))
     }
 
     private func eventuallyLoadDelegation(

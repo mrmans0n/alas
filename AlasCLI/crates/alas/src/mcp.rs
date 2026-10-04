@@ -176,9 +176,12 @@ fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
     all_tool_definitions()
 }
 
-/// Delegated children are leaves: `session_new` is left out of their
-/// discovery. Direct or forged `tools/call session_new` still reaches Alas,
-/// whose orchestration policy rejects it.
+/// Tools that only act on a session's own children.
+const CHILD_ONLY_TOOLS: [&str; 3] = ["session_new", "session_wait", "session_interrupt"];
+
+/// Delegated children are leaves: tools that act on children are left out
+/// of their discovery. Direct or forged calls still reach Alas, whose
+/// orchestration policy rejects them.
 fn tool_definitions_for_session(workspace_only: bool, is_delegated: bool) -> Vec<Value> {
     let tools = tool_definitions_for_mode(workspace_only);
     if !is_delegated {
@@ -186,7 +189,11 @@ fn tool_definitions_for_session(workspace_only: bool, is_delegated: bool) -> Vec
     }
     tools
         .into_iter()
-        .filter(|tool| tool.get("name").and_then(Value::as_str) != Some("session_new"))
+        .filter(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_none_or(|name| !CHILD_ONLY_TOOLS.contains(&name))
+        })
         .collect()
 }
 
@@ -276,6 +283,61 @@ fn all_tool_definitions() -> Vec<Value> {
                     "prompt": { "type": "string", "description": "Text-only prompt to queue." }
                 },
                 "required": ["session_id", "prompt"]
+            }
+        }),
+        json!({
+            "name": "session_read",
+            "description": "Read-only: one page of a direct parent's or child's transcript as JSON entries (user and agent messages, one-line tool-call summaries; thoughts omitted). Without offset, returns the latest entries. Pass the returned end as offset to read on.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Direct parent or child session id." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "First entry index to return. Omit for the latest entries." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum entries. Default: 20." },
+                    "max_chars": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Text budget across entries; an entry over it is cut and marked truncated. Default: 8000." }
+                },
+                "required": ["session_id"]
+            }
+        }),
+        json!({
+            "name": "session_search",
+            "description": "Read-only: case-insensitive text search across the transcripts of this session's direct parent and children. Returns session id, entry index (usable as session_read offset), role, and a snippet per match.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Text to find." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum matches. Default: 20." }
+                },
+                "required": ["query"]
+            }
+        }),
+        json!({
+            "name": "session_wait",
+            "description": "Wait until every listed direct child has no turn running or queued, or the timeout passes, then return each child's state and latest agent text together. A child blocked on a permission or question counts as settled (state awaiting_input): only the user can answer it. Call again if timed_out is true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "description": "Direct child session ids."
+                    },
+                    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 20000, "description": "Default: 20000." }
+                },
+                "required": ["session_ids"]
+            }
+        }),
+        json!({
+            "name": "session_interrupt",
+            "description": "Cancel a direct child's running turn, like the user pressing Stop. A pending permission request is cancelled, never approved. Queued prompts stay queued.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Direct child session id." }
+                },
+                "required": ["session_id"]
             }
         }),
         json!({
@@ -745,6 +807,42 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         "session_send" => Ok(Command::SessionSend {
             session_id: required_string(args, "session_id")?,
             prompt: required_string(args, "prompt")?,
+        }),
+        "session_read" => Ok(Command::SessionRead {
+            session_id: required_non_blank_string(args, "session_id")?,
+            offset: optional_bounded_u64(args, "offset", 0, u64::MAX)?,
+            limit: optional_bounded_u64(args, "limit", 1, 100)?,
+            max_chars: optional_bounded_u64(args, "max_chars", 1, 100_000)?,
+        }),
+        "session_search" => Ok(Command::SessionSearch {
+            query: required_non_blank_string(args, "query")?,
+            limit: optional_bounded_u64(args, "limit", 1, 100)?,
+        }),
+        "session_wait" => {
+            let ids = args
+                .get("session_ids")
+                .and_then(Value::as_array)
+                .filter(|ids| (1..=20).contains(&ids.len()))
+                .ok_or("session_wait requires a 'session_ids' array of 1 to 20 ids")?;
+            let session_ids = ids
+                .iter()
+                .map(|id| {
+                    id.as_str()
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            "session_wait 'session_ids' must be non-empty strings".to_string()
+                        })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(Command::SessionWait {
+                session_ids,
+                timeout_ms: optional_bounded_u64(args, "timeout_ms", 1, 20_000)?,
+            })
+        }
+        "session_interrupt" => Ok(Command::SessionInterrupt {
+            session_id: required_non_blank_string(args, "session_id")?,
         }),
         "worktree_list" => Ok(Command::WtList),
         "worktree_switch" => Ok(Command::WtSwitch {
@@ -1268,6 +1366,10 @@ fn success_message(command: &Command) -> String {
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
+        Command::SessionRead { .. }
+        | Command::SessionSearch { .. }
+        | Command::SessionWait { .. }
+        | Command::SessionInterrupt { .. } => "OK".into(),
         Command::WorkspaceList => "No Workspace Checkouts found.".into(),
         Command::WorkspaceShow { .. } => "Workspace Checkout shown.".into(),
         Command::WorkspaceSwitch { .. } => "Switched Alas to Workspace Checkout.".into(),
@@ -1919,7 +2021,7 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
+        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result, is_initialize_message,
         parse_http_request, tools_call_command,
@@ -2149,6 +2251,10 @@ mod tests {
                 "session_list",
                 "session_new",
                 "session_send",
+                "session_read",
+                "session_search",
+                "session_wait",
+                "session_interrupt",
                 "worktree_list",
                 "worktree_switch",
                 "worktree_new",
@@ -2388,10 +2494,11 @@ mod tests {
         assert_eq!(
             child,
             root.iter()
-                .filter(|name| *name != "session_new")
+                .filter(|name| !CHILD_ONLY_TOOLS.contains(&name.as_str()))
                 .cloned()
                 .collect::<Vec<_>>()
         );
+        assert!(child.iter().any(|name| name == "session_read"));
 
         // Authorization stays server-side: a forged call is forwarded to
         // Alas, which rejects it.
@@ -2764,6 +2871,48 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(
+            command_for_tool(
+                "session_wait",
+                &json!({ "session_ids": ["a", "b"], "timeout_ms": 500 }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::SessionWait {
+                session_ids: vec!["a".into(), "b".into()],
+                timeout_ms: Some(500),
+            }
+        );
+        assert_eq!(
+            command_for_tool("session_read", &json!({ "session_id": "child" }), "/wt").unwrap(),
+            alas_client::Command::SessionRead {
+                session_id: "child".into(),
+                offset: None,
+                limit: None,
+                max_chars: None,
+            }
+        );
+        for (tool, invalid) in [
+            ("session_wait", json!({ "session_ids": [] })),
+            ("session_wait", json!({ "session_ids": "a" })),
+            ("session_wait", json!({ "session_ids": [" "] })),
+            (
+                "session_wait",
+                json!({ "session_ids": ["a"], "timeout_ms": 20_001 }),
+            ),
+            ("session_read", json!({ "session_id": "child", "limit": 0 })),
+            (
+                "session_read",
+                json!({ "session_id": "child", "offset": -1 }),
+            ),
+            ("session_search", json!({ "query": "  " })),
+            ("session_interrupt", json!({})),
+        ] {
+            assert!(
+                command_for_tool(tool, &invalid, "/wt").is_err(),
+                "{tool} {invalid}"
+            );
+        }
     }
 
     #[test]

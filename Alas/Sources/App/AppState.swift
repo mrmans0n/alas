@@ -7428,6 +7428,9 @@ final class AppState {
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
             },
+            performDelegatedSessionAction: { origin, action in
+                await orchestration.perform(origin: origin, action)
+            },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)

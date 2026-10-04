@@ -201,6 +201,27 @@ pub enum Command {
         session_id: String,
         prompt: String,
     },
+    /// One page of a direct parent's or child's text-only transcript. The
+    /// app applies its defaults to omitted bounds.
+    SessionRead {
+        session_id: String,
+        /// First entry to return; the latest entries when absent.
+        offset: Option<u64>,
+        limit: Option<u64>,
+        max_chars: Option<u64>,
+    },
+    SessionSearch {
+        query: String,
+        limit: Option<u64>,
+    },
+    /// Block until every listed direct child settles or the timeout passes.
+    SessionWait {
+        session_ids: Vec<String>,
+        timeout_ms: Option<u64>,
+    },
+    SessionInterrupt {
+        session_id: String,
+    },
     WorkspaceList,
     WorkspaceShow {
         checkout_id: String,
@@ -555,6 +576,58 @@ pub fn build_request(
         Command::SessionSend { session_id, prompt } => {
             let mut r = Request::new("session_send");
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
+            r
+        }
+        Command::SessionRead {
+            session_id,
+            offset,
+            limit,
+            max_chars,
+        } => {
+            let mut r = Request::new("session_read");
+            let mut params = serde_json::Map::new();
+            params.insert(
+                "session_id".into(),
+                serde_json::Value::String(session_id.clone()),
+            );
+            for (key, value) in [
+                ("offset", offset),
+                ("limit", limit),
+                ("max_chars", max_chars),
+            ] {
+                if let Some(value) = value {
+                    params.insert(key.into(), serde_json::Value::from(*value));
+                }
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::SessionSearch { query, limit } => {
+            let mut r = Request::new("session_search");
+            let mut params = serde_json::Map::new();
+            params.insert("query".into(), serde_json::Value::String(query.clone()));
+            if let Some(limit) = limit {
+                params.insert("limit".into(), serde_json::Value::from(*limit));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::SessionWait {
+            session_ids,
+            timeout_ms,
+        } => {
+            let mut r = Request::new("session_wait");
+            let mut params = serde_json::Map::new();
+            params.insert("session_ids".into(), serde_json::json!(session_ids));
+            if let Some(timeout_ms) = timeout_ms {
+                params.insert("timeout_ms".into(), serde_json::Value::from(*timeout_ms));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::SessionInterrupt { session_id } => {
+            let mut r = Request::new("session_interrupt");
+            r.params = Some(serde_json::json!({ "session_id": session_id }));
             r
         }
         Command::WorkspaceList => {
@@ -1252,6 +1325,34 @@ mod tests {
         assert_eq!(
             send.params,
             Some(serde_json::json!({ "session_id": "child", "prompt": "Follow up" }))
+        );
+
+        let read = build_request(
+            &Command::SessionRead {
+                session_id: "child".into(),
+                offset: Some(0),
+                limit: None,
+                max_chars: Some(500),
+            },
+            Some("acp-1".into()),
+            None,
+        );
+        assert_eq!(read.command, "session_read");
+        assert_eq!(
+            read.params,
+            Some(serde_json::json!({ "session_id": "child", "offset": 0, "max_chars": 500 }))
+        );
+        let wait = build_request(
+            &Command::SessionWait {
+                session_ids: vec!["a".into(), "b".into()],
+                timeout_ms: None,
+            },
+            Some("acp-1".into()),
+            None,
+        );
+        assert_eq!(
+            wait.params,
+            Some(serde_json::json!({ "session_ids": ["a", "b"] }))
         );
     }
 

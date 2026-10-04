@@ -388,6 +388,44 @@ struct ACPSessionOrchestrationPolicyTests {
         ) == .closed)
     }
 
+    @Test("only a direct parent in the same project may wait on or interrupt a child", arguments: [
+        ("parent", "project", true, nil),
+        ("child", "project", false, ACPSessionOrchestrationPolicy.Error.targetIsNotDirectRelative),
+        ("sibling", "project", true, .targetIsNotDirectRelative),
+        ("parent", "other-project", true, .crossProjectTarget),
+    ])
+    func childControlAuthorization(
+        caller: String, project: String, targetIsChild: Bool,
+        expected: ACPSessionOrchestrationPolicy.Error?
+    ) {
+        // A child addressing its parent finds no delegation record for it.
+        let result = ACPSessionOrchestrationPolicy.authorizeChildControl(
+            callerSessionId: caller, callerProjectId: project, target: targetIsChild ? child : nil
+        )
+        switch result {
+        case .success: #expect(expected == nil)
+        case .failure(let error): #expect(error == expected)
+        }
+    }
+
+    @Test("a wait settles once a child has no turn running, starting, or queued", arguments: [
+        (ACPDelegationPhase.starting, ACPOrchestrationRuntimeState?.none, false, false),
+        (.ready, .running, false, false),
+        (.ready, .idle, true, false),
+        (.ready, .none, true, false),
+        (.ready, .idle, false, true),
+        (.ready, .awaitingInput, true, true),
+        (.failed, .none, true, true),
+        (.closed, .running, false, true),
+    ])
+    func waitSettled(
+        phase: ACPDelegationPhase, runtime: ACPOrchestrationRuntimeState?, pending: Bool, settled: Bool
+    ) {
+        #expect(ACPSessionOrchestrationPolicy.waitSettled(
+            phase: phase, runtime: runtime, hasPendingPrompts: pending
+        ) == settled)
+    }
+
     @Test("completed turn that reported to the parent only notices")
     func completedReportedNotices() {
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(

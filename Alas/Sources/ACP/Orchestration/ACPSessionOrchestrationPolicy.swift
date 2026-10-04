@@ -168,6 +168,51 @@ enum ACPSessionOrchestrationPolicy {
         return target.phase == .creatingWorktree || target.phase == .starting
     }
 
+    /// `session_wait` and `session_interrupt` act on a turn only its direct
+    /// parent started, so they reach direct children only; a child cannot
+    /// stop or block on its parent.
+    static func authorizeChildControl(
+        callerSessionId: String,
+        callerProjectId: String,
+        target: ACPDelegationRecord?
+    ) -> Result<Void, Error> {
+        guard let target, target.parentSessionId == callerSessionId else {
+            return .failure(.targetIsNotDirectRelative)
+        }
+        guard target.projectId == callerProjectId else {
+            return .failure(.crossProjectTarget)
+        }
+        return .success(())
+    }
+
+    /// Whether `session_wait` can stop waiting on a child: it is not still
+    /// starting, has no turn running, and has no prompt left to run. A queued
+    /// prompt or undelivered inbox message counts as work, so a wait right
+    /// after `session_send` does not return before that turn has run. A
+    /// child blocked on a permission or question is settled: only the user
+    /// can unblock it, and the caller should hear about it.
+    static func waitSettled(
+        phase: ACPDelegationPhase,
+        runtime: ACPOrchestrationRuntimeState?,
+        hasPendingPrompts: Bool
+    ) -> Bool {
+        switch phase {
+        case .creatingWorktree, .starting:
+            return false
+        case .failed, .closed:
+            return true
+        case .ready:
+            switch runtime {
+            case .running:
+                return false
+            case .awaitingInput, .closed:
+                return true
+            case .idle, .none:
+                return !hasPendingPrompts
+            }
+        }
+    }
+
     static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
         guard let target else { return true }
         return target.phase != .failed && target.phase != .closed

@@ -50,6 +50,9 @@ struct AlasCLICommandRouter {
     var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
+    var performDelegatedSessionAction: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionAction) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
         .error("Workspace automation is not available yet.")
     }
@@ -83,6 +86,7 @@ struct AlasCLICommandRouter {
             listDelegatedSessions: listDelegatedSessions,
             createDelegatedSession: createDelegatedSession,
             sendDelegatedSessionMessage: sendDelegatedSessionMessage,
+            performDelegatedSessionAction: performDelegatedSessionAction,
             activateApp: activateApp
         )
     }
@@ -108,7 +112,7 @@ struct AlasCLICommandRouter {
             return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
             return await workspaceCommand(command)
-        case .agentList, .sessionList, .sessionNew, .sessionSend:
+        case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             guard let sessionId = request.sessionId,
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
                 return .error("session commands require an originating ACP session")
@@ -149,6 +153,8 @@ struct AlasCLICommandRouter {
                         prompt: prompt
                     )
                 )
+            case .sessionAction(let action):
+                return await service.sessionAction(origin: acpOrigin, action: action)
             default:
                 preconditionFailure("Session command switch must be exhaustive")
             }
@@ -259,7 +265,7 @@ struct AlasCLICommandRouter {
                 origin: origin, sessionID: sessionID, verdict: verdict, summary: summary,
                 projectWorktrees: projectWorktrees
             )
-        case .agentList, .sessionList, .sessionNew, .sessionSend:
+        case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             preconditionFailure("Session commands are handled before generic origin resolution")
         }
     }

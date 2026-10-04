@@ -50,6 +50,9 @@ struct AlasActionService {
     var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
+    var performDelegatedSessionAction: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionAction) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -173,6 +176,13 @@ struct AlasActionService {
         request: ACPDelegatedSessionMessageRequest
     ) async -> AlasCLIResponse {
         await sendDelegatedSessionMessage(origin, request)
+    }
+
+    func sessionAction(
+        origin: ACPOrchestrationSessionOrigin,
+        action: ACPDelegatedSessionAction
+    ) async -> AlasCLIResponse {
+        await performDelegatedSessionAction(origin, action)
     }
 
     func new(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
