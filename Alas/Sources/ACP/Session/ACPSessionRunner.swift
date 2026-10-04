@@ -139,6 +139,9 @@ final class ACPSessionRunner {
     private var activePromptCostRevision = 0
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
+    /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost never takes one sent
+    /// after its result.
+    private var costLog: [(index: Int, cost: ACPUsageInfo.Cost)] = []
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -492,6 +495,11 @@ final class ACPSessionRunner {
 #endif
                 self.dequeuedUpdateCount += 1
                 guard self.isConnectionCurrent() else { continue }
+                if case .usageUpdate(let info) = u.update, let cost = info.cost {
+                    self.costLog.append((self.dequeuedUpdateCount, cost))
+                    // ponytail: only recent entries; a turn resolves within a second of its result.
+                    if self.costLog.count > 32 { self.costLog.removeFirst() }
+                }
                 self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
@@ -1863,13 +1871,18 @@ final class ACPSessionRunner {
     /// The active turn's cost, read once the updates already sent before its result have been taken off the stream
     /// (the last `usage_update` may not have been). Only reads; never flushes the coalescing buffer (see above).
     private func turnCost() -> ACPTurnCost {
+        let known = turnCumulativeCost(since: activePromptCostRevision)
         let watermark = connection.client.yieldedUpdateCount
-        let costRevision = activePromptCostRevision
-        return ACPTurnCost(
-            known: turnCumulativeCost(since: costRevision),
+        let seen = dequeuedUpdateCount
+        // Everything sent before the result is already in `known`.
+        guard seen < watermark else { return ACPTurnCost(known: known) }
+        return ACPTurnCost(known: known, later: .init(
             settled: { [weak self] in (self?.dequeuedUpdateCount ?? 0) >= watermark },
             live: { [weak self] in self.map { $0.updatesTask?.isCancelled == false && $0.isConnectionCurrent() } ?? false },
-            read: { [weak self] in self?.turnCumulativeCost(since: costRevision) })
+            // Only updates sent before the result and taken off the stream after it.
+            sentBeforeResult: { [weak self] in
+                self?.costLog.last { $0.index > seen && $0.index <= watermark }?.cost
+            }))
     }
 
     /// Tail of the last agent message this turn produced, or nil. Only rows at

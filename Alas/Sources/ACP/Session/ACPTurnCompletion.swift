@@ -37,35 +37,38 @@ struct ACPTurnCompletion: Equatable, Sendable {
 
 /// A finished turn's cumulative cost: the session's, when a `usage_update` with a cost arrived during the turn, and
 /// nil when none did, so a turn never reports a stale total as its own. The turn's last update may still be on the
-/// stream when its result arrives, so `resolve` waits, without touching the runner, until the updates sent before
+/// stream when its result arrives, so `resolve` can wait, without touching the runner, until the updates sent before
 /// the result have been taken off it. The completion itself is never held for this.
 @MainActor
 final class ACPTurnCost: Equatable {
-    private let known: ACPUsageInfo.Cost?
-    private let settled: @MainActor () -> Bool
-    private let live: @MainActor () -> Bool
-    private let read: @MainActor () -> ACPUsageInfo.Cost?
-
-    /// `known` is the cost as of the result; `settled` says the updates sent before it were taken off the stream,
-    /// `live` that more still can be, and `read` gives the cost once settled.
-    init(
-        known: ACPUsageInfo.Cost?, settled: @escaping @MainActor () -> Bool, live: @escaping @MainActor () -> Bool,
-        read: @escaping @MainActor () -> ACPUsageInfo.Cost?
-    ) {
-        self.known = known
-        self.settled = settled
-        self.live = live
-        self.read = read
+    /// Updates sent before the result that were still on the stream then.
+    struct Later {
+        /// Every update sent before the result has been taken off the stream.
+        let settled: @MainActor () -> Bool
+        /// More can still be taken off it.
+        let live: @MainActor () -> Bool
+        /// The newest cost among those taken off since the result; never one sent after it.
+        let sentBeforeResult: @MainActor () -> ACPUsageInfo.Cost?
     }
 
-    /// Waits at most a second; if the stream went away first, the cost as of the result.
+    /// The cost as of the result.
+    private let known: ACPUsageInfo.Cost?
+    private let later: Later?
+
+    init(known: ACPUsageInfo.Cost?, later: Later? = nil) {
+        self.known = known
+        self.later = later
+    }
+
+    /// Waits at most a second for the updates sent before the result.
     func resolve() async -> ACPUsageInfo.Cost? {
+        guard let later else { return known }
         // ponytail: a yield loop with a deadline, as `ACPSessionRunner.persistPermissionDecision` drains.
         let deadline = ContinuousClock.now + .seconds(1)
-        while !settled(), live(), ContinuousClock.now < deadline {
+        while !later.settled(), later.live(), ContinuousClock.now < deadline {
             await Task.yield()
         }
-        return settled() ? read() : known
+        return later.sentBeforeResult() ?? known
     }
 
     nonisolated static func == (lhs: ACPTurnCost, rhs: ACPTurnCost) -> Bool { lhs === rhs }
