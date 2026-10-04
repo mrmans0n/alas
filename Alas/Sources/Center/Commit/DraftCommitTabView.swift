@@ -22,6 +22,8 @@ struct DraftCommitTabView: View {
     @State private var generation: Task<Void, Never>? = nil
     @State private var createReviewRequestAsDraft = false
     @State private var publicationProbe = CommitPublishAmendProbeLoader()
+    @State private var messageSuggestion = CommitMessageSuggestionState()
+    @State private var messageSuggestionJob: Task<Void, Never>?
 
     @State private var stagedSession: DiffReviewLoadedSession?
     @State private var sessionWithActions: DiffReviewLoadedSession?
@@ -267,7 +269,10 @@ struct DraftCommitTabView: View {
                             .accessibilityIdentifier("commit-composer-abandon-publish")
                         }
                     }
-                )
+                ),
+                suggesting: messageSuggestion.isSuggesting,
+                suggestionNote: messageSuggestion.isShowingSuggestion(subject: subject, body: bodyText)
+                    ? "Suggested on this Mac from the staged diff. Review it before committing." : nil
             )
             if let activity = publishActivityText {
                 HStack(spacing: 6) {
@@ -308,11 +313,24 @@ struct DraftCommitTabView: View {
                 $0.createReviewRequestAsDraft = new
             }
         }
-        .onChange(of: subject) { _, new in persist(subject: new) }
-        .onChange(of: bodyText) { _, new in persist(body: new) }
+        .onChange(of: subject) { _, new in
+            messageSuggestion.recordEdit(subject: new, body: bodyText)
+            persist(subject: new, suggestion: .some(messageSuggestion.applied))
+            if !messageSuggestion.canFill(subject: new, body: bodyText) { stopMessageSuggestion() }
+        }
+        .onChange(of: bodyText) { _, new in
+            messageSuggestion.recordEdit(subject: subject, body: new)
+            persist(body: new, suggestion: .some(messageSuggestion.applied))
+            if !messageSuggestion.canFill(subject: subject, body: new) { stopMessageSuggestion() }
+        }
         .onChange(of: amend) { _, new in
             persist(amend: new)
             if new {
+                // Amend starts from HEAD's message, not a draft for a new commit.
+                if messageSuggestion.isShowingSuggestion(subject: subject, body: bodyText) {
+                    subject = ""
+                    bodyText = ""
+                }
                 Task { await applyAmendPrefill() }
             } else {
                 clearAmendPrefillIfUnchanged()
@@ -325,6 +343,100 @@ struct DraftCommitTabView: View {
             if await loadStagedSession() {
                 onStartupRecoveryReady()
             }
+        }
+        // Closing the tab or a new key cancels the request.
+        .task(id: messageSuggestionKey) {
+            // Held separately so typing or the agent generator can stop the
+            // model request without waiting for the next key change.
+            let job = Task { await suggestMessage() }
+            messageSuggestionJob = job
+            await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        }
+    }
+
+    /// Identifies the staged contents a suggestion describes. Unlike
+    /// `stagedKey`, unstaged and untracked churn leaves it unchanged. Nil
+    /// until the right pane has loaded a snapshot, so a restored draft is not
+    /// judged stale against an index Alas has not read yet.
+    private var stagedIndexKey: String? {
+        guard let rps = rightPane, rps.hasLoadedSnapshot else { return nil }
+        let staged = rps.changes
+            .filter { $0.stage == .staged }
+            .map { "\($0.path):\($0.add):\($0.del)" }
+            .sorted()
+        return CommitMessageSuggestionPolicy.indexKey(
+            stagedEntries: staged, indexFingerprint: rps.indexFingerprint, headSHA: rps.currentHeadSHA
+        )
+    }
+
+    /// Restaging, toggling amend, or a change in whether a suggestion may run
+    /// (model readiness, helper settings, a paused publish) restarts it.
+    private var messageSuggestionKey: String {
+        // Each backend separately, so revoking one cancels its in-flight work.
+        "\(stagedIndexKey ?? "unloaded"):\(amend):\(publishCheckpoint == nil)"
+            + ":\(appState.commitMessageAppleSuggestionsAvailable):\(appState.commitMessageMLXSuggestionsAvailable)"
+    }
+
+    /// Frees the local model once someone else owns the next write to the
+    /// fields. Blank fields (including Alas withdrawing its own stale draft)
+    /// keep the request running.
+    private func stopMessageSuggestion() {
+        messageSuggestion.cancel()
+        messageSuggestionJob?.cancel()
+        messageSuggestionJob = nil
+    }
+
+    /// Seeds empty fields with an on-device draft. Commit never waits on it,
+    /// and text the user typed is never replaced.
+    private func suggestMessage() async {
+        guard let indexKey = stagedIndexKey else {
+            messageSuggestion.cancel()
+            return
+        }
+        // A draft for other staged changes must not stay committable while
+        // its replacement is computed, or when none can be.
+        if messageSuggestion.withdrawStale(indexKey: indexKey, subject: subject, body: bodyText) {
+            subject = ""
+            bodyText = ""
+        }
+        // A running agent generation owns the next write to the fields.
+        guard !amend, hasStaged, publishCheckpoint == nil, generation == nil,
+              appState.commitMessageSuggestionAvailable else {
+            messageSuggestion.cancel()
+            return
+        }
+        // Staging several files in a row moves the key repeatedly; only the
+        // settled index is worth a model request.
+        do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+        guard let id = messageSuggestion.begin(indexKey: indexKey, subject: subject, body: bodyText) else { return }
+        let ticketTitle = appState.worktree(withId: worktreeId).flatMap {
+            appState.projectsManager.issueAttachment(projectId: $0.projectId, worktreeId: worktreeId)?.title
+        }
+        let input = try? await CommitMessageSuggestionInput.load(worktreePath: worktreePath, ticketTitle: ticketTitle)
+        let suggestion: CommitMessageSuggestion?
+        if let input, !Task.isCancelled {
+            suggestion = await appState.makeCommitMessageSuggester().suggest(for: input)
+        } else {
+            suggestion = nil
+        }
+        guard !Task.isCancelled else { return }
+        guard let currentIndexKey = stagedIndexKey else {
+            messageSuggestion.cancel()
+            return
+        }
+        switch messageSuggestion.complete(
+            id, suggestion: suggestion, indexKey: currentIndexKey, subject: subject, body: bodyText
+        ) {
+        case .fill(let suggestion):
+            subject = suggestion.subject
+            bodyText = suggestion.body ?? ""
+            // Covers a refresh that yields the same text, which fires no change handler.
+            persist(suggestion: .some(messageSuggestion.applied))
+        case .clear:
+            subject = ""
+            bodyText = ""
+        case nil:
+            break
         }
     }
 
@@ -362,6 +474,8 @@ struct DraftCommitTabView: View {
     }
 
     private func hydrateFromTabState() {
+        // Before the fields, so their change handlers see Alas's own draft.
+        messageSuggestion = CommitMessageSuggestionState(restoring: tabState.messageSuggestion)
         subject = tabState.subject
         bodyText = tabState.bodyText
         amend = tabState.amend
@@ -369,8 +483,12 @@ struct DraftCommitTabView: View {
         selectedFileID = tabState.selectedPath.map { DiffReviewFileID(namespace: "staged", path: $0) }
     }
 
-    private func persist(subject: String? = nil, body: String? = nil, amend: Bool? = nil, selectedPath: String?? = nil) {
+    private func persist(
+        subject: String? = nil, body: String? = nil, amend: Bool? = nil, selectedPath: String?? = nil,
+        suggestion: CommitMessageSuggestionRecord?? = nil
+    ) {
         appState.tabs.updateDraftCommit(worktreeId: worktreeId, tabId: tabState.id) { s in
+            if let suggestion { s.messageSuggestion = suggestion }
             if let subject { s.subject = subject }
             if let body { s.bodyText = body }
             if let amend { s.amend = amend }
@@ -433,6 +551,9 @@ struct DraftCommitTabView: View {
 
     private func runGenerate() {
         publishSession?.clearError()
+        // The agent's message replaces the fields through the edit observers;
+        // until then an untouched draft stays Alas's to refresh or withdraw.
+        stopMessageSuggestion()
         guard let agent = RepositoryAgentSelectionPolicy.selection(
             selectedID: appState.config.changes.aiToolId,
             availability: agentAvailability

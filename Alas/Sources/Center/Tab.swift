@@ -624,6 +624,8 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
     var preferredAction: DraftCommitPreferredAction
     var createReviewRequestAsDraft: Bool
     var publishCheckpoint: CommitPublishCheckpoint?
+    /// The on-device suggestion the fields still hold untouched, if any.
+    var messageSuggestion: CommitMessageSuggestionRecord?
     private var presentationRevision: Int?
 
     private enum CodingKeys: String, CodingKey {
@@ -636,6 +638,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         case preferredAction
         case createReviewRequestAsDraft
         case publishCheckpoint
+        case messageSuggestion
         case presentationRevision
     }
 
@@ -676,6 +679,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         preferredAction = try container.decodeIfPresent(DraftCommitPreferredAction.self, forKey: .preferredAction) ?? .commit
         createReviewRequestAsDraft = try container.decodeIfPresent(Bool.self, forKey: .createReviewRequestAsDraft) ?? false
         publishCheckpoint = try container.decodeIfPresent(CommitPublishCheckpoint.self, forKey: .publishCheckpoint)
+        messageSuggestion = try? container.decodeIfPresent(CommitMessageSuggestionRecord.self, forKey: .messageSuggestion)
         presentationRevision = try container.decodeIfPresent(Int.self, forKey: .presentationRevision)
     }
 
@@ -690,6 +694,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         try container.encode(preferredAction, forKey: .preferredAction)
         try container.encode(createReviewRequestAsDraft, forKey: .createReviewRequestAsDraft)
         try container.encodeIfPresent(publishCheckpoint, forKey: .publishCheckpoint)
+        try container.encodeIfPresent(messageSuggestion, forKey: .messageSuggestion)
         try container.encodeIfPresent(presentationRevision, forKey: .presentationRevision)
     }
 
