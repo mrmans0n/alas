@@ -291,6 +291,12 @@ Local validation passed:
   a hidden marker during snapshot insertion. Snapshot and delta paths now both
   retire that node and retain the hidden marker's index for pagination; the
   regression also covers markers without an earlier visible node.
+- Native backfill ordering passed **312 tests in six suites**:
+  `RemoteSessionGatewayTests`, `RemoteProtocolTests`, `NativePeerTranscriptTests`,
+  `NativePeerSessionsTests`, `RemoteWebAssetTests`, and `CommitDetailsTests`.
+  The new native regression reproduced older pages replacing newer hidden and
+  visible entries with the same stable ID. Backfill now preserves the newer
+  row while still adding unrelated older rows and advancing the page cursor.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

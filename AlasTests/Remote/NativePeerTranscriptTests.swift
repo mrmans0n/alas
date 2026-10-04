@@ -50,6 +50,22 @@ struct NativePeerTranscriptTests {
         #expect(!transcript.canDrive)
     }
 
+    @Test(arguments: [false, true])
+    func olderPagesPreserveNewerStableRows(hidden: Bool) {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        let latest = RemoteWireMessage(stableId: "job", kind: "agent", text: "latest", json: nil,
+                                       index: 10, isHidden: hidden)
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [latest, row("tail", index: 11, text: "tail")],
+                                              firstIndex: 10, totalCount: 12, epoch: 1, revision: 0))
+        transcript.apply(.transcriptPage(sessionId: "B:s", epoch: 1, firstIndex: 8,
+                                          messages: [row("older", index: 8, text: "older"), row("job", index: 9, text: "stale")]))
+        #expect(transcript.messages.map(\.stableId) == (hidden ? ["older", "tail"] : ["older", "job", "tail"]))
+        #expect(transcript.messages.first(where: { $0.stableId == "job" })?.text == (hidden ? nil : "latest"))
+        #expect(transcript.olderPageBeforeIndex == 8)
+        #expect(transcript.totalCount == 12)
+    }
+
     @Test func pendingPermissionAndClosure() {
         var transcript = NativePeerTranscript(sessionId: "B:s")
         transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,

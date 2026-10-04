@@ -102,6 +102,7 @@ struct NativePeerTranscript: Equatable {
             guard let epoch, incomingEpoch == epoch, first < firstIndex, !isClosed else { return false }
             var updated = messagesByStableID
             for row in rows where row.index < firstIndex {
+                if let current = updated[row.stableId], current.index >= row.index { continue }
                 updated[row.stableId] = row
             }
             messagesByStableID = updated
