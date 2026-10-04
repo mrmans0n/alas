@@ -3238,6 +3238,7 @@ extension ACPSessionRunner {
             onPromptFinished?(recoveryPersisted)
             return }
             var recordedMessageID = recordedUserMessageID
+            var recordedMessagePersisted = durableQueueItem.item.transcriptRecorded
             var ownedContinuationStarted = false
             var steeringAcknowledgement: ACPDurableConsumptionAcknowledgement?
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
@@ -3248,7 +3249,7 @@ extension ACPSessionRunner {
                         self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: durableQueueItem.item.id)
                     } else if !ownedContinuationStarted {
                         var item = durableQueueItem.item
-                        item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
+                        item.transcriptRecorded = recordedMessagePersisted
                         item.status = .pending
                         item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
                         item.markDeliveryUncertain()
@@ -3259,7 +3260,7 @@ extension ACPSessionRunner {
                         }
                         if normalUserTurn {
                             self.session.normalQueuedTurnIDs.insert(item.id)
-                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
+                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessagePersisted ? recordedMessageID : nil
                         }
                     }
                     // Submission is accepted if its content is retained for
@@ -3304,9 +3305,17 @@ extension ACPSessionRunner {
                         text: Self.textPreview(of: blocks),
                         attachments: Self.attachments(of: blocks, draft: draft),
                         delegatedSource: delegatedSource)
-                    self.persistFromIndex(before)
+                    guard await self.persistSteeringUserRow(at: before, queueItemID: durableQueueItem.item.id) else {
+                        throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
+                    }
+                    recordedMessagePersisted = true
+                    recoveryPersisted = true
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
                 if recordUserPrompt, let messageID = recordedMessageID,
                    let checkpointID = await self.onCheckpointCapture?(
                        Self.textPreview(of: blocks), !Self.attachments(of: blocks).isEmpty) {
@@ -3321,6 +3330,10 @@ extension ACPSessionRunner {
                         self.persistIndices([index])
                     }
                 }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
                 // Match normal prompts' per-dispatch context, while keeping
                 // private context out of the recorded user message.
                 let context = await self.pluginContext?(self.sessionId) ?? []
@@ -3441,6 +3454,31 @@ extension ACPSessionRunner {
                 // the caller's draft without blindly sending it again.
                 finishPrompt(false)
             }
+        }
+    }
+
+    private func persistSteeringUserRow(at index: Int, queueItemID: UUID) async -> Bool {
+        flushStreamingPersist()
+        guard holdsLeaseForWrite(), session.transcript.messages.indices.contains(index),
+              let queueIndex = session.queue.firstIndex(where: { $0.id == queueItemID }),
+              let payload = try? ACPMessageCodec.encode(session.transcript.messages[index])
+        else { return false }
+        let message = session.transcript.messages[index]
+        let row = ACPStoredMessage(id: messageRowID(index), sessionId: sessionId, kind: message.kind,
+                                   seq: Int64(index), payload: payload, createdAt: createdAt(forMessageAt: index))
+        session.queue[queueIndex].transcriptRecorded = true
+        let items = session.queue
+        let sessionId = sessionId
+        let fence = leaseFenceProvider()
+        session.pendingQueuePersistenceCount += 1
+        return await withCheckedContinuation { continuation in
+            enqueuePersistence({ persistence in
+                try await persistence.persistMessagesAndQueue([row], sessionId: sessionId, items: items, fence: fence)
+            }, completion: { persisted in
+                self.session.pendingQueuePersistenceCount -= 1
+                if persisted == true { self.commitPersistedMessageRows([row]) }
+                continuation.resume(returning: persisted == true)
+            })
         }
     }
 

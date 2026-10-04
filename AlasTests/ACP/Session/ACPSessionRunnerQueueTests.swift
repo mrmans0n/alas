@@ -49,7 +49,8 @@ struct ACPSessionRunnerQueueTests {
         isConnectionCurrent: (() -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
-        pluginContext: (@MainActor (String) async -> [String])? = nil
+        pluginContext: (@MainActor (String) async -> [String])? = nil,
+        onCheckpointCapture: (@MainActor (String, Bool) async -> CheckpointID?)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -69,6 +70,7 @@ struct ACPSessionRunnerQueueTests {
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
+            onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
@@ -694,6 +696,55 @@ struct ACPSessionRunnerQueueTests {
         replacement.flushQueueIfIdle()
         try await waitUntil { session.queue.isEmpty }
         #expect(replacementMock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        #expect(session.transcript.messages.count == 1)
+    }
+
+    @Test("steering recovery binds the recorded row before preparation suspends", arguments: ["checkpoint", "plugin"])
+    func steeringRecoveryBindsRowBeforePreparation(stage: String) async throws {
+        let preparing = QueueTestGate()
+        let release = QueueTestGate()
+        let current = ConnectionCurrentFlag(true)
+        let (runner, mock, session, store) = try mkRunner(
+            isConnectionCurrent: { current.isCurrent },
+            pluginContext: { _ in
+                if stage == "plugin" { await preparing.open()
+                await release.wait() }
+                return []
+            },
+            onCheckpointCapture: { _, _ in
+                if stage == "checkpoint" { await preparing.open()
+                await release.wait() }
+                return nil
+            })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        defer { runner.stop()
+        Task { await release.open() } }
+        await preparing.wait()
+        await runner.flushPersistence()
+        let recovered = try #require(store.loadQueue(sessionId: "s").first)
+        #expect(recovered.transcriptRecorded)
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
+        #expect(mock.sent.isEmpty)
+        current.set(false)
+        runner.stop()
+        session.restoreQueue([recovered])
+        session.transcript.streamingState = .idle
+        let replacementMock = ACPMockClient()
+        replacementMock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let replacement = ACPSessionRunner(session: session, connection: ACPConnection(client: replacementMock),
+                                          store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+        defer { replacement.stop() }
+        await release.open()
+        try await waitUntil { accepted != nil }
+        #expect(accepted == true)
+        #expect(session.retryQueueItem(id: recovered.id))
+        replacement.flushQueueIfIdle()
+        try await waitUntil { session.queue.isEmpty }
+        await replacement.flushPersistence()
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
         #expect(session.transcript.messages.count == 1)
     }
 
