@@ -528,6 +528,14 @@ final class PluginManager {
                 let web = try manifest.web.map { path in
                     let web = try readScript(path, in: folder, invalid: .invalidWeb("\"\(path)\" must be a file inside the plugin folder"))
                     guard String(data: web, encoding: .utf8) != nil else { throw PluginManifestError.invalidWeb("\"\(path)\" is not UTF-8") }
+                    // A hard link, or a name the manifest check could not see as the same, still can't make the page
+                    // the entry.
+                    let identity = { (path: String) in
+                        try? folder.appending(path: path).resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+                    }
+                    if let page = identity(path) as? NSObject, page.isEqual(identity(manifest.entry)) {
+                        throw PluginManifestError.invalidWeb("\"web\" and \"entry\" must be different files")
+                    }
                     return web
                 }
                 found.append(Plugin(

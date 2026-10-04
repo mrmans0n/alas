@@ -326,7 +326,7 @@ struct PluginManifest: Equatable, Sendable {
         if let web = raw.web {
             guard api >= 12 else { throw .needsNewerAPI("\"web\"", api: 12) }
             guard isRelativePath(web), !web.isEmpty else { throw .invalidWeb("\"\(web)\" must be a relative path inside the plugin folder") }
-            guard (web as NSString).standardizingPath != (entry as NSString).standardizingPath else {
+            guard !isSameFileName(web, entry) else {
                 throw .invalidWeb("\"web\" and \"entry\" must be different files")
             }
         }
@@ -373,6 +373,13 @@ struct PluginManifest: Equatable, Sendable {
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
             settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web)
+    }
+
+    /// Whether two relative paths can name the same file: compared after `./` and `//` are removed, ignoring case
+    /// and Unicode normalization, as the default macOS volume does.
+    static func isSameFileName(_ a: String, _ b: String) -> Bool {
+        func normalized(_ path: String) -> String { (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping }
+        return normalized(a).compare(normalized(b), options: [.caseInsensitive]) == .orderedSame
     }
 
     private static func isRelativePath(_ path: String) -> Bool {

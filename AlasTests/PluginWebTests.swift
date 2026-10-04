@@ -29,6 +29,19 @@ struct PluginWebTests {
         #expect(response.headers["X-DNS-Prefetch-Control"] == "off")
     }
 
+    /// The page gets the colors Alas draws with: the user's accent overrides the theme's, and missing tokens are left
+    /// out rather than sent as the missing-token sentinel.
+    @Test func themeVariablesFollowTheAccentOverride() {
+        var theme = Theme(id: "dark", name: "Dark", tokens: ["accent": "oklch(0.74 0.11 195)", "fg": "oklch(1 0 0)"])
+        let plain = PluginWebPolicy.cssVariables(theme)
+        #expect(plain["--alas-text"] == "rgb(255 255 255 / 1.000)")
+        #expect(plain["--alas-dim"] == nil)
+        theme.accentOverrideHex = "#ff0000"
+        let overridden = PluginWebPolicy.cssVariables(theme)
+        #expect(overridden["--alas-accent"] == "rgb(255 0 0 / 1.000)")
+        #expect(plain["--alas-accent"] != overridden["--alas-accent"])
+    }
+
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
         #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id) == "default-src 'none'; "
             + "script-src alas-plugin://io.x.p/ui.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "

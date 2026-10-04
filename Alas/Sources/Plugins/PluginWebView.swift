@@ -76,11 +76,17 @@ enum PluginWebPolicy {
         ("--alas-tone-warning", "warn"), ("--alas-tone-info", "info"),
     ]
 
-    /// Only plain `oklch(…)` values, so a theme file cannot write arbitrary CSS into the shell.
-    static func cssVariables(_ tokens: [String: String]) -> [String: String] {
+    /// The colors Alas's own views draw with (`Theme.nsColor`), so the user's accent and contrast overrides apply,
+    /// written as numeric `rgb(…)` values: a theme file can't put arbitrary CSS into the shell. Tokens the theme
+    /// lacks are left out, so the page falls back instead of getting the missing-token sentinel.
+    static func cssVariables(_ theme: Theme) -> [String: String] {
         var variables: [String: String] = [:]
         for (variable, token) in themeVariables {
-            if let value = tokens[token], value.wholeMatch(of: /oklch\([0-9. \/%]+\)/) != nil { variables[variable] = value }
+            let overridden = theme.resolvedColorOverrides[token] != nil || (token == "accent" && theme.accentOverride != nil)
+            guard overridden || theme.tokens[token] != nil, let color = theme.nsColor(token).usingColorSpace(.sRGB) else { continue }
+            func channel(_ value: CGFloat) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+            let alpha = String(format: "%.3f", min(max(color.alphaComponent, 0), 1))
+            variables[variable] = "rgb(\(channel(color.redComponent)) \(channel(color.greenComponent)) \(channel(color.blueComponent)) / \(alpha))"
         }
         return variables
     }
@@ -261,7 +267,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         self.tab = tab
         pluginID = host.manifest.id
         schemeHandler = PluginWebSchemeHandler(
-            pluginID: pluginID, shell: PluginWebPolicy.shell(pluginID: pluginID, variables: PluginWebPolicy.cssVariables(theme.tokens)),
+            pluginID: pluginID, shell: PluginWebPolicy.shell(pluginID: pluginID, variables: PluginWebPolicy.cssVariables(theme)),
             script: script)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -326,7 +332,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     /// Keeps the page's CSS variables in step with Alas's theme.
     func apply(_ theme: Theme) {
         guard !isClosed else { return }
-        let variables = PluginWebPolicy.cssVariables(theme.tokens)
+        let variables = PluginWebPolicy.cssVariables(theme)
         schemeHandler.shell = PluginWebPolicy.shell(pluginID: pluginID, variables: variables)
         webView.callAsyncJavaScript(
             "for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value);",

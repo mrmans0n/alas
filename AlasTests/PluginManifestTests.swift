@@ -136,6 +136,7 @@ struct PluginManifestTests {
         (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab with kind "web""#)),
         (manifest(api: 12, webTab + #","web":"../ui.js""#), .invalidWeb(#""../ui.js" must be a relative path inside the plugin folder"#)),
         (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files"#)),
+        (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files"#)),
         (manifest(api: 12, webTab + #","web":"dist/ui.js""#), nil),
     ])
     func webTabsNeedAPI12AndTheirOwnPageScript(json: String, expected: PluginManifestError?) throws {
@@ -148,6 +149,19 @@ struct PluginManifestTests {
         } catch {
             #expect(error == expected)
         }
+    }
+
+    /// The default macOS volume ignores case and Unicode normalization, so these name one file.
+    @Test(arguments: [
+        ("ui.js", "UI.JS", true),
+        ("./dist//ui.js", "dist/ui.js", true),
+        ("caf\u{E9}.js", "cafe\u{301}.js", true),
+        ("CAF\u{C9}.js", "cafe\u{301}.js", true),
+        ("ui.js", "ui2.js", false),
+        ("dist/ui.js", "ui.js", false),
+    ])
+    func webAndEntryNamesCompareAsTheVolumeDoes(a: String, b: String, same: Bool) {
+        #expect(PluginManifest.isSameFileName(a, b) == same)
     }
 
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {
