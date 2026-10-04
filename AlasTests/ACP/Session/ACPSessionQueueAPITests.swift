@@ -353,6 +353,95 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("a")], [.text("b")]])
     }
 
+    enum UncertainOrigin: CaseIterable {
+        /// `.sending` at quit with no dispatch provenance.
+        case legacyRestore
+        /// Dispatched on a broker generation the reconnect cannot adopt.
+        case brokerGenerationChange
+        /// Marked uncertain on an earlier reconnect, before the reply was stored.
+        case earlierReconnect
+    }
+
+    @Test("an uncertain recorded prompt the transcript shows answered is dropped",
+          arguments: UncertainOrigin.allCases)
+    func uncertainDeliveredPromptDropped(origin: UncertainOrigin) {
+        let s = mkSession()
+        let generation: ACPBrokerGeneration? = origin == .legacyRestore ? nil : ACPBrokerGeneration(rawValue: 7)
+        var delivered = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: generation)
+        var unsent = QueuedPrompt(
+            blocks: [.text("second")], status: .sending, dispatchedBrokerGeneration: generation)
+        if origin == .earlierReconnect {
+            delivered.markDeliveryUncertain()
+            unsent.markDeliveryUncertain()
+        }
+        s.deliveredQueuedPromptIDs = [delivered.id]
+
+        var dropped = s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+        if origin == .brokerGenerationChange {
+            dropped = s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        }
+
+        #expect(dropped)
+        #expect(s.queue.map(\.id) == [unsent.id])
+        #expect(s.queue[0].deliveryUncertain)
+    }
+
+    enum RetainedUncertainPrompt: CaseIterable {
+        /// Steering records the row first and persists the item as uncertain;
+        /// the running turn's output after that row does not prove delivery.
+        case unconfirmedSteeredFollowUp
+        /// The turn produced partial output, then failed; Retry must survive.
+        case failedAfterPartialOutput
+    }
+
+    @Test("an answered-looking uncertain prompt that may still need Retry survives restore",
+          arguments: RetainedUncertainPrompt.allCases)
+    func uncertainPromptNeedingRetrySurvives(_ kind: RetainedUncertainPrompt) {
+        let s = mkSession()
+        var item: QueuedPrompt
+        switch kind {
+        case .unconfirmedSteeredFollowUp:
+            item = QueuedPrompt(blocks: [.text("also this")], status: .sending, transcriptRecorded: true)
+            item.markDeliveryUncertain()
+        case .failedAfterPartialOutput:
+            item = QueuedPrompt(blocks: [.text("do it")], lastError: "connection reset",
+                                transcriptRecorded: true,
+                                dispatchedBrokerGeneration: ACPBrokerGeneration(rawValue: 7))
+        }
+        s.deliveredQueuedPromptIDs = [item.id]
+
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+        s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+
+        #expect(s.queue.map(\.id) == [item.id])
+    }
+
+    @Test("deliveredRecordedPromptIDs needs agent output after a once-dispatched recorded prompt",
+          arguments: [(answered: true, attempt: 0, dispatches: 1, delivered: true),
+                      (answered: false, attempt: 0, dispatches: 1, delivered: false),
+                      // A resend reuses the row: earlier output proves only the
+                      // first dispatch, whether or not the retry advanced the attempt.
+                      (answered: true, attempt: 1, dispatches: 1, delivered: false),
+                      (answered: true, attempt: 0, dispatches: 2, delivered: false)])
+    func deliveredRecordedPromptIDs(answered: Bool, attempt: Int, dispatches: Int, delivered: Bool) {
+        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true,
+                                brokerOperationAttempt: attempt, dispatchCount: dispatches)
+        var transcript: [ACPMessageWire] = [
+            .user(messageId: nil, text: "earlier", attachments: [], delegatedSource: nil),
+            .agent(messageId: nil, text: "ok", phase: nil, metadata: nil),
+            .user(messageId: nil, text: "ship it", attachments: [], delegatedSource: nil),
+        ]
+        if answered {
+            transcript.append(.agent(messageId: nil, text: "shipping", phase: nil, metadata: nil))
+        }
+
+        let ids = QueuedPrompt.deliveredRecordedPromptIDs(in: [item], transcript: transcript)
+
+        #expect(ids == (delivered ? [item.id] : []))
+    }
+
     @Test("enqueue(blocks:draft:) stores the structured draft on the item")
     func enqueueWithDraft() {
         let s = mkSession()

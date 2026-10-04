@@ -2329,11 +2329,14 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
-        session.restoreQueue(
+        session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
+        if session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
-        )
+        ) {
+            persistQueue(for: session)
+        }
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
         // Only restore the draft when the live composer is still pristine
@@ -2345,6 +2348,9 @@ final class ACPSessionManager: ObservableObject {
                 session.replaceComposerDraft(handoff.draft)
             } else if let draft = result.draft {
                 session.replaceComposerDraft(draft)
+                if result.draftAwaitsAgentReply {
+                    clearRestoredSubmittedDraftOnAgentReply(in: session)
+                }
             }
         }
         session.currentModel = result.row.currentModel
@@ -3059,6 +3065,27 @@ final class ACPSessionManager: ObservableObject {
         // most one upsert per ~300ms instead of one per keystroke.
         session.replaceComposerDraft(draft)
         scheduleDraftPersistence(for: session.id)
+    }
+
+    /// Hydration keeps a submitted prompt with no stored reply in the
+    /// composer, because the agent may never have received it. A reattached
+    /// turn that then produces output proves delivery, so the draft goes,
+    /// unless the user has touched it since (even retyping the same prompt).
+    /// A newer prompt ends the watch, since its output says nothing about
+    /// this one.
+    private func clearRestoredSubmittedDraftOnAgentReply(in session: ACPSession) {
+        let restoredRevision = session.composerDraftRevision
+        session.transcript.onMessageAdded = { [weak self, weak session] message in
+            guard let self, let session else { return }
+            if case .user = message {
+                session.transcript.onMessageAdded = nil
+                return
+            }
+            guard message.isAgentSideProgress else { return }
+            session.transcript.onMessageAdded = nil
+            guard session.composerDraftRevision == restoredRevision else { return }
+            self.clearComposerDraft(for: session)
+        }
     }
 
     func clearComposerDraft(for session: ACPSession) {

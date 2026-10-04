@@ -2649,6 +2649,7 @@ final class ACPSession: ObservableObject, Identifiable {
         queue[0].status = .sending
         queue[0].lastError = nil
         queue[0].dispatchedBrokerGeneration = nil
+        queue[0].dispatchCount += 1
         return queue[0].brokerOperationKey
     }
 
@@ -2711,52 +2712,87 @@ final class ACPSession: ObservableObject, Identifiable {
     /// from `ACPSessionManager.openSession` after pulling rows from the
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
+    ///
+    /// Returns whether an uncertain item was dropped as already delivered,
+    /// so the caller can persist the shorter queue.
+    @discardableResult
     func restoreQueue(
         _ items: [QueuedPrompt],
         markLegacySendingUncertain: Bool = false,
         knownUnsentDispatches: Set<UUID> = []
-    ) {
+    ) -> Bool {
         forceSendAfterSendingHeadId = nil
+        var newlyUncertain: Set<UUID> = []
         queue = items.map { item in
             guard knownUnsentDispatches.contains(item.id) else {
-                return item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+                let restored = item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+                if restored.deliveryUncertain, !item.deliveryUncertain { newlyUncertain.insert(item.id) }
+                return restored
             }
             var restored = item.normalizedAfterRestore(markLegacySendingUncertain: false)
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
+        let count = queue.count
+        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
+        return queue.count != count
     }
 
     /// Restore a persisted queue and Limited state as one snapshot. The queue
     /// is published first, so an observer never sees the limit without the
     /// resume item that makes it non-actionable. The row's limit wins; the
     /// resume item covers rows written before `usage_limit` existed.
+    @discardableResult
     func restoreQueue(
         _ items: [QueuedPrompt],
         markLegacySendingUncertain: Bool,
         persistedUsageLimit: ACPUsageLimit?
-    ) {
-        restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
+    ) -> Bool {
+        let dropped = restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
         usageLimit = persistedUsageLimit ?? usageLimitResumeItem?.usageLimit
+        return dropped
+    }
+
+    /// Recorded queued prompts the stored transcript shows the agent already
+    /// answered, set at hydration. Their delivery is not uncertain: offering
+    /// Retry would resend a prompt the agent holds, so they are dropped.
+    var deliveredQueuedPromptIDs: Set<UUID> = []
+
+    /// Drops uncertain prompts the transcript shows answered, when they were
+    /// ordinary `session/prompt` sends: ones that just became uncertain, or
+    /// that kept broker dispatch provenance from an earlier reconnect. A
+    /// follow-up steered into a running turn has no provenance and records
+    /// its row before steering is confirmed, so output after it is no proof.
+    /// A turn that failed after partial output keeps its error and Retry.
+    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
+        guard !deliveredQueuedPromptIDs.isEmpty else { return }
+        queue.removeAll { item in
+            item.deliveryUncertain
+                && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
+                && deliveredQueuedPromptIDs.contains(item.id)
+                && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
+        }
     }
 
     /// Holds prompts dispatched on a broker generation that this connection
     /// cannot adopt. Queue items with no dispatch provenance remain eligible.
     @discardableResult
     func markQueuedPromptsUncertain(afterBrokerGeneration generation: ACPBrokerGeneration) -> Bool {
-        var changed = false
+        var newlyUncertain: Set<UUID> = []
         for index in queue.indices {
             guard let dispatchedGeneration = queue[index].dispatchedBrokerGeneration,
                   dispatchedGeneration != generation,
                   !queue[index].deliveryUncertain
             else { continue }
             queue[index].markDeliveryUncertain()
-            changed = true
+            newlyUncertain.insert(queue[index].id)
         }
-        return changed
+        let count = queue.count
+        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        return !newlyUncertain.isEmpty || queue.count != count
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

@@ -3259,7 +3259,13 @@ extension ACPSessionRunner {
         recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
         let dispatchHandoff = onDispatchRegistered.map(ACPRequestHandoff.init)
-        let durableQueueItem = recoveryQueueItem ?? (
+        // A force-steered item may keep provenance from an earlier failed
+        // send; that dispatch does not describe this steered delivery.
+        let durableQueueItem = recoveryQueueItem.map { recovery in
+            var item = recovery.item
+            item.dispatchedBrokerGeneration = nil
+            return (item: item, index: recovery.index)
+        } ?? (
             item: QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource,
                                transcriptRecorded: !recordUserPrompt),
             index: session.queue.count)
