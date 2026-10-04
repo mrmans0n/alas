@@ -942,7 +942,7 @@ private struct ACPSessionView: View {
                 await state.acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
             },
             candidate: { [state, worktree, sessionId] id in
-                guard id != sessionId, let candidate = state.acpSessionMentionCandidate(sessionId: id),
+                guard id != sessionId, let candidate = await state.acpSessionMentionCandidate(sessionId: id),
                       candidate.projectId == worktree.projectId
                 else { return nil }
                 return candidate

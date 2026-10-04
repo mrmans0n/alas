@@ -67,7 +67,8 @@ struct ACPSessionReferenceTests {
     @Test("the whole block, wrapper and labels included, stays within the budget")
     func contextBlockNeverExceedsBudget() {
         let longTarget = ACPSessionReference.Target(
-            sessionId: "s-1", title: String(repeating: "t", count: 5_000), agentName: "Codex", worktreeName: "main"
+            sessionId: "s-1", title: String(repeating: "t", count: 5_000),
+            agentName: String(repeating: "a", count: 5_000), worktreeName: String(repeating: "w", count: 5_000)
         )
         let entries = (0..<200).map {
             ACPSessionTranscriptReader.Entry(index: $0, role: $0.isMultiple(of: 2) ? "user" : "agent", text: String(repeating: "y", count: 150))

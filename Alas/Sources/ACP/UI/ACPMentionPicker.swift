@@ -16,7 +16,7 @@ struct ACPSessionMentionCandidate: Identifiable, Hashable, Sendable {
 struct ACPSessionMentionSource {
     /// Async: it can read stores of worktrees not opened in this run.
     let candidates: @MainActor () async -> [ACPSessionMentionCandidate]
-    let candidate: @MainActor (_ sessionId: String) -> ACPSessionMentionCandidate?
+    let candidate: @MainActor (_ sessionId: String) async -> ACPSessionMentionCandidate?
 }
 
 enum MentionPickerItem: Hashable {

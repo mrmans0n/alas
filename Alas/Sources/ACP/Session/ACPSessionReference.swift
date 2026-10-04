@@ -17,7 +17,10 @@ enum ACPSessionReference {
     /// wrapper and labels counted against `contextMaxChars`.
     static let contextEntryLimit = 40
     static let contextMaxChars = 6_000
+    /// Caps on the session's title, agent, and worktree names, so the
+    /// wrapper always leaves room for entries.
     static let contextTitleLimit = 120
+    static let contextNameLimit = 80
 
     struct Target: Equatable, Sendable {
         let sessionId: String
@@ -98,13 +101,16 @@ enum ACPSessionReference {
     /// `entries` may be only the latest part of the transcript, so the text
     /// never claims to show all of it.
     static func context(for target: Target, entries: [ACPSessionTranscriptReader.Entry]) -> String {
-        let title = target.title.count > contextTitleLimit
-            ? target.title.prefix(contextTitleLimit) + "…"
-            : target.title
+        func capped(_ value: String, _ limit: Int) -> String {
+            value.count > limit ? value.prefix(limit) + "…" : value
+        }
+        let title = capped(target.title, contextTitleLimit)
+        let agentName = capped(target.agentName, contextNameLimit)
+        let worktreeName = capped(target.worktreeName, contextNameLimit)
         let header = [
             "<alas-session-reference session_id=\"\(target.sessionId)\">",
-            "The user attached the Alas session \"\(title)\" (agent: \(target.agentName), "
-                + "worktree: \(target.worktreeName)) as context. To read more of it, call the "
+            "The user attached the Alas session \"\(title)\" (agent: \(agentName), "
+                + "worktree: \(worktreeName)) as context. To read more of it, call the "
                 + "session_read tool of the \"alas\" MCP server with session_id \"\(target.sessionId)\".",
         ]
         let footer = "</alas-session-reference>"

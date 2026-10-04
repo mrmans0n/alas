@@ -2544,7 +2544,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         dropPending = true
         onNextPromptStateChange(nextPromptInputState)
         let pasteboard = sender.draggingPasteboard
-        return hasImage(in: pasteboard) || !droppedSessions(in: pasteboard).isEmpty
+        return hasImage(in: pasteboard) || !droppedSessionIds(in: pasteboard).isEmpty
             ? .copy : super.draggingEntered(sender)
     }
 
@@ -2560,28 +2560,37 @@ final class ACPNSTextView: PairedDelimiterTextView {
             dropPending = false
             onNextPromptStateChange(nextPromptInputState)
         }
-        let sessions = droppedSessions(in: sender.draggingPasteboard)
-        if !sessions.isEmpty {
-            // Drop at the pointer, like dropped text.
+        let sessionIds = droppedSessionIds(in: sender.draggingPasteboard)
+        if !sessionIds.isEmpty {
+            // Drop at the pointer, like dropped text, once the lookup confirms
+            // each session is attachable. Sessions the composer cannot attach
+            // (its own, another project's, an archived one, a terminal's)
+            // resolve to nothing.
             let point = convert(sender.draggingLocation, from: nil)
-            setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
-            sessions.forEach { insertSessionMention($0) }
+            let location = characterIndexForInsertion(at: point)
+            let source = coordinator?.sessionMentions
+            Task { @MainActor [weak self] in
+                var sessions: [ACPSessionMentionCandidate] = []
+                for id in sessionIds {
+                    if let session = await source?.candidate(id) { sessions.append(session) }
+                }
+                guard let self, !sessions.isEmpty else { return }
+                self.setSelectedRange(NSRange(location: min(location, self.string.utf16.count), length: 0))
+                sessions.forEach { self.insertSessionMention($0) }
+            }
             return true
         }
         if insertImages(from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 
-    /// Sessions dragged in from the sidebar, which carry an
-    /// `alas-session://` URL. Sessions the composer cannot attach (its own,
-    /// another project's, a terminal's) resolve to nothing.
-    private func droppedSessions(in pasteboard: NSPasteboard) -> [ACPSessionMentionCandidate] {
-        guard let source = coordinator?.sessionMentions,
+    /// Ids of sessions dragged in from the sidebar, which carry an
+    /// `alas-session://` URL. Empty when this composer offers no sessions.
+    private func droppedSessionIds(in pasteboard: NSPasteboard) -> [String] {
+        guard coordinator?.sessionMentions != nil,
               let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
         else { return [] }
-        return urls.compactMap { url in
-            ACPSessionReference.sessionId(fromURI: url.absoluteString).flatMap(source.candidate)
-        }
+        return urls.compactMap { ACPSessionReference.sessionId(fromURI: $0.absoluteString) }
     }
 
     @discardableResult

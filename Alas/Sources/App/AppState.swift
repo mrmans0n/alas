@@ -12744,12 +12744,19 @@ final class AppState {
         return result
     }
 
-    func acpSessionMentionCandidate(sessionId: String) -> ACPSessionMentionCandidate? {
+    /// The attachable session `sessionId`, confirmed in its store like the
+    /// picker's candidates: a cached row cannot show another instance's
+    /// archive.
+    func acpSessionMentionCandidate(sessionId: String) async -> ACPSessionMentionCandidate? {
         for (owner, manager) in acpManagers {
             guard let worktreeId = owner.worktreeID, let worktree = worktree(withId: worktreeId),
                   let match = acpMentionableSessions(in: manager, worktree: worktree)
                     .first(where: { $0.candidate.id == sessionId })
             else { continue }
+            await manager.flushPersistence()
+            guard let stored = try? await manager.persistence.loadSession(id: sessionId),
+                  !stored.archived, stored.ephemeralParentId == nil
+            else { return nil }
             return match.candidate
         }
         return nil
