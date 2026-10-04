@@ -12783,13 +12783,13 @@ final class AppState {
     }
 
     /// A session this instance knows, live or stored, made live with its
-    /// whole transcript loaded. Nil when unknown or archived.
+    /// whole transcript loaded. Nil when unknown or archived. Looked up in
+    /// each worktree's store, not the recent-row snapshot: an attachment can
+    /// outlive the session's place among the recent rows.
     func acpReferencedSessionLocation(_ sessionId: String) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (owner, manager) in acpManagers {
             guard let worktreeId = owner.worktreeID,
                   let worktree = worktree(withId: worktreeId),
-                  manager.liveSession(for: sessionId) != nil
-                    || manager.sessionRows.contains(where: { $0.id == sessionId }),
                   let row = await manager.persistedSessionRow(id: sessionId), !row.archived
             else { continue }
             _ = manager.placeholderSession(id: sessionId)
