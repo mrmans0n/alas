@@ -351,6 +351,9 @@ final class HarnessService {
         shouldNotifyOnCommit: Bool = true
     ) {
         let previous = activityBySession[event.sessionId]
+        // A hook idle after an ACP failure is the same turn ending (Pi maps
+        // `agent_end` to idle); a new turn passes through busy first.
+        if previous?.state == .failed { return }
         if backgroundActivityIdsBySession[event.sessionId]?.isEmpty == false {
             deferredForegroundIdleBySession[event.sessionId] = DeferredForegroundIdle(
                 event: event,

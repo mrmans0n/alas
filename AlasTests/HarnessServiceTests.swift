@@ -49,31 +49,37 @@ struct HarnessServiceTests {
         #expect(summary?.sessions.map(\.state) == [.awaiting, .failed, .running, .limited])
     }
 
-    @Test("a failed turn and background work keep separate state in either order", arguments: [false, true])
+    @Test("a failed turn survives background work and late hook events in either order", arguments: [false, true])
     func failedTurnCoexistsWithBackgroundWork(backgroundFirst: Bool) {
-        let (service, _) = makeService()
+        let (service, collector) = makeService()
         var transitions: [HarnessActivityTransition] = []
         service.onActivityTransition = { transitions.append($0) }
-        let startBackground = {
+        let hook = { (event: ActivityEvent) in
             service.handleSocketEvent(
-                self.makeEvent(event: .backgroundStarted, agent: .pi, activityId: "run-1"),
-                stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+                self.makeEvent(event: event, agent: .pi, activityId: event == .idle ? nil : "run-1"),
+                stateLookup: { _ in (projectId: "p1", worktreeId: "w1") }, shouldNotifyOnAwaiting: { false }
             )
         }
         let fail = { service.setExternalActivity(sessionId: "session-1", agent: .pi, state: .failed, body: "boom") }
 
         if backgroundFirst {
-            startBackground()
+            hook(.backgroundStarted)
             fail()
         } else {
             fail()
-            startBackground()
+            hook(.backgroundStarted)
         }
+        #expect(service.hasBackgroundActivity(sessionId: "session-1"))
+
+        // Pi reports `agent_end` as idle for the same failed turn.
+        hook(.idle)
+        hook(.backgroundEnded)
 
         #expect(service.activityBySession["session-1"]?.state == .failed)
-        #expect(service.hasBackgroundActivity(sessionId: "session-1"))
+        #expect(!service.hasBackgroundActivity(sessionId: "session-1"))
         // Leaving `.failed` would acknowledge the failure as if a new turn began.
         #expect(transitions.last?.state == .failed)
+        #expect(collector.requests.isEmpty)
     }
 
     @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {
