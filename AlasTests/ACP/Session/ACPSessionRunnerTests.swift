@@ -176,7 +176,10 @@ struct ACPSessionRunnerTests {
         let second = AsyncGate()
         var entered = 0
         mock.scriptAsync(method: "session/prompt") { _ in
-            let call = await MainActor.run { entered += 1; return entered }
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
             await (call == 1 ? first : second).wait()
             let quota = #"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120,"outputTokens":40}}}}"#
             return Data((call == 1 ? quota : "{}").utf8)
