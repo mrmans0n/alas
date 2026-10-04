@@ -28,6 +28,25 @@ protocol PluginProcessLauncher: Sendable {
     func launch(
         _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
     ) throws -> any PluginProcessHandle
+    /// A process on an SSH host, run by its Alas helper once `start` is called.
+    func launchRemote(
+        host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int
+    ) -> any PluginRemoteProcessHandle
+}
+
+extension PluginProcessLauncher {
+    func launchRemote(
+        host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int
+    ) -> any PluginRemoteProcessHandle {
+        RemotePluginProcess(host: host, procId: procId, lease: lease, keep: keep, limit: limit)
+    }
+}
+
+/// A process on an SSH host. It can be stopped before it started: `start` then stops it at once.
+protocol PluginRemoteProcessHandle: PluginProcessHandle {
+    /// Asks the helper to start it and follows it. Throws why the host refused it; afterwards, everything comes as
+    /// events.
+    func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws
 }
 
 enum PluginProcessError: Error, CustomStringConvertible {

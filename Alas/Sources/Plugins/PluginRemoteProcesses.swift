@@ -61,7 +61,7 @@ enum RemotePluginProcEvent: Sendable {
 
 /// A plugin process on an SSH host, run by the remote helper, which owns its cleanup: Alas only asks it to stop.
 /// Alas renews the process's lease while it runs, so the helper stops it when Alas is gone.
-final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
+final class RemotePluginProcess: PluginRemoteProcessHandle, @unchecked Sendable {
     static let leaseMs = 60_000
     static let renewInterval: Duration = .seconds(20)
 
@@ -99,7 +99,6 @@ final class RemotePluginProcess: PluginProcessHandle, @unchecked Sendable {
         return "pp-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Starts the process and follows it. Throws why the host refused it; afterwards, everything comes as events.
     func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws {
         let client: RemoteHelperClient
         do {

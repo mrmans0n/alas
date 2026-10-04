@@ -17,7 +17,7 @@ the host.
 { "api": 11, "capabilities": ["files.read", "files.write"], "remote": true }
 ```
 
-`remote` (bool, default `false`) says the plugin's `file/*` and `process/run`
+`remote` (bool, default `false`) says the plugin's `file/*` and `process/*`
 calls make sense on an SSH host. Without it, a remote worktree keeps API 10's refusal.
 
 - It needs `"api": 11`; below that the manifest is refused.
@@ -100,5 +100,28 @@ later delivery. The differences:
 
   Remote `file/*` works on macOS hosts.
 
-`process/start` on a remote worktree answers `-32003 "process/start can't run
-on remote hosts yet; process/run can"`.
+## Remote `process/start`
+
+`process/start` works on a worktree of a remote project with the same message
+and result as API 6, `{run}`, and so do `process/stop` and
+`process/exited {run, exit}`. Everything `process/run` does above holds too:
+the argv, the executable and the environment are the host's, stopping goes
+through the helper, and the same hosts are refused with the same reasons. The
+differences from a local start:
+
+- `{run}` comes in a later delivery, once the helper has started the process,
+  rather than at once: a host that refuses it answers `-32003` with the
+  reason, and no run is left behind. Until it answers, the start counts
+  towards the 4 requests in flight.
+- The process reads from `/dev/null` and has no time limit.
+- It shows in the remote worktree's Run tab, under *Plugins*, like a local
+  one: its latest output and a Stop button. The helper keeps only the latest
+  output on the host as well, so a verbose dev server can't fill its disk.
+- Alas renews the process's lease on the host for as long as it follows it.
+  When the plugin stops, is disabled or fails, Alas stops the process through
+  the helper, and `process/exited` never reaches a later instance. Nothing
+  re-attaches to a process after Alas quits or the instance ends: its lease
+  lapses within a minute and the helper stops it and everything it started.
+- If the connection to the host stays down for about two minutes, Alas gives
+  the run up: it ends with exit `-1`, and the helper stops the process when
+  its lease lapses.
