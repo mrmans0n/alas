@@ -919,13 +919,21 @@ final class ACPSessionOrchestrationCoordinator {
                 }
             }
         }
+        // Hold an already-live queue before the first inbox read can suspend.
+        // Its active turn may finish while the persistence actor is busy.
+        let liveManager = suppliedManager ?? environment.sessionLocation(sessionID)?.manager
+        let session = liveManager?.liveSession(for: sessionID)
+        session?.nextPromptWorkCount += 1
+        session?.pendingQueuePersistenceCount += 1
+        defer {
+            session?.nextPromptWorkCount -= 1
+            session?.pendingQueuePersistenceCount -= 1
+            liveManager?.runners[sessionID]?.flushQueueIfIdle()
+        }
         // Read fresh: a caller's snapshot can predate the start transition.
         if ACPSessionOrchestrationPolicy.defersInboxDelivery(
             target: try? await environment.persistence.delegation(childSessionId: sessionID)
         ) { return }
-        let session = (suppliedManager ?? environment.sessionLocation(sessionID)?.manager)?.liveSession(for: sessionID)
-        session?.nextPromptWorkCount += 1
-        defer { session?.nextPromptWorkCount -= 1 }
         let manager: ACPSessionManager?
         if let suppliedManager {
             manager = suppliedManager
@@ -933,19 +941,24 @@ final class ACPSessionOrchestrationCoordinator {
             manager = await resolveDeliveryTarget(sessionID: sessionID, callerParent: callerParent,
                 targetParent: targetParent)?.manager
         }
-        guard let manager,
-              let initialMessages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
-        else { return }
+        guard let manager else { return }
         let targetSession = manager.liveSession(for: sessionID)
+        // A restored target may have been hydrated by resolveDeliveryTarget.
+        let holdsResolvedSession = targetSession !== session
+        if holdsResolvedSession {
+            targetSession?.nextPromptWorkCount += 1
+            targetSession?.pendingQueuePersistenceCount += 1
+        }
+        defer {
+            if holdsResolvedSession {
+                targetSession?.nextPromptWorkCount -= 1
+                targetSession?.pendingQueuePersistenceCount -= 1
+                manager.runners[sessionID]?.flushQueueIfIdle()
+            }
+        }
+        guard let initialMessages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) else { return }
         targetSession?.hasPendingDelegatedMessages = !initialMessages.isEmpty
         guard !initialMessages.isEmpty else { return }
-        // An active turn can finish during collection. Keep its queued
-        // results unsent until this drain has persisted the complete batch.
-        targetSession?.pendingQueuePersistenceCount += 1
-        defer {
-            targetSession?.pendingQueuePersistenceCount -= 1
-            manager.runners[sessionID]?.flushQueueIfIdle()
-        }
         guard let children = try? await environment.persistence.children(parentSessionId: sessionID) else { return }
         var childrenByID = Dictionary(uniqueKeysWithValues: children.map { ($0.childSessionId, $0) })
         if initialMessages.contains(where: { $0.kind == .prompt && childrenByID[$0.sourceSessionId] != nil }) {
@@ -962,7 +975,7 @@ final class ACPSessionOrchestrationCoordinator {
         // A message is attempted only once per drain, even if deleting its
         // inbox row fails. New arrivals during persistence join the next pass.
         var attempted: Set<String> = []
-        while let pending = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
+        drain: while let pending = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
             let messages = pending.filter { !attempted.contains($0.id) }
             guard !messages.isEmpty else { break }
             guard let currentChildren = try? await environment.persistence.children(parentSessionId: sessionID) else { break }
@@ -970,29 +983,46 @@ final class ACPSessionOrchestrationCoordinator {
             var childResults: [ACPClaimedDelegatedMessage] = []
             for message in messages {
                 attempted.insert(message.id)
+                let isChildResult = message.kind == .prompt && childrenByID[message.sourceSessionId] != nil
+                if !isChildResult {
+                    // Accept earlier reports before a later informational notice.
+                    // The queue hold still lets subsequent reports join this wake.
+                    guard await deliverChildResults(childResults, childrenByID: childrenByID,
+                        into: sessionID, manager: manager) else { break drain }
+                    childResults.removeAll()
+                }
                 guard let claimed = try? await environment.persistence.claimMessage(
                     id: message.id, instanceId: environment.instanceId, token: environment.makeID(),
                     now: environment.now(), staleAfter: 60
                 ) else { continue }
-                if claimed.message.kind == .prompt, childrenByID[claimed.message.sourceSessionId] != nil {
+                if isChildResult {
                     childResults.append(claimed)
                 } else {
                     await deliver(claimed, with: ACPDelegatedPromptSource(message: claimed.message,
                         senderDelegation: childrenByID[claimed.message.sourceSessionId]), to: manager)
                 }
             }
-            if !childResults.isEmpty {
-                let accepted = await manager.enqueueDelegatedPrompts(childResults.map { claimed in
-                    (claimed.message.prompt, ACPDelegatedPromptSource(message: claimed.message,
-                        senderDelegation: childrenByID[claimed.message.sourceSessionId]))
-                }, into: sessionID, requiringWriter: true)
-                for claimed in childResults { await finishDelivery(claimed, accepted: accepted) }
-                if !accepted { break }
-            }
+            guard await deliverChildResults(childResults, childrenByID: childrenByID,
+                into: sessionID, manager: manager) else { break }
         }
         if let remaining = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
             targetSession?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
+    }
+
+    private func deliverChildResults(
+        _ results: [ACPClaimedDelegatedMessage],
+        childrenByID: [String: ACPDelegationRecord],
+        into sessionID: String,
+        manager: ACPSessionManager
+    ) async -> Bool {
+        guard !results.isEmpty else { return true }
+        let accepted = await manager.enqueueDelegatedPrompts(results.map { claimed in
+            (claimed.message.prompt, ACPDelegatedPromptSource(message: claimed.message,
+                senderDelegation: childrenByID[claimed.message.sourceSessionId]))
+        }, into: sessionID, requiringWriter: true)
+        for claimed in results { await finishDelivery(claimed, accepted: accepted) }
+        return accepted
     }
 
     private func resolveDeliveryTarget(

@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import Alas
 
+private extension ACPOrchestrationPersistence {
+    /// Keep the first inbox read suspended while the parent finishes its turn.
+    func holdInboxReads(until release: DispatchSemaphore, started: CheckedContinuation<Void, Never>) {
+        started.resume()
+        _ = release.wait(timeout: .now() + 30)
+    }
+}
 @MainActor
 @Suite("ACP session orchestration coordinator")
 struct ACPSessionOrchestrationCoordinatorTests {
@@ -512,7 +519,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         client: ACPMockClient,
         launchModels: [ACPAgentModelCatalog.Model]? = nil,
         reasoningRefreshTimeout: Duration = .seconds(30),
-        waitForChildResultBatch: @escaping @Sendable () async -> Void = {}
+        waitForChildResultBatch: @escaping @Sendable () async -> Void = {},
+        notifyChanged: @escaping () -> Void = {}
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -554,7 +562,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
             createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
-            autoRunDefault: { false }, notifyChanged: {}
+            autoRunDefault: { false }, notifyChanged: notifyChanged
         ))
         return (coordinator, persistence, manager)
     }
@@ -652,23 +660,40 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
     }
 
-    @Test("nearby child results produce one parent turn while notices stay informational", arguments: [false, true])
-    func nearbyResultsShareOneParentTurn(parentFinishesDuringWindow: Bool) async throws {
+    enum ParentCompletionBoundary: CaseIterable {
+        case idle, readingInbox, collecting
+    }
+
+    @Test("nearby child results produce one parent turn while notices stay informational", arguments: ParentCompletionBoundary.allCases)
+    func nearbyResultsShareOneParentTurn(boundary: ParentCompletionBoundary) async throws {
+        let parentIsBusy = boundary != .idle
         let gate = GenerationGate()
         let activeTurn = GenerationGate()
         let client = makeSelectionClient()
         var promptCount = 0
         client.scriptAsync(method: "session/prompt") { _ in
             promptCount += 1
-            if parentFinishesDuringWindow && promptCount == 1 { await activeTurn.wait() }
+            if parentIsBusy && promptCount == 1 { await activeTurn.wait() }
             return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
-        let fixture = try makeModelSelectionFixture(client: client, waitForChildResultBatch: { await gate.wait() })
+        var observedManager: ACPSessionManager?
+        var noticePrecededReportAcceptance = false
+        let fixture = try makeModelSelectionFixture(client: client, waitForChildResultBatch: { await gate.wait() }, notifyChanged: {
+            guard let parent = observedManager?.liveSession(for: "parent"),
+                  parent.transcript.messages.contains(where: { message in
+                      guard case .systemNotice(_, let text) = message else { return false }
+                      return text == "Child turn completed."
+                  }) else { return }
+            if !parent.queue.contains(where: { $0.delegatedSource?.deliveries.contains { $0.messageId == "first" } == true }) {
+                noticePrecededReportAcceptance = true
+            }
+        })
+        observedManager = fixture.manager
         defer { fixture.manager.shutdownBackgroundTasks() }
         await fixture.manager.attach(to: "parent", freshlyCreated: true)
         try #require(fixture.manager.isWriter(for: "parent"))
         let parent = try #require(fixture.manager.liveSession(for: "parent"))
-        if parentFinishesDuringWindow {
+        if parentIsBusy {
             try #require(fixture.manager.runners["parent"]).send(text: "Parent work", attachments: [])
             await activeTurn.waitUntilStarted()
             #expect(await fixture.manager.enqueueDelegatedPrompt(text: "Earlier child result",
@@ -678,9 +703,27 @@ struct ACPSessionOrchestrationCoordinatorTests {
         first.role = "planner"
         try await fixture.persistence.insert(first)
         try await fixture.persistence.enqueue(.init(id: "first", sourceSessionId: "child", targetSessionId: "parent", prompt: "Report from planner child: Plan ready.", createdAt: 1))
-        let delivery = Task { await fixture.coordinator.deliverPendingMessages(to: "parent", manager: fixture.manager) }
+        let releaseInbox = DispatchSemaphore(value: 0)
+        defer { releaseInbox.signal() }
+        if boundary == .readingInbox {
+            await withCheckedContinuation { started in
+                Task.detached { await fixture.persistence.holdInboxReads(until: releaseInbox, started: started) }
+            }
+        }
+        var deliveryStarted = false
+        let delivery = Task {
+            deliveryStarted = true
+            await fixture.coordinator.deliverPendingMessages(to: "parent", manager: fixture.manager)
+        }
+        if boundary == .readingInbox {
+            try await waitUntil { deliveryStarted }
+            await activeTurn.release()
+            try await waitUntil { parent.transcript.streamingState == .idle }
+            #expect(promptCount == 1)
+            releaseInbox.signal()
+        }
         await gate.waitUntilStarted()
-        if parentFinishesDuringWindow {
+        if boundary == .collecting {
             await activeTurn.release()
             try await waitUntil { parent.transcript.streamingState == .idle }
             #expect(promptCount == 1)
@@ -695,7 +738,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             !childRequests(client).isEmpty && parent.queue.isEmpty && parent.transcript.streamingState == .idle
         }
         let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
-        #expect(prompts.count == (parentFinishesDuringWindow ? 2 : 1))
+        #expect(prompts.count == (parentIsBusy ? 2 : 1))
         let text = prompts.flatMap(\.prompt).compactMap { block -> String? in
             guard case .text(let text) = block else { return nil }
             return text
@@ -703,6 +746,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(text.contains("Plan ready."))
         #expect(text.contains("Review ready."))
         #expect(!text.contains("Child turn completed."))
+        #expect(!noticePrecededReportAcceptance)
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
         #expect(!parent.hasPendingDelegatedMessages)
     }
@@ -734,7 +778,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let origin = ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "project", worktreeId: "worktree")
         let response = await fixture.coordinator.create(origin: origin,
             request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current, role: " reviewer "))
-        guard case .text = response else { Issue.record("Expected a delegated child"); return }
+        guard case .text = response else {
+            Issue.record("Expected a delegated child")
+            return
+        }
         try await waitUntil { !childRequests(client).isEmpty }
         let prompt = try #require(client.sent.compactMap { $0.params as? ACPSessionPromptParams }.first)
         let text = prompt.prompt.compactMap { block -> String? in
@@ -744,7 +791,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(text.contains("Your role in this delegated task is reviewer."))
         #expect(text.contains("Review the parser."))
         #expect(try await fixture.persistence.delegation(childSessionId: "child")?.role == "reviewer")
-        guard case .text(let lines) = await fixture.coordinator.list(origin: origin) else { Issue.record("Expected a session list"); return }
+        guard case .text(let lines) = await fixture.coordinator.list(origin: origin) else {
+            Issue.record("Expected a session list")
+            return
+        }
         let listed = try JSONDecoder().decode(ACPOrchestrationListResponse.self, from: Data(lines.joined(separator: "\n").utf8))
         #expect(listed.sessions.first { $0.sessionId == "child" }?.role == "reviewer")
     }
