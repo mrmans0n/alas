@@ -668,8 +668,25 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Milliseconds on a clock wall-clock changes don't move, shared by every
+/// process on the host: the helper writes a lease and the supervisor checks it.
+/// `CLOCK_BOOTTIME` on Linux also counts suspended time, so a lease still lapses
+/// across a suspend.
+fn lease_clock_ms() -> u64 {
+    #[cfg(target_os = "linux")]
+    let clock = libc::CLOCK_BOOTTIME;
+    #[cfg(not(target_os = "linux"))]
+    let clock = libc::CLOCK_MONOTONIC;
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: plain clock read into a local.
+    if unsafe { libc::clock_gettime(clock, &mut now) } != 0 {
+        return 0;
+    }
+    now.tv_sec as u64 * 1000 + now.tv_nsec as u64 / 1_000_000
+}
+
 fn write_lease(dir: &Path, lease_ms: Option<u64>) -> Result<(), HelperError> {
-    let until = now_ms() + lease_ms.unwrap_or(DEFAULT_LEASE_MS).clamp(1, MAX_LEASE_MS);
+    let until = lease_clock_ms() + lease_ms.unwrap_or(DEFAULT_LEASE_MS).clamp(1, MAX_LEASE_MS);
     write_atomic(&dir.join("lease-until"), until.to_string().as_bytes())
 }
 
@@ -679,7 +696,7 @@ fn lease_lapsed(dir: &Path) -> bool {
     std::fs::read_to_string(dir.join("lease-until"))
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
-        .is_none_or(|until| now_ms() > until)
+        .is_none_or(|until| lease_clock_ms() > until)
 }
 
 fn create_private_dir_all(path: &Path) -> Result<(), HelperError> {
