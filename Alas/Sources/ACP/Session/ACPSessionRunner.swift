@@ -3402,7 +3402,7 @@ extension ACPSessionRunner {
                 } else {
                     self.session.allowsStreamingBoundaryCrossing = true
                     var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
-                    let dirty = self.session.beginSteeringOutputBoundary { text in
+                    let dirty = self.session.beginSteeringOutputBoundary(followingUserCount: 0) { text in
                         boundaryMetadata.append((text, text.metadata))
                     }
                     self.steeringRowPersistencePending = true

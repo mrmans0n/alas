@@ -634,12 +634,14 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
+    private static let steeringFollowingUsersMetadataKey = "_alas/steeringFollowingUserCount"
 
     /// Split live text items at a follow-up without changing existing row IDs.
     /// Persist the next segment's ID on its predecessor so subsequent chunks
     /// keep the same binding after rehydration, including repeated steering.
     func beginSteeringOutputBoundary(
         beforeUserMessageAt end: Int? = nil,
+        followingUserCount: Int = 1,
         beforeRebinding: ((StreamingText) -> Void)? = nil
     ) -> Set<Int> {
         var dirty = flushPendingReplayCandidates()
@@ -656,6 +658,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 let continuation = "alas-steering:\(UUID().uuidString)"
                 text.adopt(phase: nil, metadata: AnyCodable([
                     Self.steeringContinuationMetadataKey: AnyCodable(continuation),
+                    Self.steeringFollowingUsersMetadataKey: AnyCodable(followingUserCount),
                 ]))
                 transcript.noteStreamingChange(at: index)
                 dirty.insert(index)
@@ -667,28 +670,47 @@ final class ACPSession: ObservableObject, Identifiable {
         return dirty
     }
 
-    private func steeringMessageId(_ messageId: String?, kind: ACPTranscript.TextMessageKind) -> String? {
-        // Reattached turns have no local prompt task. Their saved steering
-        // binding identifies live continuation chunks without opening replay
-        // boundaries for unrelated message IDs.
+    private func steeringMessageBinding(_ messageId: String?, kind: ACPTranscript.TextMessageKind) -> (id: String?, crossesBoundary: Bool) {
+        // Reattached turns have no local prompt task. Resolve only the saved
+        // steering chain whose final segment still belongs to the latest user
+        // boundary; a normal turn must not reactivate a historical binding.
         guard allowsStreamingBoundaryCrossing || transcript.streamingState == .streaming,
-              var resolved = messageId else { return messageId }
+              var resolved = messageId else { return (messageId, allowsStreamingBoundaryCrossing) }
         var visited: Set<String> = []
+        var lastBindingIndex: Int?
+        var followingUsers = 1
         while visited.insert(resolved).inserted,
               let index = transcript.messageIndex(messageId: resolved, kind: kind) {
             let text: StreamingText
             switch transcript.messages[index] {
             case .agent(_, _, let value), .thought(_, _, let value): text = value
-            default: return resolved
+            default: return (messageId, false)
             }
             guard let metadata = text.metadata?.value as? [String: AnyCodable],
                   let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String,
                   next.hasPrefix("alas-steering:"),
                   UUID(uuidString: String(next.dropFirst("alas-steering:".count))) != nil
             else { break }
+            lastBindingIndex = index
+            followingUsers = metadata[Self.steeringFollowingUsersMetadataKey]?.value as? Int ?? 1
             resolved = next
         }
-        return resolved
+        guard let lastBindingIndex else { return (messageId, allowsStreamingBoundaryCrossing) }
+        if let index = transcript.messageIndex(messageId: resolved, kind: kind) {
+            guard !hasUserAfterMessage(at: index),
+                  !transcript.completedOutputBoundaryMessageIds.contains(transcript.messages[index].stableId)
+            else { return (messageId, false) }
+        } else {
+            // A binding can precede its first continuation chunk. Count users
+            // after its predecessor so pagination and regenerated local UUIDs
+            // do not change its scope. Recorded-row retries add no user row.
+            let users = transcript.messages[(lastBindingIndex + 1)...].filter {
+                if case .user = $0 { return true }
+                return false
+            }.count
+            guard users == followingUsers else { return (messageId, false) }
+        }
+        return (resolved, true)
     }
 
     @discardableResult
@@ -784,12 +806,13 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
-            let messageId = steeringMessageId(chunk.messageId, kind: .agent)
+            let binding = steeringMessageBinding(chunk.messageId, kind: .agent)
+            let messageId = binding.id
             var flushedForAgent: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: messageId,
-                allowsStreamingBoundaryCrossing: allowsStreamingBoundaryCrossing || messageId != chunk.messageId,
+                allowsStreamingBoundaryCrossing: binding.crossesBoundary,
                 replayKind: .agent,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
@@ -824,12 +847,13 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
-            let messageId = steeringMessageId(chunk.messageId, kind: .thought)
+            let binding = steeringMessageBinding(chunk.messageId, kind: .thought)
+            let messageId = binding.id
             var flushedForThought: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: messageId,
-                allowsStreamingBoundaryCrossing: allowsStreamingBoundaryCrossing || messageId != chunk.messageId,
+                allowsStreamingBoundaryCrossing: binding.crossesBoundary,
                 replayKind: .thought,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
