@@ -12707,8 +12707,18 @@ final class AppState {
     func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) async -> [ACPSessionMentionCandidate] {
         var candidates: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
         for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: true) {
-            candidates += acpMentionableSessions(in: manager, worktree: worktree)
-                .filter { $0.candidate.id != sessionId }
+            let recentIds = Set(manager.sessionRows.map(\.id))
+            for entry in acpMentionableSessions(in: manager, worktree: worktree) where entry.candidate.id != sessionId {
+                // A live session missing from the just-reloaded recent rows
+                // may have been archived by another instance, which its
+                // cached row cannot show: confirm it in the store.
+                if !recentIds.contains(entry.candidate.id) {
+                    guard let stored = try? await manager.persistence.loadSession(id: entry.candidate.id),
+                          !stored.archived, stored.ephemeralParentId == nil
+                    else { continue }
+                }
+                candidates.append(entry)
+            }
         }
         return candidates.sorted { $0.updatedAt > $1.updatedAt }.map(\.candidate)
     }
