@@ -22,7 +22,7 @@ accessible and cheaper.
 
 - `web` names the page script, a file in the plugin folder, with the same rules
   as `entry`: a relative path with no `..`, not a symlink, UTF-8, at most
-  8 MiB, and not the entry itself.
+  8 MiB, and neither the entry nor `plugin.json`.
 - A tab with `"kind": "web"` shows that page. A web tab without `web`, or
   `web` without a web tab, is refused, and so is either one below `"api": 12`.
 - The plugin doesn't ship HTML. Alas serves a fixed page that loads `ui.js` as

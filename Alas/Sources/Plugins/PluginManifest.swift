@@ -338,6 +338,8 @@ struct PluginManifest: Equatable, Sendable {
             guard !isSameFileName(web, entry) else {
                 throw .invalidWeb("\"web\" and \"entry\" must be different files")
             }
+            // Installing writes the manifest there first, and the page over it.
+            guard !isSameFileName(web, "plugin.json") else { throw .invalidWeb("\"web\" can't be plugin.json") }
         }
         if let tab = tabs.first(where: { $0.kind == .web }) {
             guard api >= 12 else { throw .needsNewerAPI("tab \"\(tab.id)\" kind \"web\"", api: 12) }
