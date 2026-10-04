@@ -12795,11 +12795,13 @@ final class AppState {
                 )
             },
             onTurnCompleted: { [weak self] completion in
-                self?.recordTurnUsage(completion, owner: owner)
                 Task { @MainActor [weak self] in
                     self?.scheduledAgentTurns.deliver(completion)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
+            },
+            onTurnUsage: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
             },
             onChildBlocked: { [weak self] blocker in
                 self?.notifyACPPermissionBlocked(blocker)
@@ -13258,10 +13260,12 @@ final class AppState {
                 )
             },
             onTurnCompleted: { [weak self] completion in
-                self?.recordTurnUsage(completion, owner: owner)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
+            },
+            onTurnUsage: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
             },
             onChildBlocked: { [weak self] blocker in
                 self?.notifyACPPermissionBlocked(blocker)

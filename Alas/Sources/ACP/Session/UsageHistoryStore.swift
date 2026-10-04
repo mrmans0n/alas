@@ -267,6 +267,7 @@ extension UsageTurnInput {
         case .limited: "limited"
         }
         let models = completion.quota?.modelUsage ?? []
+        let started = completion.sentAt ?? completion.startedAt
         // Some adapters send only per-model counts; their sum is the turn's.
         let counts = completion.quota.flatMap { quota in
             quota.tokenCount ?? quota.modelUsage.map(\.tokenCount).reduce(ACPTokenCount?.none) { sum, next in
@@ -277,7 +278,7 @@ extension UsageTurnInput {
             session: completion.sessionId, project: project, worktree: worktree, agent: agent,
             // The quota names the model that answered when there was exactly one.
             model: models.count == 1 ? models[0].model : model,
-            startedAt: completion.startedAt, endedAt: max(endedAt, completion.startedAt), result: result,
+            startedAt: started, endedAt: max(endedAt, started), result: result,
             tokens: counts.map {
                 UsageTurn.Tokens(
                     total: $0.displayTotal, input: $0.inputTokens, cachedInput: $0.cachedInputTokens,

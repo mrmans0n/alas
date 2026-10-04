@@ -164,6 +164,68 @@ struct ACPSessionRunnerTests {
         #expect(cost == expected)
     }
 
+    /// A steered prompt's result is still usage: it is reported as a cancelled turn with its own tokens, before the
+    /// steer's turn, while turn completions only ever hear of the steer's.
+    @Test func aSteeredPromptsResultIsReportedAsCancelledUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        runner.session.agentState = .ready
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run { entered += 1; return entered }
+            await (call == 1 ? first : second).wait()
+            let quota = #"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120,"outputTokens":40}}}}"#
+            return Data((call == 1 ? quota : "{}").utf8)
+        }
+        runner.send(text: "first", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        runner.steer(blocks: [.text("instead")])
+        // The steer sends its prompt once the cancelled one's result is in.
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 && entered == 2 })
+        await second.open()
+        #expect(await awaitCondition { usage.count == 2 })
+        #expect(usage.map(\.result) == [.cancelled, .completed])
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == 120)
+        #expect(usage.allSatisfy { $0.sentAt != nil })
+        #expect(completions.map(\.result) == [.completed])
+    }
+
+    /// A turn's usage starts when its prompt goes to the agent, after the work before sending (here a slow context
+    /// provider), not when it was submitted.
+    @Test func usageStartsWhenThePromptIsSent() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let context = AsyncGate()
+        var contextEnteredAt: Int64?
+        func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) },
+            pluginContext: { _ in
+                contextEnteredAt = now()
+                await context.wait()
+                return []
+            })
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { contextEnteredAt != nil })
+        // Released in a later millisecond than the turn's start, so the two can be told apart.
+        let entered = try #require(contextEnteredAt)
+        while now() <= entered { await Task.yield() }
+        let released = now()
+        await context.open()
+        #expect(await awaitCondition { !completions.isEmpty })
+        let completion = try #require(completions.first)
+        #expect(completion.startedAt <= entered)
+        let input = UsageTurnInput(
+            completion: completion, agent: "claude", model: nil, cumulativeCost: nil, project: nil, worktree: nil,
+            endedAt: now())
+        #expect(input.startedAt >= released)
+    }
+
     @Test("send attaches its checkpoint before the prompt RPC")
     func sendAttachesCheckpointBeforePrompt() async throws {
         let checkpointID = UUID()
@@ -4037,6 +4099,8 @@ struct ACPSessionRunnerTests {
         validateLease: (() async -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -4057,7 +4121,9 @@ struct ACPSessionRunnerTests {
             onUserCancel: onUserCancel,
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
+            onTurnUsage: onTurnUsage,
             onCheckpointCapture: onCheckpointCapture,
+            pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent,
             incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
             canWrite: canWrite,

@@ -175,10 +175,13 @@ agent ids, model names, times, token counts and cost.
 }
 ```
 
-- Times are epoch milliseconds. `startedAt` is when the prompt was sent,
-  `endedAt` when Alas saw the turn end; `endedAt` is never before `startedAt`.
+- Times are epoch milliseconds. `startedAt` is when the prompt went to the
+  agent, after any checkpoint, attachments and plugin context were prepared;
+  `endedAt` when Alas saw the turn end. `endedAt` is never before `startedAt`.
 - `result` is `completed`, `failed`, `cancelled` or `limited` (stopped by a
-  usage limit).
+  usage limit). A prompt replaced by a newer one (steering) is recorded as
+  `cancelled` when its result arrives, with the tokens the agent reported for
+  it, and sent as `turn.finished` like any other turn.
 - `tokens` is the turn's own usage as the agent reported it, or absent when it
   reported none. When the agent reports only per-model counts, they are
   summed. Turns that fail or are cancelled before the agent answers have none.

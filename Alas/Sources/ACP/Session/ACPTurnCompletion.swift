@@ -33,6 +33,9 @@ struct ACPTurnCompletion: Equatable, Sendable {
     var quota: ACPPromptQuota? = nil
     /// Resolves the turn's cumulative cost for usage history; nil when the runner did not report one.
     var cost: ACPTurnCost? = nil
+    /// Epoch milliseconds when the prompt went to the agent; nil when it never did. Later than `startedAt` by the
+    /// checkpoint, attachment and context work before sending.
+    var sentAt: Int64? = nil
 }
 
 /// A finished turn's cumulative cost: the session's, when a `usage_update` with a cost arrived during the turn, and
