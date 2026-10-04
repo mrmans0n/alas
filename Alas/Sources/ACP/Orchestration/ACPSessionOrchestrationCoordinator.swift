@@ -703,20 +703,49 @@ final class ACPSessionOrchestrationCoordinator {
         let record = try? await environment.persistence.delegation(childSessionId: sessionId)
         let session = environment.sessionLocation(sessionId)?.manager.liveSession(for: sessionId)
         let runtime = session.map(Self.runtimeState)
-        // A prompt held for the user's Retry, or scheduled for later, is not
-        // a turn this wait can see finish.
-        let queued = session?.queue.contains { $0.lastError == nil && $0.scheduledAt == nil } ?? false
-        let undelivered = !((try? await environment.persistence.pendingMessages(targetSessionId: sessionId)) ?? []).isEmpty
         let phase = record?.phase ?? .closed
+        var queued = session.map { ACPSessionOrchestrationPolicy.queueOwesTurn($0.queue) } ?? false
+        var archived = false
+        if session == nil, phase == .ready, let record {
+            // Not live here: restored later, or driven by another instance.
+            // Judge it by its stored queue, whose head stays until the turn
+            // ends, and keep it unsettled when its store is out of reach.
+            switch await storedTurnState(record) {
+            case .archived: archived = true
+            case .queue(let stored): queued = ACPSessionOrchestrationPolicy.queueOwesTurn(stored)
+            case nil: queued = true
+            }
+        }
+        let undelivered = !((try? await environment.persistence.pendingMessages(targetSessionId: sessionId)) ?? []).isEmpty
         return .init(
             sessionId: sessionId,
-            state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: false).rawValue,
-            settled: ACPSessionOrchestrationPolicy.waitSettled(
+            state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived).rawValue,
+            settled: archived || ACPSessionOrchestrationPolicy.waitSettled(
                 phase: phase, runtime: runtime, hasPendingPrompts: queued || undelivered
             ),
             lastAgentText: session.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
             failure: record?.failureMessage
         )
+    }
+
+    private enum StoredTurnState {
+        case archived
+        case queue([QueuedPrompt])
+    }
+
+    /// A child's persisted state when it has no live session here, or nil
+    /// when its worktree or stored session cannot be reached.
+    private func storedTurnState(_ record: ACPDelegationRecord) async -> StoredTurnState? {
+        guard let worktreeId = record.childWorktreeId,
+              let worktree = environment.worktree(worktreeId),
+              let manager = environment.manager(worktree),
+              let row = await manager.persistedSessionRow(id: record.childSessionId)
+        else { return nil }
+        if row.archived { return .archived }
+        guard let queue = try? await manager.persistence.loadQueue(sessionId: record.childSessionId) else {
+            return nil
+        }
+        return .queue(queue)
     }
 
     /// Entry point for a delegated child's finished turn. Non-children and

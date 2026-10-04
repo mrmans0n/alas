@@ -213,6 +213,13 @@ enum ACPSessionOrchestrationPolicy {
         }
     }
 
+    /// Whether a session's queue holds a turn still to run or finish. A
+    /// prompt held for the user's Retry, or scheduled for later, is not one
+    /// a wait can see end.
+    static func queueOwesTurn(_ queue: [QueuedPrompt]) -> Bool {
+        queue.contains { $0.lastError == nil && $0.scheduledAt == nil }
+    }
+
     static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
         guard let target else { return true }
         return target.phase != .failed && target.phase != .closed

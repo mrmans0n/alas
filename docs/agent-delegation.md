@@ -391,7 +391,9 @@ session's transcript is not readable.
 **Waiting.** A child is settled when it is not starting, has no turn running,
 and has no prompt queued or undelivered, so waiting right after `session_send`
 does not return before that prompt has run. A child blocked on a permission,
-question, or plan prompt is also settled, with state `awaiting_input`. The
+question, or plan prompt is also settled, with state `awaiting_input`. A child
+with no live session in this Alas instance is judged by its stored queue, and
+stays unsettled when that store cannot be reached. The
 timeout is 1 to 20,000 ms (default 20,000), below the CLI's 30-second socket
 limit; call again while `timed_out` is `true`. Each session in the reply has
 its `state`, `settled`, the tail of its latest agent message as

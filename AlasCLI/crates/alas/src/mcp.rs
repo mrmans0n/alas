@@ -1483,6 +1483,56 @@ fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command) || matches!(command, Command::SessionWait { .. })
 }
 
+/// Longest single `session_wait` request sent to the app by a worker.
+const SESSION_WAIT_SLICE_MS: u64 = 1_000;
+
+/// Dispatches `command`, running a `session_wait` as a series of short
+/// waits so a cancelled request stops within one slice instead of holding a
+/// worker until its timeout. Returns None once `still_pending` turns false.
+fn dispatch_session_wait(
+    env: &McpEnv,
+    command: &Command,
+    still_pending: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    let Command::SessionWait {
+        session_ids,
+        timeout_ms,
+    } = command
+    else {
+        return Some(dispatch(env, command));
+    };
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.unwrap_or(20_000));
+    loop {
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis() as u64;
+        let slice = Command::SessionWait {
+            session_ids: session_ids.clone(),
+            timeout_ms: Some(remaining.clamp(1, SESSION_WAIT_SLICE_MS)),
+        };
+        let result = dispatch(env, &slice);
+        if !still_pending() {
+            return None;
+        }
+        let timed_out = result.as_ref().is_ok_and(session_wait_timed_out);
+        if !timed_out || remaining <= SESSION_WAIT_SLICE_MS {
+            return Some(result);
+        }
+    }
+}
+
+fn session_wait_timed_out(resp: &Response) -> bool {
+    resp.ok
+        && resp
+            .lines
+            .as_ref()
+            .and_then(|lines| lines.first())
+            .and_then(|line| serde_json::from_str::<Value>(line).ok())
+            .and_then(|reply| reply.get("timed_out")?.as_bool())
+            .unwrap_or(false)
+}
+
 fn is_preview_cancel_command(command: &Command) -> bool {
     matches!(
         command,
@@ -1495,7 +1545,7 @@ fn register_pending_preview(
     id: &Value,
     command: &Command,
 ) -> Option<String> {
-    if preview_id_for_cancel(command).is_none() {
+    if preview_id_for_cancel(command).is_none() && !matches!(command, Command::SessionWait { .. }) {
         return None;
     }
     let key = request_key(id);
@@ -1547,7 +1597,14 @@ fn cancellation_command_for_message(
     pending: &Mutex<std::collections::HashMap<String, Command>>,
 ) -> Option<Command> {
     let key = cancellation_request_key(msg)?;
-    let command = pending.lock().ok()?.get(&key).cloned()?;
+    let mut pending = pending.lock().ok()?;
+    let command = pending.get(&key).cloned()?;
+    // A wait has nothing to cancel in the app: dropping it from `pending`
+    // stops its worker at the next slice (see `dispatch_session_wait`).
+    if matches!(command, Command::SessionWait { .. }) {
+        pending.remove(&key);
+        return None;
+    }
     let preview_id = preview_id_for_cancel(&command)?;
     Some(Command::Preview(alas_client::PreviewCommand::Cancel {
         preview_id,
@@ -1648,12 +1705,22 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                 let spawn = std::thread::Builder::new()
                     .name("alas-mcp-tool-worker".into())
                     .spawn(move || {
-                        let result = match dispatch(&env, &command) {
+                        let still_pending = || {
+                            key.as_ref().is_none_or(|key| {
+                                pending
+                                    .lock()
+                                    .map_or(true, |pending| pending.contains_key(key))
+                            })
+                        };
+                        let dispatched = dispatch_session_wait(&env, &command, still_pending);
+                        remove_pending_preview(&pending, key.as_deref());
+                        release_worker(&active_workers);
+                        // A cancelled request gets no response.
+                        let Some(dispatched) = dispatched else { return };
+                        let result = match dispatched {
                             Ok(resp) => tool_result(&command, resp),
                             Err(err) => transport_error_result(&err),
                         };
-                        remove_pending_preview(&pending, key.as_deref());
-                        release_worker(&active_workers);
                         let _ = worker_reply_tx.send(json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -2030,7 +2097,8 @@ mod tests {
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result, is_initialize_message,
-        parse_http_request, runs_on_worker, tools_call_command,
+        parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out,
+        tools_call_command,
     };
     use alas_client::{Command, Response};
     use serde_json::{Value, json};
@@ -2678,6 +2746,44 @@ mod tests {
                 preview_id: "runtime-preview-id".into()
             }))
         );
+    }
+
+    #[test]
+    fn cancelling_a_pending_session_wait_drops_it_without_an_app_command() {
+        let pending = std::sync::Mutex::new(std::collections::HashMap::new());
+        let wait = Command::SessionWait {
+            session_ids: vec!["child".into()],
+            timeout_ms: None,
+        };
+        assert!(register_pending_preview(&pending, &json!(9), &wait).is_some());
+        let msg: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
+        )
+        .unwrap();
+        assert_eq!(cancellation_command_for_message(&msg, &pending), None);
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_wait_slices_continue_only_on_timed_out_replies() {
+        let reply = |line: &str| Response {
+            ok: true,
+            lines: Some(vec![line.into()]),
+            error: None,
+            exit_code: None,
+        };
+        assert!(session_wait_timed_out(&reply(
+            r#"{"sessions":[],"timed_out":true}"#
+        )));
+        assert!(!session_wait_timed_out(&reply(
+            r#"{"sessions":[],"timed_out":false}"#
+        )));
+        assert!(!session_wait_timed_out(&Response {
+            ok: false,
+            lines: None,
+            error: Some("denied".into()),
+            exit_code: None,
+        }));
     }
 
     #[test]

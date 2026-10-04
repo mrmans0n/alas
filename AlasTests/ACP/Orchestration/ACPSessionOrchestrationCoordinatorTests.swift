@@ -1151,6 +1151,19 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(idleChild == .init(sessionId: "child", cancelRequested: false))
     }
 
+    @Test("a ready child with no live session and no reachable store is not reported settled")
+    func waitKeepsUnreachableChildUnsettled() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.timedOut)
+        #expect(response.sessions.map(\.settled) == [false])
+    }
+
     @Test("interrupting a running child this instance does not drive reports no cancellation")
     func interruptWithoutWriterLease() async throws {
         let fixture = try makeOutcomeFixture()
