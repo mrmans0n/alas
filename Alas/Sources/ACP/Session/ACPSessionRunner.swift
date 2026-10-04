@@ -1934,7 +1934,8 @@ final class ACPSessionRunner {
         onTurnUsage?(ACPTurnCompletion(
             sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
             quota: quota,
-            cost: turnCost(streamStart: prompt.streamStart, end: activePromptID != nil ? activePromptStreamStart : nil),
+            // Capped where a successor was sent: one still preparing has not started its usage yet.
+            cost: turnCost(streamStart: prompt.streamStart, end: activePromptID.flatMap { unreportedPrompts[$0]?.streamStart }),
             sentAt: prompt.sentAt, recovery: recovery))
     }
 

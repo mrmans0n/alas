@@ -321,6 +321,43 @@ struct ACPSessionRunnerTests {
         #expect(usage.first?.quota?.tokenCount?.totalTokens == (settles ? 120 : nil))
     }
 
+    /// A stopped turn's result that comes while its successor is still preparing keeps the cost sent meanwhile:
+    /// the successor's usage starts only when it is sent.
+    @Test func aStoppedTurnKeepsTheCostSentWhileItsSuccessorPrepares() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let context = AsyncGate()
+        var contexts = 0
+        let (runner, mock) = try makeRunner(
+            onTurnUsage: { usage.append($0) },
+            pluginContext: { _ in
+                contexts += 1
+                if contexts == 2 { await context.wait() }
+                return []
+            },
+            usageWaitSleep: { _ in await never.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let result = AsyncGate()
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await result.wait()
+            return Data("{}".utf8)
+        }
+        runner.send(text: "first", attachments: []) { _ in }
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        runner.send(text: "second", attachments: []) { _ in }
+        #expect(await awaitCondition { contexts == 2 })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.5, currency: "USD")))))
+        await result.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        await context.open()
+        await never.open()
+    }
+
     /// More stopped turns waiting on their results than the runner keeps: the oldest is still recorded, without
     /// tokens, when it makes room.
     @Test func aStoppedTurnPastTheKeptOnesIsStillRecorded() async throws {
