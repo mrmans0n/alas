@@ -389,9 +389,10 @@ private struct PluginApprovalSheet: View {
             if manifest.capabilities.isEmpty {
                 Text("It requests no capabilities.")
             }
-            if !sandboxed.isEmpty {
+            if !sandboxed.isEmpty || manifest.web != nil {
                 Text("Sandboxed. It will be able to:").font(.subheadline.weight(.semibold))
                 ForEach(sandboxed, id: \.self) { Text("• \($0.summary)") }
+                if manifest.web != nil { Text("• Show its own web content, with no network access") }
             }
             if !manifest.network.isEmpty {
                 Text("Web requests: " + manifest.network.joined(separator: ", "))

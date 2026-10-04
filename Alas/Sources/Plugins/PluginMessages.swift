@@ -86,6 +86,10 @@ struct PluginPanelVisibleParams: Codable, Equatable, Sendable {
     let visible: Bool
 }
 
+struct PluginTabParams: Decodable, Sendable {
+    let tab: Int
+}
+
 struct PluginTabVisibleParams: Codable, Equatable, Sendable {
     let tab: Int
     let visible: Bool

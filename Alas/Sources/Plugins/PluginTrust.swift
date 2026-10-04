@@ -4,13 +4,23 @@ import Foundation
 /// Approval key for a plugin. Mirrors `RepoHookTrust`: any byte change to the
 /// manifest or the entry script yields a new hash, so the user must approve again.
 enum PluginTrust {
-    private static let version = "alas-plugin-trust-v1"
-
-    static func hash(manifest: Data, entry: Data) -> String {
-        var payload = Data("\(version)\u{0}".utf8)
-        payload.append(manifest)
-        payload.append(0)
-        payload.append(entry)
+    /// v1 separates the manifest and the entry with one NUL, safe only because a JSON manifest cannot hold a raw NUL.
+    /// Two scripts can, so a plugin with a `web` page uses v2, which frames every field with its name and length.
+    /// Plugins without one keep v1, so their approvals and catalog records stay valid.
+    static func hash(manifest: Data, entry: Data, web: Data? = nil) -> String {
+        var payload: Data
+        if let web {
+            payload = Data("alas-plugin-trust-v2\u{0}".utf8)
+            for (name, bytes) in [("manifest", manifest), ("entry", entry), ("web", web)] {
+                payload.append(Data("\(name)\u{0}\(bytes.count)\u{0}".utf8))
+                payload.append(bytes)
+            }
+        } else {
+            payload = Data("alas-plugin-trust-v1\u{0}".utf8)
+            payload.append(manifest)
+            payload.append(0)
+            payload.append(entry)
+        }
         return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
 }

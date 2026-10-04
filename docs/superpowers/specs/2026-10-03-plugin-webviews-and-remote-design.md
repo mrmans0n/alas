@@ -398,8 +398,13 @@ nothing if the page can talk to any host:
   to a crafted hostname would leak data to whoever runs its DNS. The shell is
   served with `X-DNS-Prefetch-Control: off` and the matching `<meta>` before
   any page script; WebKit doesn't let a document turn it back on, and frames
-  are blocked, so no fresh document can either. W1 verifies it against a test
-  page with a resolver that records lookups, and doesn't ship if any leak.
+  are blocked, so no fresh document can either. W1's headless test asserts the
+  meta is present (the header is pinned by the scheme handler test) and that
+  `dns-prefetch`, `preconnect`, `prefetch` and `preload` links pointing at a
+  local listener cause no connection at all, not even a bare preconnect. A
+  positive control first loads an image from the same listener in a plain,
+  unsandboxed web view and must be seen, so "no connections" can't come from a
+  listener that sees nothing. Lookups for real hostnames aren't recorded.
 - Residual: timing side channels, accepted and listed on the approval sheet's
   line for web content (Q6).
 
