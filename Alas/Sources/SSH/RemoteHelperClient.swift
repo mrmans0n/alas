@@ -86,6 +86,7 @@ actor RemoteHelperClient {
     private var earlyProcEvents: [String: [RemoteHelperProcEvent]] = [:]
     private var procOffsets: [String: RemoteHelperProcOffsets] = [:]
     private var detachedProcIds: Set<String> = []
+    private var pluginProcStreams: [String: AsyncStream<RemotePluginProcEvent>.Continuation] = [:]
     private var subscriptionReplayTask: Task<Void, Error>?
     private var subscriptionsNeedReplay = false
     private var lastExitStatus: Int32?
@@ -468,6 +469,50 @@ actor RemoteHelperClient {
         )
     }
 
+    // MARK: Plugin processes (`pproc/*`)
+
+    /// The argv carries user text, so virtual paths are not rewritten in it; `cwd` is already the real path.
+    func spawnPluginProc(_ params: RemotePluginProcSpawnParams) async throws {
+        let _: RemotePluginProcOK = try await request(method: "pproc/spawn", params: params, stripVirtualPaths: false)
+    }
+
+    /// Replays the journal from `offset` and streams what follows until the exit. The stream is registered before the
+    /// request goes out: the helper's first notification can arrive before this call resumes.
+    func attachPluginProc(
+        procId: String, lease: String, offset: UInt64
+    ) async throws -> (RemotePluginProcAttachResult, AsyncStream<RemotePluginProcEvent>) {
+        let (stream, continuation) = AsyncStream.makeStream(of: RemotePluginProcEvent.self)
+        pluginProcStreams.removeValue(forKey: procId)?.finish()
+        pluginProcStreams[procId] = continuation
+        do {
+            let result: RemotePluginProcAttachResult = try await request(
+                method: "pproc/attach", params: RemotePluginProcOwnedParams(procId: procId, lease: lease, offset: offset))
+            if result.exit != nil {
+                pluginProcStreams.removeValue(forKey: procId)?.finish()
+            }
+            return (result, stream)
+        } catch {
+            pluginProcStreams.removeValue(forKey: procId)?.finish()
+            throw error
+        }
+    }
+
+    func renewPluginProc(procId: String, lease: String, leaseMs: Int) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/renew", params: RemotePluginProcOwnedParams(procId: procId, lease: lease, leaseMs: leaseMs))
+    }
+
+    /// Stops the process and everything it started; the exit follows on the attach stream.
+    func killPluginProc(procId: String, lease: String) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/kill", params: RemotePluginProcOwnedParams(procId: procId, lease: lease))
+    }
+
+    func releasePluginProc(procId: String, lease: String) async throws {
+        let _: RemotePluginProcOK = try await request(
+            method: "pproc/release", params: RemotePluginProcOwnedParams(procId: procId, lease: lease))
+    }
+
     func listProcs() async throws -> RemoteHelperProcListResult {
         try await request(method: "proc/list", params: RemoteHelperNoParams())
     }
@@ -541,6 +586,11 @@ actor RemoteHelperClient {
             proc.continuation.finish()
         }
         activeProcAttachments.removeAll()
+        // The process runs on; its owner attaches again from where it got to.
+        for stream in pluginProcStreams.values {
+            stream.finish()
+        }
+        pluginProcStreams.removeAll()
         earlyProcEvents.removeAll()
         detachedProcIds.removeAll()
         drainPending(with: RemoteHelperClientError.notRunning)
@@ -782,6 +832,22 @@ actor RemoteHelperClient {
             )
             return
         }
+        if head.method == "pproc/output",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemotePluginProcChunk>.self, from: data),
+           let chunk = env.params, let procId = chunk.procId {
+            pluginProcStreams[procId]?.yield(.output(chunk))
+            return
+        }
+        if head.method == "pproc/exit",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemotePluginProcExit>.self, from: data),
+           let exit = env.params {
+            if let stream = pluginProcStreams.removeValue(forKey: exit.procId) {
+                stream.yield(.exit(exit))
+                stream.finish()
+            }
+            scheduleIdleShutdownIfPossible()
+            return
+        }
         if head.method == "proc/output",
            let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperProcOutputParams>.self, from: data),
            let event = env.params {
@@ -882,6 +948,11 @@ actor RemoteHelperClient {
             proc.continuation.yield(.unavailable)
         }
         activeProcAttachments.removeAll()
+        // The process runs on; its owner attaches again from where it got to.
+        for stream in pluginProcStreams.values {
+            stream.finish()
+        }
+        pluginProcStreams.removeAll()
         earlyProcEvents.removeAll()
         detachedProcIds.removeAll()
         if RemoteExec.isConnectionFailure(exitCode: status) {
@@ -936,6 +1007,7 @@ actor RemoteHelperClient {
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
               activeProcAttachments.isEmpty,
+              pluginProcStreams.isEmpty,
               transport != nil else { return }
         idleShutdownTask?.cancel()
         let delay = idleShutdownNanoseconds
@@ -949,7 +1021,8 @@ actor RemoteHelperClient {
         guard pending.isEmpty,
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
-              activeProcAttachments.isEmpty else { return }
+              activeProcAttachments.isEmpty,
+              pluginProcStreams.isEmpty else { return }
         shutdown()
     }
 

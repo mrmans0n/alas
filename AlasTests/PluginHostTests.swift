@@ -90,7 +90,8 @@ struct PluginHostTests {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
-        let manifest = try PluginManifest.parse(Data(manifest.utf8))
+        let manifest = try PluginManifest.parse(
+            Data(manifest.utf8), supportedAPIs: PluginManifest.supportedAPIVersions.lowerBound...11)
         return PluginHost(
             manifest: manifest,
             source: PluginJSFixture.source(script),
@@ -1198,10 +1199,13 @@ struct PluginHostTests {
         }
     }
 
-    static let processManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","capabilities":["process.exec","files.read","files.write"],"processes":[{"id":"install","command":["pnpm","install"]},{"id":"op","command":["op","read"],"appendArgs":true},{"id":"dev","command":["pnpm","dev"],"longRunning":true}]}"#
+    nonisolated static let processManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":6,"entry":"p.js","capabilities":["process.exec","files.read","files.write"],"processes":[{"id":"install","command":["pnpm","install"]},{"id":"op","command":["op","read"],"appendArgs":true},{"id":"dev","command":["pnpm","dev"],"longRunning":true}]}"#
+
+    nonisolated static let remoteProcessManifest = processManifest.replacingOccurrences(of: #""api":6"#, with: #""api":11,"remote":true"#)
 
     struct ProcessCase: Sendable {
         let request: String
+        var manifest = PluginHostTests.processManifest
         var grants: Set<PluginCapability> = [.processExec]
         /// Part of the immediate reply; nil when `process/run` goes out and answers later.
         let reply: String?
@@ -1221,11 +1225,14 @@ struct PluginHostTests {
         ProcessCase(request: processCall(1, "process/start", "install"), reply: "use process/run"),
         ProcessCase(request: processCall(1, worktree: "other"), reply: "unknown worktree other"),
         ProcessCase(request: processCall(1, worktree: "far"), reply: "worktree far is on remote host devbox"),
+        ProcessCase(
+            request: processCall(1, "process/start", "dev", worktree: "far"), manifest: remoteProcessManifest,
+            reply: "process/start can't run on remote hosts yet"),
         ProcessCase(request: processCall(1, "process/start", "dev"), reply: #""run":"p1""#, argv: ["pnpm", "dev"]),
     ])
     func processesRunOnlyWhatTheManifestDeclares(_ c: ProcessCase) async throws {
         let launcher = FakeLauncher()
-        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: Self.processManifest, launcher: launcher)
+        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: c.manifest, launcher: launcher)
         await host.activate()
         #expect(host.state == .active)
         if let reply = c.reply {
@@ -1235,6 +1242,24 @@ struct PluginHostTests {
         }
         #expect(launcher.handles.first?.argv == c.argv)
         #expect(launcher.handles.allSatisfy { $0.directory.path == "/tmp/wt" })
+    }
+
+    /// A run the remote helper stopped at the time limit, before Alas's own clock got there, still says it timed out.
+    @Test(arguments: [true, false])
+    func processRunReportsAHelperTimeout(timedOut: Bool) async throws {
+        let launcher = FakeLauncher()
+        let host = try makeHost(
+            [[.send(activateOK), .send(processCall(1))]], grants: [.processExec], manifest: Self.processManifest,
+            launcher: launcher)
+        await host.activate()
+        let output = PluginProcessOutput(keep: .head, limit: 16, interval: .zero)
+        if timedOut { output.markTimedOut() }
+        output.finish(exit: 143)
+        var events: [PluginProcessEvent] = []
+        for await event in output.events { events.append(event) }
+        for event in events { launcher.handles[0].emit(event) }
+        #expect(await awaitCondition { lastReply(host)?.contains(#""exit":143"#) == true })
+        #expect(lastReply(host)?.contains(#""timedOut":\#(timedOut)"#) == true)
     }
 
     /// Two at a time, output capped, and an instance that ends stops its processes and never hears from them.
@@ -1299,6 +1324,51 @@ struct PluginHostTests {
         var events: [PluginProcessEvent] = []
         for await event in output.events { events.append(event) }
         #expect(events == [.stdout(Data(kept.utf8)), .stderr(Data("e".utf8)), .truncated, .exit(3)])
+    }
+
+    /// A replay after a reconnect repeats output, and a chunk can grow after part of it was read: only what follows
+    /// the end already read is new. A chunk past it, after the helper dropped older output, is new whole.
+    @Test(arguments: [(0, 0, "abcd"), (0, 2, "cd"), (0, 4, nil), (2, 5, "d"), (4, 2, "abcd")] as [(UInt64, UInt64, String?)])
+    func remoteOutputIsReadOnce(offset: UInt64, next: UInt64, unseen: String?) {
+        #expect(RemotePluginProcess.unseen(Data("abcd".utf8), at: offset, after: next) == unseen.map { Data($0.utf8) })
+    }
+
+    /// A remote argv stays within the helper's bounds, checked before anything is sent.
+    @Test(arguments: [
+        (Array(repeating: "x", count: 4096), true),
+        (Array(repeating: "x", count: 4097), false),
+        (Array(repeating: String(repeating: "x", count: 1023), count: 1024), true),
+        (Array(repeating: String(repeating: "x", count: 1024), count: 1024), false),
+        (["ls", "a\u{0}b"], false),
+    ] as [([String], Bool)])
+    func remoteArgvFitsTheHelper(argv: [String], fits: Bool) {
+        let refusal = RemotePluginProcess.argvRefusal(argv, process: "big")
+        #expect(refusal == (fits ? nil : "process big has too many arguments to run on a remote host"))
+    }
+
+    /// A spawn whose answer was lost is sent again under the same id, which the helper only reports; a refusal is
+    /// final at once.
+    @Test(arguments: [
+        ([RemoteHelperClientError.notRunning, .unavailable("ssh exited")], 3, true),
+        ([.notRunning, .notRunning, .notRunning], 3, false),
+        ([.jsonrpc(JSONRPCError(code: -32003, message: "command not found: pnpm", data: nil))], 1, false),
+    ] as [([RemoteHelperClientError], Int, Bool)])
+    func remoteSpawnRetriesOnlyLostConnections(failures: [RemoteHelperClientError], calls: Int, starts: Bool) async {
+        actor Attempts { var count = 0
+        func next() -> Int { count += 1
+        return count } }
+        let attempts = Attempts()
+        let started: Bool
+        do {
+            try await RemotePluginProcess.spawnRetrying(pause: .zero) {
+                let attempt = await attempts.next()
+                if attempt <= failures.count { throw failures[attempt - 1] }
+            }
+            started = true
+        } catch {
+            started = false
+        }
+        #expect(await attempts.count == calls && started == starts)
     }
 
     @Test(arguments: [
