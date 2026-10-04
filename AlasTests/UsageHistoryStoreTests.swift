@@ -29,7 +29,7 @@ struct UsageHistoryStoreTests {
             sessionId: "s1", startedAt: started, result: .limited, delegatedSource: nil, lastAgentText: nil,
             quota: ACPPromptQuota(tokenCount: tokens, modelUsage: [ACPModelUsage(model: "opus", tokenCount: tokens)]))
         let input = UsageTurnInput(
-            completion: completion, agent: "claude", model: "default",
+            completion: completion, agent: "claude", model: "default", cumulativeCost: nil,
             project: "proj", worktree: "wt", endedAt: started - 1_000)
         _ = try await UsageHistoryStore(path: path).record(input)
 
@@ -111,7 +111,7 @@ struct UsageHistoryStoreTests {
             quota: ACPPromptQuota(tokenCount: nil, modelUsage: [
                 ACPModelUsage(model: "a", tokenCount: count), ACPModelUsage(model: "b", tokenCount: count),
             ]))
-        let input = UsageTurnInput(completion: completion, agent: "claude", model: "default", project: nil, worktree: nil, endedAt: 2)
+        let input = UsageTurnInput(completion: completion, agent: "claude", model: "default", cumulativeCost: nil, project: nil, worktree: nil, endedAt: 2)
         #expect(input.tokens == UsageTurn.Tokens(total: 20, input: 2, cachedInput: 4, cachedWrite: 6, output: 8, reasoningOutput: 0))
         #expect(input.model == "default")
     }

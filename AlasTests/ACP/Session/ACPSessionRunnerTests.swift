@@ -93,20 +93,26 @@ struct ACPSessionRunnerTests {
 
     enum TurnCostUpdate: CaseIterable, Sendable {
         case none, applied, buffered, appliedThenBufferedWithoutCost, appliedThenAppliedWithoutCost, notYetDequeued
+        /// Still on the stream when the connection is replaced.
+        case replacedBeforeDequeued
     }
 
     /// A turn reports the session's cumulative cost only when a `usage_update` with one arrived during it, including
     /// one still in the coalescing buffer when the prompt result arrives; a newer update without a cost, applied or
     /// buffered, does not hide it, and an earlier total is not the turn's own. One still on the stream when the
-    /// prompt result arrives holds the completion until it is taken off.
+    /// prompt result arrives counts once taken off; the completion is delivered at once either way, and a connection
+    /// replaced meanwhile leaves the cost unknown rather than losing the turn.
     @Test(arguments: TurnCostUpdate.allCases)
     func aTurnReportsOnlyACostUpdatedDuringIt(update: TurnCostUpdate) async throws {
         var completions: [ACPTurnCompletion] = []
+        var current = true
+        let held = update == .notYetDequeued || update == .replacedBeforeDequeued
         // Long enough that a buffered update is still waiting when the turn ends.
         let (runner, mock) = try makeRunner(
-            onTurnCompleted: { completions.append($0) }, incomingUpdateCoalesceNanos: 30_000_000_000)
+            isConnectionCurrent: { current }, onTurnCompleted: { completions.append($0) },
+            incomingUpdateCoalesceNanos: 30_000_000_000)
         let dequeue = AsyncGate()
-        if update == .notYetDequeued { runner.beforeDequeueForTesting = { await dequeue.wait() } }
+        if held { runner.beforeDequeueForTesting = { await dequeue.wait() } }
         runner.start()
         defer { runner.stop() }
         runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
@@ -114,12 +120,12 @@ struct ACPSessionRunnerTests {
         let withoutCost = ACPSessionUpdate.usageUpdate(.init(used: 3, size: 10, cost: nil))
         mock.scriptAsync(method: "session/prompt") { _ in
             let applied: [ACPSessionUpdate] = switch update {
-            case .none, .buffered, .notYetDequeued: []
+            case .none, .buffered, .notYetDequeued, .replacedBeforeDequeued: []
             case .applied, .appliedThenBufferedWithoutCost: [later]
             case .appliedThenAppliedWithoutCost: [later, withoutCost]
             }
             await MainActor.run { for item in applied { _ = runner.session.apply(item) } }
-            if update == .notYetDequeued { mock.emit(.init(sessionId: "s", update: later)) }
+            if held { mock.emit(.init(sessionId: "s", update: later)) }
             let buffered: ACPSessionUpdate? = switch update {
             case .buffered: later
             case .appliedThenBufferedWithoutCost: withoutCost
@@ -131,14 +137,19 @@ struct ACPSessionRunnerTests {
             }
             return Data("{}".utf8)
         }
-        var sent = false
-        runner.send(text: "hello", attachments: []) { _ in sent = true }
-        if update == .notYetDequeued {
-            #expect(await awaitCondition { sent })
-            await dequeue.open()
-        }
-        #expect(await awaitCondition { !completions.isEmpty })
-        #expect(completions.map(\.cumulativeCost) == [update == .none ? nil : .init(amount: 0.3, currency: "USD")])
+        // Delivered with the prompt result, before the send's own completion, even while an update is held.
+        var completedFirst: Bool?
+        runner.send(text: "hello", attachments: []) { _ in completedFirst = !completions.isEmpty }
+        #expect(await awaitCondition { completedFirst != nil })
+        #expect(completedFirst == true)
+        if update == .replacedBeforeDequeued { current = false }
+        if update == .notYetDequeued { await dequeue.open() }
+        let cost = await completions.first?.cost?.resolve()
+        await dequeue.open()
+        let expected: ACPUsageInfo.Cost? = [.none, .replacedBeforeDequeued].contains(update)
+            ? nil : .init(amount: 0.3, currency: "USD")
+        #expect(completions.count == 1)
+        #expect(cost == expected)
     }
 
     @Test("send attaches its checkpoint before the prompt RPC")

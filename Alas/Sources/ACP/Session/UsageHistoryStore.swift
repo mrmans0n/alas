@@ -257,7 +257,8 @@ actor UsageHistoryStore {
 
 extension UsageTurnInput {
     init(
-        completion: ACPTurnCompletion, agent: String, model: String?, project: String?, worktree: String?, endedAt: Int64
+        completion: ACPTurnCompletion, agent: String, model: String?, cumulativeCost: ACPUsageInfo.Cost?, project: String?,
+        worktree: String?, endedAt: Int64
     ) {
         let result = switch completion.result {
         case .completed: "completed"
@@ -282,7 +283,7 @@ extension UsageTurnInput {
                     total: $0.displayTotal, input: $0.inputTokens, cachedInput: $0.cachedInputTokens,
                     cachedWrite: $0.cachedWriteTokens, output: $0.outputTokens, reasoningOutput: $0.reasoningOutputTokens)
             },
-            cumulativeCost: completion.cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) })
+            cumulativeCost: cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) })
     }
 }
 
@@ -301,13 +302,17 @@ extension AppState {
         guard let store = usageHistory, let session = acpManager(for: owner)?.liveSession(for: completion.sessionId) else { return }
         let worktree = owner.worktreeID
         let project = worktree.flatMap { self.worktree(withId: $0)?.projectId }
-        let input = UsageTurnInput(
-            completion: completion, agent: session.agentId, model: session.currentModel, project: project, worktree: worktree,
-            endedAt: Int64(Date().timeIntervalSince1970 * 1000))
+        let agent = session.agentId
+        let model = session.currentModel
+        let endedAt = Int64(Date().timeIntervalSince1970 * 1000)
         let episode = completion.result == .limited ? session.usageLimit.map {
             UsageLimitEpisode($0, session: completion.sessionId, project: project, worktree: worktree, agent: session.agentId)
         } : nil
+        // Everything but the cost is captured now, so the row is written even if the session goes away meanwhile.
         Task { [weak self] in
+            let input = UsageTurnInput(
+                completion: completion, agent: agent, model: model, cumulativeCost: await completion.cost?.resolve(),
+                project: project, worktree: worktree, endedAt: endedAt)
             if let episode { try? await store.record(episode) }
             guard let turn = try? await store.record(input) else { return }
             await self?.pluginManager?.turnFinished(turn)

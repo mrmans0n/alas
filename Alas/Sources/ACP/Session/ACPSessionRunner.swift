@@ -1851,31 +1851,25 @@ final class ACPSessionRunner {
             result: result,
             delegatedSource: activePromptDelegatedSource,
             lastAgentText: lastAgentText,
-            quota: quota
+            quota: quota,
+            cost: turnCost()
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
-        // The turn's last `usage_update` may still be on the stream, not yet taken off by `updatesTask`. Waiting
-        // until it has been, without flushing the coalescing buffer (see above), lets its cost count for this turn.
+        onTurnCompleted?(completion)
+    }
+
+    /// The active turn's cost, read once the updates already sent before its result have been taken off the stream
+    /// (the last `usage_update` may not have been). Only reads; never flushes the coalescing buffer (see above).
+    private func turnCost() -> ACPTurnCost {
         let watermark = connection.client.yieldedUpdateCount
         let costRevision = activePromptCostRevision
-        let deliver: @MainActor (ACPSessionRunner) -> Void = { runner in
-            var completion = completion
-            completion.cumulativeCost = runner.turnCumulativeCost(since: costRevision)
-            runner.onTurnCompleted?(completion)
-        }
-        guard dequeuedUpdateCount < watermark, updatesTask?.isCancelled == false else { return deliver(self) }
-        Task { @MainActor [weak self] in
-            // ponytail: a yield loop with a deadline, as `persistPermissionDecision` drains; a stream that never
-            // delivers only delays the completion by the deadline.
-            let deadline = ContinuousClock.now + .seconds(1)
-            while let self, self.dequeuedUpdateCount < watermark, self.isConnectionCurrent(), ContinuousClock.now < deadline {
-                await Task.yield()
-            }
-            guard let self else { return }
-            deliver(self)
-        }
+        return ACPTurnCost(
+            known: turnCumulativeCost(since: costRevision),
+            settled: { [weak self] in (self?.dequeuedUpdateCount ?? 0) >= watermark },
+            live: { [weak self] in self.map { $0.updatesTask?.isCancelled == false && $0.isConnectionCurrent() } ?? false },
+            read: { [weak self] in self?.turnCumulativeCost(since: costRevision) })
     }
 
     /// Tail of the last agent message this turn produced, or nil. Only rows at
