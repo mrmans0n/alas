@@ -328,7 +328,8 @@ extension AppState {
         let worktree = owner.worktreeID
         let project = worktree.flatMap { self.worktree(withId: $0)?.projectId }
         let agent = session.agentId
-        let model = session.currentModel
+        // The model the prompt went out with: a stopped turn's result can come after the user switched models.
+        let model = completion.model ?? session.currentModel
         let endedAt = Int64(Date().timeIntervalSince1970 * 1000)
         let episode = completion.result == .limited ? session.usageLimit.map {
             UsageLimitEpisode($0, session: completion.sessionId, project: project, worktree: worktree, agent: session.agentId)

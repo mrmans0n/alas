@@ -141,7 +141,7 @@ final class ACPSessionRunner {
     /// The client's `yieldedUpdateCount` when the active prompt started: updates past it belong to the turn.
     private var activePromptStreamStart = 0
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
-    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int)] = [:]
+    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?)] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
@@ -1903,7 +1903,8 @@ final class ACPSessionRunner {
             lastAgentText: lastAgentText,
             quota: quota,
             cost: turnCost(streamStart: activePromptStreamStart),
-            sentAt: unreportedPrompts[promptID]?.sentAt
+            sentAt: unreportedPrompts[promptID]?.sentAt,
+            model: unreportedPrompts[promptID]?.model
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
@@ -1936,7 +1937,7 @@ final class ACPSessionRunner {
             quota: quota,
             // Capped where a successor was sent: one still preparing has not started its usage yet.
             cost: turnCost(streamStart: prompt.streamStart, end: activePromptID.flatMap { unreportedPrompts[$0]?.streamStart }),
-            sentAt: prompt.sentAt, recovery: recovery))
+            sentAt: prompt.sentAt, model: prompt.model, recovery: recovery))
     }
 
     /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
@@ -4017,7 +4018,7 @@ extension ACPSessionRunner {
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
-                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart)
+                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
                     if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
@@ -4259,7 +4260,7 @@ extension ACPSessionRunner {
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
                 let sentAt = Int64(Date().timeIntervalSince1970 * 1000)
-                self.unreportedPrompts[promptID] = (sentAt, sentAt, self.connection.client.yieldedUpdateCount)
+                self.unreportedPrompts[promptID] = (sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel)
                 return true
             }
             guard proceeded else {

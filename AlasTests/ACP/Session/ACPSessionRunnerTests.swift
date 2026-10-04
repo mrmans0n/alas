@@ -283,7 +283,8 @@ struct ACPSessionRunnerTests {
     }
 
     /// Stopping a turn reports its completion at once, but its usage waits for the prompt's result, which carries its
-    /// tokens; if none comes within the bound it is recorded without them. Either way, once.
+    /// tokens; if none comes within the bound it is recorded without them. Either way, once, with the model it was
+    /// sent with.
     @Test(arguments: [true, false])
     func aStoppedTurnsUsageWaitsForItsResult(settles: Bool) async throws {
         var completions: [ACPTurnCompletion] = []
@@ -305,9 +306,12 @@ struct ACPSessionRunnerTests {
             await result.wait()
             return Data(#"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120}}}}"#.utf8)
         }
+        runner.session.currentModel = "opus"
         runner.send(text: "hello", attachments: []) { _ in }
         #expect(await awaitCondition { entered })
         await runner.userCancel()
+        // A model picked before the result comes is the next turn's.
+        runner.session.currentModel = "sonnet"
         #expect(completions.map(\.result) == [.cancelled])
         #expect(usage.isEmpty)
         await (settles ? result : waited).open()
@@ -319,6 +323,7 @@ struct ACPSessionRunnerTests {
         await Task.yield()
         #expect(usage.map(\.result) == [.cancelled])
         #expect(usage.first?.quota?.tokenCount?.totalTokens == (settles ? 120 : nil))
+        #expect(usage.first?.model == "opus")
     }
 
     /// A stopped turn's result that comes while its successor is still preparing keeps the cost sent meanwhile:
