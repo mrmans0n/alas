@@ -236,6 +236,31 @@ struct ACPSessionRunnerTests {
         #expect(await completion.cost?.resolve() == nil)
     }
 
+    /// Stopped while still preparing (here, the lease is lost), the prompt never reached the agent: the turn ends,
+    /// but no usage is recorded for it.
+    @Test func aPromptStoppedBeforeItIsSentRecordsNoUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        var contextGathered = false
+        var sent = false
+        // The lease is lost while context providers run, so the prompt stops just before it would go out.
+        let (runner, mock) = try makeRunner(
+            validateLease: { !contextGathered },
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            pluginContext: { _ in
+                contextGathered = true
+                return []
+            })
+        mock.script(method: "session/prompt") { _ in
+            sent = true
+            return Data("{}".utf8)
+        }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { !completions.isEmpty })
+        #expect(!sent)
+        #expect(usage.isEmpty)
+    }
+
     /// A context-recovery prompt's spend is usage of its own, flagged as recovery, and never a turn completion.
     @Test func aRecoveryPromptIsReportedAsRecoveryUsage() async throws {
         var completions: [ACPTurnCompletion] = []

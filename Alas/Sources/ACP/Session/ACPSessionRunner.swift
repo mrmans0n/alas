@@ -1883,7 +1883,9 @@ final class ACPSessionRunner {
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
         onTurnCompleted?(completion)
-        guard usageAwaitsResult, unreportedPrompts[promptID] != nil else {
+        // A prompt stopped or failed before it reached the agent is no turn: there is no usage to record.
+        guard unreportedPrompts[promptID] != nil else { return }
+        guard usageAwaitsResult else {
             unreportedPrompts[promptID] = nil
             onTurnUsage?(completion)
             return
