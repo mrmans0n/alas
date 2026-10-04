@@ -335,11 +335,11 @@ struct PluginManifest: Equatable, Sendable {
         if let web = raw.web {
             guard api >= 12 else { throw .needsNewerAPI("\"web\"", api: 12) }
             guard isRelativePath(web), !web.isEmpty else { throw .invalidWeb("\"\(web)\" must be a relative path inside the plugin folder") }
-            guard !isSameFileName(web, entry) else {
-                throw .invalidWeb("\"web\" and \"entry\" must be different files")
+            // Installing writes each file in turn, so none may be another, or a folder holding another.
+            guard !pathsCollide(web, entry) else {
+                throw .invalidWeb("\"web\" and \"entry\" must be different files, neither inside the other")
             }
-            // Installing writes the manifest there first, and the page over it.
-            guard !isSameFileName(web, "plugin.json") else { throw .invalidWeb("\"web\" can't be plugin.json") }
+            guard !pathsCollide(web, "plugin.json") else { throw .invalidWeb("\"web\" can't use the name plugin.json") }
         }
         if let tab = tabs.first(where: { $0.kind == .web }) {
             guard api >= 12 else { throw .needsNewerAPI("tab \"\(tab.id)\" kind \"web\"", api: 12) }
@@ -386,11 +386,14 @@ struct PluginManifest: Equatable, Sendable {
             settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web)
     }
 
-    /// Whether two relative paths can name the same file: compared after `./` and `//` are removed, ignoring case
-    /// and Unicode normalization, as the default macOS volume does.
-    static func isSameFileName(_ a: String, _ b: String) -> Bool {
-        func normalized(_ path: String) -> String { (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping }
-        return normalized(a).compare(normalized(b), options: [.caseInsensitive]) == .orderedSame
+    /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
+    /// after `./` and `//` are removed, ignoring case and Unicode normalization, as the default macOS volume does.
+    static func pathsCollide(_ a: String, _ b: String) -> Bool {
+        func normalized(_ path: String) -> String {
+            (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping.lowercased()
+        }
+        let (a, b) = (normalized(a), normalized(b))
+        return a == b || a.hasPrefix(b + "/") || b.hasPrefix(a + "/")
     }
 
     private static func isRelativePath(_ path: String) -> Bool {

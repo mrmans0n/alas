@@ -1925,7 +1925,7 @@ struct PluginHostTests {
     }
 
     /// A page may post twice `maxWebBytesPerSecond` at once, then that rate as time passes, so a page posting in a
-    /// loop cannot hold the main thread; another page has its own budget.
+    /// loop cannot hold the main thread, even by reloading; another page has its own budget.
     @Test func aPageCanPostOnlySoMuchPerSecond() async throws {
         var time = ContinuousClock.now
         var limits = Self.limits
@@ -1941,6 +1941,9 @@ struct PluginHostTests {
         time += .milliseconds(500)
         for _ in 0..<4 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
         #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        // Reloading does not refill it.
+        let reloaded = try #require(host.attachWebPage(tab: 0, replacing: page) { _ in })
+        #expect(await host.webMessage(tab: 0, page: reloaded, json: "0") == "busy")
     }
 
     /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's

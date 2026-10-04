@@ -1496,11 +1496,15 @@ final class PluginHost {
     @ObservationIgnored private var webBudget: [UUID: (bytes: Double, at: ContinuousClock.Instant)] = [:]
 
     /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
-    /// to detach with, or nil for a tab that is not a web tab.
-    func attachWebPage(tab: Int, receive: @escaping (String) -> Void) -> UUID? {
+    /// to detach with, or nil for a tab that is not a web tab. `replacing` is the same view's previous document:
+    /// it is detached, and its post budget carries over, so reloading does not refill it.
+    func attachWebPage(tab: Int, replacing previous: UUID? = nil, receive: @escaping (String) -> Void) -> UUID? {
+        let budget = previous.flatMap { webBudget[$0] }
+        if let previous { detachWebPage(tab: tab, previous) }
         guard tabIs(tab, .web) else { return nil }
         let token = UUID()
         webPages[tab, default: [:]][token] = receive
+        webBudget[token] = budget
         return token
     }
 

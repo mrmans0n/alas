@@ -152,9 +152,9 @@ struct PluginManifestTests {
         (manifest(api: 12, webTab), .invalidWeb(#"tab "w" has kind "web", so the manifest needs "web""#)),
         (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab with kind "web""#)),
         (manifest(api: 12, webTab + #","web":"../ui.js""#), .invalidWeb(#""../ui.js" must be a relative path inside the plugin folder"#)),
-        (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files"#)),
-        (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files"#)),
-        (manifest(api: 12, webTab + #","web":"./Plugin.JSON""#), .invalidWeb(#""web" can't be plugin.json"#)),
+        (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
+        (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
+        (manifest(api: 12, webTab + #","web":"./Plugin.JSON""#), .invalidWeb(#""web" can't use the name plugin.json"#)),
         (manifest(api: 12, webTab + #","web":"dist/ui.js""#), nil),
     ])
     func webTabsNeedAPI12AndTheirOwnPageScript(json: String, expected: PluginManifestError?) throws {
@@ -167,7 +167,8 @@ struct PluginManifestTests {
         }
     }
 
-    /// The default macOS volume ignores case and Unicode normalization, so these name one file.
+    /// The default macOS volume ignores case and Unicode normalization, so these name one file; and a file can't
+    /// also be the folder another is in.
     @Test(arguments: [
         ("ui.js", "UI.JS", true),
         ("./dist//ui.js", "dist/ui.js", true),
@@ -175,9 +176,12 @@ struct PluginManifestTests {
         ("CAF\u{C9}.js", "cafe\u{301}.js", true),
         ("ui.js", "ui2.js", false),
         ("dist/ui.js", "ui.js", false),
+        ("Assets", "assets/ui.js", true),
+        ("assets/ui.js", "./ASSETS", true),
+        ("asset", "assets/ui.js", false),
     ])
     func webAndEntryNamesCompareAsTheVolumeDoes(a: String, b: String, same: Bool) {
-        #expect(PluginManifest.isSameFileName(a, b) == same)
+        #expect(PluginManifest.pathsCollide(a, b) == same)
     }
 
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {

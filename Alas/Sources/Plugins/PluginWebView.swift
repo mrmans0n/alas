@@ -434,10 +434,10 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
 
     /// Each document is its own page for the host: its bridge starts with an empty queue, so the host's count for
-    /// it starts over too, and late replies or posts for the previous document go to a token that is gone.
+    /// it starts over too, and late replies or posts for the previous document go to a token that is gone. The post
+    /// budget is the view's, so a page reloading itself gets no more through than one that doesn't.
     private func attach() {
-        if let token { host.detachWebPage(tab: tab, token) }
-        token = host.attachWebPage(tab: tab) { [weak self] json in self?.receive(json) }
+        token = host.attachWebPage(tab: tab, replacing: token) { [weak self] json in self?.receive(json) }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
