@@ -33,6 +33,7 @@ struct ACPDelegatedSessionNewRequest: Equatable, Sendable {
     let agentId: String?
     let worktree: ACPDelegatedSessionWorktreeTarget
     var modelSelection: ACPDelegatedModelSelection? = nil
+    var role: String? = nil
 }
 
 struct ACPDelegatedSessionMessageRequest: Equatable, Sendable {
@@ -139,6 +140,7 @@ struct ACPDelegationRecord: Equatable, Sendable {
     /// Persisted so a delayed start (new worktree) and startup recovery apply
     /// the same selection before the pending initial prompt.
     var modelSelection: ACPDelegatedModelSelection? = nil
+    var role: String? = nil
 }
 
 /// How the inbox delivers a delegated message to its target session.
@@ -177,10 +179,11 @@ struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
     let state: String
     let failure: String?
     let createdAt: Int64
+    var role: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
-        case relationship
+        case relationship, role
         case agentId = "agent_id"
         case worktreeId = "worktree_id"
         case state

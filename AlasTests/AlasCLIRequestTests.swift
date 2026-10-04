@@ -168,10 +168,10 @@ struct AlasCLIRequestTests {
             prompt: "Task", agentID: nil, worktree: .current
         ))
 
-        let existing = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"codex","model":"gpt-5.2","reasoning":"high","worktree":"feature"}}"#
+        let existing = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"codex","model":"gpt-5.2","reasoning":"high","role":"reviewer","worktree":"feature"}}"#
         #expect(try AlasCLIRequest.decode(from: Data(existing.utf8)).command == .sessionNew(
             prompt: "Task", agentID: "codex", worktree: .existing(worktreeID: "feature"),
-            model: "gpt-5.2", reasoning: "high"
+            model: "gpt-5.2", reasoning: "high", role: "reviewer"
         ))
 
         let fresh = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"child","base":"origin/main"}}}"#
@@ -211,6 +211,8 @@ struct AlasCLIRequestTests {
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","model":" "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","reasoning":""}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","role":" "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","role":4}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"feature","new_worktree":{"branch":"child"}}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"  "}}}"#,

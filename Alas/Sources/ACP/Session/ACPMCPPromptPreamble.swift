@@ -224,7 +224,7 @@ enum ACPMCPPromptPreamble {
         if builtInInjected {
             let sessionCLI = isDelegated
                 ? "alas session send <session-id> <prompt>"
-                : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] | alas session send <session-id> <prompt>"
+                : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] | alas session send <session-id> <prompt>"
             var line = "Use the `alas` CLI via your shell tool to drive the Alas UI: "
                 + "`alas open <path>` reveals a file to the user, "
                 + "`alas notify <body>` posts a macOS notification, "

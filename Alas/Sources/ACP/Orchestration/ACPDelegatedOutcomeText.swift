@@ -9,6 +9,7 @@ enum ACPDelegatedOutcomeText {
         let agentId: String
         let worktreeName: String?
         var blockerSummary: String? = nil
+        var role: String? = nil
     }
 
     static func unreported(_ context: Context, lastAgentText: String?) -> String {
@@ -130,9 +131,10 @@ enum ACPDelegatedOutcomeText {
     }
 
     private static func label(_ context: Context) -> String {
+        let agent = context.role.map { "\(context.agentId), role \($0)" } ?? context.agentId
         if let worktreeName = context.worktreeName, !worktreeName.isEmpty {
-            return "\(context.childSessionId) (\(context.agentId), worktree \(worktreeName))"
+            return "\(context.childSessionId) (\(agent), worktree \(worktreeName))"
         }
-        return "\(context.childSessionId) (\(context.agentId))"
+        return "\(context.childSessionId) (\(agent))"
     }
 }

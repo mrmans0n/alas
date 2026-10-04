@@ -35,6 +35,8 @@ final class ACPSessionOrchestrationCoordinator {
         /// `escalateBlockerIfStillBlocked` directly instead of waiting out a
         /// real delay. Only `AppState`'s construction (Task 7) sleeps for real.
         let scheduleEscalationCheck: (Int, @escaping @Sendable () async -> Void) -> Void
+        /// Fixed collection window for nearby child results; injectable for tests.
+        let waitForChildResultBatch: @Sendable () async -> Void
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
@@ -66,6 +68,9 @@ final class ACPSessionOrchestrationCoordinator {
             blockedRequestKeys: @escaping (String) -> Set<String> = { _ in [] },
             escalationDelaySeconds: @escaping () -> Int = { 30 },
             scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
+            waitForChildResultBatch: @escaping @Sendable () async -> Void = {
+                try? await Task.sleep(for: .milliseconds(250))
+            },
             makeID: @escaping () -> String,
             worktree: @escaping (String) -> Worktree?,
             existingWorktree: @escaping (String, String) -> Worktree?,
@@ -88,6 +93,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.blockedRequestKeys = blockedRequestKeys
             self.escalationDelaySeconds = escalationDelaySeconds
             self.scheduleEscalationCheck = scheduleEscalationCheck
+            self.waitForChildResultBatch = waitForChildResultBatch
             self.makeID = makeID
             self.worktree = worktree
             self.existingWorktree = existingWorktree
@@ -106,6 +112,8 @@ final class ACPSessionOrchestrationCoordinator {
     }
 
     private let environment: Environment
+    private var deliveringSessions: Set<String> = []
+    private var deliveryRequested: Set<String> = []
 
     init(environment: Environment) {
         self.environment = environment
@@ -155,7 +163,8 @@ final class ACPSessionOrchestrationCoordinator {
                     worktreeId: record.childWorktreeId ?? record.worktreeRequest.worktreeId ?? "",
                     phase: record.phase,
                     failure: record.failureMessage,
-                    createdAt: record.createdAt
+                    createdAt: record.createdAt,
+                    role: record.role
                 ))
             }
             return json(ACPOrchestrationListResponse(sessions: summaries))
@@ -222,8 +231,11 @@ final class ACPSessionOrchestrationCoordinator {
         }
 
         let prompt: String
+        let role = request.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let role, role.isEmpty { return .error("role must not be blank") }
         do {
-            prompt = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
+            let task = try ACPSessionOrchestrationPolicy.validatedPrompt(request.prompt)
+            prompt = role.map { "[alas system] Your role in this delegated task is \($0).\n\n\(task)" } ?? task
         } catch ACPSessionOrchestrationPolicy.Error.blankPrompt {
             return .error("prompt must not be blank")
         } catch {
@@ -259,6 +271,7 @@ final class ACPSessionOrchestrationCoordinator {
                 prompt: prompt,
                 agentID: agentID,
                 modelSelection: request.modelSelection,
+                role: role,
                 worktree: worktree,
                 request: .current(worktreeId: worktree.id),
                 phase: .starting,
@@ -290,6 +303,7 @@ final class ACPSessionOrchestrationCoordinator {
                 prompt: prompt,
                 agentID: agentID,
                 modelSelection: request.modelSelection,
+                role: role,
                 worktree: worktree,
                 request: .existing(worktreeId: worktree.id),
                 phase: .starting,
@@ -343,7 +357,8 @@ final class ACPSessionOrchestrationCoordinator {
                 failureMessage: nil,
                 createdAt: now,
                 updatedAt: now,
-                modelSelection: request.modelSelection
+                modelSelection: request.modelSelection,
+                role: role
             )
             do {
                 try await environment.persistence.insert(record)
@@ -667,7 +682,8 @@ final class ACPSessionOrchestrationCoordinator {
         .init(
             childSessionId: record.childSessionId,
             agentId: record.agentId,
-            worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name }
+            worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name },
+            role: record.role
         )
     }
 
@@ -691,6 +707,7 @@ final class ACPSessionOrchestrationCoordinator {
         prompt: String,
         agentID: String,
         modelSelection: ACPDelegatedModelSelection?,
+        role: String?,
         worktree: Worktree,
         request: ACPDelegatedWorktreeRequest,
         phase: ACPDelegationPhase,
@@ -710,7 +727,8 @@ final class ACPSessionOrchestrationCoordinator {
             failureMessage: nil,
             createdAt: now,
             updatedAt: now,
-            modelSelection: modelSelection
+            modelSelection: modelSelection,
+            role: role
         )
             do {
                 self.environment.rememberParent(childID, origin.sessionId)
@@ -882,30 +900,95 @@ final class ACPSessionOrchestrationCoordinator {
         return "Could not start delegated ACP session."
     }
 
-    private func deliverPendingMessages(
+    func deliverPendingMessages(
         to sessionID: String,
-        callerParent: ACPDelegationRecord?,
-        targetParent: ACPDelegationRecord?
+        callerParent: ACPDelegationRecord? = nil,
+        targetParent: ACPDelegationRecord? = nil,
+        manager suppliedManager: ACPSessionManager? = nil
     ) async {
+        guard deliveringSessions.insert(sessionID).inserted else {
+            deliveryRequested.insert(sessionID)
+            return
+        }
+        defer {
+            deliveringSessions.remove(sessionID)
+            if deliveryRequested.remove(sessionID) != nil {
+                Task { @MainActor in
+                    await self.deliverPendingMessages(to: sessionID, callerParent: callerParent,
+                        targetParent: targetParent, manager: suppliedManager)
+                }
+            }
+        }
         // Read fresh: a caller's snapshot can predate the start transition.
         if ACPSessionOrchestrationPolicy.defersInboxDelivery(
             target: try? await environment.persistence.delegation(childSessionId: sessionID)
-        ) {
-            return
-        }
-        let session = environment.sessionLocation(sessionID)?.manager.liveSession(for: sessionID)
+        ) { return }
+        let session = (suppliedManager ?? environment.sessionLocation(sessionID)?.manager)?.liveSession(for: sessionID)
         session?.nextPromptWorkCount += 1
         defer { session?.nextPromptWorkCount -= 1 }
-        guard let target = await resolveDeliveryTarget(
-            sessionID: sessionID,
-            callerParent: callerParent,
-            targetParent: targetParent
-        ), let messages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
+        let manager: ACPSessionManager?
+        if let suppliedManager {
+            manager = suppliedManager
+        } else {
+            manager = await resolveDeliveryTarget(sessionID: sessionID, callerParent: callerParent,
+                targetParent: targetParent)?.manager
+        }
+        guard let manager,
+              let initialMessages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
         else { return }
-        let targetSession = target.manager.liveSession(for: sessionID)
-        targetSession?.hasPendingDelegatedMessages = !messages.isEmpty
-        for message in messages {
-            await deliver(message.id, to: target)
+        let targetSession = manager.liveSession(for: sessionID)
+        targetSession?.hasPendingDelegatedMessages = !initialMessages.isEmpty
+        guard !initialMessages.isEmpty else { return }
+        // An active turn can finish during collection. Keep its queued
+        // results unsent until this drain has persisted the complete batch.
+        targetSession?.pendingQueuePersistenceCount += 1
+        defer {
+            targetSession?.pendingQueuePersistenceCount -= 1
+            manager.runners[sessionID]?.flushQueueIfIdle()
+        }
+        guard let children = try? await environment.persistence.children(parentSessionId: sessionID) else { return }
+        var childrenByID = Dictionary(uniqueKeysWithValues: children.map { ($0.childSessionId, $0) })
+        if initialMessages.contains(where: { $0.kind == .prompt && childrenByID[$0.sourceSessionId] != nil }) {
+            await environment.waitForChildResultBatch()
+        }
+        guard !Task.isCancelled,
+              let row = await manager.persistedSessionRow(id: sessionID), !row.archived
+        else { return }
+        await manager.attach(to: sessionID, freshlyCreated: false)
+        guard manager.isWriter(for: sessionID) else {
+            manager.notifyDelegatedMessagesAvailable()
+            return
+        }
+        // A message is attempted only once per drain, even if deleting its
+        // inbox row fails. New arrivals during persistence join the next pass.
+        var attempted: Set<String> = []
+        while let pending = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
+            let messages = pending.filter { !attempted.contains($0.id) }
+            guard !messages.isEmpty else { break }
+            guard let currentChildren = try? await environment.persistence.children(parentSessionId: sessionID) else { break }
+            childrenByID = Dictionary(uniqueKeysWithValues: currentChildren.map { ($0.childSessionId, $0) })
+            var childResults: [ACPClaimedDelegatedMessage] = []
+            for message in messages {
+                attempted.insert(message.id)
+                guard let claimed = try? await environment.persistence.claimMessage(
+                    id: message.id, instanceId: environment.instanceId, token: environment.makeID(),
+                    now: environment.now(), staleAfter: 60
+                ) else { continue }
+                if claimed.message.kind == .prompt, childrenByID[claimed.message.sourceSessionId] != nil {
+                    childResults.append(claimed)
+                } else {
+                    await deliver(claimed, with: ACPDelegatedPromptSource(message: claimed.message,
+                        senderDelegation: childrenByID[claimed.message.sourceSessionId]), to: manager)
+                }
+            }
+            if !childResults.isEmpty {
+                let accepted = await manager.enqueueDelegatedPrompts(childResults.map { claimed in
+                    (claimed.message.prompt, ACPDelegatedPromptSource(message: claimed.message,
+                        senderDelegation: childrenByID[claimed.message.sourceSessionId]))
+                }, into: sessionID, requiringWriter: true)
+                for claimed in childResults { await finishDelivery(claimed, accepted: accepted) }
+                if !accepted { break }
+            }
         }
         if let remaining = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
             targetSession?.hasPendingDelegatedMessages = !remaining.isEmpty
@@ -942,39 +1025,24 @@ final class ACPSessionOrchestrationCoordinator {
         )
     }
 
-    private func deliver(_ messageID: String, to target: SessionLocation) async {
-        guard let claimed = try? await environment.persistence.claimMessage(
-            id: messageID,
-            instanceId: environment.instanceId,
-            token: environment.makeID(),
-            now: environment.now(),
-            staleAfter: 60
-        ) else { return }
-        await target.manager.attach(to: claimed.message.targetSessionId, freshlyCreated: false)
-        guard target.manager.isWriter(for: claimed.message.targetSessionId) else {
-            try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
-            target.manager.notifyDelegatedMessagesAvailable()
-            return
-        }
+    private func deliver(
+        _ claimed: ACPClaimedDelegatedMessage,
+        with source: ACPDelegatedPromptSource,
+        to manager: ACPSessionManager
+    ) async {
         let accepted: Bool
         switch claimed.message.kind {
         case .prompt:
-            accepted = await target.manager.enqueueDelegatedPrompt(
-                text: claimed.message.prompt,
-                source: ACPDelegatedPromptSource(
-                    message: claimed.message,
-                    senderDelegation: try? await environment.persistence.delegation(
-                        childSessionId: claimed.message.sourceSessionId
-                    )
-                ),
-                into: claimed.message.targetSessionId
-            )
+            accepted = await manager.enqueueDelegatedPrompt(text: claimed.message.prompt,
+                source: source, into: claimed.message.targetSessionId, requiringWriter: true)
         case .notice:
-            accepted = await target.manager.appendDelegatedNotice(
-                text: claimed.message.prompt,
-                into: claimed.message.targetSessionId
-            )
+            accepted = await manager.appendDelegatedNotice(text: claimed.message.prompt,
+                into: claimed.message.targetSessionId)
         }
+        await finishDelivery(claimed, accepted: accepted)
+    }
+
+    private func finishDelivery(_ claimed: ACPClaimedDelegatedMessage, accepted: Bool) async {
         guard accepted else {
             try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
             return
@@ -990,7 +1058,8 @@ final class ACPSessionOrchestrationCoordinator {
         worktreeId: String,
         phase: ACPDelegationPhase,
         failure: String?,
-        createdAt: Int64
+        createdAt: Int64,
+        role: String? = nil
     ) async -> ACPOrchestrationSessionSummary {
         let location = environment.sessionLocation(sessionId)
         let runtime = location.flatMap { location -> ACPOrchestrationRuntimeState? in
@@ -1019,7 +1088,8 @@ final class ACPSessionOrchestrationCoordinator {
             worktreeId: worktreeId,
             state: state.rawValue,
             failure: failure,
-            createdAt: createdAt
+            createdAt: createdAt,
+            role: role
         )
     }
 

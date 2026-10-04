@@ -511,7 +511,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
     private func makeModelSelectionFixture(
         client: ACPMockClient,
         launchModels: [ACPAgentModelCatalog.Model]? = nil,
-        reasoningRefreshTimeout: Duration = .seconds(30)
+        reasoningRefreshTimeout: Duration = .seconds(30),
+        waitForChildResultBatch: @escaping @Sendable () async -> Void = {}
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -541,7 +542,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         let claude = ACPOrchestrationAgent(id: "claude", isEnabled: true, isACPCapable: true)
         let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
-            persistence: persistence, instanceId: "instance", now: { 100 }, makeID: { "child" },
+            persistence: persistence, instanceId: "instance", now: { 100 },
+            waitForChildResultBatch: waitForChildResultBatch, makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil }, existingWorktree: { _, _ in nil },
             configuredAgents: { [claude] }, availableAgents: { _, _ in [claude] },
             launchModels: { _, _ in launchModels },
@@ -648,6 +650,103 @@ struct ACPSessionOrchestrationCoordinatorTests {
             #expect(childRequests(client) == ["set_model:opus"])
             #expect(fixture.manager.liveSession(for: "child")?.queue.isEmpty == true)
         }
+    }
+
+    @Test("nearby child results produce one parent turn while notices stay informational", arguments: [false, true])
+    func nearbyResultsShareOneParentTurn(parentFinishesDuringWindow: Bool) async throws {
+        let gate = GenerationGate()
+        let activeTurn = GenerationGate()
+        let client = makeSelectionClient()
+        var promptCount = 0
+        client.scriptAsync(method: "session/prompt") { _ in
+            promptCount += 1
+            if parentFinishesDuringWindow && promptCount == 1 { await activeTurn.wait() }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let fixture = try makeModelSelectionFixture(client: client, waitForChildResultBatch: { await gate.wait() })
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        await fixture.manager.attach(to: "parent", freshlyCreated: true)
+        try #require(fixture.manager.isWriter(for: "parent"))
+        let parent = try #require(fixture.manager.liveSession(for: "parent"))
+        if parentFinishesDuringWindow {
+            try #require(fixture.manager.runners["parent"]).send(text: "Parent work", attachments: [])
+            await activeTurn.waitUntilStarted()
+            #expect(await fixture.manager.enqueueDelegatedPrompt(text: "Earlier child result",
+                source: .init(sessionId: "earlier", messageId: "earlier", senderRelationship: "child"), into: "parent"))
+        }
+        var first = selectedChildRecord(phase: .ready)
+        first.role = "planner"
+        try await fixture.persistence.insert(first)
+        try await fixture.persistence.enqueue(.init(id: "first", sourceSessionId: "child", targetSessionId: "parent", prompt: "Report from planner child: Plan ready.", createdAt: 1))
+        let delivery = Task { await fixture.coordinator.deliverPendingMessages(to: "parent", manager: fixture.manager) }
+        await gate.waitUntilStarted()
+        if parentFinishesDuringWindow {
+            await activeTurn.release()
+            try await waitUntil { parent.transcript.streamingState == .idle }
+            #expect(promptCount == 1)
+        }
+        try await fixture.persistence.insert(.init(childSessionId: "reviewer", parentSessionId: "parent", projectId: "project", parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "claude", worktreeRequest: .current(worktreeId: "worktree"), phase: .ready, failureMessage: nil, createdAt: 2, updatedAt: 2, role: "reviewer"))
+        try await fixture.persistence.enqueue(.init(id: "second", sourceSessionId: "reviewer", targetSessionId: "parent", prompt: "Report from reviewer child: Review ready.", createdAt: 2))
+        try await fixture.persistence.enqueue(.init(id: "notice", sourceSessionId: "child", targetSessionId: "parent", prompt: "Child turn completed.", createdAt: 3, kind: .notice))
+        await fixture.coordinator.deliverPendingMessages(to: "parent", manager: fixture.manager)
+        await gate.release()
+        await delivery.value
+        try await waitUntil {
+            !childRequests(client).isEmpty && parent.queue.isEmpty && parent.transcript.streamingState == .idle
+        }
+        let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
+        #expect(prompts.count == (parentFinishesDuringWindow ? 2 : 1))
+        let text = prompts.flatMap(\.prompt).compactMap { block -> String? in
+            guard case .text(let text) = block else { return nil }
+            return text
+        }.joined()
+        #expect(text.contains("Plan ready."))
+        #expect(text.contains("Review ready."))
+        #expect(!text.contains("Child turn completed."))
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+        #expect(!parent.hasPendingDelegatedMessages)
+    }
+
+    @Test("a parent archived during collection keeps results pending without waking")
+    func archivedParentIsNotWokenAfterCollection() async throws {
+        let gate = GenerationGate()
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client, waitForChildResultBatch: { await gate.wait() })
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        await fixture.manager.attach(to: "parent", freshlyCreated: true)
+        try await fixture.persistence.insert(selectedChildRecord(phase: .ready))
+        try await fixture.persistence.enqueue(.init(id: "report", sourceSessionId: "child", targetSessionId: "parent", prompt: "Result ready.", createdAt: 1))
+        let delivery = Task { await fixture.coordinator.deliverPendingMessages(to: "parent", manager: fixture.manager) }
+        await gate.waitUntilStarted()
+        fixture.manager.setArchived(id: "parent", archived: true)
+        await fixture.manager.flushPersistence()
+        await gate.release()
+        await delivery.value
+        #expect(client.sent.allSatisfy { $0.method != "session/prompt" })
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.id) == ["report"])
+    }
+
+    @Test("a child role is persisted, listed and sent in its initial context")
+    func childRoleReachesInitialContext() async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let origin = ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "project", worktreeId: "worktree")
+        let response = await fixture.coordinator.create(origin: origin,
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current, role: " reviewer "))
+        guard case .text = response else { Issue.record("Expected a delegated child"); return }
+        try await waitUntil { !childRequests(client).isEmpty }
+        let prompt = try #require(client.sent.compactMap { $0.params as? ACPSessionPromptParams }.first)
+        let text = prompt.prompt.compactMap { block -> String? in
+            guard case .text(let text) = block else { return nil }
+            return text
+        }.joined()
+        #expect(text.contains("Your role in this delegated task is reviewer."))
+        #expect(text.contains("Review the parser."))
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.role == "reviewer")
+        guard case .text(let lines) = await fixture.coordinator.list(origin: origin) else { Issue.record("Expected a session list"); return }
+        let listed = try JSONDecoder().decode(ACPOrchestrationListResponse.self, from: Data(lines.joined(separator: "\n").utf8))
+        #expect(listed.sessions.first { $0.sessionId == "child" }?.role == "reviewer")
     }
 
     @Test("a model missing from this launch's catalog is rejected before any child exists")
