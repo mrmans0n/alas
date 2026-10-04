@@ -1829,10 +1829,15 @@ final class ACPSessionRunner {
         }
     }
 
-    /// Snapshot the finished turn and hand it to `onTurnCompleted`. Must be
-    /// called on the main actor inside the `isActivePrompt` branch so a
-    /// superseded prompt never reports.
+    /// Snapshot the finished turn, record whether it failed, and hand it to
+    /// `onTurnCompleted`. Must be called on the main actor inside the
+    /// `isActivePrompt` branch so a superseded prompt never reports.
     private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
+        if case .failed(let message) = result {
+            session.turnFailure = message
+        } else {
+            session.turnFailure = nil
+        }
         guard let startedAt = activePromptStartedAt else { return }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever

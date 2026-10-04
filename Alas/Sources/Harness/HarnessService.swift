@@ -401,7 +401,7 @@ final class HarnessService {
 
     nonisolated static func shouldRefreshWorktreeStatus(after state: ActivityState) -> Bool {
         switch state {
-        case .busy, .idle, .awaitingInput, .permissionRequest, .limited:
+        case .busy, .idle, .awaitingInput, .permissionRequest, .limited, .failed:
             return true
         }
     }
@@ -505,7 +505,7 @@ final class HarnessService {
     }
 
     enum AggregatedState: String, Equatable {
-        case running, awaiting, limited
+        case running, awaiting, limited, failed
     }
 
     struct WorktreeHarnessSession: Equatable, Identifiable {
@@ -533,6 +533,8 @@ final class HarnessService {
                 return (WorktreeHarnessSession(id: id, state: .running, agent: activity.agent), activity.updatedAt, offset)
             case .limited:
                 return (WorktreeHarnessSession(id: id, state: .limited, agent: activity.agent), activity.updatedAt, offset)
+            case .failed:
+                return (WorktreeHarnessSession(id: id, state: .failed, agent: activity.agent), activity.updatedAt, offset)
             case .idle:
                 return nil
             }
@@ -567,12 +569,24 @@ final class HarnessService {
 }
 
 extension HarnessService.AggregatedState {
-    /// Worktree roll-up priority: awaiting > running > limited.
+    /// Worktree roll-up priority: awaiting > failed > running > limited.
+    /// A failed turn needs the user, so it outranks work still in progress.
     var rollUpRank: Int {
         switch self {
         case .awaiting: 0
-        case .running: 1
-        case .limited: 2
+        case .failed: 1
+        case .running: 2
+        case .limited: 3
+        }
+    }
+
+    /// Lowercase status word for sidebar tooltips and notes.
+    var statusNote: String {
+        switch self {
+        case .running: "running"
+        case .awaiting: "waiting"
+        case .limited: "limited"
+        case .failed: "failed"
         }
     }
 }

@@ -364,6 +364,7 @@ struct TabButton: View {
         case .awaitingInput: return theme.color("mod")
         case .permissionRequest: return theme.color("mod")
         case .limited:       return theme.color("warn")
+        case .failed:        return theme.color("del")
         case .idle:          return theme.color("fg-faint")
         }
     }

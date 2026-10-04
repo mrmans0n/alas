@@ -35,14 +35,18 @@ struct HarnessServiceTests {
         #expect(collector.requests.isEmpty)
     }
 
-    @Test func limitedSessionsRollUpBelowRunningAndAwaiting() {
+    @Test func worktreeRollUpRanksAwaitingThenFailedThenRunningThenLimited() {
         let (service, _) = makeService()
-        service.setExternalActivity(sessionId: "a", agent: .claude, state: .limited)
-        #expect(service.summary(forSessionIds: ["a"])?.state == .limited)
-        service.setExternalActivity(sessionId: "b", agent: .codex, state: .busy)
-        let summary = service.summary(forSessionIds: ["a", "b"])
-        #expect(summary?.state == .running)
-        #expect(summary?.sessions.map(\.state) == [.running, .limited])
+        service.setExternalActivity(sessionId: "limited", agent: .claude, state: .limited)
+        service.setExternalActivity(sessionId: "running", agent: .codex, state: .busy)
+        service.setExternalActivity(sessionId: "failed", agent: .pi, state: .failed)
+        let ids = ["limited", "running", "failed"]
+        #expect(service.summary(forSessionIds: ids)?.state == .failed)
+
+        service.setExternalActivity(sessionId: "awaiting", agent: .claude, state: .awaitingInput)
+        let summary = service.summary(forSessionIds: ids + ["awaiting"])
+        #expect(summary?.state == .awaiting)
+        #expect(summary?.sessions.map(\.state) == [.awaiting, .failed, .running, .limited])
     }
 
     @Test func inputIntentChangesDeliverTransitionsWithoutChangingStateOrBody() {

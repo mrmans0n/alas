@@ -33,7 +33,7 @@ struct TabActivityPulse: ViewModifier {
         switch activityState {
         case .busy: return 0.7
         case .awaitingInput, .permissionRequest: return 0.8
-        case .idle, .limited, nil: return 1.0
+        case .idle, .limited, .failed, nil: return 1.0
         }
     }
 
@@ -43,7 +43,7 @@ struct TabActivityPulse: ViewModifier {
             return .easeInOut(duration: 2.5).repeatForever(autoreverses: true)
         case .awaitingInput, .permissionRequest:
             return .easeInOut(duration: 3.0).repeatForever(autoreverses: true)
-        case .idle, .limited, nil:
+        case .idle, .limited, .failed, nil:
             return .easeOut(duration: 0.2)
         }
     }

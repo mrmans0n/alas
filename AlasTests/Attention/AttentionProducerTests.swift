@@ -7,7 +7,8 @@ struct AttentionProducerTests {
     @Test(arguments: [
         (ActivityState.awaitingInput, true, AttentionKind.agentAwaiting, "session:s1:awaiting"),
         (ActivityState.awaitingInput, false, AttentionKind.agentReady, "session:s1:awaiting"),
-        (ActivityState.permissionRequest, false, AttentionKind.agentPermission, "session:s1:permission")
+        (ActivityState.permissionRequest, false, AttentionKind.agentPermission, "session:s1:permission"),
+        (ActivityState.failed, false, AttentionKind.agentFailed, "session:s1:failed")
     ])
     func harnessWaitingStatesMapToAttention(
         state: ActivityState, requiresUserInput: Bool, kind: AttentionKind, sourceKey: String

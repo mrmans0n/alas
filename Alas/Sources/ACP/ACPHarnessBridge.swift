@@ -35,17 +35,15 @@ final class ACPHarnessBridge {
         let resumeScheduled = session.$queue
             .map { $0.contains { $0.usageLimit != nil } }
             .removeDuplicates()
+        let stop = session.$usageLimit.map { $0 != nil }.removeDuplicates()
+            .combineLatest(resumeScheduled, session.$turnFailure.removeDuplicates())
+            .map { IdleStop(limited: $0, resumeScheduled: $1, failure: $2) }
         sessionCancellables[session.id] = session.$readOnlyRestricted
-            .combineLatest(
-                session.transcript.$streamingState,
-                session.$usageLimit.map { $0 != nil }.removeDuplicates(),
-                resumeScheduled
-            )
-            .filter { restricted, _, _, _ in !restricted }
-            .sink { [weak self, weak session] _, state, limited, resumeScheduled in
+            .combineLatest(session.transcript.$streamingState, stop)
+            .filter { restricted, _, _ in !restricted }
+            .sink { [weak self, weak session] _, state, stop in
                 guard let self, let session else { return }
-                self.apply(state: state, limited: limited, resumeScheduled: resumeScheduled,
-                           session: session, isSnapshot: isSnapshot)
+                self.apply(state: state, stop: stop, session: session, isSnapshot: isSnapshot)
                 isSnapshot = false
             }
     }
@@ -96,17 +94,32 @@ final class ACPHarnessBridge {
         observedSessionsByManager[worktreeId] = current
     }
 
-    private func apply(
-        state: ACPSession.StreamingState, limited: Bool, resumeScheduled: Bool, session: ACPSession, isSnapshot: Bool) {
+    /// Why an idle session stopped, when it is not a normal finish.
+    private struct IdleStop: Equatable {
+        let limited: Bool
+        let resumeScheduled: Bool
+        let failure: String?
+    }
+
+    private func apply(state: ACPSession.StreamingState, stop: IdleStop, session: ACPSession, isSnapshot: Bool) {
         let agent = Self.agentKind(for: session.agentId)
         let previousState = harness.activityBySession[session.id]?.state
         switch state {
         case .idle:
-            if limited {
+            if stop.limited {
                 // A limit is not a finish: no completion history, keep a badge.
                 harness.setExternalActivity(
                     sessionId: session.id, owner: session.owner, agent: agent, state: .limited,
-                    isSnapshot: isSnapshot, requiresUserInput: !resumeScheduled
+                    isSnapshot: isSnapshot, requiresUserInput: !stop.resumeScheduled
+                )
+                return
+            }
+            if let failure = stop.failure {
+                // A failed turn is not a finish either: keep the badge until
+                // the next turn replaces it.
+                harness.setExternalActivity(
+                    sessionId: session.id, owner: session.owner, agent: agent, state: .failed,
+                    body: failure, isSnapshot: isSnapshot
                 )
                 return
             }
@@ -136,7 +149,7 @@ final class ACPHarnessBridge {
         isSnapshot: Bool
     ) {
         guard !isSnapshot,
-              previousState == .awaitingInput || previousState == .permissionRequest
+              previousState == .awaitingInput || previousState == .permissionRequest || previousState == .failed
         else { return }
         acknowledgeSessionInteraction(session.owner, session.id)
     }

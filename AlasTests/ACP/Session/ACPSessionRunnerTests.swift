@@ -22,6 +22,7 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == false)
         #expect(runner.session.lastError?.contains("prompt failed") == true)
+        #expect(runner.session.turnFailure != nil)
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(completions.count == 1)
@@ -73,6 +74,7 @@ struct ACPSessionRunnerTests {
             "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
         ])])])
         runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+        runner.session.turnFailure = "previous turn failed"
 
         let succeeded = await withCheckedContinuation { continuation in
             runner.send(text: "hello", attachments: []) { succeeded in
@@ -81,6 +83,7 @@ struct ACPSessionRunnerTests {
         }
 
         #expect(succeeded == true)
+        #expect(runner.session.turnFailure == nil)
         #expect(runner.session.lastError == nil)
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)

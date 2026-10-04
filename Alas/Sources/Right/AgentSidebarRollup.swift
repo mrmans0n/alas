@@ -360,7 +360,7 @@ struct AgentSidebarRollupBuilder {
             return .awaitingInput
         case .permissionRequest:
             return .permissionRequest
-        case .idle, .limited:
+        case .idle, .limited, .failed:
             return .idle
         }
     }
