@@ -2564,7 +2564,8 @@ final class ACPSession: ObservableObject, Identifiable {
         let protectedPrefixCount = (queue.first?.status == .sending) ? 1 : 0
         for bypassedIndex in protectedPrefixCount ..< idx {
             if queue[bypassedIndex].status == .pending,
-               queue[bypassedIndex].lastError != nil {
+               queue[bypassedIndex].lastError != nil,
+               queue[bypassedIndex].backgroundTaskWake == nil {
                 queue[bypassedIndex].transcriptRecorded = false
             }
         }

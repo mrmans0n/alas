@@ -241,6 +241,13 @@ Local validation passed:
   and consumed wakes being recreated after a limit. They now cover late
   reobservation, completed replay, successful continuation, and SQLite failure
   retaining the notification and resume state.
+- Queue bypass and interrupted-wake recovery passed **271 tests in four suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionQueueAPITests`,
+  `ACPSessionRunnerTests`, and `ACPSessionPersistenceTests`. The regressions
+  first reproduced hidden payloads becoming recordable after bypass and
+  interrupted wakes disappearing during fallback steering. They cover direct
+  fallback and rejected native steering, successful atomic confirmation, and
+  SQLite failure retaining the wake for explicit retry.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

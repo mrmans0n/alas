@@ -1502,6 +1502,66 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.count == requestsBeforeReplay)
     }
 
+    @Test("fallback steering confirms an interrupted background wake or retains its failed confirmation", arguments: [(false, false), (true, false), (false, true), (true, true)])
+    func fallbackSteeringRetainsInterruptedBackgroundWake(committed: Bool, nativeUnsupported: Bool) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        session.supportsSteering = nativeUnsupported
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed", summary: "Result"), ownerSessionId: "s")
+        let probe = StrictSingleFlightPromptProbe()
+        mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in await probe.releaseFirst() }
+        mock.script(method: "_session/steering") { _ in
+            throw ACPClientError.jsonrpc(.init(code: -32601, message: "Method not found", data: nil))
+        }
+        runner.start()
+        defer {
+            runner.stop()
+            Task { await probe.releaseFirst() }
+        }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        let wakeID = try #require(session.queue.first?.id)
+        if !committed { try rejectWakeDeliveryWrites(in: store) }
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await probe.waitUntilFirstStarted()
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("Selected prompt")])
+        let selectedID = try #require(session.queue.last?.id)
+        runner.persistQueue()
+        await runner.flushPersistence()
+        runner.forceSendQueuedItem(id: selectedID)
+        try await waitUntil {
+            mock.sent.filter { $0.method == "session/prompt" }.count == 2
+                && session.transcript.streamingState == .idle
+        }
+        await runner.flushPersistence()
+        #expect(mock.sent.filter { $0.method == "_session/steering" }.count == (nativeUnsupported ? 1 : 0))
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        let row = try #require(store.loadMessages(sessionId: "s").first)
+        let task = try #require(ACPBackgroundTask(toolCall: JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload)))
+        #expect(task.wakeDelivered == committed)
+        if committed {
+            #expect(session.queue.isEmpty)
+        } else {
+            let held = try #require(session.queue.first)
+            #expect(session.queue.count == 1 && held.id == wakeID)
+            #expect(held.status == .pending && held.lastError != nil && held.deliveryUncertain)
+        }
+        #expect(session.transcript.messages.compactMap { message -> String? in
+            if case .user(_, _, let text, _, _) = message { return text }
+            return nil
+        } == ["Selected prompt"])
+        let beforeReplay = session.queue
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        #expect(session.queue == beforeReplay)
+        #expect(await probe.callCount == 2)
+    }
+
     @Test("a failed delivery transaction retains a visible background wake without automatic replay", arguments: ["completed", "cancelled", "cancelDuringConfirmation"])
     func backgroundDeliveryPersistenceFailure(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")

@@ -218,21 +218,20 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].lastError == "network")
     }
 
-    @Test("forceQueueItem resets recorded failed prompts it bypasses")
-    func forceQueueItemResetsBypassedRecordedFailures() {
+    @Test("forceQueueItem resets bypassed failed user prompts while preserving hidden wakes", arguments: [false, true])
+    func forceQueueItemResetsBypassedRecordedFailures(backgroundWake: Bool) {
         let s = mkSession()
-        s.enqueue(blocks: [.text("failed")])
+        s.queue.append(.init(blocks: [.text("failed")], lastError: "network",
+                             backgroundTaskWake: backgroundWake ? "task" : nil, transcriptRecorded: true))
         s.enqueue(blocks: [.text("clean")])
         s.enqueue(blocks: [.text("forced")])
-        s.queue[0].lastError = "network"
-        s.queue[0].transcriptRecorded = true
         s.queue[1].transcriptRecorded = true
         let id = s.queue[2].id
 
         #expect(s.forceQueueItem(id: id))
         #expect(s.queue.map { $0.blocks } == [[.text("forced")], [.text("failed")], [.text("clean")]])
         #expect(s.queue[1].lastError == "network")
-        #expect(s.queue[1].transcriptRecorded == false)
+        #expect(s.queue[1].transcriptRecorded == backgroundWake)
         #expect(s.queue[2].transcriptRecorded == true)
     }
 

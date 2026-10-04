@@ -3204,8 +3204,9 @@ extension ACPSessionRunner {
     }
 
     /// Inject into the running turn where supported, otherwise interrupt and
-    /// send a fresh turn. Only the fallback removes the cancelled queue head;
-    /// every other pending item keeps its position.
+    /// send a fresh turn. The fallback removes an ordinary cancelled queue
+    /// head; a background wake stays until cancellation is durably confirmed.
+    /// Every other pending item keeps its position.
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
@@ -3228,7 +3229,10 @@ extension ACPSessionRunner {
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        session.queue.removeAll { $0.status == .sending }
+        let interruptedBackgroundWake = session.queue.first.map {
+            $0.status == .sending && $0.backgroundTaskWake != nil
+        } ?? false
+        session.queue.removeAll { $0.status == .sending && $0.backgroundTaskWake == nil }
         persistQueue()
         let interruptedPromptTask = activePromptID == nil ? nil : latestPromptTask
         // Invalidate the in-flight prompt NOW (before awaiting userCancel)
@@ -3270,6 +3274,9 @@ extension ACPSessionRunner {
             // settles. Keep cleanup observers informed before waiting on it.
             self.onPromptWorkChanged?()
             await interruptedPromptTask?.value
+            if interruptedBackgroundWake {
+                await self.flushPersistence()
+            }
             await MainActor.run {
                 // Detach and restart both invalidate this runner, but a
                 // replacement may already have put the shared session back
