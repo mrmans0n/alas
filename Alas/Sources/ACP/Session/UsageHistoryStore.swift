@@ -296,6 +296,23 @@ extension UsageLimitEpisode {
     }
 }
 
+/// Runs work for the same key one after another, in the order it was enqueued; different keys run concurrently.
+@MainActor
+final class KeyedSerialQueue {
+    private var tails: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+
+    func enqueue(_ key: String, _ work: @escaping @MainActor () async -> Void) {
+        let previous = tails[key]?.task
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            await work()
+            if self?.tails[key]?.id == id { self?.tails[key] = nil }
+        }
+        tails[key] = (id, task)
+    }
+}
+
 extension AppState {
     /// Records a finished turn of a session of `owner`, and the usage limit that stopped it, then tells plugins.
     func recordTurnUsage(_ completion: ACPTurnCompletion, owner: SessionOwnerID) {
@@ -308,8 +325,9 @@ extension AppState {
         let episode = completion.result == .limited ? session.usageLimit.map {
             UsageLimitEpisode($0, session: completion.sessionId, project: project, worktree: worktree, agent: session.agentId)
         } : nil
-        // Everything but the cost is captured now, so the row is written even if the session goes away meanwhile.
-        Task { [weak self] in
+        // Everything but the cost is captured now, so the row is written even if the session goes away meanwhile. In
+        // completion order per session, since each turn's cost is measured from the previous row's.
+        usageRecording.enqueue(completion.sessionId) { [weak self] in
             let input = UsageTurnInput(
                 completion: completion, agent: agent, model: model, cumulativeCost: await completion.cost?.resolve(),
                 project: project, worktree: worktree, endedAt: endedAt)

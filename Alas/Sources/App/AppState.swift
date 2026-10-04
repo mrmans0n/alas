@@ -274,6 +274,8 @@ final class AppState {
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
     /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
     @ObservationIgnored let usageHistory: UsageHistoryStore?
+    /// Records each session's turns in completion order.
+    @ObservationIgnored let usageRecording = KeyedSerialQueue()
     var runHistoryRevision = 0
     var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
     var runHistoryError: String?

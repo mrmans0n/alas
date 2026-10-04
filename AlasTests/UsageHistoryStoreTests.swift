@@ -116,6 +116,33 @@ struct UsageHistoryStoreTests {
         #expect(input.model == "default")
     }
 
+    /// A session's turns are recorded in completion order even when an earlier one waits longer, so each turn's cost
+    /// is measured from the one before it; other sessions do not wait.
+    @MainActor
+    @Test func recordingKeepsEachSessionsCompletionOrder() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try UsageHistoryStore(path: path)
+        let queue = KeyedSerialQueue()
+        let held = AsyncStream<Void>.makeStream()
+        var recorded: [String] = []
+        for (session, amount, waits) in [("s1", 0.10, false), ("s1", 0.25, true), ("s1", 0.40, false), ("s2", 1.0, false)] {
+            queue.enqueue(session) {
+                if waits { for await _ in held.stream { break } }
+                _ = try? await store.record(turn(session: session, cost: (amount, "USD")))
+                recorded.append(session)
+            }
+        }
+        // The other session and the first turn are written while the second is still waiting.
+        #expect(await awaitCondition { recorded.sorted() == ["s1", "s2"] })
+        held.continuation.yield()
+        #expect(await awaitCondition { recorded.count == 4 })
+        let costs = try await store.turns(project: nil, since: 0, until: nil, limit: 10).turns
+            .filter { $0.session == "s1" }.map { $0.cost.map { ($0.amount * 100).rounded() } }
+        // Newest first: 0.40 then 0.25 each grew 15 cents from the turn before; the first only sets the baseline.
+        #expect(costs == [15, 15, nil])
+    }
+
     /// A repeated hit of the same episode updates its reset rather than adding a row.
     @Test func aUsageLimitEpisodeIsRecordedOnce() async throws {
         let path = temporaryPath()
