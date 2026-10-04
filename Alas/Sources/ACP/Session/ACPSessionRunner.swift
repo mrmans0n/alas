@@ -3187,6 +3187,7 @@ extension ACPSessionRunner {
                 if let recoveryQueueItemID {
                     guard let index = self.session.queue.firstIndex(where: { $0.id == recoveryQueueItemID }) else {
                         self.steerInProgress = false
+                        onDispatchRegistered?()
                         onPromptFinished?(false)
                         return
                     }
@@ -3197,12 +3198,14 @@ extension ACPSessionRunner {
                     self.session.queue.insert(head, at: 0)
                     guard let brokerOperationKey = self.session.markQueueHeadSending() else {
                         self.steerInProgress = false
+                        onDispatchRegistered?()
                         onPromptFinished?(false)
                         return
                     }
                     self.sendQueuedHead(head, brokerOperationKey: brokerOperationKey,
                                         onPromptFinished: onPromptFinished,
                                         onDispatchSettled: { [weak self] in
+                                            onDispatchRegistered?()
                                             guard let self else { return }
                                             self.steerInProgress = false
                                             if let id = self.pendingForceSendQueuedItemID {
@@ -3471,8 +3474,7 @@ extension ACPSessionRunner {
                 else { throw CancellationError() }
                 let result = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks,
-                    brokerOperationKey: durableQueueItem.item.steeringBrokerOperationKey,
-                    onRequestHandoff: { dispatchHandoff?.fire() })
+                    brokerOperationKey: durableQueueItem.item.steeringBrokerOperationKey)
                 steeringAcknowledgement = result.acknowledgement
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
@@ -3481,10 +3483,12 @@ extension ACPSessionRunner {
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
                 switch try result.outcome.get() {
                 case .injected:
+                    dispatchHandoff?.fire()
                     self.session.lastError = nil
                     finishPrompt(true)
                     self.finishNativeSteering(generation: generation)
                 case .startedNewTurn:
+                    dispatchHandoff?.fire()
                     guard self.session.supportsCodexSteeringCompletion || self.lastSteeringThreadStatus != nil else {
                         let message = "The agent started a follow-up without a supported completion signal. Stop or restart before continuing."
                         self.session.supportsSteering = false
@@ -3532,13 +3536,15 @@ extension ACPSessionRunner {
                     self.sendQueuedHead(
                         continuationItem, brokerOperationKey: brokerOperationKey,
                         onPromptFinished: finishPrompt,
-                        onDispatchSettled: { [weak self] in self?.finishNativeSteering(generation: generation) })
+                        onDispatchSettled: { [weak self] in
+                            dispatchHandoff?.fire()
+                            self?.finishNativeSteering(generation: generation)
+                        })
                 case .failed:
                     throw ACPClientError.jsonrpc(.init(
                         code: -32000, message: "The agent could not inject the follow-up.", data: nil))
                 }
             } catch {
-                dispatchHandoff?.fire()
                 if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation {
                     if case ACPClientError.jsonrpc(let rpcError) = error, rpcError.code == -32601 {
                         // Method-not-found proves the content was not consumed.
@@ -3556,9 +3562,11 @@ extension ACPSessionRunner {
                             blocks: blocks, delegatedSource: delegatedSource,
                             recordUserPrompt: recordedMessageID == nil && recordUserPrompt,
                             normalUserTurn: normalUserTurn, recordedUserMessageID: recordedMessageID,
-                            draft: draft, recoveryQueueItemID: durableQueueItem.item.id, onPromptFinished: finishPrompt)
+                            draft: draft, recoveryQueueItemID: durableQueueItem.item.id,
+                            onDispatchRegistered: { dispatchHandoff?.fire() }, onPromptFinished: finishPrompt)
                         return
                     }
+                    dispatchHandoff?.fire()
                     if !(error is CancellationError) {
                         self.session.lastError = "Follow-up failed: \(error.localizedDescription)"
                     }
@@ -3570,6 +3578,7 @@ extension ACPSessionRunner {
                 }
                 // An ambiguous failure may have consumed the content. Restore
                 // the caller's draft without blindly sending it again.
+                dispatchHandoff?.fire()
                 finishPrompt(false)
             }
         }

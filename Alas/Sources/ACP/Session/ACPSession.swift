@@ -651,6 +651,39 @@ final class ACPSession: ObservableObject, Identifiable {
             return false
         }
         let start = (previousUser ?? -1) + 1
+        if followingUserCount > 0 {
+            // Consecutive follow-ups may arrive before the previous segment
+            // emits any text. Carry its unresolved binding across the next
+            // user boundary instead of leaving it scoped to the prior row.
+            for index in 0..<start {
+                let text: StreamingText
+                let kind: ACPTranscript.TextMessageKind
+                switch transcript.messages[index] {
+                case .agent(_, _, let value): text = value
+                kind = .agent
+                case .thought(_, _, let value): text = value
+                kind = .thought
+                default: continue
+                }
+                guard let metadata = text.metadata?.value as? [String: AnyCodable],
+                      let next = metadata[Self.steeringContinuationMetadataKey]?.value as? String,
+                      next.hasPrefix("alas-steering:"),
+                      UUID(uuidString: String(next.dropFirst("alas-steering:".count))) != nil,
+                      transcript.messageIndex(messageId: next, kind: kind) == nil
+                else { continue }
+                let users = transcript.messages[(index + 1)..<end].filter {
+                    if case .user = $0 { return true }
+                    return false
+                }.count
+                guard users == (metadata[Self.steeringFollowingUsersMetadataKey]?.value as? Int ?? 1) else { continue }
+                beforeRebinding?(text)
+                text.adopt(phase: nil, metadata: AnyCodable([
+                    Self.steeringFollowingUsersMetadataKey: AnyCodable(users + followingUserCount),
+                ]))
+                transcript.noteStreamingChange(at: index)
+                dirty.insert(index)
+            }
+        }
         for index in start..<end {
             switch transcript.messages[index] {
             case .agent(_, .some, let text), .thought(_, .some, let text):

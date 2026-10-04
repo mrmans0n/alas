@@ -1075,6 +1075,58 @@ struct ACPSessionRunnerQueueTests {
         #expect(saved.metadata != nil)
     }
 
+    @Test("native steering keeps selection ordering through the consuming handoff", arguments: ["injected", "promptRequired", "methodNotFound"])
+    func steeringRegistrationFollowsConsumingHandoff(outcome: String) async throws {
+        let requested = QueueTestGate()
+        let releaseResponse = QueueTestGate()
+        let preparing = QueueTestGate()
+        let releasePreparation = QueueTestGate()
+        let prompted = QueueTestGate()
+        let finishPrompt = QueueTestGate()
+        var contextCalls = 0
+        let (runner, mock, session, _) = try mkRunner(pluginContext: { _ in
+            contextCalls += 1
+            if contextCalls == 2 {
+                await preparing.open()
+                await releasePreparation.wait()
+            }
+            return []
+        })
+        defer { runner.stop()
+        Task { await releaseResponse.open()
+        await releasePreparation.open()
+        await finishPrompt.open() } }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.scriptAsync(method: "_session/steering") { _ in
+            await requested.open()
+            await releaseResponse.wait()
+            if outcome == "methodNotFound" {
+                throw ACPClientError.jsonrpc(.init(code: -32601, message: "unsupported", data: nil))
+            }
+            return Data("{\"outcome\":\"\(outcome)\"}".utf8)
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await prompted.open()
+            await finishPrompt.wait()
+            return Data("{}".utf8)
+        }
+        let registration = DispatchRegistrationFlag()
+        runner.sendRegistered(text: "redirect", attachments: [], intent: .steer,
+                              onDispatchRegistered: { registration.markRegistered() })
+        await requested.wait()
+        #expect(!registration.isRegistered)
+        await releaseResponse.open()
+        if outcome != "injected" {
+            await preparing.wait()
+            #expect(!registration.isRegistered)
+            await releasePreparation.open()
+            await prompted.wait()
+        }
+        try await waitUntil { registration.isRegistered }
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == (outcome == "injected" ? 0 : 1))
+    }
+
     @Test("a second steer stays queued until the owned continuation reaches handoff")
     func secondSteerWaitsForContinuationHandoff() async throws {
         var steeringReturned = false

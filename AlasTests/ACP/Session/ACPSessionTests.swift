@@ -508,6 +508,33 @@ struct ACPSessionTests {
         #expect(Set(restored.transcript.messages.map(\.stableId)).count == 5)
     }
 
+    @Test("consecutive steers preserve an unresolved text binding after rehydration", arguments: [false, true])
+    func consecutiveSteersPreserveUnresolvedBinding(thought: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdate {
+            let value = ACPTextChunk(messageId: "shared", content: .text(text))
+            return thought ? .agentThoughtChunk(value) : .agentMessageChunk(value)
+        }
+        session.apply(chunk("before"))
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "first redirect", attachments: [])
+        _ = session.beginSteeringOutputBoundary()
+        session.recordUserPrompt(text: "second redirect", attachments: [])
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        restored.transcript.messages = try session.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.transcript.streamingState = .streaming
+        restored.allowsStreamingBoundaryCrossing = false
+        restored.apply(chunk("after"))
+        #expect(restored.transcript.messages.map(\.kind) == [thought ? "thought" : "agent", "user", "user", thought ? "thought" : "agent"])
+        switch restored.transcript.messages.last {
+        case .agent(_, _, let output), .thought(_, _, let output):
+            #expect(output.value == "after")
+        default: Issue.record("Missing continuation")
+        }
+    }
+
     @Test("a later normal turn cannot reactivate a completed steering binding", arguments: [false, true])
     func normalTurnDoesNotReactivateSteeringBinding(continuationRecorded: Bool) async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

@@ -2436,7 +2436,7 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
     }
 
-    @Test("a later model pick waits for prompt RPC handoff", arguments: [false, true])
+    @Test("a later model pick waits for prompt handoff or confirmed native consumption", arguments: [false, true])
     func laterModelPickWaitsForPromptRPCHandoff(nativeSteering: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
@@ -2521,6 +2521,13 @@ struct ACPSessionManagerAttachRestoreTests {
         await checkpointGate.release()
         try await waitUntil {
             client.sent.dropFirst(initialRequestCount).contains { $0.method == followupMethod }
+        }
+        if nativeSteering {
+            try await waitUntilAsync { await promptGate.hasEntered }
+            #expect(client.sent.dropFirst(initialRequestCount).compactMap {
+                ($0.params as? ACPSessionSetModelParams)?.modelId
+            } == ["haiku"])
+            await promptGate.release()
         }
         try await waitUntil {
             client.sent.dropFirst(initialRequestCount).contains {
