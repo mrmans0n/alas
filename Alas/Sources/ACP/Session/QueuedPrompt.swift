@@ -159,6 +159,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):session/prompt"
     }
 
+    var steeringBrokerOperationKey: String {
+        "queued-prompt:\(id.uuidString):\(brokerOperationAttempt):_session/steering"
+    }
+
     mutating func advanceBrokerOperationAttempt() {
         brokerOperationAttempt += 1
     }

@@ -1620,6 +1620,47 @@ struct ACPBrokerClientTests {
     // ack happens when send() throws this way, and that a subsequent
     // successful retry for the same key still acks correctly once the
     // caller actually consumes it.
+    @Test func steeringRecoversDurableCompletionWithItsSavedOperationKey() async throws {
+        let service = MockBrokerService()
+        let item = QueuedPrompt(blocks: [.text("redirect")])
+        let operationKey = "queued-prompt:\(item.id.uuidString):0:_session/steering"
+        let outcome = ACPBrokerRPCOutcome(result: .object(["outcome": .string("injected")]), error: nil)
+        await service.enqueueAttach(events: [.init(cursor: ACPBrokerEventCursor(rawValue: 2),
+                                                  kind: .operationCompleted(operationKey: .init(rawValue: operationKey), outcome: outcome))])
+        await service.enqueueSendResult(.init(requestId: .init(rawValue: 9), replayed: true,
+                                              result: outcome.result, pending: false))
+        await service.enqueueAttach(events: [], shouldThrow: true)
+        await service.enqueueSendResult(.init(requestId: .init(rawValue: 9), replayed: true,
+                                              result: outcome.result, pending: false))
+        await service.enqueueAttach(events: [], turnState: .streaming)
+        let client = makeClient(service: service)
+        client.preRegisterAwaitedOperationKeys([operationKey])
+        try await client.start()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("steering-replay-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t", currentModel: nil,
+                                     currentMode: nil, autoRun: false, createdAt: 0, updatedAt: 0,
+                                     lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.agentState = .ready
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.queue = [item]
+        try store.upsertQueue(sessionId: "s", items: [item])
+        let runner = ACPSessionRunner(session: session, connection: ACPConnection(client: client),
+                                      store: store, sessionId: "s", worktreePath: "/tmp")
+        defer { runner.stop()
+        Task { await client.shutdown() } }
+        runner.forceSendQueuedItem(id: item.id)
+        try await waitUntil { session.queue.isEmpty || session.lastError != nil }
+        await runner.flushPersistence()
+        try await waitUntil { await service.acks.contains { $0.cursor == ACPBrokerEventCursor(rawValue: 2) } || session.lastError != nil }
+        #expect(await service.sent.map(\.operationKey.rawValue) == [operationKey, operationKey])
+        #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
+        #expect(try store.loadQueue(sessionId: "s").isEmpty)
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+    }
+
     @Test func sendDoesNotAckCompletionWhenFollowUpAttachFails() async throws {
         let service = MockBrokerService()
         let operationKey = "queued-prompt:test:0:session/prompt"

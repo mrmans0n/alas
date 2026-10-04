@@ -3449,6 +3449,7 @@ extension ACPSessionRunner {
                 else { throw CancellationError() }
                 let result = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks,
+                    brokerOperationKey: durableQueueItem.item.steeringBrokerOperationKey,
                     onRequestHandoff: { dispatchHandoff?.fire() })
                 steeringAcknowledgement = result.acknowledgement
                 guard await self.hasConfirmedLeaseForSideEffect(),

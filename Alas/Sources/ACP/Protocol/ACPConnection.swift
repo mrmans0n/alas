@@ -415,19 +415,30 @@ final class ACPConnection: @unchecked Sendable {
 
     func steer(
         sessionId: String, blocks: [ACPContentBlock],
+        brokerOperationKey: String? = nil,
         onRequestHandoff: (@Sendable () -> Void)? = nil
     ) async throws -> ACPSteeringResult {
         let request = ACPRequest(
             method: "_session/steering",
-            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks)
+            params: ACPSteeringParams(sessionId: sessionId, prompt: blocks),
+            brokerOperationKey: brokerOperationKey
         )
         let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
         let response: ACPResponse
-        do {
+        func dispatch() async throws -> ACPResponse {
             if let handoff {
-                response = try await client.send(request, onRequestHandoff: { handoff.fire() })
-            } else {
-                response = try await client.send(request)
+                return try await client.send(request, onRequestHandoff: { handoff.fire() })
+            }
+            return try await client.send(request)
+        }
+        do {
+            do {
+                response = try await dispatch()
+            } catch {
+                // The broker already completed this exact operation. Reusing
+                // its saved key recovers the outcome without another delivery.
+                guard brokerOperationKey != nil, error is ACPBrokerDurableCompletionReplayError else { throw error }
+                response = try await dispatch()
             }
         } catch {
             handoff?.fire()
