@@ -343,8 +343,8 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// When false, `appendStreaming` discards chunks that would cross a
     /// completed-output boundary (i.e. create a duplicate agent message bubble).
-    /// The runner sets this false when load replay ends for an idle turn and
-    /// true for a live or newly started turn, preventing late replay frames from creating
+    /// The runner sets this false when load-replay suppression ends and true
+    /// when the next prompt starts, preventing late replay frames from creating
     /// duplicate bubbles while still letting fresh in-progress continuation
     /// chunks through (those target non-completed messages, so the boundary
     /// check is never reached).
@@ -668,7 +668,11 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     private func steeringMessageId(_ messageId: String?, kind: ACPTranscript.TextMessageKind) -> String? {
-        guard allowsStreamingBoundaryCrossing, var resolved = messageId else { return messageId }
+        // Reattached turns have no local prompt task. Their saved steering
+        // binding identifies live continuation chunks without opening replay
+        // boundaries for unrelated message IDs.
+        guard allowsStreamingBoundaryCrossing || transcript.streamingState == .streaming,
+              var resolved = messageId else { return messageId }
         var visited: Set<String> = []
         while visited.insert(resolved).inserted,
               let index = transcript.messageIndex(messageId: resolved, kind: kind) {
@@ -785,6 +789,7 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let i = appendStreaming(
                 text: txt,
                 messageId: messageId,
+                allowsStreamingBoundaryCrossing: allowsStreamingBoundaryCrossing || messageId != chunk.messageId,
                 replayKind: .agent,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
@@ -824,6 +829,7 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let i = appendStreaming(
                 text: txt,
                 messageId: messageId,
+                allowsStreamingBoundaryCrossing: allowsStreamingBoundaryCrossing || messageId != chunk.messageId,
                 replayKind: .thought,
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
@@ -3739,6 +3745,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                  messageId: String?,
+                                 allowsStreamingBoundaryCrossing: Bool,
                                  replayKind: TextMessageKind,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,

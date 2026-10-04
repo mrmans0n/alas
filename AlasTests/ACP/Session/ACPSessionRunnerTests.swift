@@ -1365,16 +1365,16 @@ struct ACPSessionRunnerTests {
         try await waitUntil { session.retryStatus == nil }
     }
 
-    @Test("replay completion restores steering bindings only for a streaming turn", arguments: [false, true])
-    func replayCompletionRestoresLiveSteeringBinding(streaming: Bool) async throws {
+    @Test("replay completion restores only live steering bindings", arguments: [(true, true), (true, false), (false, true)])
+    func replayCompletionRestoresLiveSteeringBinding(steered: Bool, streaming: Bool) async throws {
         let original = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         func chunk(_ text: String) -> ACPSessionUpdateParams {
             .init(sessionId: "s", update: .agentMessageChunk(.init(messageId: "shared", content: .text(text))))
         }
         original.apply(chunk("before").update)
-        _ = original.beginSteeringOutputBoundary()
+        if steered { _ = original.beginSteeringOutputBoundary() }
         original.recordUserPrompt(text: "redirect", attachments: [])
-        original.apply(chunk("after").update)
+        original.apply(.agentMessageChunk(.init(messageId: steered ? "shared" : "new", content: .text("after"))))
 
         let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         restored.transcript.messages = try original.transcript.messages.map {
@@ -1394,7 +1394,12 @@ struct ACPSessionRunnerTests {
             Issue.record("Missing steering continuation")
             return
         }
-        #expect(text.value == (streaming ? "after continued" : "after"))
+        #expect(text.value == (streaming && steered ? "after continued" : "after"))
+        guard case .agent(_, _, let predecessor) = restored.transcript.messages.first else {
+            Issue.record("Missing predecessor")
+            return
+        }
+        #expect(predecessor.value == "before")
     }
 
     @Test("delayed load replay finish keeps active prompt boundary crossing")
