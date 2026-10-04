@@ -2722,17 +2722,30 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.isEmpty)
     }
 
-    @Test("userCancel() drains queue after canceling the running turn")
-    func cancelThenFlushDrainsQueue() async throws {
+    @Test("foreground cancellation drains the queue while preserving background work", arguments: [false, true])
+    func cancelThenFlushDrainsQueue(withBackgroundWork: Bool) async throws {
         let (runner, mock, session, _) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        if withBackgroundWork {
+            session.backgroundTaskStopSupported = true
+            session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "watch",
+                name: "Watch", canStop: true), ownerSessionId: "s")
+            session.apply(.subagentSpawned(.init(subagentSessionId: "child", capabilities: .cancellable)))
+            mock.script(method: "_session/async_task/stop") { _ in Data(#"{"stopped":true}"#.utf8) }
+        }
         session.transcript.streamingState = .streaming
         session.enqueue(blocks: [.text("queued-after-esc")])
         await runner.userCancel()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitUntil { session.queue.isEmpty }
         #expect(session.queue.isEmpty)
-        #expect(mock.sent.contains { $0.method == "session/cancel" })
+        #expect(mock.sent.filter { $0.method == "session/cancel" }
+            .compactMap { ($0.params as? ACPSessionCancelParams)?.sessionId } == ["s"])
+        #expect(!mock.sent.contains { $0.method == "_session/async_task/stop" })
         #expect(mock.sent.contains { $0.method == "session/prompt" })
+        if withBackgroundWork {
+            #expect(session.backgroundTasks[0].isActive)
+            #expect(session.subagentRun("child")?.isRunning == true)
+        }
     }
 
     @Test("a sendNow cancelled before its Task starts is a complete no-op")

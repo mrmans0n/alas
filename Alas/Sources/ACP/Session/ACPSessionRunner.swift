@@ -2266,7 +2266,8 @@ final class ACPSessionRunner {
             ? session.activeBackgroundTasks.filter(\.canStop).map(\.id) : []
         let childIds = session.orderedSubagents.filter { $0.isRunning && $0.capabilities.supportsCancel }
             .map(\.subagentSessionId)
-        let cancellingBackground = !backgroundIds.isEmpty || !childIds.isEmpty
+        let cancellingBackground = activePromptID == nil && session.transcript.streamingState == .idle
+            && session.transcript.pendingUserInputs.isEmpty && (!backgroundIds.isEmpty || !childIds.isEmpty)
         if cancellingBackground {
             guard !backgroundCancellationInProgress else { return false }
             backgroundCancellationInProgress = true
@@ -2277,8 +2278,7 @@ final class ACPSessionRunner {
                 flushQueueIfIdle()
             }
         }
-        if cancellingBackground, activePromptID == nil, session.transcript.streamingState == .idle,
-           session.transcript.pendingUserInputs.isEmpty {
+        if cancellingBackground {
             var sent = false
             for id in backgroundIds {
                 let reachedAgent = await stopBackgroundTask(id: id)
@@ -2335,9 +2335,6 @@ final class ACPSessionRunner {
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
-        guard isConnectionCurrent() else { return true }
-        for id in backgroundIds { await stopBackgroundTask(id: id) }
-        for id in childIds { await cancelSubagent(subagentSessionId: id) }
         guard isConnectionCurrent() else { return true }
         await MainActor.run {
             guard self.isConnectionCurrent() else { return }

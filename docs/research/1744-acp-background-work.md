@@ -106,6 +106,8 @@ extension remain outside reliable task tracking.
    of foreground turns and background work so a typed prompt can still Send.
    Esc and session Stop should reach supported background work after a turn
    ends. Failed or rejected Stop must leave the task running until confirmed.
+   Foreground Stop cancels only the root turn; it does not send separate Stop
+   requests to unrelated background tasks or native children.
 4. Deduplicate terminal transitions and replay. Queue a completion wake for
    Codex through the existing prompt queue, respecting permissions, input
    blockers, ownership and foreground work. For Claude, retain provider-owned
@@ -167,6 +169,11 @@ Local validation passed:
   loss test now also reannounces the task before completion; that variant
   failed before the fix because the completion notification was consumed
   under the earlier loss notification's identity.
+- Foreground cancellation scope passed **242 tests in three suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`, and
+  `ACPSubagentRoutingTests`. The existing queue-drain test now covers live
+  background tasks and native children; it failed before the fix because
+  foreground Stop also cancelled that independent work.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 
