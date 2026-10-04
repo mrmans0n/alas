@@ -24,7 +24,7 @@ usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
-usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
+usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
 usage: alas review [target] [--worktree <name-or-path>]
 usage: alas review -- <target> [--worktree <name-or-path>]  (escapes a target named like a review subcommand)
@@ -395,11 +395,12 @@ fn parse_session(args: &[&str]) -> Result<Command, String> {
 }
 
 fn parse_session_new(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
+    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
     let mut prompt = None;
     let mut agent = None;
     let mut model = None;
     let mut reasoning = None;
+    let mut role = None;
     let mut existing_worktree = None;
     let mut new_worktree = None;
     let mut base = None;
@@ -410,6 +411,7 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
             "--agent" => &mut agent,
             "--model" => &mut model,
             "--reasoning" => &mut reasoning,
+            "--role" => &mut role,
             "--worktree" => &mut existing_worktree,
             "--new-worktree" => &mut new_worktree,
             "--base" => &mut base,
@@ -445,6 +447,7 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
         worktree,
         model,
         reasoning,
+        role,
     })
 }
 
@@ -1628,6 +1631,17 @@ mod tests {
     }
 
     #[test]
+    fn child_role_is_accepted_by_the_cli() {
+        let command = parse(
+            &s(&["session", "new", "--prompt", "Review", "--role", "reviewer"]),
+            Path::new("/wt"),
+        )
+        .unwrap();
+        let request = alas_client::build_session_request(&command, "parent".into(), "/wt".into());
+        assert_eq!(request.params.unwrap()["role"], "reviewer");
+    }
+
+    #[test]
     fn session_commands_parse_and_validate() {
         assert_eq!(
             parse(&s(&["agent", "list"]), Path::new("/b")).unwrap(),
@@ -1682,6 +1696,7 @@ mod tests {
                 },
                 model: Some("gpt-5.2".into()),
                 reasoning: Some("high".into()),
+                role: None,
             }
         );
         assert_eq!(
@@ -1708,6 +1723,7 @@ mod tests {
                 },
                 model: None,
                 reasoning: None,
+                role: None,
             }
         );
         assert_eq!(
@@ -1743,6 +1759,8 @@ mod tests {
                 "origin/main",
             ]
             .as_slice(),
+            ["session", "new", "--prompt", "Task", "--role", " "].as_slice(),
+            ["session", "new", "--prompt", "Task", "--role"].as_slice(),
             ["session", "new", "--prompt", "Task", "--model"].as_slice(),
             ["session", "new", "--prompt", "Task", "--model", " "].as_slice(),
             [

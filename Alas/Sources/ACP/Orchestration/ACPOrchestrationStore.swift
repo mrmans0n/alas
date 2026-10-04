@@ -6,7 +6,7 @@ final class ACPOrchestrationStore {
         case malformedWorktreeRequest
     }
 
-    static let targetSchemaVersion = 3
+    static let targetSchemaVersion = 4
 
     let path: String
     let db: SQLiteDatabase
@@ -45,8 +45,8 @@ final class ACPOrchestrationStore {
                 child_session_id, parent_session_id, project_id, parent_worktree_id,
                 child_worktree_id, agent_id, worktree_request, pending_initial_prompt,
                 phase, failure_message, created_at, updated_at,
-                requested_model, requested_reasoning
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                requested_model, requested_reasoning, role
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, bindings: [
                 record.childSessionId,
                 record.parentSessionId,
@@ -62,6 +62,7 @@ final class ACPOrchestrationStore {
                 record.updatedAt,
                 record.modelSelection?.model,
                 record.modelSelection?.reasoning,
+                record.role,
             ])
             try db.exec("COMMIT")
         } catch {
@@ -427,6 +428,7 @@ final class ACPOrchestrationStore {
             if current < 1 { try migrateToV1() }
             if current < 2 { try migrateToV2() }
             if current < 3 { try migrateToV3() }
+            if current < 4 { try db.exec("ALTER TABLE delegations ADD COLUMN role TEXT") }
             if current == 0 {
                 try db.exec(
                     "INSERT INTO schema_version (version) VALUES (?)",
@@ -517,7 +519,8 @@ final class ACPOrchestrationStore {
             modelSelection: ACPDelegatedModelSelection(
                 model: row["requested_model"] as? String,
                 reasoning: row["requested_reasoning"] as? String
-            )
+            ),
+            role: row["role"] as? String
         )
     }
 
