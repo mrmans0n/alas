@@ -12785,22 +12785,32 @@ final class AppState {
     /// A session this instance knows, live or stored, made live with its
     /// whole transcript loaded. Nil when unknown or archived. Looked up in
     /// each worktree's store, not the recent-row snapshot: an attachment can
-    /// outlive the session's place among the recent rows.
+    /// outlive the session's place among the recent rows. A session made
+    /// live here is retained until the caller calls the location's
+    /// `release`, which evicts it again once idle and unreferenced.
     func acpReferencedSessionLocation(_ sessionId: String) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (owner, manager) in acpManagers {
             guard let worktreeId = owner.worktreeID,
                   let worktree = worktree(withId: worktreeId),
                   let row = await manager.persistedSessionRow(id: sessionId), !row.archived
             else { continue }
-            _ = manager.placeholderSession(id: sessionId)
+            var release: (() -> Void)?
+            if manager.liveSession(for: sessionId) == nil, manager.placeholderSession(id: sessionId) != nil {
+                manager.retainSession(id: sessionId)
+                release = { [weak manager] in manager?.releaseSession(id: sessionId) }
+            }
             await manager.hydrateIfNeeded(id: sessionId)
             await manager.awaitBackfill(id: sessionId)
-            guard manager.liveSession(for: sessionId) != nil else { return nil }
+            guard manager.liveSession(for: sessionId) != nil else {
+                release?()
+                return nil
+            }
             return .init(
                 origin: ACPOrchestrationSessionOrigin(
                     sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id
                 ),
-                manager: manager
+                manager: manager,
+                release: release
             )
         }
         return nil
@@ -12809,8 +12819,9 @@ final class AppState {
     /// What a prompt in `projectId` carries in place of an attached session.
     /// Sessions of other projects are not resolved.
     func acpSessionReferenceContext(_ sessionId: String, projectId: String) async -> String? {
-        guard let location = await acpReferencedSessionLocation(sessionId),
-              location.origin.projectId == projectId,
+        guard let location = await acpReferencedSessionLocation(sessionId) else { return nil }
+        defer { location.release?() }
+        guard location.origin.projectId == projectId,
               let session = location.manager.liveSession(for: sessionId),
               let worktree = worktree(withId: location.origin.worktreeId)
         else { return nil }

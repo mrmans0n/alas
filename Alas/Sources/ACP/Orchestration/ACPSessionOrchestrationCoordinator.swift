@@ -9,6 +9,15 @@ final class ACPSessionOrchestrationCoordinator {
     struct SessionLocation {
         let origin: ACPOrchestrationSessionOrigin
         let manager: ACPSessionManager
+        /// Lets go of a session the lookup made live just to read it; call
+        /// once done reading. Nil when the session was already live.
+        var release: (() -> Void)? = nil
+    }
+
+    /// A session to read, and what to call once done reading it.
+    private struct ReadableSession {
+        let session: ACPSession
+        let release: () -> Void
     }
 
     struct Environment {
@@ -541,11 +550,13 @@ final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
     ) async -> AlasCLIResponse {
-        let session: ACPSession
+        let readable: ReadableSession
         switch await readableSession(origin: origin, targetSessionId: request.targetSessionId) {
-        case .success(let readable): session = readable
+        case .success(let found): readable = found
         case .failure(let error): return .error(error.message)
         }
+        defer { readable.release() }
+        let session = readable.session
         let page = ACPSessionTranscriptReader.page(
             ACPSessionTranscriptReader.entries(session.transcript.messages),
             offset: request.offset,
@@ -584,10 +595,11 @@ final class ACPSessionOrchestrationCoordinator {
         var matches: [ACPOrchestrationSearchResponse.Match] = []
         var truncated = false
         search: for target in targets {
-            guard case .success(let session) = await readableSession(
+            guard case .success(let readable) = await readableSession(
                 origin: origin, targetSessionId: target.sessionId
             ) else { continue }
-            let entries = ACPSessionTranscriptReader.entries(session.transcript.messages)
+            let entries = ACPSessionTranscriptReader.entries(readable.session.transcript.messages)
+            readable.release()
             for match in ACPSessionTranscriptReader.search(entries, query: query) {
                 guard matches.count < request.limit else {
                     truncated = true
@@ -682,7 +694,7 @@ final class ACPSessionOrchestrationCoordinator {
     private func readableSession(
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
-    ) async -> Result<ACPSession, ObservationError> {
+    ) async -> Result<ReadableSession, ObservationError> {
         if let location = await userAttachedLocation(origin: origin, targetSessionId: targetSessionId) {
             return await hydratedSession(targetSessionId, at: location)
         }
@@ -730,25 +742,30 @@ final class ACPSessionOrchestrationCoordinator {
         await callerManager.awaitBackfill(id: origin.sessionId)
         guard let caller = callerManager.liveSession(for: origin.sessionId),
               ACPSessionReference.attachedSessionIds(in: caller.transcript.messages).contains(targetSessionId),
-              let location = await environment.referencedSessionLocation(targetSessionId),
-              location.origin.projectId == origin.projectId
+              let location = await environment.referencedSessionLocation(targetSessionId)
         else { return nil }
+        guard location.origin.projectId == origin.projectId else {
+            location.release?()
+            return nil
+        }
         return location
     }
 
     private func hydratedSession(
         _ targetSessionId: String,
         at location: SessionLocation
-    ) async -> Result<ACPSession, ObservationError> {
+    ) async -> Result<ReadableSession, ObservationError> {
+        let release = location.release ?? {}
         // A restored tab can still be loading its stored transcript, and
         // hydration applies only the tail before backfilling older messages,
         // which would shift every entry index between pages.
         await location.manager.hydrateIfNeeded(id: targetSessionId)
         await location.manager.awaitBackfill(id: targetSessionId)
         guard let session = location.manager.liveSession(for: targetSessionId) else {
+            release()
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
-        return .success(session)
+        return .success(ReadableSession(session: session, release: release))
     }
 
     private func waitSnapshot(sessionId: String) async -> ACPOrchestrationWaitResponse.Session {

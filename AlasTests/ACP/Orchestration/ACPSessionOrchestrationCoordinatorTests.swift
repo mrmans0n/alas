@@ -1011,7 +1011,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         blockedKeys: Set<String> = [],
         escalationSeconds: Int = 30,
         scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
-        pause: @escaping (Duration) async -> Void = { _ in }
+        pause: @escaping (Duration) async -> Void = { _ in },
+        releaseReferencedSession: (() -> Void)? = nil
     ) throws -> OutcomeFixture {
         let orchestrationPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
@@ -1050,7 +1051,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             referencedSessionLocation: { sessionId in
                 manager.liveSession(for: sessionId) != nil
-                    ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
+                    ? .init(
+                        origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"),
+                        manager: manager, release: releaseReferencedSession
+                    )
                     : nil
             },
             manager: { _ in parentReachable ? manager : nil },
@@ -1266,9 +1270,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(sibling == .error("Only a direct parent or child session's transcript can be read."))
     }
 
-    @Test("a session reads another session only once the user attaches it to one of its prompts")
+    @Test("a session reads another session only once the user attaches it to one of its prompts, then lets it go")
     func readUserAttachedSession() async throws {
-        let fixture = try makeOutcomeFixture()
+        var releases = 0
+        let fixture = try makeOutcomeFixture(releaseReferencedSession: { releases += 1 })
         let other = fixture.manager.createSession(id: "other", agentId: "codex", autoRunDefault: false)
         other.transcript.messages = [.user(id: UUID(), text: "Plan the release", attachments: [])]
         let read: () async -> AlasCLIResponse = {
@@ -1284,6 +1289,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let attached = try decoded(ACPOrchestrationReadResponse.self, await read())
 
         #expect(attached.entries.map(\.text) == ["Plan the release"])
+        #expect(releases == 1)
     }
 
     @Test("session_wait returns once a running child settles, or reports the timeout")
