@@ -2000,7 +2000,7 @@ final class ACPSessionManager: ObservableObject {
               let forkRow = try await persistence.loadSession(id: id), !forkRow.archived else {
             throw ACPSessionForkMergeError.forkUnavailable
         }
-        guard let prompt = ACPSessionForkMergeContext.prompt(fork: fork, messages: session.transcript.messages) else {
+        guard ACPSessionForkMergeContext.prompt(fork: fork, messages: session.transcript.messages) != nil else {
             throw ACPSessionForkMergeError.noConversation
         }
         let messageCount = session.transcript.messages.count
@@ -2014,6 +2014,14 @@ final class ACPSessionManager: ObservableObject {
         guard source.hydrationState == .ready, !source.readOnlyRestricted else {
             throw ACPSessionForkMergeError.sourceReadOnly
         }
+        let canExpand = effectiveRemoteHost() == nil
+            && source.builtInMCPRegistration == .registered
+            && source.mcpAttachmentSummary?.statuses.contains {
+                $0.id == BuiltInAlasMCP.statusId && $0.disposition == .requested
+            } == true
+        guard let prompt = ACPSessionForkMergeContext.prompt(
+            fork: fork, messages: session.transcript.messages, canExpand: canExpand
+        ) else { throw ACPSessionForkMergeError.sourceReadUnavailable }
         let hadLease = _ownedLeases.contains(sourceID)
         guard await acquireWriterLease(sessionId: sourceID) else {
             throw ACPSessionForkMergeError.sourceReadOnly

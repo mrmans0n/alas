@@ -13,6 +13,10 @@ struct ACPSessionForkManagerTests {
         let restored = try #require(manager.placeholderSession(id: source.id))
         await manager.hydrateIfNeeded(id: source.id)
         restored.transcript.streamingState = .streaming
+        restored.builtInMCPRegistration = .registered
+        restored.mcpAttachmentSummary = .init(statuses: [
+            .init(id: BuiltInAlasMCP.statusId, name: "alas", transport: .stdio, disposition: .requested),
+        ], configurationFingerprint: "test")
         restored.replaceComposerDraft(ACPComposerDraft(segments: [.text("Unsent draft")]))
         #expect(await manager.enqueuePrompt(id: UUID(), text: "Existing task", into: source.id))
 
@@ -25,6 +29,7 @@ struct ACPSessionForkManagerTests {
         }.joined()
         #expect(sourceID == source.id)
         #expect(text.contains("New finding"))
+        #expect(text.contains("session_read("))
         #expect(!text.contains("Inherited answer"))
         #expect(item.delegatedSource?.sessionId == fork.id)
         #expect(restored.transcript.streamingState == .streaming)
@@ -103,7 +108,7 @@ struct ACPSessionForkManagerTests {
     }
 
     @Test("rejected merges leave the fork unarchived and the source queue empty",
-          arguments: ["busy", "empty", "archived", "missing", "leased", "forkLeased", "write"])
+          arguments: ["busy", "empty", "archived", "missing", "leased", "forkLeased", "readUnavailable", "write"])
     func rejectedMergeKeepsFork(reason: String) async throws {
         let (manager, store, source, fork) = try await mergeFixture()
         let expected: ACPSessionForkMergeError
@@ -126,6 +131,9 @@ struct ACPSessionForkManagerTests {
             _ = try store.claimLease(sessionId: fork.id, instanceId: "other", pid: Int64(getpid()),
                                      now: Int64(Date().timeIntervalSince1970), staleAfter: 15)
             expected = .forkUnavailable
+        case "readUnavailable":
+            fork.transcript.appendMessage(.agent(id: UUID(), StreamingText(String(repeating: "Long finding", count: 1_000))))
+            expected = .sourceReadUnavailable
         case "write":
             try store.db.exec("""
                 CREATE TRIGGER reject_merge_queue BEFORE INSERT ON session_queue

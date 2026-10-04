@@ -30,6 +30,11 @@ struct ACPSessionForkPolicyTests {
         #expect(entries.map(\.index) == [2, 3])
         #expect(entries.map(\.text) == ["Check the retry policy", "Retry only after acknowledgement."])
         #expect(ACPSessionForkMergeContext.prompt(fork: fork, messages: Array(messages.prefix(2))) == nil)
+        let fallback = try #require(ACPSessionForkMergeContext.prompt(fork: fork, messages: messages, canExpand: false))
+        #expect(fallback.contains("complete post-fork conversation"))
+        #expect(!fallback.contains("session_read("))
+        #expect(fallback.contains("Check the retry policy"))
+        #expect(fallback.contains("Retry only after acknowledgement."))
     }
 
     @Test("merge digest budgets the full escaped prompt and preserves the latest findings",
@@ -51,6 +56,7 @@ struct ACPSessionForkPolicyTests {
         let entries = try JSONDecoder().decode([ACPSessionTranscriptReader.Entry].self, from: Data(json.utf8))
         #expect(entries.last?.index == 19)
         #expect(entries.allSatisfy { $0.truncated == true })
+        #expect(ACPSessionForkMergeContext.prompt(fork: fork, messages: messages, canExpand: false) == nil)
     }
 
     @Test("native candidate requires same agent, remote head, id, and non-negative capability knowledge")
