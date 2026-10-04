@@ -7236,7 +7236,7 @@ final class AppState {
                     self?.acpOrchestrationSessionLocation(sessionId: sessionId)
                 },
                 referencedSessionLocation: { [weak self] sessionId, projectId in
-                    await self?.acpReferencedSessionLocation(sessionId, projectId: projectId)
+                    await self?.acpReferencedSessionLocation(sessionId, projectId: projectId, loadingFullTranscript: true)
                 },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectId, branch in
@@ -12776,27 +12776,30 @@ final class AppState {
         return result
     }
 
-    /// A session of `projectId`, live or stored, made live with its whole
-    /// transcript loaded. Nil when unknown or archived. Looked up in each of
+    /// A session of `projectId`, live or stored, made live. With
+    /// `loadingFullTranscript`, its whole transcript is loaded; otherwise
+    /// only what hydration loads first, the latest messages. Nil when
+    /// unknown or archived. Looked up in each of
     /// the project's worktree stores, opened or not, rather than the
     /// recent-row snapshot: an attachment can outlive both. Every lookup
     /// retains the session until the caller calls the location's `release`,
     /// so concurrent readers share it and the last one out lets an idle,
     /// otherwise unreferenced session be evicted again.
     func acpReferencedSessionLocation(
-        _ sessionId: String, projectId: String
+        _ sessionId: String, projectId: String, loadingFullTranscript: Bool
     ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
         for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
-            // Read the store, not the cached row: another instance may have
-            // archived the session since this one cached it.
+            // Check both the store, which another instance may have archived
+            // since this one cached the row, and the cached row, which a
+            // local archive updates before its write reaches the store.
             guard let stored = try? await manager.persistence.loadSession(id: sessionId), !stored.archived,
-                  await manager.persistedSessionRow(id: sessionId) != nil,
+                  let cached = await manager.persistedSessionRow(id: sessionId), !cached.archived,
                   manager.placeholderSession(id: sessionId) != nil
             else { continue }
             manager.retainSession(id: sessionId)
             let release: () -> Void = { [weak manager] in manager?.releaseSession(id: sessionId) }
             await manager.hydrateIfNeeded(id: sessionId)
-            await manager.awaitBackfill(id: sessionId)
+            if loadingFullTranscript { await manager.awaitBackfill(id: sessionId) }
             guard manager.liveSession(for: sessionId) != nil else {
                 release()
                 return nil
@@ -12815,7 +12818,11 @@ final class AppState {
     /// What a prompt in `projectId` carries in place of an attached session.
     /// Sessions of other projects are not resolved.
     func acpSessionReferenceContext(_ sessionId: String, projectId: String) async -> String? {
-        guard let location = await acpReferencedSessionLocation(sessionId, projectId: projectId) else { return nil }
+        // The inline context keeps only the latest entries, so it skips the
+        // full-history backfill that `session_read` pages through.
+        guard let location = await acpReferencedSessionLocation(
+            sessionId, projectId: projectId, loadingFullTranscript: false
+        ) else { return nil }
         defer { location.release?() }
         guard location.origin.projectId == projectId,
               let session = location.manager.liveSession(for: sessionId),

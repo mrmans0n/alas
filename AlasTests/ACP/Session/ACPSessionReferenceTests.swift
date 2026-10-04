@@ -57,7 +57,7 @@ struct ACPSessionReferenceTests {
         #expect(context.hasSuffix("</alas-session-reference>"))
         #expect(context.contains("\"Fix parser\" (agent: Codex, worktree: feature-x)"))
         #expect(context.contains("session_read"))
-        #expect(context.contains("latest 2 of 3 entries"))
+        #expect(context.contains("latest 2 entries"))
         #expect(context.contains("[user] Latest question"))
         #expect(!context.contains("First question"))
     }

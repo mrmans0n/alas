@@ -83,6 +83,8 @@ enum ACPSessionReference {
 
     /// The text block sent in place of a session link: who the session is,
     /// how to read it in full, and its latest entries within the budget.
+    /// `entries` may be only the latest part of the transcript, so the text
+    /// never claims to show all of it.
     static func context(for target: Target, entries: [ACPSessionTranscriptReader.Entry]) -> String {
         let page = ACPSessionTranscriptReader.page(
             entries, offset: nil, limit: contextEntryLimit, maxChars: contextMaxChars
@@ -96,9 +98,7 @@ enum ACPSessionReference {
         if page.entries.isEmpty {
             lines.append("The session has no messages yet.")
         } else {
-            lines.append(page.start > 0
-                ? "Its latest \(page.entries.count) of \(page.total) entries (earlier ones omitted):"
-                : "Its transcript:")
+            lines.append("Its latest \(page.entries.count) entries (earlier ones may be omitted):")
             for entry in page.entries {
                 lines.append("")
                 lines.append("[\(entry.role)]\(entry.truncated == true ? " …" : "") \(entry.text)")
