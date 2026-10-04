@@ -13,6 +13,7 @@ struct NativePeerTranscript: Equatable {
     private var driveAllowed = false
 
     private(set) var streamingState = "idle"
+    private(set) var hasCancellableBackgroundWork = false
     private(set) var firstIndex = 0
     private(set) var totalCount = 0
     private(set) var isClosed = false
@@ -60,11 +61,12 @@ struct NativePeerTranscript: Equatable {
         guard message.sessionId == sessionId else { return false }
         switch message {
         case .transcriptSnapshot(_, let state, let drive, let rows,
-                                 let first, let total, let incomingEpoch, let incomingRevision):
+                                 let first, let total, let incomingEpoch, let incomingRevision, let backgroundWork):
             guard epoch == nil || incomingEpoch >= epoch! else { return false }
             epoch = incomingEpoch
             revision = incomingRevision
             streamingState = state
+            hasCancellableBackgroundWork = backgroundWork
             driveAllowed = drive
             firstIndex = first
             totalCount = total
@@ -73,7 +75,7 @@ struct NativePeerTranscript: Equatable {
             messagesByStableID = Dictionary(rows.map { ($0.stableId, $0) }, uniquingKeysWith: { _, newer in newer })
             return false
 
-        case .transcriptDelta(_, let state, let drive, let upserts, let incomingEpoch, let incomingRevision):
+        case .transcriptDelta(_, let state, let drive, let upserts, let incomingEpoch, let incomingRevision, let backgroundWork):
             guard !isClosed else { return false }
             guard let epoch, let revision,
                   incomingEpoch == epoch, incomingRevision == revision + 1 else {
@@ -84,6 +86,7 @@ struct NativePeerTranscript: Equatable {
             }
             self.revision = incomingRevision
             streamingState = state
+            hasCancellableBackgroundWork = backgroundWork
             driveAllowed = drive
             needsResubscribe = false
             if !upserts.isEmpty {
@@ -137,7 +140,7 @@ struct NativePeerTranscript: Equatable {
     }
 
     private mutating func rebuildMessages() {
-        messages = messagesByStableID.values.sorted {
+        messages = messagesByStableID.values.filter { $0.isHidden != true }.sorted {
             if $0.index != $1.index { return $0.index < $1.index }
             return $0.stableId < $1.stableId
         }

@@ -146,6 +146,11 @@ the same delivery transaction, including the owned continuation when an
 adapter requires a prompt. Failed wakes offer Retry and Send now. Generic
 Remove, Edit, and Clear preserve them in both native and remote queues so
 those actions cannot discard only the queue half of a pending notification.
+Remote snapshots and deltas carry cancellable background-work state for web
+and native-peer Stop controls, including state-only changes and federation.
+Older frames default to no background cancellation. Hidden task rows become
+empty visibility markers remotely, preserving pagination indices while
+removing a previously visible row from client rendering.
 Replayed spawns cannot reopen completed work. A successful attach to a
 surviving broker retains running tasks; replacement marks only prior tasks
 that the new adapter has not reported again as lost observation.
@@ -208,6 +213,15 @@ Local validation passed:
   delivery state in native steering and fallback, and generic mutations
   dropping retry-held wakes. Success and SQLite failure variants now cover
   durable task/queue state, response acknowledgement, and replay.
+- Remote projection fixes passed **203 tests in four suites**:
+  `RemoteSessionGatewayTests`, `RemoteProtocolTests`,
+  `NativePeerTranscriptTests`, and `NativePeerSessionsTests`. The regressions
+  first reproduced hidden rows appearing in snapshots/deltas and missing
+  idle cancellation state. They cover hidden-page cursor progress, state-only
+  flag changes, federation and decoding frames from older peers.
+  A Node probe of the web functions passed the composer-action matrix and
+  hidden-row insertion/removal checks; JavaScript syntax and SwiftFormat lint
+  also passed.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

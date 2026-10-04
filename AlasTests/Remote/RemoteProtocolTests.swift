@@ -255,7 +255,8 @@ struct RemoteProtocolTests {
         }
     }
 
-    @Test func serverMessageSnapshotRoundTrips() throws {
+    @Test(arguments: [false, true])
+    func backgroundCancellationRoundTripsAndOlderFramesDefaultToFalse(delta: Bool) throws {
         let snap = RemoteServerMessage.transcriptSnapshot(
             sessionId: "s1",
             streamingState: "streaming",
@@ -264,9 +265,18 @@ struct RemoteProtocolTests {
             firstIndex: 0,
             totalCount: 1,
             epoch: 0,
-            revision: 0
+            revision: 0,
+            hasCancellableBackgroundWork: true
         )
-        #expect(try roundTrip(snap) == snap)
+        let message = delta ? RemoteServerMessage.transcriptDelta(
+            sessionId: "s1", streamingState: "idle", canDrive: true, upserts: [],
+            epoch: 0, revision: 0, hasCancellableBackgroundWork: true) : snap
+        #expect(try roundTrip(message) == message)
+        var fields = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any])
+        fields.removeValue(forKey: "hasCancellableBackgroundWork")
+        let legacy = try JSONDecoder().decode(RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: fields))
+        let encodedLegacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        #expect(encodedLegacy["hasCancellableBackgroundWork"] as? Bool == false)
     }
 
     @Test(arguments: [

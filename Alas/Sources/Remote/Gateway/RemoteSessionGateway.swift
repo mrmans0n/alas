@@ -602,6 +602,7 @@ final class RemoteSessionGateway {
         if state.generation == capturedGeneration {
             state.sentVersion = newSentVersion
             state.revision = 0
+            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
             send(.transcriptSnapshot(sessionId: id,
                                      streamingState: Self.stateString(session.transcript.streamingState),
                                      canDrive: provider.isWriter(for: id),
@@ -609,7 +610,8 @@ final class RemoteSessionGateway {
                                      firstIndex: wire.first?.index ?? count,
                                      totalCount: count,
                                      epoch: state.epoch,
-                                     revision: 0))
+                                     revision: 0,
+                                     hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
         }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
@@ -658,6 +660,9 @@ final class RemoteSessionGateway {
                 // objectWillChange fires for queue mutations too, and the
                 // queue changes far more often than the config does.
                 self.sendQueueState(id: id, session: session)
+                if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {
+                    await self.sendDelta(id: id, session: session)
+                }
                 let cfg = RemoteSessionConfig(
                     sessionId: id,
                     models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
@@ -688,12 +693,14 @@ final class RemoteSessionGateway {
             // (streamingState / pending prompt). Send a content-free delta
             // so the client still tracks state.
             state.revision += 1
+            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
             send(.transcriptDelta(sessionId: id,
                                   streamingState: Self.stateString(session.transcript.streamingState),
                                   canDrive: provider.isWriter(for: id),
                                   upserts: [],
                                   epoch: state.epoch,
-                                  revision: state.revision))
+                                  revision: state.revision,
+                                  hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
         case .dirty(let indices):
             guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
                 await sendSnapshot(id: id, session: session)
@@ -736,12 +743,14 @@ final class RemoteSessionGateway {
             // check and giving each frame the next revision clients expect.
             for wire in batches {
                 state.revision += 1
+                state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
                 send(.transcriptDelta(sessionId: id,
                                       streamingState: Self.stateString(session.transcript.streamingState),
                                       canDrive: provider.isWriter(for: id),
                                       upserts: wire,
                                       epoch: state.epoch,
-                                      revision: state.revision))
+                                      revision: state.revision,
+                                      hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
             }
         }
         emitPendingPermissionIfAny(id: id, session: session)
@@ -1262,6 +1271,11 @@ final class RemoteSessionGateway {
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil, index: index)
         case .toolCall(let call):
+            if ACPBackgroundTask(toolCall: call)?.showInTranscript == false {
+                // Keep a positional marker so deltas can hide an existing row
+                // and an entirely hidden page still advances its history cursor.
+                return .init(stableId: sid, kind: "toolCall", text: nil, json: nil, index: index, isHidden: true)
+            }
             return .init(
                 stableId: sid,
                 kind: "toolCall",

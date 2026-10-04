@@ -236,7 +236,7 @@ struct RemotePeerConnectionTests {
         try await waitUntil { events.messages.count >= 2 }
         guard case .transcriptSnapshot(
             let sessionId, let state, let canDrive, let messages,
-            let firstIndex, let totalCount, let epoch, let revision
+            let firstIndex, let totalCount, let epoch, let revision, _
         ) = events.messages[0] else {
             Issue.record("Expected the complete legacy transcript snapshot")
             return

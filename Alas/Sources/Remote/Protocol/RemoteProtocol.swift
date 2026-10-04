@@ -489,10 +489,10 @@ enum RemoteServerMessage: Equatable, Sendable {
     case createSessionFailed(message: String)
     case transcriptSnapshot(
         sessionId: String, streamingState: String, canDrive: Bool, messages: [RemoteWireMessage],
-        firstIndex: Int, totalCount: Int, epoch: Int, revision: Int)
+        firstIndex: Int, totalCount: Int, epoch: Int, revision: Int, hasCancellableBackgroundWork: Bool = false)
     case transcriptDelta(
         sessionId: String, streamingState: String, canDrive: Bool, upserts: [RemoteWireMessage],
-        epoch: Int, revision: Int)
+        epoch: Int, revision: Int, hasCancellableBackgroundWork: Bool = false)
     case transcriptPage(sessionId: String, epoch: Int, firstIndex: Int, messages: [RemoteWireMessage])
     case stopPending(sessionId: String)
     case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
@@ -543,6 +543,7 @@ enum RemoteServerMessage: Equatable, Sendable {
 extension RemoteServerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
+        case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -604,7 +605,8 @@ extension RemoteServerMessage: Codable {
                 firstIndex: try c.decode(Int.self, forKey: .firstIndex),
                 totalCount: try c.decode(Int.self, forKey: .totalCount),
                 epoch: try c.decode(Int.self, forKey: .epoch),
-                revision: try c.decode(Int.self, forKey: .revision))
+                revision: try c.decode(Int.self, forKey: .revision),
+                hasCancellableBackgroundWork: try c.decodeIfPresent(Bool.self, forKey: .hasCancellableBackgroundWork) ?? false)
         case "transcriptDelta":
             self = .transcriptDelta(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -612,7 +614,8 @@ extension RemoteServerMessage: Codable {
                 canDrive: try c.decode(Bool.self, forKey: .canDrive),
                 upserts: try c.decode([RemoteWireMessage].self, forKey: .upserts),
                 epoch: try c.decode(Int.self, forKey: .epoch),
-                revision: try c.decode(Int.self, forKey: .revision))
+                revision: try c.decode(Int.self, forKey: .revision),
+                hasCancellableBackgroundWork: try c.decodeIfPresent(Bool.self, forKey: .hasCancellableBackgroundWork) ?? false)
         case "transcriptPage":
             self = .transcriptPage(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -816,21 +819,23 @@ extension RemoteServerMessage: Codable {
         case .createSessionFailed(let message):
             try c.encode("createSessionFailed", forKey: .type)
             try c.encode(message, forKey: .message)
-        case .transcriptSnapshot(let id, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision):
+        case .transcriptSnapshot(let id, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision, let backgroundWork):
             try c.encode("transcriptSnapshot", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(st, forKey: .streamingState)
             try c.encode(cd, forKey: .canDrive)
+            try c.encode(backgroundWork, forKey: .hasCancellableBackgroundWork)
             try c.encode(m, forKey: .messages)
             try c.encode(firstIndex, forKey: .firstIndex)
             try c.encode(totalCount, forKey: .totalCount)
             try c.encode(epoch, forKey: .epoch)
             try c.encode(revision, forKey: .revision)
-        case .transcriptDelta(let id, let st, let cd, let u, let epoch, let revision):
+        case .transcriptDelta(let id, let st, let cd, let u, let epoch, let revision, let backgroundWork):
             try c.encode("transcriptDelta", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(st, forKey: .streamingState)
             try c.encode(cd, forKey: .canDrive)
+            try c.encode(backgroundWork, forKey: .hasCancellableBackgroundWork)
             try c.encode(u, forKey: .upserts)
             try c.encode(epoch, forKey: .epoch)
             try c.encode(revision, forKey: .revision)

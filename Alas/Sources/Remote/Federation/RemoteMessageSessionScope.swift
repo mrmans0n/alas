@@ -84,7 +84,7 @@ extension RemoteServerMessage {
             // Conditionally scoped: nil when the error isn't about any one
             // session (most callers), the failing session's id otherwise.
             return sessionId
-        case .transcriptSnapshot(let id, _, _, _, _, _, _, _), .transcriptDelta(let id, _, _, _, _, _),
+        case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _), .transcriptDelta(let id, _, _, _, _, _, _),
              .transcriptPage(let id, _, _, _), .stopPending(let id), .permissionRequest(let id, _),
              .permissionResolved(let id, _), .questionRequest(let id, _), .questionResolved(let id, _),
              .planRequest(let id, _), .planResolved(let id, _), .elicitationRequest(let id, _),
@@ -114,11 +114,13 @@ extension RemoteServerMessage {
             // unscoped case and keeps `replacingSessionId` a no-op on it.
             guard sessionId != nil else { return self }
             return .error(message: message, sessionId: new)
-        case .transcriptSnapshot(_, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision):
+        case .transcriptSnapshot(_, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision, let backgroundWork):
             return .transcriptSnapshot(sessionId: new, streamingState: st, canDrive: cd, messages: m,
-                                       firstIndex: firstIndex, totalCount: totalCount, epoch: epoch, revision: revision)
-        case .transcriptDelta(_, let st, let cd, let u, let epoch, let revision):
-            return .transcriptDelta(sessionId: new, streamingState: st, canDrive: cd, upserts: u, epoch: epoch, revision: revision)
+                                       firstIndex: firstIndex, totalCount: totalCount, epoch: epoch, revision: revision,
+                                       hasCancellableBackgroundWork: backgroundWork)
+        case .transcriptDelta(_, let st, let cd, let u, let epoch, let revision, let backgroundWork):
+            return .transcriptDelta(sessionId: new, streamingState: st, canDrive: cd, upserts: u, epoch: epoch, revision: revision,
+                                    hasCancellableBackgroundWork: backgroundWork)
         case .transcriptPage(_, let epoch, let firstIndex, let m):
             return .transcriptPage(sessionId: new, epoch: epoch, firstIndex: firstIndex, messages: m)
         case .stopPending: return .stopPending(sessionId: new)

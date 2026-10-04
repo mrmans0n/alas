@@ -397,7 +397,8 @@ private struct NativePeerComposer: View {
                     shortcutHint
                 }
                 Spacer(minLength: 0)
-                if NativePeerSessionControls.showsStop(for: transcript.streamingState) {
+                if NativePeerSessionControls.showsStop(for: transcript.streamingState,
+                                                       hasCancellableBackgroundWork: transcript.hasCancellableBackgroundWork) {
                     ACPComposerActionButton(
                         action: .stop,
                         onPrimary: { client.stopSelected() },
@@ -468,7 +469,7 @@ private struct PeerChipButtonStyle: ButtonStyle {
 }
 
 enum NativePeerSessionControls {
-    static func showsStop(for streamingState: String) -> Bool {
-        streamingState != "idle"
+    static func showsStop(for streamingState: String, hasCancellableBackgroundWork: Bool = false) -> Bool {
+        streamingState != "idle" || hasCancellableBackgroundWork
     }
 }

@@ -30,6 +30,7 @@ let olderFetchInFlight = false;
 let stopPending = false;
 let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError, scheduledAt}] from queueState
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
+let hasCancellableBackgroundWork = false;
 let sessionTitles = new Map();
 let listedSessions = new Map();
 let gatewayCounts = new Map();  // serverId -> {attention, running}, from the active link's last sessionList
@@ -862,6 +863,7 @@ function openSession(id) {
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
   lastStreamingState = "idle";
+  hasCancellableBackgroundWork = false;
   $("bar").classList.add("is-detail");
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar becomes ‹ title · rename
   $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
@@ -1925,6 +1927,7 @@ function applyCreatedSession(session) {
 
 function applySnapshot(msg) {
   if (msg.sessionId !== currentSession) return;
+  hasCancellableBackgroundWork = msg.hasCancellableBackgroundWork === true;
   canDrive = msg.canDrive; canDriveKnown = true;
   transcriptMeta = { epoch: msg.epoch, revision: msg.revision, firstIndex: msg.firstIndex, totalCount: msg.totalCount };
   olderFetchInFlight = false;
@@ -1946,6 +1949,7 @@ function applyDelta(msg) {
     return;
   }
   transcriptMeta.revision = msg.revision;
+  hasCancellableBackgroundWork = msg.hasCancellableBackgroundWork === true;
   canDrive = msg.canDrive; canDriveKnown = true;
   const box = $("messages");
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 120;
@@ -2104,6 +2108,7 @@ function resubscribe() {
 // Insert a message node at its index-ordered DOM position. Nodes carry
 // dataset.index; the common case (append at the tail) is O(1).
 function insertMessage(m, open) {
+  if (m.isHidden === true) { messages.set(m.stableId, m); return; }
   const box = $("messages");
   const node = renderMessage(m, m.stableId, open);
   node.dataset.sid = m.stableId;
@@ -2116,6 +2121,12 @@ function insertMessage(m, open) {
 }
 
 function upsertMessage(m) {
+  if (m.isHidden === true) {
+    messageNodes.get(m.stableId)?.remove();
+    messageNodes.delete(m.stableId);
+    messages.set(m.stableId, m);
+    return;
+  }
   const existing = messageNodes.get(m.stableId);
   if (existing) {
     const wasOpen = existing.classList.contains("is-open") ? new Set([m.stableId]) : null;
@@ -3608,11 +3619,12 @@ function hideElicitation() {
 }
 
 // Direct port of composerAction(...) in ComposerAction.swift. Kept as a pure
-// function of (streamingState, hasText) so the two implementations can be
+// function of turn state, composer content, and cancellable background work so
+// the two implementations can be
 // diffed against each other by eye.
-function composerAction(streamingState, hasText) {
+function composerAction(streamingState, hasText, backgroundWork = false) {
   if (streamingState === "idle") {
-    return hasText ? "send" : "hidden";
+    return hasText ? "send" : (backgroundWork ? "stop" : "hidden");
   }
   return hasText ? "queue" : "stop";
 }
@@ -3645,7 +3657,7 @@ function renderDriveBar(streamingState) {
   // Lets the stylesheet animate only the live turn's newest "Thinking…" pips.
   $("messages").classList.toggle("is-streaming", streamingState !== "idle");
   const hasText = !!$("prompt").value.trim() || pendingAttachments.length > 0;
-  const action = composerAction(streamingState, hasText);
+  const action = composerAction(streamingState, hasText, hasCancellableBackgroundWork);
   $("send").classList.toggle("hidden", action !== "send");
   $("queue-capsule").classList.toggle("hidden", action !== "queue");
   $("stop").classList.toggle("hidden", action !== "stop");
