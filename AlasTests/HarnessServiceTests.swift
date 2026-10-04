@@ -62,7 +62,13 @@ struct HarnessServiceTests {
         }
         let fail = { service.setExternalActivity(sessionId: "session-1", agent: .pi, state: .failed, body: "boom") }
 
-        if backgroundFirst { startBackground(); fail() } else { fail(); startBackground() }
+        if backgroundFirst {
+            startBackground()
+            fail()
+        } else {
+            fail()
+            startBackground()
+        }
 
         #expect(service.activityBySession["session-1"]?.state == .failed)
         #expect(service.hasBackgroundActivity(sessionId: "session-1"))
