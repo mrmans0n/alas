@@ -150,11 +150,19 @@ struct EditorDisplayIntegrationTests {
         let file = root.appendingPathComponent("file.swift")
         try Data("let value = 1\n".utf8).write(to: file)
         let transport = FakeTransport()
+        // Like a real server, stop offering the annotation once the source
+        // spells it out. Otherwise the post-edit refresh races the stale-ID
+        // assertion by recreating a hint with the same positional ID.
+        var text = ""
         transport.onSend = { sent in
-            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)) else { return }
+            if let opened = request["params"]?["textDocument"]?["text"]?.stringValue { text = opened }
+            if case .array(let changes)? = request["params"]?["contentChanges"], let changed = changes.last?["text"]?.stringValue { text = changed }
+            guard let id = request["id"] else { return }
             let result: LSPJSONValue
             switch request["method"]?.stringValue {
             case "initialize": result = .object(["capabilities": .object(["inlayHintProvider": .bool(true)])])
+            case "textDocument/inlayHint" where text.contains(": Int"): result = .array([])
             case "textDocument/inlayHint":
                 result = .array([.object([
                     "position": .object(["line": .number("0"), "character": .number("9")]),
