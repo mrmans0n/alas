@@ -847,13 +847,17 @@ final class PluginHost {
             guard let self else { return Data() }
             do {
                 if method == "usage/turns" {
-                    let page = try await store.turns(project: scoped, since: params.since, until: params.until, limit: limit)
+                    let page = try await store.turns(
+                        project: scoped, since: params.since, until: params.until, after: params.cursor, limit: limit)
                     return self.encode(PluginResponse(
-                        id: id, result: PluginUsageTurnsResult(turns: page.turns, truncated: page.truncated), error: nil))
+                        id: id, result: PluginUsageTurnsResult(turns: page.turns, truncated: page.next != nil, next: page.next),
+                        error: nil))
                 }
-                let page = try await store.limits(project: scoped, since: params.since, until: params.until, limit: limit)
+                let page = try await store.limits(
+                    project: scoped, since: params.since, until: params.until, after: params.cursor, limit: limit)
                 return self.encode(PluginResponse(
-                    id: id, result: PluginUsageLimitsResult(limits: page.limits, truncated: page.truncated), error: nil))
+                    id: id, result: PluginUsageLimitsResult(limits: page.limits, truncated: page.next != nil, next: page.next),
+                    error: nil))
             } catch {
                 return self.errorReply(id, code: -32003, "usage history could not be read: \(error)")
             }

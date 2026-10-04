@@ -29,7 +29,7 @@ struct UsageHistoryStoreTests {
             sessionId: "s1", startedAt: started, result: .limited, delegatedSource: nil, lastAgentText: nil,
             quota: ACPPromptQuota(tokenCount: tokens, modelUsage: [ACPModelUsage(model: "opus", tokenCount: tokens)]))
         let input = UsageTurnInput(
-            completion: completion, agent: "claude", model: "default", cumulativeCost: nil,
+            completion: completion, agent: "claude", model: "default",
             project: "proj", worktree: "wt", endedAt: started - 1_000)
         _ = try await UsageHistoryStore(path: path).record(input)
 
@@ -50,7 +50,8 @@ struct UsageHistoryStoreTests {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
         let store = try UsageHistoryStore(path: path)
-        let cumulative: [(Double, String)?] = [(0.10, "USD"), (0.25, "USD"), (0.05, "USD"), (0.07, "EUR"), nil]
+        // A turn without a fresh total (nil) keeps the baseline, so the next one is given all the growth since.
+        let cumulative: [(Double, String)?] = [(0.10, "USD"), nil, (0.25, "USD"), (0.05, "USD"), (0.07, "EUR")]
         for cost in cumulative {
             _ = try await store.record(turn(cost: cost))
         }
@@ -58,7 +59,7 @@ struct UsageHistoryStoreTests {
         _ = try await store.record(turn(session: "s2", cost: (1, "USD")))
         let read = try await store.turns(project: nil, since: 0, until: nil, limit: 10).turns.filter { $0.session == "s1" }
         // Newest first, in cents.
-        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, nil, 5, 15, 10])
+        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, 5, 15, nil, 10])
     }
 
     @Test(arguments: [
@@ -77,7 +78,42 @@ struct UsageHistoryStoreTests {
         }
         let page = try await store.turns(project: project, since: since, until: until, limit: limit)
         #expect(page.turns.map(\.endedAt) == ends)
-        #expect(page.truncated == truncated)
+        #expect((page.next != nil) == truncated)
+    }
+
+    /// A page that ends inside a run of equal times resumes after its last row, skipping and repeating none.
+    @Test func pagesResumeInsideARunOfEqualTimes() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try UsageHistoryStore(path: path)
+        for session in ["a", "b", "c"] {
+            _ = try await store.record(turn(session: session, endedAt: 2_000))
+            try await store.record(UsageLimitEpisode(
+                session: session, project: "proj", worktree: nil, agent: "claude", detectedAt: 2_000, resetsAt: nil,
+                resetSource: "unknown"))
+        }
+        let first = try await store.turns(project: nil, since: 0, until: nil, limit: 2)
+        let second = try await store.turns(project: nil, since: 0, until: nil, after: first.next, limit: 2)
+        #expect((first.turns + second.turns).map(\.session) == ["c", "b", "a"])
+        #expect(second.next == nil)
+        let firstLimits = try await store.limits(project: nil, since: 0, until: nil, limit: 2)
+        let secondLimits = try await store.limits(project: nil, since: 0, until: nil, after: firstLimits.next, limit: 2)
+        #expect((firstLimits.limits + secondLimits.limits).map(\.session) == ["c", "b", "a"])
+        #expect(secondLimits.next == nil)
+    }
+
+    /// Without a top-level count, a turn's tokens are the sum of its models'.
+    @Test func tokensWithoutATopLevelCountAreTheSumOfTheModels() {
+        let count = ACPTokenCount(
+            totalTokens: 10, inputTokens: 1, cachedInputTokens: 2, cachedWriteTokens: 3, outputTokens: 4, reasoningOutputTokens: 0)
+        let completion = ACPTurnCompletion(
+            sessionId: "s1", startedAt: 1, result: .completed, delegatedSource: nil, lastAgentText: nil,
+            quota: ACPPromptQuota(tokenCount: nil, modelUsage: [
+                ACPModelUsage(model: "a", tokenCount: count), ACPModelUsage(model: "b", tokenCount: count),
+            ]))
+        let input = UsageTurnInput(completion: completion, agent: "claude", model: "default", project: nil, worktree: nil, endedAt: 2)
+        #expect(input.tokens == UsageTurn.Tokens(total: 20, input: 2, cachedInput: 4, cachedWrite: 6, output: 8, reasoningOutput: 0))
+        #expect(input.model == "default")
     }
 
     /// A repeated hit of the same episode updates its reset rather than adding a row.

@@ -34,6 +34,12 @@ struct UsageTurn: Codable, Equatable, Sendable {
     let cost: Cost?
 }
 
+/// Where the next page of a `usage/*` read starts: after the row at `before` with id `beforeId`, newest first.
+struct UsageCursor: Codable, Equatable, Sendable {
+    let before: Int64
+    let beforeId: Int64
+}
+
 /// A provider usage limit that stopped a session, as first detected.
 struct UsageLimitEpisode: Codable, Equatable, Sendable {
     let session: String
@@ -80,7 +86,9 @@ actor UsageHistoryStore {
         try database.exec("DELETE FROM usage_limits WHERE detected_at < ?", bindings: [cutoff])
     }
 
-    /// Stores the turn, with its cost as the change in the session's cumulative cost since its previous recorded turn.
+    /// Stores the turn, with its cost as the change in the session's cumulative cost since its previous recorded turn
+    /// that had one. A turn that saw no fresh total records no cost and keeps that baseline, so the next turn that
+    /// sees one is given all the growth since.
     func record(_ input: UsageTurnInput) throws -> UsageTurn {
         try database.transaction {
             let previous = try database.query("""
@@ -132,8 +140,12 @@ actor UsageHistoryStore {
     }
 
     /// Turns that ended in `[since, until)`, newest first, at most `limit`; `project` nil reads every project.
-    func turns(project: String?, since: Int64, until: Int64?, limit: Int) throws -> (turns: [UsageTurn], truncated: Bool) {
-        let (filter, bindings) = Self.filter("ended_at", project: project, since: since, until: until)
+    /// Past `limit`, `next` resumes after the last turn returned, so turns ending in the same millisecond are neither
+    /// skipped nor repeated.
+    func turns(
+        project: String?, since: Int64, until: Int64?, after cursor: UsageCursor? = nil, limit: Int
+    ) throws -> (turns: [UsageTurn], next: UsageCursor?) {
+        let (filter, bindings) = Self.filter("ended_at", "id", project: project, since: since, until: until, cursor: cursor)
         let rows = try database.query(
             "SELECT * FROM turn_usage WHERE \(filter) ORDER BY ended_at DESC, id DESC LIMIT ?",
             bindings: bindings + [limit + 1])
@@ -154,16 +166,16 @@ actor UsageHistoryStore {
                 startedAt: row["started_at"] as? Int64 ?? 0, endedAt: row["ended_at"] as? Int64 ?? 0,
                 result: row["result"] as? String ?? "", tokens: tokens, cost: cost)
         }
-        return (Array(turns), rows.count > limit)
+        return (Array(turns), rows.count > limit ? turns.last.map { UsageCursor(before: $0.endedAt, beforeId: $0.id) } : nil)
     }
 
     /// Episodes detected in `[since, until)`, newest first, at most `limit`; `project` nil reads every project.
     func limits(
-        project: String?, since: Int64, until: Int64?, limit: Int
-    ) throws -> (limits: [UsageLimitEpisode], truncated: Bool) {
-        let (filter, bindings) = Self.filter("detected_at", project: project, since: since, until: until)
+        project: String?, since: Int64, until: Int64?, after cursor: UsageCursor? = nil, limit: Int
+    ) throws -> (limits: [UsageLimitEpisode], next: UsageCursor?) {
+        let (filter, bindings) = Self.filter("detected_at", "rowid", project: project, since: since, until: until, cursor: cursor)
         let rows = try database.query(
-            "SELECT * FROM usage_limits WHERE \(filter) ORDER BY detected_at DESC LIMIT ?",
+            "SELECT rowid AS row_id, * FROM usage_limits WHERE \(filter) ORDER BY detected_at DESC, rowid DESC LIMIT ?",
             bindings: bindings + [limit + 1])
         let limits = rows.prefix(limit).map { row in
             UsageLimitEpisode(
@@ -172,15 +184,24 @@ actor UsageHistoryStore {
                 detectedAt: row["detected_at"] as? Int64 ?? 0, resetsAt: row["resets_at"] as? Int64,
                 resetSource: row["reset_source"] as? String ?? "unknown")
         }
-        return (Array(limits), rows.count > limit)
+        let next = rows.count > limit ? rows[limit - 1] : nil
+        return (Array(limits), next.map {
+            UsageCursor(before: $0["detected_at"] as? Int64 ?? 0, beforeId: $0["row_id"] as? Int64 ?? 0)
+        })
     }
 
-    private static func filter(_ column: String, project: String?, since: Int64, until: Int64?) -> (String, [Any?]) {
+    private static func filter(
+        _ column: String, _ idColumn: String, project: String?, since: Int64, until: Int64?, cursor: UsageCursor?
+    ) -> (String, [Any?]) {
         var clauses = ["\(column) >= ?"]
         var bindings: [Any?] = [since]
         if let until {
             clauses.append("\(column) < ?")
             bindings.append(until)
+        }
+        if let cursor {
+            clauses.append("(\(column) < ? OR (\(column) = ? AND \(idColumn) < ?))")
+            bindings += [cursor.before, cursor.before, cursor.beforeId]
         }
         if let project {
             clauses.append("project_id = ?")
@@ -235,8 +256,7 @@ actor UsageHistoryStore {
 
 extension UsageTurnInput {
     init(
-        completion: ACPTurnCompletion, agent: String, model: String?, cumulativeCost: ACPUsageInfo.Cost?,
-        project: String?, worktree: String?, endedAt: Int64
+        completion: ACPTurnCompletion, agent: String, model: String?, project: String?, worktree: String?, endedAt: Int64
     ) {
         let result = switch completion.result {
         case .completed: "completed"
@@ -245,17 +265,23 @@ extension UsageTurnInput {
         case .limited: "limited"
         }
         let models = completion.quota?.modelUsage ?? []
+        // Some adapters send only per-model counts; their sum is the turn's.
+        let counts = completion.quota.flatMap { quota in
+            quota.tokenCount ?? quota.modelUsage.map(\.tokenCount).reduce(ACPTokenCount?.none) { sum, next in
+                sum.map { $0 + next } ?? next
+            }
+        }
         self.init(
             session: completion.sessionId, project: project, worktree: worktree, agent: agent,
             // The quota names the model that answered when there was exactly one.
             model: models.count == 1 ? models[0].model : model,
             startedAt: completion.startedAt, endedAt: max(endedAt, completion.startedAt), result: result,
-            tokens: completion.quota?.tokenCount.map {
+            tokens: counts.map {
                 UsageTurn.Tokens(
                     total: $0.displayTotal, input: $0.inputTokens, cachedInput: $0.cachedInputTokens,
                     cachedWrite: $0.cachedWriteTokens, output: $0.outputTokens, reasoningOutput: $0.reasoningOutputTokens)
             },
-            cumulativeCost: cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) })
+            cumulativeCost: completion.cumulativeCost.map { UsageTurn.Cost(amount: $0.amount, currency: $0.currency) })
     }
 }
 
@@ -275,8 +301,7 @@ extension AppState {
         let worktree = owner.worktreeID
         let project = worktree.flatMap { self.worktree(withId: $0)?.projectId }
         let input = UsageTurnInput(
-            completion: completion, agent: session.agentId, model: session.currentModel,
-            cumulativeCost: session.contextUsage?.cost, project: project, worktree: worktree,
+            completion: completion, agent: session.agentId, model: session.currentModel, project: project, worktree: worktree,
             endedAt: Int64(Date().timeIntervalSince1970 * 1000))
         let episode = completion.result == .limited ? session.usageLimit.map {
             UsageLimitEpisode($0, session: completion.sessionId, project: project, worktree: worktree, agent: session.agentId)

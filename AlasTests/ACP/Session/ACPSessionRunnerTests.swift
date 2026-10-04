@@ -91,6 +91,27 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
+    /// A turn reports the session's cumulative cost only when a `usage_update` arrived during it; an earlier total
+    /// is not its own.
+    @Test(arguments: [false, true])
+    func aTurnReportsOnlyACostUpdatedDuringIt(updatedDuringTurn: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        runner.session.apply(.usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.1, currency: "USD"))))
+        mock.scriptAsync(method: "session/prompt") { _ in
+            if updatedDuringTurn {
+                await MainActor.run {
+                    _ = runner.session.apply(.usageUpdate(.init(used: 2, size: 10, cost: .init(amount: 0.3, currency: "USD"))))
+                }
+            }
+            return Data("{}".utf8)
+        }
+        await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { _ in continuation.resume() }
+        }
+        #expect(completions.map(\.cumulativeCost) == [updatedDuringTurn ? .init(amount: 0.3, currency: "USD") : nil])
+    }
+
     @Test("send attaches its checkpoint before the prompt RPC")
     func sendAttachesCheckpointBeforePrompt() async throws {
         let checkpointID = UUID()

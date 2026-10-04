@@ -31,4 +31,7 @@ struct ACPTurnCompletion: Equatable, Sendable {
     let lastAgentText: String?
     /// The turn's own `_meta.quota`; nil when the adapter sent none or the turn ended without a prompt result.
     var quota: ACPPromptQuota? = nil
+    /// The session's cumulative cost when a `usage_update` arrived during the turn; nil when none did, so a turn
+    /// never reports a stale total as its own.
+    var cumulativeCost: ACPUsageInfo.Cost? = nil
 }

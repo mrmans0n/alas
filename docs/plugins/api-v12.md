@@ -48,13 +48,15 @@ agent ids, model names, times, token counts and cost.
 - `result` is `completed`, `failed`, `cancelled` or `limited` (stopped by a
   usage limit).
 - `tokens` is the turn's own usage as the agent reported it, or absent when it
-  reported none. Turns that fail or are cancelled before the agent answers
-  have none.
+  reported none. When the agent reports only per-model counts, they are
+  summed. Turns that fail or are cancelled before the agent answers have none.
 - `cost` is what the turn added to the session's cost: the growth of the
-  cumulative cost the agent reports since the session's previous recorded
-  turn. It is absent when the agent reports no cost, or when the currency
-  changed. If the agent restarts its count, the first turn after it counts the
-  whole new total.
+  cumulative cost the agent reports since the session's previous turn that
+  had one. It is absent when no cost update arrived during the turn (often a
+  failed or cancelled one), and then the next turn that sees an update is
+  given all the growth since. It is also absent when the currency changed. If
+  the agent restarts its count, the first turn after it counts the whole new
+  total.
 - `model` is the model that answered when the agent named exactly one, and
   otherwise the session's selected model, if any.
 - `project` and `worktree` are absent for sessions of a multi-project
@@ -70,22 +72,23 @@ Alas keeps 400 days of history.
   "params": { "since": 1767000000000, "until": 1767600000000, "limit": 200, "scope": "project" } }
 ```
 
-→ `{ "turns": [ … ], "truncated": false }`
+→ `{ "turns": [ … ], "truncated": true, "next": { "before": 1767400000000, "beforeId": 40 } }`
 
 - Turns whose `endedAt` is at or after `since` and before `until` (absent: no
   end), newest first.
 - `limit` is 1 to 1000, 200 when absent. `truncated` is true when older turns
-  in the window were left out; ask again with `until` set to the oldest
-  `endedAt` you got.
+  in the window were left out. Then `next` is present: ask again with the same
+  params and `"cursor"` set to it, and the page continues right after the last
+  turn you got, even among turns that ended in the same millisecond.
 - `scope` is `project` (the default) or `all`.
 - The answer comes in a later delivery and counts towards the 4 requests in
   flight.
 
 ### `usage/limits`
 
-Same params; `since` and `until` apply to `detectedAt`.
+Same params, `cursor` included; `since` and `until` apply to `detectedAt`.
 
-→ `{ "limits": [ { "session", "project", "worktree", "agent", "detectedAt", "resetsAt", "resetSource" } ], "truncated": false }`
+→ `{ "limits": [ { "session", "project", "worktree", "agent", "detectedAt", "resetsAt", "resetSource" } ], "truncated": false }`, with `next` when truncated.
 
 One entry per limit episode, from its first detection. A session that hits
 the same limit again keeps its entry, with the latest reset time. `resetsAt`

@@ -135,6 +135,8 @@ final class ACPSessionRunner {
     /// decides that, not the runner.
     private let onPermissionBlocked: ((ACPChildBlocker) -> Void)?
     private var activePromptStartedAt: Int64?
+    /// `session.usageUpdateCount` when the active prompt started.
+    private var activePromptUsageUpdateCount = 0
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -1839,7 +1841,8 @@ final class ACPSessionRunner {
             result: result,
             delegatedSource: activePromptDelegatedSource,
             lastAgentText: lastAgentText,
-            quota: quota
+            quota: quota,
+            cumulativeCost: session.usageUpdateCount != activePromptUsageUpdateCount ? session.contextUsage?.cost : nil
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
@@ -3251,6 +3254,7 @@ extension ACPSessionRunner {
                     self.session.queue.first(where: { $0.id == qid && $0.transcriptRecorded })?.turnStartedAt
                 }
                 self.activePromptStartedAt = queuedTurnStartedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
+                self.activePromptUsageUpdateCount = self.session.usageUpdateCount
                 self.activePromptDelegatedSource = delegatedSource
                 // Captured before the user prompt is recorded below, so the
                 // floor points at this turn's own first transcript entry.

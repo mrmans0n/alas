@@ -279,16 +279,21 @@ struct PluginUsageParams: Decodable, Sendable {
     var limit: Int?
     /// `project` (the default) or `all`.
     var scope: String?
+    /// The previous page's `next`.
+    var cursor: UsageCursor?
 }
 
 struct PluginUsageTurnsResult: Encodable {
     let turns: [UsageTurn]
     let truncated: Bool
+    /// Present when truncated: pass it as `cursor` for the next page.
+    let next: UsageCursor?
 }
 
 struct PluginUsageLimitsResult: Encodable {
     let limits: [UsageLimitEpisode]
     let truncated: Bool
+    let next: UsageCursor?
 }
 
 struct PluginRunOutputParams: Decodable, Sendable {
