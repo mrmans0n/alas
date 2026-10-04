@@ -1285,9 +1285,9 @@ struct ACPSessionRunnerQueueTests {
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
     }
 
-    @Test("idle Stop reaches a child-owned background task without cancelling a foreground turn", arguments: ["true", "false", "error"])
+    @Test("idle Stop reaches a child-owned background task without cancelling a foreground turn", arguments: ["true", "false", "error", "lease-denied"])
     func idleBackgroundStop(result: String) async throws {
-        let (runner, mock, session, _) = try mkRunner()
+        let (runner, mock, session, _) = try mkRunner(validateLease: { result != "lease-denied" })
         session.remoteSessionId = "remote-root"
         session.backgroundTaskStopSupported = true
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "job",
@@ -1300,11 +1300,11 @@ struct ACPSessionRunnerQueueTests {
             if result == "error" { throw ACPClientError.notRunning }
             return Data("{\"stopped\":\(result)}".utf8)
         }
-        await runner.userCancel()
+        #expect(await runner.userCancel() == ["true", "false"].contains(result))
         await runner.flushPersistence()
-        #expect(mock.sent.map(\.method) == ["_session/async_task/stop"])
+        #expect(mock.sent.map(\.method) == (result == "lease-denied" ? [] : ["_session/async_task/stop"]))
         #expect(session.backgroundTasks[0].isActive == (result != "true"))
-        #expect((session.backgroundTasks[0].stopError != nil) == (result != "true"))
+        #expect((session.backgroundTasks[0].stopError != nil) == ["false", "error"].contains(result))
         #expect(session.transcript.streamingState == .idle)
     }
 

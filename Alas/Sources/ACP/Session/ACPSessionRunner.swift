@@ -2255,8 +2255,11 @@ final class ACPSessionRunner {
     /// any pending permission continuation, marks in-flight tool calls as
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
-    func userCancel(confirmingLease: Bool = true) async {
-        guard isConnectionCurrent() else { return }
+    /// Returns whether the cancel reached the agent: false when the runner
+    /// lost its connection or writer lease before sending it.
+    @discardableResult
+    func userCancel(confirmingLease: Bool = true) async -> Bool {
+        guard isConnectionCurrent() else { return false }
         invalidateNativeSteering()
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         let backgroundIds = session.backgroundTaskStopSupported
@@ -2265,7 +2268,7 @@ final class ACPSessionRunner {
             .map(\.subagentSessionId)
         let cancellingBackground = !backgroundIds.isEmpty || !childIds.isEmpty
         if cancellingBackground {
-            guard !backgroundCancellationInProgress else { return }
+            guard !backgroundCancellationInProgress else { return false }
             backgroundCancellationInProgress = true
         }
         defer {
@@ -2276,9 +2279,16 @@ final class ACPSessionRunner {
         }
         if cancellingBackground, activePromptID == nil, session.transcript.streamingState == .idle,
            session.transcript.pendingUserInputs.isEmpty {
-            for id in backgroundIds { await stopBackgroundTask(id: id) }
-            for id in childIds { await cancelSubagent(subagentSessionId: id) }
-            return
+            var sent = false
+            for id in backgroundIds {
+                let reachedAgent = await stopBackgroundTask(id: id)
+                sent = sent || reachedAgent
+            }
+            for id in childIds {
+                let reachedAgent = await cancelSubagent(subagentSessionId: id)
+                sent = sent || reachedAgent
+            }
+            return sent
         }
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
@@ -2312,23 +2322,23 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         if confirmingLease {
             // A former writer that lost the lease must not send a cancel RPC to
             // the agent for a session another instance now owns. The local
             // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
             // it only affects this runner's own sendNow catch path and has no
             // cross-instance side effects.
-            guard await hasConfirmedLeaseForSideEffect() else { return }
+            guard await hasConfirmedLeaseForSideEffect() else { return false }
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return true }
         for id in backgroundIds { await stopBackgroundTask(id: id) }
         for id in childIds { await cancelSubagent(subagentSessionId: id) }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return true }
         await MainActor.run {
             guard self.isConnectionCurrent() else { return }
             flushStreamingPersist()
@@ -2387,6 +2397,7 @@ final class ACPSessionRunner {
             }
             flushQueueIfIdle()
         }
+        return true
     }
 }
 
@@ -2398,15 +2409,21 @@ extension ACPSessionRunner {
     /// The child's terminal state comes back as a `subagent_state_update`;
     /// nothing is assumed locally, because an agent may finish the child
     /// normally in the window before the cancel lands.
-    func cancelSubagent(subagentSessionId: String) async {
-        guard isConnectionCurrent() else { return }
+    @discardableResult
+    func cancelSubagent(subagentSessionId: String) async -> Bool {
+        guard isConnectionCurrent() else { return false }
         guard let run = session.subagentRun(subagentSessionId),
               run.capabilities.supportsCancel,
               run.isRunning
-        else { return }
-        guard await hasConfirmedLeaseForSideEffect() else { return }
-        guard isConnectionCurrent() else { return }
-        try? await connection.cancel(sessionId: subagentSessionId)
+        else { return false }
+        guard await hasConfirmedLeaseForSideEffect() else { return false }
+        guard isConnectionCurrent() else { return false }
+        do {
+            try await connection.cancel(sessionId: subagentSessionId)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Legacy callsite shim: defaults to `.auto` intent (immediate send
@@ -5009,21 +5026,24 @@ extension ACPSessionRunner {
         })
     }
 
-    func stopBackgroundTask(id: String) async {
+    @discardableResult
+    func stopBackgroundTask(id: String) async -> Bool {
         guard isConnectionCurrent(), session.backgroundTaskStopSupported,
               let task = session.backgroundTasks.first(where: { $0.id == id }),
-              task.isActive, task.canStop, !backgroundStopRequests.contains(id) else { return }
+              task.isActive, task.canStop, !backgroundStopRequests.contains(id) else { return false }
         backgroundStopRequests.insert(id)
         defer { backgroundStopRequests.remove(id) }
-        guard await hasConfirmedLeaseForSideEffect(), isConnectionCurrent() else { return }
+        guard await hasConfirmedLeaseForSideEffect(), isConnectionCurrent() else { return false }
+        var reachedAgent = false
         let errorMessage: String?
         do {
             // Both adapters keep the control runtime on the ROOT session even
             // when a notification is routed to a native child transcript.
             let stopped = try await connection.stopBackgroundTask(
                 sessionId: session.remoteSessionId ?? sessionId, asyncTaskId: task.asyncTaskId)
+            reachedAgent = true
             errorMessage = stopped ? nil : "The adapter did not stop this task."
-            guard isConnectionCurrent(), holdsLeaseForWrite() else { return }
+            guard isConnectionCurrent(), holdsLeaseForWrite() else { return reachedAgent }
             if stopped, var current = session.backgroundTasks.first(where: { $0.id == id }), current.isActive {
                 current.merge(.init(sessionUpdate: "async_task_state_update", asyncTaskId: current.asyncTaskId,
                     state: "stopped"), wakeOnCompletion: false)
@@ -5034,8 +5054,9 @@ extension ACPSessionRunner {
         }
         guard isConnectionCurrent(), holdsLeaseForWrite(),
               var current = session.backgroundTasks.first(where: { $0.id == id }),
-              current.isActive else { return }
+              current.isActive else { return reachedAgent }
         current.stopError = errorMessage
         persistIndices(session.saveBackgroundTask(current))
+        return reachedAgent
     }
 }

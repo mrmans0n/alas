@@ -18,6 +18,19 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     /// value from a newer build still decodes.
     var childNoticeKind: String? = nil
 
+    /// Individual inbox identities retained by a combined parent prompt.
+    /// Nil for single deliveries and sources saved by older builds.
+    var batchedSources: [ACPDelegatedPromptSource]? = nil
+
+    var deliveries: [ACPDelegatedPromptSource] { batchedSources ?? [self] }
+
+    static func batch(_ sources: [ACPDelegatedPromptSource]) -> ACPDelegatedPromptSource {
+        let deliveries = sources.flatMap(\.deliveries)
+        var source = deliveries[0]
+        source.batchedSources = deliveries.count > 1 ? deliveries : nil
+        return source
+    }
+
     static let childRelationship = "child"
 
     var isFromChild: Bool { senderRelationship == Self.childRelationship }
@@ -55,7 +68,11 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
     /// fields, so a prompt recorded before they existed still dedupes a
     /// redelivery that carries them.
     func isSameDelivery(as other: ACPDelegatedPromptSource) -> Bool {
-        sessionId == other.sessionId && messageId == other.messageId
+        deliveries.contains { delivery in
+            other.deliveries.contains {
+                delivery.sessionId == $0.sessionId && delivery.messageId == $0.messageId
+            }
+        }
     }
 
     /// The caption above a delivered prompt in the receiving transcript:
@@ -65,6 +82,10 @@ struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         for source: ACPDelegatedPromptSource,
         agentDisplayName: (String) -> String
     ) -> String {
+        if let batch = source.batchedSources {
+            let count = Set(batch.map(\.sessionId)).count
+            return "Updates from \(count) child \(count == 1 ? "session" : "sessions")"
+        }
         guard source.isFromChild else { return "Delegated prompt" }
         let shortId = String(source.sessionId.prefix(8))
         let child = source.senderAgentId.flatMap { $0.isEmpty ? nil : agentDisplayName($0) }

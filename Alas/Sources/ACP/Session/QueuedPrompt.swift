@@ -32,7 +32,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     var draft: ACPComposerDraft?
     /// Present only for prompts delivered by a direct delegated-session edge.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
-    let delegatedSource: ACPDelegatedPromptSource?
+    var delegatedSource: ACPDelegatedPromptSource?
     let backgroundTaskWake: String?
     var brokerOperationAttempt: Int
     /// The broker generation on which this prompt crossed the dispatch

@@ -184,9 +184,10 @@ private struct SessionsPopover: View {
                     .foregroundStyle(theme.color("fg-faint"))
                     .frame(width: 14)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(summary.relationship == "parent" ? "Delegated by parent" : "Child session")
+                    Text(summary.relationship == "parent" ? "Delegated by parent" : summary.role.map { "Child session · \($0)" } ?? "Child session")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.color("fg"))
+                        .lineLimit(1)
                     Text(ACPDelegatedSessionsPolicy.statusLabel(for: summary.state))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(summary.state == "failed" ? theme.color("del") : theme.color("fg-faint"))

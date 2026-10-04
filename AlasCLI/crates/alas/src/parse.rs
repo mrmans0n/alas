@@ -24,8 +24,12 @@ usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
-usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
+usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
+usage: alas session read <session-id> [--offset <n>] [--limit <1...100>] [--max-chars <1...100000>]
+usage: alas session search <query> [--limit <1...100>]
+usage: alas session wait <session-id> [session-id...] [--timeout-ms <1...20000>]
+usage: alas session interrupt <session-id>
 usage: alas review [target] [--worktree <name-or-path>]
 usage: alas review -- <target> [--worktree <name-or-path>]  (escapes a target named like a review subcommand)
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
@@ -390,16 +394,111 @@ fn parse_session(args: &[&str]) -> Result<Command, String> {
                 prompt: args[2].to_string(),
             })
         }
+        Some("read") => parse_session_read(&args[1..]),
+        Some("search") => parse_session_search(&args[1..]),
+        Some("wait") => parse_session_wait(&args[1..]),
+        Some("interrupt") => {
+            const USAGE: &str = "usage: alas session interrupt <session-id>";
+            if args.len() != 2 {
+                return Err(USAGE.into());
+            }
+            Ok(Command::SessionInterrupt {
+                session_id: non_empty(args[1], "session-id").map_err(|_| USAGE)?,
+            })
+        }
         _ => Err(USAGE_ALL.into()),
     }
 }
 
+fn parse_session_read(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas session read <session-id> [--offset <n>] [--limit <1...100>] [--max-chars <1...100000>]";
+    let session_id = match args.first() {
+        Some(id) if !id.starts_with("--") => non_empty(id, "session-id").map_err(|_| USAGE)?,
+        _ => return Err(USAGE.into()),
+    };
+    let (mut offset, mut limit, mut max_chars) = (None, None, None);
+    let mut i = 1;
+    while i < args.len() {
+        let (slot, min, max) = match args[i] {
+            "--offset" => (&mut offset, 0, u64::MAX),
+            "--limit" => (&mut limit, 1, 100),
+            "--max-chars" => (&mut max_chars, 1, 100_000),
+            _ => return Err(USAGE.into()),
+        };
+        if slot.is_some() {
+            return Err(USAGE.into());
+        }
+        i += 1;
+        *slot = Some(bounded_u64(
+            flag_value(args, i).ok_or(USAGE)?,
+            min,
+            max,
+            USAGE,
+        )?);
+        i += 1;
+    }
+    Ok(Command::SessionRead {
+        session_id,
+        offset,
+        limit,
+        max_chars,
+    })
+}
+
+fn parse_session_search(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas session search <query> [--limit <1...100>]";
+    let query = match args.first() {
+        Some(query) if !query.starts_with("--") => non_empty(query, "query").map_err(|_| USAGE)?,
+        _ => return Err(USAGE.into()),
+    };
+    let limit = match &args[1..] {
+        [] => None,
+        ["--limit", value] => Some(bounded_u64(value, 1, 100, USAGE)?),
+        _ => return Err(USAGE.into()),
+    };
+    Ok(Command::SessionSearch { query, limit })
+}
+
+fn parse_session_wait(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str =
+        "usage: alas session wait <session-id> [session-id...] [--timeout-ms <1...20000>]";
+    let mut session_ids = Vec::new();
+    let mut timeout_ms = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--timeout-ms" if timeout_ms.is_none() => {
+                i += 1;
+                timeout_ms = Some(bounded_u64(
+                    flag_value(args, i).ok_or(USAGE)?,
+                    1,
+                    20_000,
+                    USAGE,
+                )?);
+            }
+            id if !id.starts_with("--") => {
+                session_ids.push(non_empty(id, "session-id").map_err(|_| USAGE)?);
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    if session_ids.is_empty() || session_ids.len() > 20 {
+        return Err(USAGE.into());
+    }
+    Ok(Command::SessionWait {
+        session_ids,
+        timeout_ms,
+    })
+}
+
 fn parse_session_new(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
+    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
     let mut prompt = None;
     let mut agent = None;
     let mut model = None;
     let mut reasoning = None;
+    let mut role = None;
     let mut existing_worktree = None;
     let mut new_worktree = None;
     let mut base = None;
@@ -410,6 +509,7 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
             "--agent" => &mut agent,
             "--model" => &mut model,
             "--reasoning" => &mut reasoning,
+            "--role" => &mut role,
             "--worktree" => &mut existing_worktree,
             "--new-worktree" => &mut new_worktree,
             "--base" => &mut base,
@@ -445,6 +545,7 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
         worktree,
         model,
         reasoning,
+        role,
     })
 }
 
@@ -1628,6 +1729,17 @@ mod tests {
     }
 
     #[test]
+    fn child_role_is_accepted_by_the_cli() {
+        let command = parse(
+            &s(&["session", "new", "--prompt", "Review", "--role", "reviewer"]),
+            Path::new("/wt"),
+        )
+        .unwrap();
+        let request = alas_client::build_session_request(&command, "parent".into(), "/wt".into());
+        assert_eq!(request.params.unwrap()["role"], "reviewer");
+    }
+
+    #[test]
     fn session_commands_parse_and_validate() {
         assert_eq!(
             parse(&s(&["agent", "list"]), Path::new("/b")).unwrap(),
@@ -1682,6 +1794,7 @@ mod tests {
                 },
                 model: Some("gpt-5.2".into()),
                 reasoning: Some("high".into()),
+                role: None,
             }
         );
         assert_eq!(
@@ -1708,6 +1821,7 @@ mod tests {
                 },
                 model: None,
                 reasoning: None,
+                role: None,
             }
         );
         assert_eq!(
@@ -1743,6 +1857,8 @@ mod tests {
                 "origin/main",
             ]
             .as_slice(),
+            ["session", "new", "--prompt", "Task", "--role", " "].as_slice(),
+            ["session", "new", "--prompt", "Task", "--role"].as_slice(),
             ["session", "new", "--prompt", "Task", "--model"].as_slice(),
             ["session", "new", "--prompt", "Task", "--model", " "].as_slice(),
             [
@@ -1759,6 +1875,75 @@ mod tests {
             ["session", "send", "child"].as_slice(),
         ] {
             assert!(parse(&s(invalid), Path::new("/b")).is_err());
+        }
+    }
+
+    #[test]
+    fn session_observation_commands_parse_and_validate() {
+        assert_eq!(
+            parse(
+                &s(&[
+                    "session",
+                    "read",
+                    "child",
+                    "--offset",
+                    "0",
+                    "--max-chars",
+                    "500"
+                ]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::SessionRead {
+                session_id: "child".into(),
+                offset: Some(0),
+                limit: None,
+                max_chars: Some(500),
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["session", "search", "parser bug", "--limit", "5"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::SessionSearch {
+                query: "parser bug".into(),
+                limit: Some(5),
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["session", "wait", "a", "--timeout-ms", "1000", "b"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::SessionWait {
+                session_ids: vec!["a".into(), "b".into()],
+                timeout_ms: Some(1000),
+            }
+        );
+        assert_eq!(
+            parse(&s(&["session", "interrupt", "child"]), Path::new("/b")).unwrap(),
+            Command::SessionInterrupt {
+                session_id: "child".into()
+            }
+        );
+        for invalid in [
+            ["session", "read"].as_slice(),
+            ["session", "read", "child", "--limit", "0"].as_slice(),
+            ["session", "read", "child", "--limit", "5", "--limit", "6"].as_slice(),
+            ["session", "read", "child", "--max-chars"].as_slice(),
+            ["session", "search"].as_slice(),
+            ["session", "search", " "].as_slice(),
+            ["session", "search", "q", "--limit", "101"].as_slice(),
+            ["session", "wait"].as_slice(),
+            ["session", "wait", "a", "--timeout-ms", "20001"].as_slice(),
+            ["session", "wait", "--timeout-ms", "100"].as_slice(),
+            ["session", "interrupt"].as_slice(),
+            ["session", "interrupt", "a", "b"].as_slice(),
+        ] {
+            assert!(parse(&s(invalid), Path::new("/b")).is_err(), "{invalid:?}");
         }
     }
 

@@ -51,9 +51,12 @@ struct AlasCLIRequest: Equatable {
             agentID: String?,
             worktree: SessionWorktreeSelector,
             model: String? = nil,
-            reasoning: String? = nil
+            reasoning: String? = nil,
+            role: String? = nil
         )
         case sessionSend(sessionID: String, prompt: String)
+        /// `session_read`, `session_search`, `session_wait`, `session_interrupt`.
+        case sessionAction(ACPDelegatedSessionAction)
         case resolve
     }
 
@@ -82,11 +85,11 @@ struct AlasCLIRequest: Equatable {
             ))
         case .agentList(let worktree):
             mapped = .agentList(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) })
-        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning):
+        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning, let role):
             mapped = .sessionNew(
                 prompt: prompt, agentID: agentID,
                 worktree: .existing(worktreeID: RemotePath.virtualizing(id, like: anchor)),
-                model: model, reasoning: reasoning
+                model: model, reasoning: reasoning, role: role
             )
         default:
             return self
@@ -223,6 +226,7 @@ struct AlasCLIRequest: Equatable {
         var agent: String?
         var model: String?
         var reasoning: String?
+        var role: String?
         var worktree: String?
         var new_worktree: NewWorktree?
     }
@@ -230,6 +234,27 @@ struct AlasCLIRequest: Equatable {
     private struct SessionSendParams: Decodable {
         var session_id: String
         var prompt: String
+    }
+
+    private struct SessionReadParams: Decodable {
+        var session_id: String
+        var offset: Int?
+        var limit: Int?
+        var max_chars: Int?
+    }
+
+    private struct SessionSearchParams: Decodable {
+        var query: String
+        var limit: Int?
+    }
+
+    private struct SessionWaitParams: Decodable {
+        var session_ids: [String]
+        var timeout_ms: Int?
+    }
+
+    private struct SessionInterruptParams: Decodable {
+        var session_id: String
     }
 
     private struct WorkspaceParams: Decodable {
@@ -275,6 +300,13 @@ struct AlasCLIRequest: Equatable {
                 throw AlasCLIRequestError.missingPaths
             }
             return paths
+        }
+
+        /// `value` when inside `range`, `fallback` when absent.
+        func bounded(_ value: Int?, _ range: ClosedRange<Int>, default fallback: Int) throws -> Int {
+            guard let value else { return fallback }
+            guard range.contains(value) else { throw AlasCLIRequestError.malformed }
+            return value
         }
 
         func requiredUUID(_ value: String?) throws -> UUID {
@@ -471,7 +503,8 @@ struct AlasCLIRequest: Equatable {
                 agentID: try params.agent.map(requiredNonEmpty),
                 worktree: worktree,
                 model: try params.model.map(requiredNonEmpty),
-                reasoning: try params.reasoning.map(requiredNonEmpty)
+                reasoning: try params.reasoning.map(requiredNonEmpty),
+                role: try params.role.map(requiredNonEmpty)
             )
         case "session_send":
             let params = try Self.decodeParams(SessionSendParams.self, from: data)
@@ -479,6 +512,45 @@ struct AlasCLIRequest: Equatable {
                 sessionID: try requiredNonEmpty(params.session_id),
                 prompt: try requiredNonEmpty(params.prompt)
             )
+        case "session_read":
+            let params = try Self.decodeParams(SessionReadParams.self, from: data)
+            if let offset = params.offset, offset < 0 { throw AlasCLIRequestError.malformed }
+            command = .sessionAction(.read(ACPDelegatedSessionReadRequest(
+                targetSessionId: try requiredNonEmpty(params.session_id),
+                offset: params.offset,
+                limit: try bounded(
+                    params.limit, 1...ACPDelegatedSessionReadRequest.maxLimit,
+                    default: ACPDelegatedSessionReadRequest.defaultLimit
+                ),
+                maxChars: try bounded(
+                    params.max_chars, 1...ACPDelegatedSessionReadRequest.maxMaxChars,
+                    default: ACPDelegatedSessionReadRequest.defaultMaxChars
+                )
+            )))
+        case "session_search":
+            let params = try Self.decodeParams(SessionSearchParams.self, from: data)
+            command = .sessionAction(.search(ACPDelegatedSessionSearchRequest(
+                query: try requiredNonEmpty(params.query),
+                limit: try bounded(
+                    params.limit, 1...ACPDelegatedSessionSearchRequest.maxLimit,
+                    default: ACPDelegatedSessionSearchRequest.defaultLimit
+                )
+            )))
+        case "session_wait":
+            let params = try Self.decodeParams(SessionWaitParams.self, from: data)
+            guard (1...ACPDelegatedSessionWaitRequest.maxSessions).contains(params.session_ids.count) else {
+                throw AlasCLIRequestError.malformed
+            }
+            command = .sessionAction(.wait(ACPDelegatedSessionWaitRequest(
+                targetSessionIds: try params.session_ids.map(requiredNonEmpty),
+                timeoutMillis: try bounded(
+                    params.timeout_ms, 1...ACPDelegatedSessionWaitRequest.maxTimeoutMillis,
+                    default: ACPDelegatedSessionWaitRequest.maxTimeoutMillis
+                )
+            )))
+        case "session_interrupt":
+            let params = try Self.decodeParams(SessionInterruptParams.self, from: data)
+            command = .sessionAction(.interrupt(targetSessionId: try requiredNonEmpty(params.session_id)))
         case let name? where name.hasPrefix("preview_"):
             guard let action = WebPreviewCommand.Action(rawValue: String(name.dropFirst("preview_".count))) else {
                 throw AlasCLIRequestError.unsupportedCommand

@@ -316,10 +316,26 @@ themselves and running `omp` from the shell.
 Delegated children are leaves in every case. Their MCP discovery does not list
 `session_new`, and Alas still rejects a direct `session_new` call from a child.
 
+## Child roles
+
+`session_new` accepts an optional `role`, such as `planner`, `implementer`, or
+`reviewer`. The CLI equivalent is `alas session new --role reviewer --prompt
+"Review the parser changes"`. Alas stores the role with the delegation, shows
+it on the child row and in `session_list`, and includes it in the child's
+initial task context, including when startup resumes after an app restart.
+Roles describe the task; they do not change the child's permissions or tools.
+
 ## Messages between parent and child
 
 `session_send` (or `alas session send`) reaches only a direct parent or a
 direct child. Alas queues the message as a prompt in the target session.
+
+Child reports and wake notices received within 250 ms share one parent prompt.
+Reports arriving while the parent is busy join its pending child-results
+prompt. Each result keeps its labelled child section and delivery identity,
+so reopening a session does not deliver the same result again. Informational
+notices remain transcript notices and do not wake the parent. A result that
+has already started sending, failed, or needs recovery is kept intact.
 
 A child's message to its parent starts with one header line, so the parent
 agent can tell a report from its user's prompt:
@@ -356,6 +372,57 @@ A delegated prompt that arrives while the target is mid-turn waits for the
 turn to end, but it is not listed in the target's **Up next** queue and does
 not count toward its queue badge: it is not the user's to edit, reorder, or
 remove, and **Clear all** leaves it in place. If sending one fails, it appears in the queue with its error so you can retry or remove it.
+
+## Reading, waiting on, and stopping sessions
+
+Four more tools act on the same direct edges. Each returns one JSON line.
+
+| MCP tool | CLI | Who may call it | What it does |
+|---|---|---|---|
+| `session_read` | `alas session read <id> [--offset <n>] [--limit <n>] [--max-chars <n>]` | parent or child, on the other | One page of the transcript |
+| `session_search` | `alas session search <query> [--limit <n>]` | any session | Case-insensitive text search across its direct parent and children |
+| `session_wait` | `alas session wait <id>... [--timeout-ms <n>]` | parent, on its children | Blocks until every listed child settles, or the timeout passes |
+| `session_interrupt` | `alas session interrupt <id>` | parent, on its children | Cancels the child's running turn, like **Stop** |
+
+Siblings, sessions in other projects, and sessions outside a delegation are
+not reachable, so a child can read its parent but not another child of that
+parent. Delegated children's MCP discovery leaves out `session_wait` and
+`session_interrupt`, as it leaves out `session_new`, and Alas rejects them from
+a child anyway.
+
+**Transcripts.** A transcript is a list of entries with an `index`, a `role`
+(`user`, `agent`, `tool`, or `system`), and `text`. Tool calls and file edits
+appear as one-line summaries such as `Bash [completed]`; their output is not
+included. Thoughts and plans are left out. Without `--offset`, `session_read`
+returns the latest entries; otherwise it reads forward from that index. The
+reply's `end` is the offset to continue from, and `total` is the entry count.
+While the session is running, `end` stops on its last entry, which may still
+be growing, so the next page reads that entry again in full.
+`--limit` (1 to 100, default 20) caps entries and `--max-chars` (1 to 100,000,
+default 8,000) caps their combined text. When the first entry alone is over the
+budget it is cut and marked `"truncated": true`. Search matches carry the
+session id, the entry index (a valid `--offset`), and a snippet. An archived
+session's transcript is not readable.
+
+**Waiting.** A child is settled when it is not starting, has no turn running,
+and has no prompt queued or undelivered, so waiting right after `session_send`
+does not return before that prompt has run. A child blocked on a permission,
+question, or plan prompt is also settled, with state `awaiting_input`. A child
+with no live session in this Alas instance is judged by its stored queue, and
+stays unsettled when that store cannot be reached. Every prompt a parent sends
+goes through that queue, but a turn the user starts from the child's tab in
+another Alas instance does not, so a wait cannot see it. The
+timeout is 1 to 20,000 ms (default 20,000), below the CLI's 30-second socket
+limit; call again while `timed_out` is `true`. Each session in the reply has
+its `state`, `settled`, the tail of its latest agent message as
+`last_agent_text`, and any `failure`. Waiting does not replace the outcome
+prompts above: a child that finishes without reporting still wakes the parent.
+
+**Interrupting.** `cancel_requested` is `false` when the child had nothing
+running, or when another Alas instance holds its lease and this one cannot stop
+it. Cancelling a turn cancels any permission request it was blocked on.
+No session tool can approve a permission request, the caller's own or another
+session's: only the user can.
 
 ## Across an app restart
 

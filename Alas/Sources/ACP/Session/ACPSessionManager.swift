@@ -422,9 +422,12 @@ final class ACPSessionManager: ObservableObject {
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded
     /// on the live lease for the same cross-process-takeover reason as `sendPrompt`.
-    func interrupt(for id: ACPSession.ID) async {
-        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return }
-        await runner.userCancel()
+    /// Returns false when nothing was cancelled because this instance does
+    /// not drive the session.
+    @discardableResult
+    func interrupt(for id: ACPSession.ID) async -> Bool {
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return false }
+        return await runner.userCancel()
     }
 
     func controlGoal(
@@ -7989,30 +7992,64 @@ extension ACPSessionManager {
         text: String,
         source: ACPDelegatedPromptSource,
         into sessionId: ACPSession.ID,
-        ahead: Bool = false
+        ahead: Bool = false,
+        requiringWriter: Bool = false
     ) async -> Bool {
-        guard var session = sessions[sessionId] else { return false }
-        let suggestionSession = session
+        await enqueueDelegatedPrompts([(text, source)], into: sessionId, ahead: ahead, requiringWriter: requiringWriter)
+    }
+
+    /// Accepts a snapshot of inbox deliveries before dispatching any of them.
+    /// Child results can extend an unsent batch while the parent is busy.
+    @discardableResult
+    func enqueueDelegatedPrompts(
+        _ prompts: [(text: String, source: ACPDelegatedPromptSource)],
+        into sessionId: ACPSession.ID,
+        ahead: Bool = false,
+        requiringWriter: Bool = false
+    ) async -> Bool {
+        guard let suggestionSession = sessions[sessionId] else { return false }
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
-        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
-            return true
-        }
+        let deliveryFence = leaseFence(sessionId: sessionId)
+        guard !requiringWriter || deliveryFence != nil else { return false }
         await awaitBackfill(id: sessionId)
-        guard let currentSession = sessions[sessionId] else { return false }
-        session = currentSession
-        guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
+        guard !requiringWriter || leaseFence(sessionId: sessionId) == deliveryFence else { return false }
+        guard let session = sessions[sessionId] else { return false }
+        var seen = session.queue.compactMap(\.delegatedSource)
+        seen += session.transcript.messages.compactMap { message in
+            guard case .user(_, _, _, _, let source) = message else { return nil }
+            return source
+        }
+        let pending = prompts.filter { prompt in
+            guard !seen.contains(where: { $0.isSameDelivery(as: prompt.source) }) else { return false }
+            seen.append(prompt.source)
             return true
         }
-        guard !session.transcript.messages.contains(where: { message in
-            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
-            return recordedSource?.isSameDelivery(as: source) == true
-        }) else {
-            return true
-        }
+        guard !pending.isEmpty else { return true }
+        let source = ACPDelegatedPromptSource.batch(pending.map(\.source))
+        let text = pending.map(\.text).joined(separator: "\n\n")
         let blocks = ACPSessionRunner.blocks(text: text, attachments: [])
-        session.enqueue(blocks: blocks, delegatedSource: source, ahead: ahead)
-        let fence = leaseFence(sessionId: sessionId)
+        let batchIndex = source.isFromChild && !ahead ? session.queue.firstIndex {
+            $0.delegatedSource?.isFromChild == true && $0.status == .pending
+                && !$0.transcriptRecorded && !$0.deliveryUncertain
+                && $0.lastError == nil && $0.scheduledAt == nil
+        } : nil
+        let previousItem = batchIndex.map { session.queue[$0] }
+        let itemID: UUID
+        if let batchIndex, let previousItem, let previousSource = previousItem.delegatedSource {
+            var item = previousItem
+            item.blocks = [.text(previousItem.blocks.compactMap { block -> String? in
+                guard case .text(let text) = block else { return nil }
+                return text
+            }.joined() + "\n\n" + text)]
+            item.delegatedSource = .batch([previousSource, source])
+            session.queue[batchIndex] = item
+            itemID = item.id
+        } else {
+            itemID = UUID()
+            session.enqueue(id: itemID, blocks: blocks, delegatedSource: source, ahead: ahead)
+        }
+        let fence = deliveryFence ?? leaseFence(sessionId: sessionId)
         let items = session.queue
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
@@ -8023,7 +8060,10 @@ extension ACPSessionManager {
         session.pendingQueuePersistenceCount -= 1
         endManagerQueuePersistence(sessionId: sessionId)
         guard persisted else {
-            session.queue.removeAll { $0.delegatedSource == source }
+            if let index = session.queue.firstIndex(where: { $0.id == itemID }) {
+                if let previousItem { session.queue[index] = previousItem }
+                else { session.queue.remove(at: index) }
+            }
             runners[sessionId]?.flushQueueIfIdle()
             return false
         }

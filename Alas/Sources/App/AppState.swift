@@ -7428,6 +7428,9 @@ final class AppState {
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
             },
+            performDelegatedSessionAction: { origin, action in
+                await orchestration.perform(origin: origin, action)
+            },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)
@@ -14125,66 +14128,7 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
-        if ACPSessionOrchestrationPolicy.defersInboxDelivery(
-            target: try? await acpOrchestrationPersistence.delegation(childSessionId: sessionId)
-        ) {
-            return
-        }
-        let session = manager.liveSession(for: sessionId)
-        session?.nextPromptWorkCount += 1
-        defer { session?.nextPromptWorkCount -= 1 }
-        guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
-            return
-        }
-        session?.hasPendingDelegatedMessages = !messages.isEmpty
-        await manager.attach(to: sessionId, freshlyCreated: false)
-        guard manager.isWriter(for: sessionId) else {
-            manager.notifyDelegatedMessagesAvailable()
-            return
-        }
-        for message in messages {
-            guard let claimed = try? await acpOrchestrationPersistence.claimMessage(
-                id: message.id,
-                instanceId: instanceId,
-                token: UUID().uuidString,
-                now: Int64(Date().timeIntervalSince1970),
-                staleAfter: 60
-            ) else { continue }
-            let accepted: Bool
-            switch claimed.message.kind {
-            case .prompt:
-                accepted = await manager.enqueueDelegatedPrompt(
-                    text: claimed.message.prompt,
-                    source: ACPDelegatedPromptSource(
-                        message: claimed.message,
-                        senderDelegation: try? await acpOrchestrationPersistence.delegation(
-                            childSessionId: claimed.message.sourceSessionId
-                        )
-                    ),
-                    into: sessionId
-                )
-            case .notice:
-                accepted = await manager.appendDelegatedNotice(
-                    text: claimed.message.prompt,
-                    into: sessionId
-                )
-            }
-            if accepted {
-                try? await acpOrchestrationPersistence.removeDeliveredMessage(
-                    id: claimed.message.id,
-                    claim: claimed.claim
-                )
-            } else {
-                try? await acpOrchestrationPersistence.releaseMessageClaim(
-                    id: claimed.message.id,
-                    claim: claimed.claim
-                )
-                manager.notifyDelegatedMessagesAvailable()
-            }
-        }
-        if let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) {
-            session?.hasPendingDelegatedMessages = !remaining.isEmpty
-        }
+        await acpOrchestration.deliverPendingMessages(to: sessionId, manager: manager)
     }
 
     func delegatedSessionSummaries(for sessionId: String) async -> [ACPOrchestrationSessionSummary] {
@@ -14222,7 +14166,8 @@ final class AppState {
                     archived: archived
                 ).rawValue,
                 failure: record.failureMessage,
-                createdAt: record.createdAt
+                createdAt: record.createdAt,
+                role: record.role
             ))
         }
         if let parent {
