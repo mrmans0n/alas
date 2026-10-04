@@ -4,6 +4,14 @@ import Testing
 
 @Suite("ACPAdapterVersionChecker")
 struct ACPAdapterVersionCheckerTests {
+    struct DownstreamVersionCase: Sendable, CustomTestStringConvertible {
+        let packageName: String
+        let current: String
+        let latest: String
+        let expected: AdapterUpdateState
+        var testDescription: String { "\(packageName): \(current) → \(latest)" }
+    }
+
     private actor RemoteCalls {
         struct Call: Equatable {
             let host: String
@@ -68,6 +76,76 @@ struct ACPAdapterVersionCheckerTests {
         let c = checker(status: 1, stdout: json)
         let r = await c.check(packageName: "@x/y")
         #expect(r == .upToDate)
+    }
+
+    @Test(arguments: [
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.1-alas.1", latest: "2.1.1-alas.2",
+            expected: .available(current: "2.1.1-alas.1", latest: "2.1.1-alas.2")
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/claude-agent-acp", current: "2.1.0-alas.9", latest: "2.1.1-alas.1",
+            expected: .available(current: "2.1.0-alas.9", latest: "2.1.1-alas.1")
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.2-alas.1", latest: "2.1.1-alas.2",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-beta.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-rc.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-next.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-alas.0",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-alas.01",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.0", latest: "2.1.1-alas.1extra",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@other/codex-acp", current: "2.1.0", latest: "2.1.1-alas.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@other/codex-acp", current: "2.1.0", latest: "2.1.1-beta.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@other/codex-acp", current: "2.1.0", latest: "2.1.1-rc.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@other/codex-acp", current: "2.1.0", latest: "2.1.1-next.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "pi-acp", current: "2.1.0", latest: "2.1.1-alas.1",
+            expected: .upToDate
+        ),
+    ])
+    func recognizesOnlyDownstreamAdapterReleases(_ version: DownstreamVersionCase) {
+        let json = """
+        {"\(version.packageName)":{"current":"\(version.current)","latest":"\(version.latest)"}}
+        """
+
+        #expect(ACPAdapterVersionChecker.parse(
+            packageName: version.packageName,
+            status: 1,
+            stdout: json
+        ) == version.expected)
     }
 
     @Test("current newer than latest is up to date")
@@ -151,10 +229,12 @@ struct ACPAdapterVersionCheckerTests {
         #expect(captured.argv == ["npm", "outdated", "-g", "pi-acp", "--json"])
     }
 
-    @Test("remote managed package uses its private prefix and resolved Node environment")
-    func remoteManagedPrefixCommand() async {
+    @Test("remote managed package uses its private prefix and resolved Node environment", arguments: [
+        ACPManagedAdapterDescriptor.claude, .codex,
+    ])
+    func remoteManagedPrefixCommand(_ descriptor: ACPManagedAdapterDescriptor) async {
         let calls = RemoteCalls()
-        let json = #"{"@agentclientprotocol/codex-acp":{"current":"1.0.0","latest":"1.1.0"}}"#
+        let json = #"{"\#(descriptor.packageName)":{"current":"1.0.0","latest":"1.1.0"}}"#
         let checker = ACPAdapterVersionChecker(
             remoteRunner: { host, cwd, command, pathPolicy in
                 await calls.append(.init(host: host, cwd: cwd, command: command, pathPolicy: pathPolicy))
@@ -166,18 +246,19 @@ struct ACPAdapterVersionCheckerTests {
             nodeResolver: { _ in remoteEnvironment }
         )
 
-        let result = await checker.check(host: "dev@example", descriptor: .codex)
+        let result = await checker.check(host: "dev@example", descriptor: descriptor)
         let recorded = await calls.values
 
         #expect(result == .available(current: "1.0.0", latest: "1.1.0"))
         #expect(recorded.count == 2)
         #expect(recorded.allSatisfy { $0.host == "dev@example" && $0.cwd == nil && $0.pathPolicy == .inherited })
         #expect(recorded[0].command.contains("$prefix/lib/node_modules/$package"))
+        #expect(recorded[0].command.contains("package='\(descriptor.packageName)'"))
         #expect(recorded[1].command == """
         PATH='/opt/node/bin':"$PATH"
         export PATH
-        prefix=$HOME/.alas/acp/codex
-        '/opt/node/bin/npm' outdated -g '@agentclientprotocol/codex-acp' --json --prefix "$prefix"
+        prefix=\(ACPRemoteAdapterManagement.managedPrefix(for: descriptor))
+        '/opt/node/bin/npm' outdated -g '\(descriptor.packageName)' --json --prefix "$prefix"
         """)
     }
 

@@ -174,16 +174,35 @@ struct ACPAdapterVersionChecker: Sendable {
         guard let latest = entry["latest"] as? String
         else { return .unknown }
 
-        if isPrerelease(latest) { return .upToDate }
+        if isIgnoredPrerelease(packageName: packageName, version: latest) { return .upToDate }
         if current == latest    { return .upToDate }
-        if compareSemver(current, latest) == .orderedDescending { return .upToDate }
+        let currentBase = downstreamBaseVersion(packageName: packageName, version: current) ?? current
+        let latestBase = downstreamBaseVersion(packageName: packageName, version: latest) ?? latest
+        if compareSemver(currentBase, latestBase) == .orderedDescending { return .upToDate }
         return .available(current: current, latest: latest)
     }
 
-    /// Treat any version containing a `-` segment as a prerelease (covers
-    /// `1.2.0-beta.1`, `1.0.0-rc.0`, `2.0.0-next.5`, etc.).
-    private static func isPrerelease(_ version: String) -> Bool {
-        version.contains("-")
+    private static func isIgnoredPrerelease(packageName: String, version: String) -> Bool {
+        version.contains("-") && downstreamBaseVersion(packageName: packageName, version: version) == nil
+    }
+
+    private static func downstreamBaseVersion(packageName: String, version: String) -> String? {
+        guard packageName.hasPrefix("@alas-ide/"),
+              let suffixRange = version.range(of: "-alas.", options: .backwards)
+        else { return nil }
+
+        let base = String(version[..<suffixRange.lowerBound])
+        let suffix = version[suffixRange.upperBound...]
+        guard !base.isEmpty,
+              !suffix.isEmpty,
+              suffix.first != "0",
+              suffix.allSatisfy(\.isNumber),
+              Int(suffix) != nil,
+              base.split(separator: ".", omittingEmptySubsequences: false)
+                .allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+        else { return nil }
+
+        return base
     }
 
     /// Lexicographic per-component numeric compare. Good enough for

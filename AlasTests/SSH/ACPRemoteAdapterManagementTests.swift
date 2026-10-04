@@ -88,6 +88,28 @@ struct ACPRemoteAdapterManagementTests {
         #expect(globalCommand?.contains("command -v 'pi-acp'") == true)
     }
 
+    @Test(arguments: [ACPManagedAdapterDescriptor.claude, .codex])
+    func scopedGlobalPackageIsQuotedAndResolvedFromNpmRoot(_ descriptor: ACPManagedAdapterDescriptor) async {
+        let runner = AdapterProbeRunner(results: [
+            absentResult(),
+            .init(exitCode: 0, stdout: taggedReady(
+                adapter: "/opt/node/bin/\(descriptor.binaryName)",
+                nodeBin: "/opt/node/bin"
+            ), stderr: ""),
+        ])
+
+        _ = await makeManagement(runner: runner).resolve(
+            host: "devbox",
+            descriptor: descriptor,
+            setupCheck: managedCheck(descriptor)
+        )
+
+        let command = await runner.commands.last
+        #expect(command?.contains("package='\(descriptor.packageName)'") == true)
+        #expect(command?.contains("[ -d \"$root/$package\" ]") == true)
+        #expect(command?.contains("global_adapter=\"$prefix/bin/$binary\"") == true)
+    }
+
     @Test func allowedPathFallbackComesAfterMatchingPackageCheck() async throws {
         let runner = AdapterProbeRunner(results: [absentResult(), missingResult()])
         let management = makeManagement(runner: runner)
@@ -138,7 +160,7 @@ struct ACPRemoteAdapterManagementTests {
         }
         let command = try #require(await runner.commands.last)
         #expect(!command.contains("command -v 'codex-acp'"))
-        #expect(command.contains("'@agentclientprotocol/codex-acp'"))
+        #expect(command.contains("'@alas-ide/codex-acp'"))
     }
 
     @Test func confirmedAbsenceWithUsablePrerequisitesIsMissing() async {
