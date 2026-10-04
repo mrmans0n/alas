@@ -1151,6 +1151,19 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(idleChild == .init(sessionId: "child", cancelRequested: false))
     }
 
+    @Test("interrupting a running child this instance does not drive reports no cancellation")
+    func interruptWithoutWriterLease() async throws {
+        let fixture = try makeOutcomeFixture()
+        let child = try await insertLiveChild(fixture, messages: [])
+        child.transcript.streamingState = .streaming
+
+        let response = try decoded(ACPOrchestrationInterruptResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .interrupt(targetSessionId: "child")
+        ))
+
+        #expect(response == .init(sessionId: "child", cancelRequested: false))
+    }
+
     private func eventuallyLoadDelegation(
         persistence: ACPOrchestrationPersistence,
         childSessionId: String,

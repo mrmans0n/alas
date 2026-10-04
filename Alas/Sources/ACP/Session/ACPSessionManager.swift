@@ -422,9 +422,13 @@ final class ACPSessionManager: ObservableObject {
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded
     /// on the live lease for the same cross-process-takeover reason as `sendPrompt`.
-    func interrupt(for id: ACPSession.ID) async {
-        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return }
+    /// Returns false when nothing was cancelled because this instance does
+    /// not drive the session.
+    @discardableResult
+    func interrupt(for id: ACPSession.ID) async -> Bool {
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return false }
         await runner.userCancel()
+        return true
     }
 
     func controlGoal(

@@ -399,7 +399,8 @@ its `state`, `settled`, the tail of its latest agent message as
 prompts above: a child that finishes without reporting still wakes the parent.
 
 **Interrupting.** `cancel_requested` is `false` when the child had nothing
-running. Cancelling a turn cancels any permission request it was blocked on.
+running, or when another Alas instance holds its lease and this one cannot stop
+it. Cancelling a turn cancels any permission request it was blocked on.
 No session tool can approve a permission request, the caller's own or another
 session's: only the user can.
 

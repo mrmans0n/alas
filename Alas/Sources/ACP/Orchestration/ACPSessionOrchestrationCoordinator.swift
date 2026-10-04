@@ -643,8 +643,10 @@ final class ACPSessionOrchestrationCoordinator {
         else {
             return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: false))
         }
-        await location.manager.interrupt(for: targetSessionId)
-        return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: true))
+        // False when another Alas instance holds the child's writer lease and
+        // this one only mirrors it.
+        let cancelRequested = await location.manager.interrupt(for: targetSessionId)
+        return json(ACPOrchestrationInterruptResponse(sessionId: targetSessionId, cancelRequested: cancelRequested))
     }
 
     private struct ObservationError: Error {
@@ -686,8 +688,11 @@ final class ACPSessionOrchestrationCoordinator {
         ) else {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
-        // A restored tab can still be loading its stored transcript.
+        // A restored tab can still be loading its stored transcript, and
+        // hydration applies only the tail before backfilling older messages,
+        // which would shift every entry index between pages.
         await location.manager.hydrateIfNeeded(id: targetSessionId)
+        await location.manager.awaitBackfill(id: targetSessionId)
         guard let session = location.manager.liveSession(for: targetSessionId) else {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }

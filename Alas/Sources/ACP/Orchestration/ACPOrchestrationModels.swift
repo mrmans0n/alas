@@ -403,8 +403,9 @@ struct ACPOrchestrationWaitResponse: Codable, Equatable, Sendable {
 
 struct ACPOrchestrationInterruptResponse: Codable, Equatable, Sendable {
     let sessionId: String
-    /// False when the session had no turn to cancel. The child's turn
-    /// outcome still arrives the usual way once the agent stops.
+    /// False when the session had no turn to cancel, or another Alas
+    /// instance drives it. The child's turn outcome still arrives the usual
+    /// way once the agent stops.
     let cancelRequested: Bool
 
     enum CodingKeys: String, CodingKey {
