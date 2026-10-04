@@ -6417,10 +6417,10 @@ extension ACPSessionManager {
                                               else { return }
                                               self.onTurnCompleted?(completion)
                                           },
+                                          // A side question's spend is usage too, unlike its completion.
                                           onTurnUsage: { [weak self] completion in
                                               guard let self,
-                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
-                                                    self.sessions[sessionId]?.readOnlyRestricted != true
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
                                               self.onTurnUsage?(completion)
                                           },
