@@ -296,7 +296,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         controller.addScriptMessageHandler(self, contentWorld: Self.bridgeWorld, name: "alas")
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        token = host.attachWebPage(tab: tab) { [weak self] json in self?.receive(json) }
+        attach()
         Task { await self.load() }
     }
 
@@ -389,8 +389,21 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         decisionHandler(!isClosed && navigationResponse.canShowMIMEType ? .allow : .cancel)
     }
 
+    /// Each document is its own page for the host: its bridge starts with an empty queue, so the host's count for
+    /// it starts over too, and late replies or posts for the previous document go to a token that is gone.
+    private func attach() {
+        if let token { host.detachWebPage(tab: tab, token) }
+        token = host.attachWebPage(tab: tab) { [weak self] json in self?.receive(json) }
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard !isClosed else { return }
+        attach()
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !isClosed else { return }
+        attach()
         webView.load(URLRequest(url: PluginWebPolicy.shellURL(pluginID: pluginID)))
     }
 

@@ -1823,7 +1823,13 @@ struct PluginHostTests {
         let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
         #expect(await host.webMessage(tab: 0, page: page, json: #"{"ready":true}"#) == nil)
         #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
-        #expect(host.trace.contains { $0.direction == .toPlugin && $0.text.contains(#""id":7,"result":{}"#) })
+        // Decoded, not matched as text: the encoder does not promise a key order.
+        #expect(host.trace.contains { entry in
+            guard entry.direction == .toPlugin,
+                  let reply = try? JSONSerialization.jsonObject(with: Data(entry.text.utf8)) as? [String: Any]
+            else { return false }
+            return reply["id"] as? Int == 7 && (reply["result"] as? [String: Any])?.isEmpty == true
+        })
 
         host.detachWebPage(tab: 0, detached)
         #expect(await host.webMessage(tab: 0, page: detached, json: "0") == "the page is closed")
@@ -1862,5 +1868,24 @@ struct PluginHostTests {
         #expect(results.last == "busy")
         #expect(await fromOther.value == nil)
         #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
+    }
+
+    /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's
+    /// token is refused even while its messages are still queued.
+    @Test func aReloadedPageGetsAFreshQueueAndTheOldOneIsClosed() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let old = try #require(host.attachWebPage(tab: 0) { _ in })
+        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: old, json: "\(index)") } }
+        // Runs after every old post took its place in the queue, before any delivery returns to the main actor.
+        let renewed = Task {
+            host.detachWebPage(tab: 0, old)
+            return host.attachWebPage(tab: 0) { _ in }
+        }
+        let page = try #require(await renewed.value)
+        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: page, json: "\(index)") } }
+        #expect(await host.webMessage(tab: 0, page: old, json: "0") == "the page is closed")
+        for post in newPosts { #expect(await post.value == nil) }
+        for post in oldPosts { #expect(await post.value == nil) }
     }
 }
