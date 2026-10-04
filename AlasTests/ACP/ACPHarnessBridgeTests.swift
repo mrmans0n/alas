@@ -199,6 +199,23 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"] == nil)
     }
 
+    @Test("a resume that fails after a usage limit badges Failed, not Limited")
+    func failedResumeAfterLimitIsFailed() async {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.usageLimit = ACPUsageLimit(
+            detectedAt: Date(), resetsAt: nil, resetSource: .unknown, probeAttempt: 0, resettable: true
+        )
+        bridge.observe(session: session)
+        session.transcript.streamingState = .streaming
+        await Task.yield()
+        session.turnFailure = "connection reset"
+        session.transcript.streamingState = .idle
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .failed)
+    }
+
     @Test("ACP idle preserves a Pi background workflow")
     func idlePreservesBackgroundWorkflow() async {
         let harness = makeHarness()

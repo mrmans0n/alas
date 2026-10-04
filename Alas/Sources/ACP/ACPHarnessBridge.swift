@@ -106,20 +106,22 @@ final class ACPHarnessBridge {
         let previousState = harness.activityBySession[session.id]?.state
         switch state {
         case .idle:
-            if stop.limited {
-                // A limit is not a finish: no completion history, keep a badge.
-                harness.setExternalActivity(
-                    sessionId: session.id, owner: session.owner, agent: agent, state: .limited,
-                    isSnapshot: isSnapshot, requiresUserInput: !stop.resumeScheduled
-                )
-                return
-            }
             if let failure = stop.failure {
-                // A failed turn is not a finish either: keep the badge until
-                // the next turn replaces it.
+                // A failed turn is not a finish: keep the badge until the next
+                // turn replaces it. It is checked first because it always
+                // describes the latest turn, while a usage limit outlives a
+                // failed resume.
                 harness.setExternalActivity(
                     sessionId: session.id, owner: session.owner, agent: agent, state: .failed,
                     body: failure, isSnapshot: isSnapshot
+                )
+                return
+            }
+            if stop.limited {
+                // A limit is not a finish either: no completion history, keep a badge.
+                harness.setExternalActivity(
+                    sessionId: session.id, owner: session.owner, agent: agent, state: .limited,
+                    isSnapshot: isSnapshot, requiresUserInput: !stop.resumeScheduled
                 )
                 return
             }
