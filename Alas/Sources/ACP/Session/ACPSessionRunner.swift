@@ -3364,7 +3364,10 @@ extension ACPSessionRunner {
                     self.steeringRowPersistencePending = true
                     guard await self.persistSteeringUserRow(from: before, userMessageID: userMessageID,
                                                            boundaryDirty: boundaryDirty, queueItemID: durableQueueItem.item.id) else {
-                        if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation,
+                        // Invalidation cancels delivery, not rollback of this
+                        // exact provisional row. A replacement connection owns
+                        // its own rows and remains fenced out here.
+                        if self.isConnectionCurrent(),
                            let index = self.session.transcript.messages.firstIndex(where: {
                                if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
                                return false

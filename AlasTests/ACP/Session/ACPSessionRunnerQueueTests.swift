@@ -947,10 +947,21 @@ struct ACPSessionRunnerQueueTests {
         #expect(user.seq == 2)
     }
 
-    @Test("a failed steering row transaction preserves replay output and one retryable submission", arguments: [false, true])
-    func failedSteeringRowTransactionDoesNotDuplicateRetry(heldReplay: Bool) async throws {
+    @Test("a failed steering row transaction preserves replay output and one retryable submission", arguments: [(false, false), (true, false), (false, true)])
+    func failedSteeringRowTransactionDoesNotDuplicateRetry(heldReplay: Bool, cancelled: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
-        defer { runner.stop() }
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        defer { runner.stop()
+        Task { await release.open() } }
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if cancelled, !paused, session.transcript.messages.contains(where: { $0.kind == "user" }) {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
         session.supportsSteering = true
         session.transcript.streamingState = .streaming
         let text = StreamingText("working")
@@ -966,14 +977,20 @@ struct ACPSessionRunnerQueueTests {
             """)
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        if cancelled {
+            await saving.wait()
+            await runner.userCancel()
+            await release.open()
+        }
         try await waitUntil { accepted != nil }
         await runner.flushPersistence()
         #expect(accepted == true)
-        #expect(session.transcript.messages.count == (heldReplay ? 2 : 1))
+        #expect(session.transcript.messages.filter { $0.kind == "agent" }.count == (heldReplay ? 2 : 1))
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.isEmpty)
         #expect(text.metadata == nil)
         let retry = try #require(session.queue.first)
         #expect(!retry.transcriptRecorded)
-        #expect(mock.sent.isEmpty)
+        #expect(!mock.sent.contains { $0.method == "_session/steering" || $0.method == "session/prompt" })
         #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.isEmpty)
         if heldReplay {
             let rows = try store.loadMessages(sessionId: "s")
@@ -986,6 +1003,7 @@ struct ACPSessionRunnerQueueTests {
         }
         try store.db.exec("DROP TRIGGER fail_steering_user")
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         runner.forceSendQueuedItem(id: retry.id)
         try await waitUntil { session.queue.isEmpty }
         await runner.flushPersistence()
