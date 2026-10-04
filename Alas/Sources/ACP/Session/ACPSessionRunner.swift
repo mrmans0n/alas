@@ -1624,11 +1624,11 @@ final class ACPSessionRunner {
     private func finishLoadReplaySuppression() {
         suppressingLoadReplay = false
         session.endSuppressedReplaySideEffects()
-        // Disallow streaming boundary crossings until the next prompt starts.
-        // If the prompt already started while a delayed replay flush was still
-        // pending, keep its live-stream boundary setting intact.
+        // A reattached broker turn can still stream without a prompt task
+        // owned by this runner. Restore its persisted steering bindings once
+        // replay ends, while keeping idle late replay behind the boundary.
         if activePromptID == nil {
-            session.allowsStreamingBoundaryCrossing = false
+            session.allowsStreamingBoundaryCrossing = session.transcript.streamingState == .streaming
         }
     }
 

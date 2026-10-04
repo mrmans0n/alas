@@ -343,8 +343,8 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// When false, `appendStreaming` discards chunks that would cross a
     /// completed-output boundary (i.e. create a duplicate agent message bubble).
-    /// The runner sets this false when load-replay suppression ends and true
-    /// when the next prompt starts, preventing late replay frames from creating
+    /// The runner sets this false when load replay ends for an idle turn and
+    /// true for a live or newly started turn, preventing late replay frames from creating
     /// duplicate bubbles while still letting fresh in-progress continuation
     /// chunks through (those target non-completed messages, so the boundary
     /// check is never reached).

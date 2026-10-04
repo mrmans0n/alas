@@ -1365,6 +1365,38 @@ struct ACPSessionRunnerTests {
         try await waitUntil { session.retryStatus == nil }
     }
 
+    @Test("replay completion restores steering bindings only for a streaming turn", arguments: [false, true])
+    func replayCompletionRestoresLiveSteeringBinding(streaming: Bool) async throws {
+        let original = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .agentMessageChunk(.init(messageId: "shared", content: .text(text))))
+        }
+        original.apply(chunk("before").update)
+        _ = original.beginSteeringOutputBoundary()
+        original.recordUserPrompt(text: "redirect", attachments: [])
+        original.apply(chunk("after").update)
+
+        let restored = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        restored.transcript.messages = try original.transcript.messages.map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: ACPMessageCodec.encode($0))
+        }
+        restored.transcript.streamingState = streaming ? .streaming : .idle
+        restored.allowsStreamingBoundaryCrossing = false
+        let (runner, _) = try makeRunner(session: restored)
+        defer { runner.stop() }
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 1)
+        runner.applyIncomingUpdateForTesting(chunk("before"))
+        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: 1)
+        runner.applyIncomingUpdateForTesting(chunk(" continued"))
+
+        #expect(restored.transcript.messages.count == 3)
+        guard case .agent(_, _, let text) = restored.transcript.messages.last else {
+            Issue.record("Missing steering continuation")
+            return
+        }
+        #expect(text.value == (streaming ? "after continued" : "after"))
+    }
+
     @Test("delayed load replay finish keeps active prompt boundary crossing")
     func delayedLoadReplayFinishKeepsActivePromptBoundaryCrossing() async throws {
         let url = FileManager.default.temporaryDirectory
