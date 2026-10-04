@@ -2728,7 +2728,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return restored
         }
         let count = queue.count
-        dropDeliveredQueuedPrompts(among: newlyUncertain)
+        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
@@ -2755,14 +2755,18 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Retry would resend a prompt the agent holds, so they are dropped.
     var deliveredQueuedPromptIDs: Set<UUID> = []
 
-    /// Drops prompts that only just lost their dispatch provenance and that
-    /// the transcript shows answered. An item already persisted as uncertain
-    /// is left alone: a follow-up steered into a running turn records its row
-    /// before steering is confirmed, so output after it is not proof.
-    private func dropDeliveredQueuedPrompts(among newlyUncertain: Set<UUID>) {
-        let delivered = newlyUncertain.intersection(deliveredQueuedPromptIDs)
-        guard !delivered.isEmpty else { return }
-        queue.removeAll { delivered.contains($0.id) }
+    /// Drops uncertain prompts the transcript shows answered, when they were
+    /// ordinary `session/prompt` sends: ones that just became uncertain, or
+    /// that kept broker dispatch provenance from an earlier reconnect. A
+    /// follow-up steered into a running turn has no provenance and records
+    /// its row before steering is confirmed, so output after it is no proof.
+    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
+        guard !deliveredQueuedPromptIDs.isEmpty else { return }
+        queue.removeAll { item in
+            item.deliveryUncertain
+                && deliveredQueuedPromptIDs.contains(item.id)
+                && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
+        }
     }
 
     /// Holds prompts dispatched on a broker generation that this connection
@@ -2778,8 +2782,9 @@ final class ACPSession: ObservableObject, Identifiable {
             queue[index].markDeliveryUncertain()
             newlyUncertain.insert(queue[index].id)
         }
-        dropDeliveredQueuedPrompts(among: newlyUncertain)
-        return !newlyUncertain.isEmpty
+        let count = queue.count
+        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        return !newlyUncertain.isEmpty || queue.count != count
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

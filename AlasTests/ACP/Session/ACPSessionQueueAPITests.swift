@@ -353,21 +353,35 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("a")], [.text("b")]])
     }
 
-    @Test("an uncertain recorded prompt the transcript shows answered is dropped", arguments: [false, true])
-    func uncertainDeliveredPromptDropped(viaBrokerGenerationChange: Bool) {
+    enum UncertainOrigin: CaseIterable {
+        /// `.sending` at quit with no dispatch provenance.
+        case legacyRestore
+        /// Dispatched on a broker generation the reconnect cannot adopt.
+        case brokerGenerationChange
+        /// Marked uncertain on an earlier reconnect, before the reply was stored.
+        case earlierReconnect
+    }
+
+    @Test("an uncertain recorded prompt the transcript shows answered is dropped",
+          arguments: UncertainOrigin.allCases)
+    func uncertainDeliveredPromptDropped(origin: UncertainOrigin) {
         let s = mkSession()
-        let delivered = QueuedPrompt(
+        let generation: ACPBrokerGeneration? = origin == .legacyRestore ? nil : ACPBrokerGeneration(rawValue: 7)
+        var delivered = QueuedPrompt(
             blocks: [.text("first")], status: .sending, transcriptRecorded: true,
-            dispatchedBrokerGeneration: viaBrokerGenerationChange ? ACPBrokerGeneration(rawValue: 7) : nil)
-        let unsent = QueuedPrompt(
-            blocks: [.text("second")], status: .sending,
-            dispatchedBrokerGeneration: viaBrokerGenerationChange ? ACPBrokerGeneration(rawValue: 7) : nil)
+            dispatchedBrokerGeneration: generation)
+        var unsent = QueuedPrompt(
+            blocks: [.text("second")], status: .sending, dispatchedBrokerGeneration: generation)
+        if origin == .earlierReconnect {
+            delivered.markDeliveryUncertain()
+            unsent.markDeliveryUncertain()
+        }
         s.deliveredQueuedPromptIDs = [delivered.id]
 
-        let dropped = viaBrokerGenerationChange
-            ? (s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
-                || s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8)))
-            : s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+        var dropped = s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+        if origin == .brokerGenerationChange {
+            dropped = s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        }
 
         #expect(dropped)
         #expect(s.queue.map(\.id) == [unsent.id])
