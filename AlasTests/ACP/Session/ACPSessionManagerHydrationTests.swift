@@ -195,7 +195,7 @@ struct ACPSessionManagerHydrationTests {
         #expect(try store.loadComposerDraft(sessionId: "s") == nil)
     }
 
-    @Test("an agent reply after restore keeps a recovered draft the user edited")
+    @Test("an agent reply after restore keeps a recovered draft the user retyped")
     func agentReplyKeepsEditedRecoveredDraft() async throws {
         let path = tmpStorePath()
         let store = try ACPSessionStore(path: path)
@@ -222,12 +222,14 @@ struct ACPSessionManagerHydrationTests {
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let s = try #require(mgr.placeholderSession(id: "s"))
         await mgr.hydrateIfNeeded(id: "s")
-        let edited = ACPComposerDraft(segments: [.text("sent, and more")])
-        s.replaceComposerDraft(edited)
+        // Cleared and retyped: same text, but now the user's new prompt.
+        let retyped = ACPComposerDraft(segments: [.text("sent")])
+        s.replaceComposerDraft(.empty)
+        s.replaceComposerDraft(retyped)
 
         s.transcript.appendMessage(.agent(id: UUID(), StreamingText("reply")))
 
-        #expect(s.composerDraft == edited)
+        #expect(s.composerDraft == retyped)
     }
 
     @Test("hydrateIfNeeded preserves a matching draft newer than the transcript prompt")

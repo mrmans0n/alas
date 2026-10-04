@@ -2346,7 +2346,7 @@ final class ACPSessionManager: ObservableObject {
             } else if let draft = result.draft {
                 session.replaceComposerDraft(draft)
                 if result.draftAwaitsAgentReply {
-                    clearRestoredSubmittedDraftOnAgentReply(draft, in: session)
+                    clearRestoredSubmittedDraftOnAgentReply(in: session)
                 }
             }
         }
@@ -3067,11 +3067,11 @@ final class ACPSessionManager: ObservableObject {
     /// Hydration keeps a submitted prompt with no stored reply in the
     /// composer, because the agent may never have received it. A reattached
     /// turn that then produces output proves delivery, so the draft goes,
-    /// unless the user has edited it. A newer prompt ends the watch, since
-    /// its output says nothing about this one.
-    private func clearRestoredSubmittedDraftOnAgentReply(
-        _ draft: ACPComposerDraft, in session: ACPSession
-    ) {
+    /// unless the user has touched it since (even retyping the same prompt).
+    /// A newer prompt ends the watch, since its output says nothing about
+    /// this one.
+    private func clearRestoredSubmittedDraftOnAgentReply(in session: ACPSession) {
+        let restoredRevision = session.composerDraftRevision
         session.transcript.onMessageAdded = { [weak self, weak session] message in
             guard let self, let session else { return }
             if case .user = message {
@@ -3080,7 +3080,7 @@ final class ACPSessionManager: ObservableObject {
             }
             guard message.isAgentSideProgress else { return }
             session.transcript.onMessageAdded = nil
-            guard session.composerDraft == draft else { return }
+            guard session.composerDraftRevision == restoredRevision else { return }
             self.clearComposerDraft(for: session)
         }
     }
