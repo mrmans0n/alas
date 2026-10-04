@@ -352,6 +352,7 @@ project, so a plugin never has to apply differences.
 | `awaiting_input` | The agent is waiting for the user to answer. |
 | `permission_request` | The agent is waiting for a permission decision. |
 | `idle` | The session is open and nothing is happening. |
+| `failed` | The last turn ended in an error; the session waits for the next prompt. |
 | `unknown` | Alas cannot tell. |
 
 Sessions that have been detached, meaning history rather than live sessions, are

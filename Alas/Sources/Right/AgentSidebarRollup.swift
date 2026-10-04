@@ -5,6 +5,8 @@ enum AgentSidebarState: Equatable {
     case awaitingInput
     case permissionRequest
     case idle
+    /// The last turn failed; the session is stopped until the next prompt.
+    case failed
     case detached
     case unknown
 }
@@ -343,7 +345,7 @@ struct AgentSidebarRollupBuilder {
             case .spawning:
                 return .running
             case .idle, .ready:
-                return .idle
+                return session.turnFailure == nil ? .idle : .failed
             case .disconnected:
                 return .detached
             case .failed:
@@ -360,7 +362,9 @@ struct AgentSidebarRollupBuilder {
             return .awaitingInput
         case .permissionRequest:
             return .permissionRequest
-        case .idle, .limited, .failed:
+        case .failed:
+            return .failed
+        case .idle, .limited:
             return .idle
         }
     }
