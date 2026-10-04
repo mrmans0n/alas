@@ -41,6 +41,33 @@ struct ACPSessionForkManagerTests {
         await manager.releaseAllOwnedLeases()
     }
 
+    @Test("merge reserves the fork against local prompts while source delivery is suspended",
+          arguments: [false, true])
+    func mergeBlocksLocalTurns(archive: Bool) async throws {
+        let (manager, store, source, fork) = try await mergeFixture()
+        // The merge enters its reservation synchronously; its lease acquisition
+        // then yields to this task before source delivery can complete.
+        let admission = Task { @MainActor in
+            #expect(fork.nextPromptWorkCount > 0)
+            let accepted = manager.submit(sessionId: fork.id, text: "New turn", attachments: [], intent: .auto,
+                                          onCompleted: { _ in })
+            #expect(!accepted)
+            #expect(!fork.queue.contains { $0.blocks == [.text("New turn")] })
+            #expect(await manager.enqueuePrompt(id: UUID(), text: "Queued turn", into: fork.id) == false)
+            #expect(await manager.enqueueDelegatedPrompt(text: "Child result", source: .init(sessionId: "child", messageId: "result"),
+                                                         into: fork.id) == false)
+        }
+        #expect(try await manager.mergeForkBack(id: fork.id, archive: archive) == source.id)
+        await admission.value
+        #expect(try store.loadQueue(sessionId: source.id).count == 1)
+        #expect(fork.queue.isEmpty)
+        #expect(try store.loadSession(id: fork.id)?.archived == archive)
+        if !archive {
+            #expect(await manager.enqueuePrompt(id: UUID(), text: "After merge", into: fork.id))
+        }
+        await manager.releaseAllOwnedLeases()
+    }
+
     @Test("rejected merges leave the fork unarchived and the source queue empty",
           arguments: ["busy", "empty", "archived", "missing", "leased", "forkLeased", "write"])
     func rejectedMergeKeepsFork(reason: String) async throws {

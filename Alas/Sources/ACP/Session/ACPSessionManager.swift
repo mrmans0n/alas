@@ -2017,6 +2017,11 @@ final class ACPSessionManager: ObservableObject {
         guard await acquireWriterLease(sessionId: sourceID), await confirmedWriterLease(for: sourceID) else {
             throw ACPSessionForkMergeError.sourceReadOnly
         }
+        guard sessions[id] === session, session.transcript.streamingState == .idle,
+              session.queue.isEmpty, session.transcript.messages.count == messageCount else {
+            if !hadLease { await releaseWriterLease(sessionId: sourceID) }
+            throw ACPSessionForkMergeError.forkBusy
+        }
         let accepted = await enqueueDelegatedPrompt(
             text: prompt,
             source: .init(sessionId: id, messageId: "fork-merge-" + SHA256.hash(data: Data(prompt.utf8)).map { String(format: "%02x", $0) }.joined()),
@@ -8094,14 +8099,14 @@ extension ACPSessionManager {
         ahead: Bool = false,
         requiringWriter: Bool = false
     ) async -> Bool {
-        guard let suggestionSession = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let suggestionSession = sessions[sessionId] else { return false }
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
         let deliveryFence = leaseFence(sessionId: sessionId)
         guard !requiringWriter || deliveryFence != nil else { return false }
         await awaitBackfill(id: sessionId)
         guard !requiringWriter || leaseFence(sessionId: sessionId) == deliveryFence else { return false }
-        guard let session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         var seen = session.queue.compactMap(\.delegatedSource)
         seen += session.transcript.messages.compactMap { message in
             guard case .user(_, _, _, _, let source) = message else { return nil }
@@ -8445,7 +8450,7 @@ extension ACPSessionManager {
         text: String,
         into sessionId: ACPSession.ID
     ) async -> Bool {
-        guard var session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), var session = sessions[sessionId] else { return false }
         let suggestionSession = session
         suggestionSession.nextPromptWorkCount += 1
         defer { suggestionSession.nextPromptWorkCount -= 1 }
@@ -8457,7 +8462,7 @@ extension ACPSessionManager {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
         }) else { return true }
         await awaitBackfill(id: sessionId)
-        guard let currentSession = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let currentSession = sessions[sessionId] else { return false }
         session = currentSession
         guard !session.queue.contains(where: {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
@@ -8537,7 +8542,7 @@ extension ACPSessionManager {
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
-        guard let session = sessions[sessionId] else { return false }
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false
