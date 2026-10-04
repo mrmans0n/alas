@@ -38,8 +38,18 @@ enum ACPSessionReference {
         return id
     }
 
+    /// Attachments of a user message chunk the agent sent, live or replayed.
+    /// Alas never sends a session link on the wire (see
+    /// `replacingReferences`), so one arriving from the agent is made up and
+    /// must not be recorded: a recorded one grants `session_read`.
+    static func agentSentAttachments(_ attachments: [ACPMessage.Attachment]) -> [ACPMessage.Attachment] {
+        attachments.filter { sessionId(fromURI: $0.uri) == nil }
+    }
+
     /// Sessions the user attached in `messages`. Delegated prompts are
-    /// skipped: only the user can grant another session's transcript.
+    /// skipped: only the user can grant another session's transcript, and
+    /// user chunks from the agent never carry a session link (see
+    /// `agentSentAttachments`).
     @MainActor
     static func attachedSessionIds(in messages: [ACPMessage]) -> Set<String> {
         var ids = Set<String>()

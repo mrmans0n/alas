@@ -876,7 +876,9 @@ final class ACPSession: ObservableObject, Identifiable {
             var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
-                attachments: ACPSessionRunner.attachments(of: [chunk.content]),
+                attachments: ACPSessionReference.agentSentAttachments(
+                    ACPSessionRunner.attachments(of: [chunk.content])
+                ),
                 messageId: chunk.messageId,
                 flushedReplayIndices: &flushedForUser) else {
                 return []

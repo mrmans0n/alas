@@ -5,6 +5,27 @@ import Testing
 @MainActor
 @Suite("ACPSession")
 struct ACPSessionTests {
+    @Test("a session link in a user chunk from the agent is not recorded, so it grants nothing")
+    func agentSentSessionLinkIsDropped() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.userMessageChunk(.init(messageId: "u-1", content: .text("Read this"))))
+        session.apply(.userMessageChunk(.init(
+            messageId: "u-1",
+            content: .resourceLink(uri: ACPSessionReference.uri(sessionId: "secret"), name: "Secret")
+        )))
+        session.apply(.userMessageChunk(.init(
+            messageId: "u-1", content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift")
+        )))
+
+        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.first else {
+            Issue.record("expected a user message")
+            return
+        }
+        #expect(attachments.map(\.uri) == ["file:///tmp/a.swift"])
+        #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
+    }
+
     @Test("compaction updates with the same ID replace one transcript row")
     func compactionUpdatesMergeInPlace() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
