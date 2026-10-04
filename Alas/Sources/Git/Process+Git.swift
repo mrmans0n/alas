@@ -480,7 +480,9 @@ extension Process {
             // character, and a strict decode fails CLOSED on that — turning
             // an otherwise perfectly valid captured prefix into an empty
             // string and silently presenting a large diff as blank.
-            stdout: decodeUTF8DroppingIncompleteTrailingScalar(outAccum.snapshot()),
+            // Cut even when one read brought more: what a caller sees can't depend on how the pipe was read.
+            stdout: decodeUTF8DroppingIncompleteTrailingScalar(
+                truncatedFlag.value ? outAccum.snapshot().prefix(maxOutputBytes) : outAccum.snapshot()),
             stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? "",
             stdoutTruncated: truncatedFlag.value
         )

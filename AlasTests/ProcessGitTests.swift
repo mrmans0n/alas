@@ -201,11 +201,8 @@ struct ProcessGitTests {
             maxOutputBytes: 1_000
         )
         #expect(result.stdoutTruncated)
-        // Soft cap: allowed to overshoot by up to one pipe chunk, but must
-        // never approach anywhere near the full 2,000,000 bytes the awk
-        // script would otherwise have produced.
-        #expect(result.stdout.count >= 1_000)
-        #expect(result.stdout.count < 500_000)
+        // Exactly the cap, however much the last pipe read brought, so a caller never sees output past it.
+        #expect(result.stdout.count == 1_000)
     }
 
     @Test func runCappedDoesNotTruncateOutputUnderTheCap() async throws {
