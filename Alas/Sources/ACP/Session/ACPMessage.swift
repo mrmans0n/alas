@@ -57,6 +57,16 @@ enum ACPMessage: Equatable {
         Self.stableId(for: stableIdentityKey)
     }
 
+    /// Mirrors `ACPMessageWire.isAgentSideProgress`.
+    var isAgentSideProgress: Bool {
+        switch self {
+        case .agent, .thought, .toolCall, .fileEdit, .plan:
+            true
+        case .user, .systemNotice:
+            false
+        }
+    }
+
     static func stableId(for key: StableIdentityKey) -> String {
         switch key {
         case .userMessageId(let messageId):

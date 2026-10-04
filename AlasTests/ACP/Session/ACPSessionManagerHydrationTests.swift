@@ -149,7 +149,7 @@ struct ACPSessionManagerHydrationTests {
         #expect(try store.loadComposerDraft(sessionId: "s") == nil)
     }
 
-    @Test("hydrateIfNeeded preserves a recorded draft until agent progress is stored")
+    @Test("a recovered draft stays until the reattached turn replies")
     func hydratePreservesRecordedDraftUntilAgentProgress() async throws {
         let path = tmpStorePath()
         let store = try ACPSessionStore(path: path)
@@ -186,6 +186,48 @@ struct ACPSessionManagerHydrationTests {
         #expect(s.hydrationState == .ready)
         #expect(s.composerDraft == draft)
         #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+
+        // The reattached turn replies: the prompt was delivered after all.
+        s.transcript.appendMessage(.agent(id: UUID(), StreamingText("reply")))
+        await mgr.flushPersistence()
+
+        #expect(s.composerDraft == .empty)
+        #expect(try store.loadComposerDraft(sessionId: "s") == nil)
+    }
+
+    @Test("an agent reply after restore keeps a recovered draft the user edited")
+    func agentReplyKeepsEditedRecoveredDraft() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: ACPComposerDraft(segments: [.text("sent")]),
+            updatedAt: 10,
+            submittedRecovery: true
+        )
+        let userMessage = ACPMessage.user(id: UUID(), text: "sent", attachments: [])
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 11
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        await mgr.hydrateIfNeeded(id: "s")
+        let edited = ACPComposerDraft(segments: [.text("sent, and more")])
+        s.replaceComposerDraft(edited)
+
+        s.transcript.appendMessage(.agent(id: UUID(), StreamingText("reply")))
+
+        #expect(s.composerDraft == edited)
     }
 
     @Test("hydrateIfNeeded preserves a matching draft newer than the transcript prompt")
