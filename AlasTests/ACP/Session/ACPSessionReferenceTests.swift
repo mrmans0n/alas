@@ -44,11 +44,12 @@ struct ACPSessionReferenceTests {
 
     @Test("context names the session and how to read it, and keeps the latest entries within budget")
     func contextKeepsLatestEntriesWithinBudget() {
-        let long = String(repeating: "x", count: ACPSessionReference.contextMaxChars - 20)
+        // Paging back from the latest entry stops at the one too large to fit.
         let entries: [ACPSessionTranscriptReader.Entry] = [
             .init(index: 0, role: "user", text: "First question"),
-            .init(index: 1, role: "agent", text: long),
-            .init(index: 2, role: "user", text: "Latest question"),
+            .init(index: 1, role: "agent", text: String(repeating: "x", count: ACPSessionReference.contextMaxChars)),
+            .init(index: 2, role: "agent", text: "Latest answer"),
+            .init(index: 3, role: "user", text: "Latest question"),
         ]
 
         let context = ACPSessionReference.context(for: target, entries: entries)
@@ -60,6 +61,23 @@ struct ACPSessionReferenceTests {
         #expect(context.contains("latest 2 entries"))
         #expect(context.contains("[user] Latest question"))
         #expect(!context.contains("First question"))
+        #expect(context.count <= ACPSessionReference.contextMaxChars)
+    }
+
+    @Test("the whole block, wrapper and labels included, stays within the budget")
+    func contextBlockNeverExceedsBudget() {
+        let longTarget = ACPSessionReference.Target(
+            sessionId: "s-1", title: String(repeating: "t", count: 5_000), agentName: "Codex", worktreeName: "main"
+        )
+        let entries = (0..<200).map {
+            ACPSessionTranscriptReader.Entry(index: $0, role: $0.isMultiple(of: 2) ? "user" : "agent", text: String(repeating: "y", count: 150))
+        }
+
+        let context = ACPSessionReference.context(for: longTarget, entries: entries)
+
+        #expect(context.count <= ACPSessionReference.contextMaxChars)
+        #expect(context.contains(String(repeating: "t", count: ACPSessionReference.contextTitleLimit) + "…\""))
+        #expect(context.hasSuffix("</alas-session-reference>"))
     }
 
     @Test("context of a session with no messages says so")

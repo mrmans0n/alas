@@ -13,9 +13,11 @@ import Foundation
 enum ACPSessionReference {
     static let scheme = "alas-session"
 
-    /// Inline transcript budget: the latest entries that fit.
+    /// Inline context budget: the latest entries that fit, with the
+    /// wrapper and labels counted against `contextMaxChars`.
     static let contextEntryLimit = 40
     static let contextMaxChars = 6_000
+    static let contextTitleLimit = 120
 
     struct Target: Equatable, Sendable {
         let sessionId: String
@@ -86,25 +88,50 @@ enum ACPSessionReference {
     /// `entries` may be only the latest part of the transcript, so the text
     /// never claims to show all of it.
     static func context(for target: Target, entries: [ACPSessionTranscriptReader.Entry]) -> String {
-        let page = ACPSessionTranscriptReader.page(
-            entries, offset: nil, limit: contextEntryLimit, maxChars: contextMaxChars
-        )
-        var lines = [
+        let title = target.title.count > contextTitleLimit
+            ? target.title.prefix(contextTitleLimit) + "…"
+            : target.title
+        let header = [
             "<alas-session-reference session_id=\"\(target.sessionId)\">",
-            "The user attached the Alas session \"\(target.title)\" (agent: \(target.agentName), "
+            "The user attached the Alas session \"\(title)\" (agent: \(target.agentName), "
                 + "worktree: \(target.worktreeName)) as context. To read more of it, call the "
                 + "session_read tool of the \"alas\" MCP server with session_id \"\(target.sessionId)\".",
         ]
+        let footer = "</alas-session-reference>"
+        func intro(_ count: Int) -> String { "Its latest \(count) entries (earlier ones may be omitted):" }
+        func line(_ entry: ACPSessionTranscriptReader.Entry) -> String {
+            "[\(entry.role)]\(entry.truncated == true ? " …" : "") \(entry.text)"
+        }
+        // Everything but the entries' text, at its longest: the text budget
+        // is what remains of `contextMaxChars`.
+        let wrapper = (header + [intro(contextEntryLimit), footer]).map(\.count).reduce(0, +) + 3
+        let textBudget = max(1, contextMaxChars - wrapper)
+        // Each entry adds a blank separator line and its label; when those
+        // push the block over budget, page again with them reserved. The
+        // second page holds no more entries than the first, so it fits.
+        func overhead(_ page: ACPSessionTranscriptReader.Page) -> Int {
+            page.entries.map { line($0).count - $0.text.count + 2 }.reduce(0, +)
+        }
+        var page = ACPSessionTranscriptReader.page(
+            entries, offset: nil, limit: contextEntryLimit, maxChars: textBudget
+        )
+        let firstOverhead = overhead(page)
+        if page.entries.map(\.text.count).reduce(0, +) + firstOverhead > textBudget {
+            page = ACPSessionTranscriptReader.page(
+                entries, offset: nil, limit: contextEntryLimit, maxChars: max(1, textBudget - firstOverhead)
+            )
+        }
+        var lines = header
         if page.entries.isEmpty {
             lines.append("The session has no messages yet.")
         } else {
-            lines.append("Its latest \(page.entries.count) entries (earlier ones may be omitted):")
+            lines.append(intro(page.entries.count))
             for entry in page.entries {
                 lines.append("")
-                lines.append("[\(entry.role)]\(entry.truncated == true ? " …" : "") \(entry.text)")
+                lines.append(line(entry))
             }
         }
-        lines.append("</alas-session-reference>")
+        lines.append(footer)
         return lines.joined(separator: "\n")
     }
 }

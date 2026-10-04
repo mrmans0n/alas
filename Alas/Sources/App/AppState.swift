@@ -12714,16 +12714,16 @@ final class AppState {
     }
 
     /// A manager for every worktree of `projectId`, created when the worktree
-    /// was not opened in this run. With `loadingRecentRows`, a manager
-    /// created here has its recent rows loaded before it is returned.
+    /// was not opened in this run. With `loadingRecentRows`, every manager's
+    /// recent rows are reloaded first, since another instance may have
+    /// created or archived sessions since they were cached.
     private func acpProjectManagers(
         projectId: String, loadingRecentRows: Bool
     ) async -> [(worktree: Worktree, manager: ACPSessionManager)] {
         var result: [(worktree: Worktree, manager: ACPSessionManager)] = []
         for worktree in projectsManager.worktrees(projectId: projectId) {
-            let existed = acpManagers[.worktree(worktree.id)] != nil
             guard let manager = acpManager(for: worktree) else { continue }
-            if loadingRecentRows, !existed { await manager.refreshRecentNow() }
+            if loadingRecentRows { await manager.refreshRecentNow() }
             result.append((worktree, manager))
         }
         return result
