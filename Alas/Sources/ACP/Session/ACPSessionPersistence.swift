@@ -411,6 +411,13 @@ actor ACPSessionPersistence {
         try openedStore().setArchived(id: id, archived: archived)
     }
 
+    func setArchived(id: String, archived: Bool, fence: ACPSessionLeaseFence) throws -> Bool {
+        let store = try openedStore()
+        return try store.withLeaseFence(fence) {
+            try store.setArchived(id: id, archived: archived)
+        } != nil
+    }
+
     func renameSession(
         id: String,
         title: String,

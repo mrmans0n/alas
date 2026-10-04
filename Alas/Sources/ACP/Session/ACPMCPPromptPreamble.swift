@@ -155,7 +155,7 @@ enum ACPMCPPromptPreamble {
                 ? "session_list/session_send/session_read/session_search"
                 : "agent_list/session_list/session_new/session_send (delegate direct child agent sessions; "
                     + "call agent_list first and pass an available agent id to session_new), "
-                    + "session_read/session_search (read a child's transcript), "
+                    + "session_read (read a child's or this session's fork transcript), session_search (search children), "
                     + "session_wait/session_interrupt (block on or stop children's turns)"
             var line = "The MCP server \"alas\" (built-in) drives the Alas UI: "
                 + "open (reveal files to the user), notify (macOS notification), "

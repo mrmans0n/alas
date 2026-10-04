@@ -1008,6 +1008,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
     /// delivery leaves rows pending and unclaimed for inspection.
     private func makeOutcomeFixture(
         parentReachable: Bool = true,
+        readScope: ACPOrchestrationSessionOrigin? = nil,
         blockedKeys: Set<String> = [],
         escalationSeconds: Int = 30,
         scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
@@ -1046,7 +1047,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
             availableAgents: { _, _ in [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
             sessionLocation: { sessionId in
                 parentReachable && manager.liveSession(for: sessionId) != nil
-                    ? .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
+                    ? .init(origin: .init(sessionId: sessionId, projectId: readScope?.projectId ?? "project",
+                                          worktreeId: readScope?.worktreeId ?? "worktree"), manager: manager)
                     : nil
             },
             referencedSessionLocation: { sessionId, _ in
@@ -1267,7 +1269,46 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(read.entries.map(\.text) == ["Fix the parser", "Parser fixed."])
         #expect(search.matches.map(\.sessionId) == ["child"])
         #expect(search.truncated)
-        #expect(sibling == .error("Only a direct parent or child session's transcript can be read."))
+        #expect(sibling == .error("Only a direct parent, child, or this session's fork transcript can be read."))
+    }
+
+    @Test("only the recorded source reads a fork, including archived and evicted forks",
+          arguments: [false, true], [false, true])
+    func sourceReadsForkTranscript(archive: Bool, checkout: Bool) async throws {
+        let origin = checkout
+            ? ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "checkout-owner", worktreeId: "checkout-owner")
+            : parentOrigin
+        let fixture = try makeOutcomeFixture(readScope: origin)
+        let source = try #require(fixture.manager.liveSession(for: "parent"))
+        let message = ACPMessage.agent(id: UUID(), StreamingText("Inherited answer"))
+        source.transcript.appendMessage(message)
+        fixture.manager.persistTrailingMessages(source, fromIndex: 0)
+        await fixture.manager.flushAllPersistence()
+        let fork = try await fixture.manager.createFork(
+            sourceSessionID: source.id, boundary: .init(stableID: message.stableId, kind: .agent),
+            targetAgentID: "claude", autoRunDefault: false
+        )
+        fork.transcript.appendMessage(.agent(id: UUID(), StreamingText("New finding")))
+        fixture.manager.persistTrailingMessages(fork, fromIndex: 1)
+        fixture.manager.setArchived(id: fork.id, archived: archive)
+        await fixture.manager.flushAllPersistence()
+        fixture.manager.closeSession(id: fork.id)
+
+        let response = await fixture.coordinator.read(
+            origin: origin, request: .init(targetSessionId: fork.id, offset: 1)
+        )
+        let page = try decoded(ACPOrchestrationReadResponse.self, response)
+        #expect(page.entries.map(\.text) == ["New finding"])
+        for deniedOrigin in [
+            ACPOrchestrationSessionOrigin(sessionId: "sibling", projectId: origin.projectId, worktreeId: origin.worktreeId),
+            ACPOrchestrationSessionOrigin(sessionId: "parent", projectId: "other", worktreeId: origin.worktreeId),
+        ] {
+            let denied = await fixture.coordinator.read(origin: deniedOrigin, request: .init(targetSessionId: fork.id))
+            #expect(denied == .error("Only a direct parent, child, or this session's fork transcript can be read."))
+        }
+        let send = await fixture.coordinator.send(origin: origin, request: .init(targetSessionId: fork.id, prompt: "Run this"))
+        guard case .error = send else { Issue.record("Fork read access must not grant send access")
+        return }
     }
 
     @Test("a session reads another session only once the user attaches it to one of its prompts, then lets it go")
@@ -1280,7 +1321,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             await fixture.coordinator.perform(origin: self.parentOrigin, .read(.init(targetSessionId: "other")))
         }
 
-        #expect(await read() == .error("Only a direct parent or child session's transcript can be read."))
+        #expect(await read() == .error("Only a direct parent, child, or this session's fork transcript can be read."))
 
         fixture.manager.liveSession(for: "parent")?.transcript.messages = [.user(
             id: UUID(), text: "Use @Release ",

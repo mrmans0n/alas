@@ -544,8 +544,9 @@ final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// `session_read`: one page of a direct parent's or child's transcript,
-    /// or of a session the user attached to one of the caller's prompts.
+    /// `session_read`: one page of a direct relative's transcript, of a fork
+    /// read by its source session, or of a session the user attached to one
+    /// of the caller's prompts.
     func read(
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
@@ -687,14 +688,18 @@ final class ACPSessionOrchestrationCoordinator {
         let message: String
     }
 
-    /// A direct parent or child whose transcript may be read, the same edge
-    /// `session_send` may use, or a session in the caller's project that the
-    /// user attached to one of its prompts. A session that is not live is
-    /// hydrated from its stored transcript; an archived one is not readable.
+    /// A session whose transcript may be read: a fork of the caller, a
+    /// session in the caller's project that the user attached to one of its
+    /// prompts, or a direct parent or child, the same edge `session_send` may
+    /// use. A session that is not live is hydrated from its stored
+    /// transcript; an archived one is not readable (except a fork).
     private func readableSession(
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
     ) async -> Result<ReadableSession, ObservationError> {
+        if let fork = await readableFork(origin: origin, targetSessionId: targetSessionId) {
+            return .success(ReadableSession(session: fork, release: {}))
+        }
         if let location = await userAttachedLocation(origin: origin, targetSessionId: targetSessionId) {
             return await hydratedSession(targetSessionId, at: location)
         }
@@ -717,7 +722,7 @@ final class ACPSessionOrchestrationCoordinator {
                 targetParent: targetParent
             )
         else {
-            return .failure(.init(message: "Only a direct parent or child session's transcript can be read."))
+            return .failure(.init(message: "Only a direct parent, child, or this session's fork transcript can be read."))
         }
         guard let location = await resolveDeliveryTarget(
             sessionID: targetSessionId,
@@ -766,6 +771,33 @@ final class ACPSessionOrchestrationCoordinator {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
         return .success(ReadableSession(session: session, release: release))
+    }
+
+    /// Fork access is read-only and scoped to its recorded source in the same store.
+    /// Archived forks remain readable so a merge reference survives closing its tab.
+    private func readableFork(
+        origin: ACPOrchestrationSessionOrigin,
+        targetSessionId: String
+    ) async -> ACPSession? {
+        let manager: ACPSessionManager
+        if let caller = environment.sessionLocation(origin.sessionId) {
+            guard caller.origin.projectId == origin.projectId,
+                  caller.origin.worktreeId == origin.worktreeId else { return nil }
+            manager = caller.manager
+        } else {
+            guard let worktree = environment.worktree(origin.worktreeId),
+                  worktree.projectId == origin.projectId,
+                  let resolved = environment.manager(worktree) else { return nil }
+            manager = resolved
+        }
+        guard let fork = try? await manager.persistence.loadFork(targetSessionID: targetSessionId),
+              fork.sourceSessionID == origin.sessionId, fork.phase == .ready,
+              await manager.persistedSessionRow(id: targetSessionId) != nil,
+              manager.placeholderSession(id: targetSessionId) != nil else { return nil }
+        await manager.hydrateIfNeeded(id: targetSessionId)
+        await manager.awaitBackfill(id: targetSessionId)
+        guard let session = manager.liveSession(for: targetSessionId), session.hydrationState == .ready else { return nil }
+        return session
     }
 
     private func waitSnapshot(sessionId: String) async -> ACPOrchestrationWaitResponse.Session {
