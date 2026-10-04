@@ -2568,13 +2568,21 @@ final class ACPNSTextView: PairedDelimiterTextView {
             // resolve to nothing.
             let point = convert(sender.draggingLocation, from: nil)
             let location = characterIndexForInsertion(at: point)
+            let coordinator = coordinator
             let source = coordinator?.sessionMentions
-            Task { @MainActor [weak self] in
+            // Held like an async image insertion: submit waits for it, and
+            // clearing or replacing the draft invalidates it.
+            let generation = coordinator?.beginPendingImageFileInsertion()
+            Task { @MainActor [weak self, weak coordinator] in
+                defer {
+                    if let generation { coordinator?.finishPendingImageFileInsertion(generation: generation) }
+                }
                 var sessions: [ACPSessionMentionCandidate] = []
                 for id in sessionIds {
                     if let session = await source?.candidate(id) { sessions.append(session) }
                 }
                 guard let self, !sessions.isEmpty else { return }
+                if let generation, coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
                 self.setSelectedRange(NSRange(location: min(location, self.string.utf16.count), length: 0))
                 sessions.forEach { self.insertSessionMention($0) }
             }
