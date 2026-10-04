@@ -2819,7 +2819,7 @@ extension ACPSessionRunner {
         _ head: QueuedPrompt,
         brokerOperationKey: String,
         onPromptFinished: (@MainActor (Bool) -> Void)? = nil,
-        onDispatchSettled: (@MainActor () -> Void)? = nil
+        onDispatchSettled: (@MainActor @Sendable () -> Void)? = nil
     ) {
         persistQueue(completion: { [weak self] persisted in
             guard let self else {
@@ -2856,6 +2856,14 @@ extension ACPSessionRunner {
                 onDispatchSettled?()
                 return
             }
+            var onDispatchRegistered = self.queuedPromptDispatchRegistration(for: head.id)
+            if let onDispatchSettled {
+                let registration = onDispatchRegistered
+                onDispatchRegistered = {
+                    registration?()
+                    Task { @MainActor in onDispatchSettled() }
+                }
+            }
             self.sendNow(
                 blocks: head.blocks,
                 queuedItemId: head.id,
@@ -2869,12 +2877,11 @@ extension ACPSessionRunner {
                 // offset instead of leaving `textOffset` nil as documented on
                 // `ACPMessage.Attachment.textOffset`.
                 draft: head.draft,
-                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
+                onDispatchRegistered: onDispatchRegistered,
                 beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id),
                 onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id),
                 onPromptFinished: onPromptFinished
             )
-            onDispatchSettled?()
         })
     }
 
@@ -3206,7 +3213,12 @@ extension ACPSessionRunner {
         pendingDelivery.markDeliveryUncertain()
         session.queue.insert(pendingDelivery, at: min(durableQueueItem.index, session.queue.count))
         if normalUserTurn { session.normalQueuedTurnIDs.insert(pendingDelivery.id) }
-        persistQueue()
+        let initialRecoveryPersistence = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await withCheckedContinuation { continuation in
+                self.persistQueue(completion: { continuation.resume(returning: $0) })
+            }
+        }
         nativeSteeringGeneration += 1
         let generation = nativeSteeringGeneration
         let originalPromptTask = activePromptID == nil ? nil : latestPromptTask
@@ -3221,8 +3233,9 @@ extension ACPSessionRunner {
         onPromptWorkChanged?()
 
         Task { [weak self] in
+            var recoveryPersisted = await initialRecoveryPersistence.value
             guard let self else { dispatchHandoff?.fire()
-            onPromptFinished?(false)
+            onPromptFinished?(recoveryPersisted)
             return }
             var recordedMessageID = recordedUserMessageID
             var ownedContinuationStarted = false
@@ -3260,7 +3273,9 @@ extension ACPSessionRunner {
                         onPromptFinished?(accepted)
                     })
                 } else {
-                    onPromptFinished?(succeeded)
+                    // A replacement owns the persisted recovery item. Keep
+                    // its submitted draft cleared without touching its state.
+                    onPromptFinished?(succeeded || recoveryPersisted)
                 }
             }
             do {
@@ -3327,6 +3342,7 @@ extension ACPSessionRunner {
                 guard persisted else {
                     throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
                 }
+                recoveryPersisted = true
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -3365,7 +3381,6 @@ extension ACPSessionRunner {
                           !self.stopped, self.isConnectionCurrent(),
                           self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
-                    self.nativeSteeringInProgress = false
                     self.detachedSteeringTurn = false
                     // An owned continuation uses the queue's normal failure
                     // handling, which retains its head before releasing output.

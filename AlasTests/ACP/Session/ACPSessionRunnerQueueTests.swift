@@ -697,6 +697,49 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.messages.count == 1)
     }
 
+    @Test("a second steer stays queued until the owned continuation reaches handoff")
+    func secondSteerWaitsForContinuationHandoff() async throws {
+        var steeringReturned = false
+        var continuationChecks = 0
+        let preparing = QueueTestGate()
+        let releaseLease = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let (runner, mock, session, _) = try mkRunner(validateLease: {
+            if steeringReturned {
+                continuationChecks += 1
+                if continuationChecks == 3 {
+                    await preparing.open()
+                    await releaseLease.wait()
+                }
+            }
+            return true
+        })
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        mock.script(method: "_session/steering") { _ in
+            steeringReturned = true
+            return Data(#"{"outcome":"promptRequired"}"#.utf8)
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await releasePrompt.wait()
+            return Data("{}".utf8)
+        }
+        defer { runner.stop()
+        Task { await releaseLease.open()
+        await releasePrompt.open() } }
+        runner.send(blocks: [.text("first")], intent: .steer)
+        await preparing.wait()
+        var secondAccepted: Bool?
+        runner.send(blocks: [.text("second")], intent: .steer) { secondAccepted = $0 }
+        try await waitUntil { secondAccepted == true || mock.sent.filter { $0.method == "_session/steering" }.count > 1 }
+        #expect(mock.sent.filter { $0.method == "_session/steering" }.count == 1)
+        #expect(secondAccepted == true)
+        await releaseLease.open()
+        await releasePrompt.open()
+        try await waitUntil { session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("first")], [.text("second")]])
+    }
+
     @Test("a late steering response cannot restart a stopped runner")
     func lateSteeringResponseCannotRestartStoppedRunner() async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -726,7 +769,8 @@ struct ACPSessionRunnerQueueTests {
         runner.stop()
         await finishSteering.open()
         try await waitUntil { accepted != nil }
-        #expect(accepted == false)
+        #expect(accepted == true)
+        #expect(session.queue.first?.deliveryUncertain == true)
         #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
         #expect(session.lastError == nil)
     }
