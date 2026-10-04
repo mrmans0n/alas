@@ -1924,6 +1924,13 @@ final class ACPSessionRunner {
         reportUsageWithoutResult(promptID)
     }
 
+    /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
+    /// (a closed transport) or a turn lost with the connection, and is not recorded.
+    private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
+        if case ACPClientError.jsonrpc = error { return }
+        unreportedPrompts[promptID] = nil
+    }
+
     /// Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or after
     /// `cancelledUsageWait` without tokens.
     private func reportUsageWithoutResult(_ promptID: Int) {
@@ -4154,6 +4161,7 @@ extension ACPSessionRunner {
             } catch {
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
+                    self.forgetUsageUnlessAgentAnswered(promptID, error)
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
@@ -4315,6 +4323,7 @@ extension ACPSessionRunner {
             } catch {
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
+                    self.forgetUsageUnlessAgentAnswered(promptID, error)
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {

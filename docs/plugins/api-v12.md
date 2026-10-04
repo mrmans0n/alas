@@ -251,7 +251,7 @@ of multi-project workspaces, are not sent; read them with `"scope": "all"`.
 
 ### Known limits
 
-- A turn in flight when Alas restarts the agent connection gets no history
+- A turn in flight when the agent connection is restarted or lost gets no history
   row.
 - When a stopped turn's result arrives only after a following turn has
   finished, cost growth around that boundary can be credited to the wrong

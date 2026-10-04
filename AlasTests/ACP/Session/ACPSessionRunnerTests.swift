@@ -264,6 +264,22 @@ struct ACPSessionRunnerTests {
         #expect(usage.isEmpty)
     }
 
+    /// A prompt that fails is recorded only when the agent answered with the error: one the client could not send
+    /// (the agent is not running) never reached it.
+    @Test(arguments: [true, false])
+    func aFailedPromptIsRecordedOnlyWhenTheAgentAnswered(agentAnswered: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        mock.script(method: "session/prompt") { _ in
+            throw agentAnswered ? ACPClientError.jsonrpc(JSONRPCError(code: -32603, message: "boom", data: nil)) : ACPClientError.notRunning
+        }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { !completions.isEmpty })
+        #expect(await awaitCondition(within: .milliseconds(200)) { !usage.isEmpty } == agentAnswered)
+    }
+
     /// A context-recovery prompt's spend is usage of its own, flagged as recovery, and never a turn completion.
     @Test func aRecoveryPromptIsReportedAsRecoveryUsage() async throws {
         var completions: [ACPTurnCompletion] = []
