@@ -3168,6 +3168,17 @@ extension ACPSessionRunner {
         onPromptFinished: (@MainActor (Bool) -> Void)?,
         recoveryQueueItem: (item: QueuedPrompt, index: Int)? = nil
     ) {
+        let durableQueueItem = recoveryQueueItem ?? (
+            item: QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource,
+                               transcriptRecorded: !recordUserPrompt),
+            index: session.queue.count)
+        var pendingDelivery = durableQueueItem.item
+        pendingDelivery.status = .sending
+        pendingDelivery.lastError = "Follow-up delivery is awaiting confirmation. Retry if it cannot be confirmed."
+        pendingDelivery.markDeliveryUncertain()
+        session.queue.insert(pendingDelivery, at: min(durableQueueItem.index, session.queue.count))
+        if normalUserTurn { session.normalQueuedTurnIDs.insert(pendingDelivery.id) }
+        persistQueue()
         nativeSteeringGeneration += 1
         let generation = nativeSteeringGeneration
         let originalPromptTask = activePromptID == nil ? nil : latestPromptTask
@@ -3186,21 +3197,31 @@ extension ACPSessionRunner {
             guard let self else { onPromptFinished?(false)
             return }
             var recordedMessageID = recordedUserMessageID
+            var ownedContinuationStarted = false
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
-                if !succeeded, let self, let recoveryQueueItem,
-                   !self.stopped, self.isConnectionCurrent(),
-                   !self.session.queue.contains(where: { $0.id == recoveryQueueItem.item.id }) {
-                    var item = recoveryQueueItem.item
-                    item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
-                    item.status = .pending
-                    item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
-                    item.markDeliveryUncertain()
-                    self.session.queue.insert(item, at: min(recoveryQueueItem.index, self.session.queue.count))
-                    if normalUserTurn {
-                        self.session.normalQueuedTurnIDs.insert(item.id)
-                        self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
+                if let self, !self.stopped, self.isConnectionCurrent() {
+                    if succeeded {
+                        self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
+                        self.session.normalQueuedTurnIDs.remove(durableQueueItem.item.id)
+                        self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: durableQueueItem.item.id)
+                    } else if !ownedContinuationStarted {
+                        var item = durableQueueItem.item
+                        item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
+                        item.status = .pending
+                        item.lastError = "Follow-up delivery was not confirmed. Retry to send it again."
+                        item.markDeliveryUncertain()
+                        if let index = self.session.queue.firstIndex(where: { $0.id == item.id }) {
+                            self.session.queue[index] = item
+                        } else {
+                            self.session.queue.insert(item, at: min(durableQueueItem.index, self.session.queue.count))
+                        }
+                        if normalUserTurn {
+                            self.session.normalQueuedTurnIDs.insert(item.id)
+                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
+                        }
                     }
                     self.persistQueue()
+                    if succeeded { self.flushQueueIfIdle() }
                 }
                 onPromptFinished?(succeeded)
             }
@@ -3258,6 +3279,20 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
+                guard let queueIndex = self.session.queue.firstIndex(where: { $0.id == durableQueueItem.item.id })
+                else { throw CancellationError() }
+                self.session.queue[queueIndex].transcriptRecorded = pendingDelivery.transcriptRecorded || recordedMessageID != nil
+                if normalUserTurn { self.session.normalQueuedTurnUserMessageIDs[durableQueueItem.item.id] = recordedMessageID }
+                let persisted = await withCheckedContinuation { continuation in
+                    self.persistQueue(completion: { continuation.resume(returning: $0) })
+                }
+                guard persisted else {
+                    throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
+                }
+                guard await self.hasConfirmedLeaseForSideEffect(),
+                      !self.stopped, self.isConnectionCurrent(),
+                      self.nativeSteeringGeneration == generation
+                else { throw CancellationError() }
                 let outcome = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks)
                 guard await self.hasConfirmedLeaseForSideEffect(),
@@ -3294,19 +3329,21 @@ extension ACPSessionRunner {
                     self.detachedSteeringTurn = false
                     // An owned continuation uses the queue's normal failure
                     // handling, which retains its head before releasing output.
-                    if let recoveryQueueItem {
-                        var item = recoveryQueueItem.item
-                        item.status = .sending
-                        item.transcriptRecorded = item.transcriptRecorded || recordedMessageID != nil
-                        self.session.queue.insert(item, at: 0)
-                        if normalUserTurn {
-                            self.session.normalQueuedTurnIDs.insert(item.id)
-                            self.session.normalQueuedTurnUserMessageIDs[item.id] = recordedMessageID
-                        }
-                        self.persistQueue()
+                    ownedContinuationStarted = true
+                    self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
+                    var continuationItem = durableQueueItem.item
+                    continuationItem.status = .sending
+                    continuationItem.transcriptRecorded = continuationItem.transcriptRecorded || recordedMessageID != nil
+                    continuationItem.lastError = nil
+                    continuationItem.deliveryUncertain = false
+                    self.session.queue.insert(continuationItem, at: 0)
+                    if normalUserTurn {
+                        self.session.normalQueuedTurnIDs.insert(continuationItem.id)
+                        self.session.normalQueuedTurnUserMessageIDs[continuationItem.id] = recordedMessageID
                     }
+                    self.persistQueue()
                     self.sendNow(
-                        blocks: blocks, queuedItemId: recoveryQueueItem?.item.id, delegatedSource: delegatedSource,
+                        blocks: blocks, queuedItemId: durableQueueItem.item.id, delegatedSource: delegatedSource,
                         recordUserPrompt: false, normalUserTurn: normalUserTurn,
                         recordedUserMessageID: recordedMessageID, draft: draft,
                         onPromptFinished: finishPrompt)
@@ -3322,6 +3359,12 @@ extension ACPSessionRunner {
                         self.session.supportsSteering = false
                         self.nativeSteeringInProgress = false
                         self.steerInProgress = false
+                        // Preserve recovery through fallback cancellation,
+                        // which discards the interrupted sending queue head.
+                        if let index = self.session.queue.firstIndex(where: { $0.id == durableQueueItem.item.id }) {
+                            self.session.queue[index].status = .pending
+                            self.persistQueue()
+                        }
                         self.steer(
                             blocks: blocks, delegatedSource: delegatedSource,
                             recordUserPrompt: recordedMessageID == nil && recordUserPrompt,

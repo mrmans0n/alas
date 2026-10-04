@@ -21,7 +21,11 @@ without consuming the prompt, allowing Alas to send a normal owned prompt.
 Codex 2.1.1 instead returns `startedNewTurn`; its continuation completes through
 `session_info_update._meta.codex.threadStatus` active/idle/systemError updates.
 The queue must remain held until that continuation ends. An unknown or failed
-steering result must not trigger a blind resend.
+steering result must not trigger a blind resend. Before dispatch, Alas persists
+an unconfirmed steering item in the queue. If attachment or acknowledgement is
+lost, it restores as delivery uncertain and requires an explicit retry; Alas
+cannot safely infer whether the adapter consumed it. A confirmed `promptRequired`
+continuation uses the normal persistent queued-send path.
 
 Pi's RPC layer has steering concepts, but this installed ACP adapter forwards
 ordinary prompts without a steering option. It retains cancel-and-resend.

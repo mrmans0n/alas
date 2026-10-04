@@ -217,6 +217,33 @@ struct RuntimeState {
     closing: bool,
 }
 
+impl RuntimeState {
+    fn register_steering(&mut self, session_id: &str) {
+        if let Some(turn) = self.steering_turn.as_mut() {
+            turn.begin_followup();
+        } else {
+            let already_idle = matches!(
+                self.last_thread_status.as_deref(),
+                Some("idle" | "systemError")
+            ) || !self
+                .pending_methods
+                .values()
+                .any(|pending| pending.method == "session/prompt");
+            self.steering_turn =
+                Some(SteeringTurn::new(session_id.to_string(), already_idle));
+        }
+        if matches!(
+            self.broker.snapshot().turn_state,
+            BrokerTurnState::Idle | BrokerTurnState::Completed
+        ) {
+            if let Some(turn) = self.steering_turn.as_mut() {
+                turn.original_prompt_completed = true;
+            }
+            let _ = self.broker.set_turn_state(BrokerTurnState::Sending);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PendingOperation {
     operation_key: OperationKey,
@@ -1756,19 +1783,7 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                 let _ = state.broker.set_turn_state(BrokerTurnState::Sending);
             } else if params.method == "_session/steering" {
                 if let Some(session_id) = params.params.get("sessionId").and_then(Value::as_str) {
-                    if let Some(turn) = state.steering_turn.as_mut() {
-                        turn.begin_followup();
-                    } else {
-                        let already_idle = matches!(
-                            state.last_thread_status.as_deref(),
-                            Some("idle" | "systemError")
-                        ) || !state
-                            .pending_methods
-                            .values()
-                            .any(|pending| pending.method == "session/prompt");
-                        state.steering_turn =
-                            Some(SteeringTurn::new(session_id.to_string(), already_idle));
-                    }
+                    state.register_steering(session_id);
                 }
             }
         }
@@ -2679,6 +2694,37 @@ mod tests {
         turn.observe(&status("root", "active"));
         turn.observe(&status("root", "systemError"));
         assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
+    }
+
+    #[test]
+    fn registering_steering_keeps_reattached_clients_busy_during_the_idle_race() {
+        let mut state = RuntimeState {
+            broker: ACPBrokerState::new(ACPBrokerMetadata {
+                broker_id: BrokerId::new("steering"),
+                generation: BrokerGeneration::new(1),
+                alas_session_id: "root".to_string(),
+                adapter_program: "agent".to_string(),
+                adapter_args: vec![],
+                cwd: "/tmp".to_string(),
+                env_keys: vec![],
+                created_at_millis: 0,
+            }),
+            pending_methods: HashMap::new(),
+            steering_turn: None,
+            last_thread_status: Some("idle".to_string()),
+            adapter_process_group_id: None,
+            adapter_exited: false,
+            closing: false,
+        };
+        for (before, expected) in [
+            (BrokerTurnState::Completed, BrokerTurnState::Sending),
+            (BrokerTurnState::AwaitingInput, BrokerTurnState::AwaitingInput),
+        ] {
+            state.broker.set_turn_state(before).unwrap();
+            state.register_steering("root");
+            assert_eq!(state.broker.snapshot().turn_state, expected);
+            assert!(state.steering_turn.as_ref().unwrap().awaiting_response);
+        }
     }
 
     #[test]
