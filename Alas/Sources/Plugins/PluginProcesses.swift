@@ -7,6 +7,8 @@ enum PluginProcessEvent: Equatable, Sendable {
     case stderr(Data)
     /// Output past the retained amount was dropped; reported once, before the exit.
     case truncated
+    /// Stopped at the time limit by whoever enforced it, such as a remote helper; reported once, before the exit.
+    case timedOut
     /// The exit code, or 128 plus the signal number when a signal ended it, as shells report it.
     case exit(Int32)
 }
@@ -26,14 +28,36 @@ protocol PluginProcessLauncher: Sendable {
     func launch(
         _ argv: [String], in directory: URL, stdin: Data?, keep: PluginProcessOutput.Keep, limit: Int
     ) throws -> any PluginProcessHandle
+    /// A process on an SSH host, run by its Alas helper once `start` is called.
+    func launchRemote(
+        host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int
+    ) -> any PluginRemoteProcessHandle
+}
+
+extension PluginProcessLauncher {
+    func launchRemote(
+        host: String, procId: String, lease: String, keep: PluginProcessOutput.Keep, limit: Int
+    ) -> any PluginRemoteProcessHandle {
+        RemotePluginProcess(host: host, procId: procId, lease: lease, keep: keep, limit: limit)
+    }
+}
+
+/// A process on an SSH host. It can be stopped before it started: `start` then stops it at once.
+protocol PluginRemoteProcessHandle: PluginProcessHandle {
+    /// Asks the helper to start it and follows it. Throws why the host refused it; afterwards, everything comes as
+    /// events.
+    func start(argv: [String], cwd: String, stdin: Data?, longRunning: Bool, limit: Int, timeout: Duration?) async throws
 }
 
 enum PluginProcessError: Error, CustomStringConvertible {
     case notFound(String)
+    /// Said as it is.
+    case refused(String)
 
     var description: String {
         switch self {
         case .notFound(let name): "command not found: \(name)"
+        case .refused(let reason): reason
         }
     }
 }
@@ -55,6 +79,7 @@ final class PluginProcessOutput: @unchecked Sendable {
     private var accepted = [0, 0]
     private var truncated = false
     private var reportedTruncation = false
+    private var timedOut = false
     private var exit: Int32?
     private var done = false
     private let wake: AsyncStream<Void>.Continuation
@@ -106,6 +131,17 @@ final class PluginProcessOutput: @unchecked Sendable {
         wake.yield()
     }
 
+    /// Output was dropped before it got here, as the remote helper caps it too.
+    func markTruncated() {
+        lock.withLock { truncated = true }
+        wake.yield()
+    }
+
+    func markTimedOut() {
+        lock.withLock { timedOut = true }
+        wake.yield()
+    }
+
     func finish(exit: Int32) {
         lock.withLock { self.exit = exit }
         wake.yield()
@@ -137,6 +173,7 @@ final class PluginProcessOutput: @unchecked Sendable {
             }
             if let exit, !done {
                 done = true
+                if timedOut { events.append(.timedOut) }
                 events.append(.exit(exit))
             } else if done, events.isEmpty {
                 wake.finish()

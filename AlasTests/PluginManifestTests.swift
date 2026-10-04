@@ -36,7 +36,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 11), .unsupportedAPI(11)),
+        (manifest(api: 12), .unsupportedAPI(12)),
         (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
         (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
          .invalidPanel(#"at most one panel with location "configure""#)),
@@ -109,6 +109,24 @@ struct PluginManifestTests {
         #expect(throws: expected) { try PluginManifest.parse(Data(json.utf8)) }
     }
 
+    @Test(arguments: [
+        (manifest(api: 10, #","capabilities":["files.read"],"remote":true"#), PluginManifestError?.some(.needsNewerAPI(#""remote""#, api: 11))),
+        (manifest(api: 11, #","capabilities":["network"],"network":["a.com"],"remote":true"#), .invalidRemote),
+        (manifest(api: 11, #","remote":"yes""#), .malformed),
+        (manifest(api: 11, #","capabilities":["files.read"],"remote":true"#), nil),
+        (manifest(api: 11, processes(#"{"id":"a","command":["ls"]}"#) + #","remote":true"#), nil),
+        (manifest(api: 10, #","remote":false"#), nil),
+    ])
+    func remoteNeedsAPI11AndAFileOrProcessCapability(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8))
+            #expect(expected == nil)
+            #expect(parsed.remote == json.contains(#""remote":true"#))
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {
         let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"a","title":"A","kind":"view"},{"id":"b","title":"B"}]}}"#.utf8))
         #expect(manifest.tabs.map(\.kind) == [.view, .canvas])
@@ -171,8 +189,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 10"),
-        (11, "requires plugin API 11; this Alas supports up to 10"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 11"),
+        (12, "requires plugin API 12; this Alas supports up to 11"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

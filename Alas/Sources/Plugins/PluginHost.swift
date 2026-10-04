@@ -93,9 +93,10 @@ struct PluginHostActions {
     }
 }
 
-enum PluginWorktreeLocation: Equatable {
+enum PluginWorktreeLocation: Equatable, Sendable {
     case local(URL)
-    case remote(host: String)
+    /// `root` is the worktree's real path on `host`.
+    case remote(host: String, root: String)
 }
 
 /// Runs one plugin in one project.
@@ -215,6 +216,8 @@ final class PluginHost {
     /// Running processes of this instance, by run id. Ending the instance stops them.
     @ObservationIgnored private var processes: [String: any PluginProcessHandle] = [:]
     @ObservationIgnored private var nextProcess = 0
+    /// With the instance, the lease remote processes are owned by: the helper refuses calls about them under any other.
+    @ObservationIgnored private let processLease = UUID().uuidString
     /// Requests Alas sent to the plugin (`prompt/expand`, `context/provide`), waiting for its response, by id.
     @ObservationIgnored private var hostRequests: [Int: CheckedContinuation<Data?, Never>] = [:]
     @ObservationIgnored private var nextHostRequest = 0
@@ -800,19 +803,17 @@ final class PluginHost {
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) { PluginFiles.read(params.path, in: $0).map(PluginFileReadResult.init) }
+            return fileReply(id, params.worktree, .read(path: params.path))
         case "file/list":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileListParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) { PluginFiles.list(params.dir ?? "", in: $0) }
+            return fileReply(id, params.worktree, .list(dir: params.dir ?? ""))
         case "file/write":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginFileWriteParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
-            return fileReply(id, params.worktree) {
-                PluginFiles.write(params.path, content: params.content, in: $0).map { PluginEmptyPayload() }
-            }
+            return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -880,28 +881,24 @@ final class PluginHost {
     }
 
     /// The filesystem work runs off the main actor, so a large folder or a slow disk does not stall the app; the
-    /// answer comes in a later delivery.
-    private func fileReply<Result: Encodable & Sendable>(
-        _ id: JSONRPCID, _ worktree: String, _ work: @escaping @Sendable (URL) -> Swift.Result<Result, PluginFilesError>
-    ) -> Data? {
-        guard case .local(let root)? = actions.worktreeLocation(worktree) else { return worktreeRefusal(id, worktree) }
+    /// answer comes in a later delivery. A remote request holds an SSH round trip, so it counts as one in flight too.
+    private func fileReply(_ id: JSONRPCID, _ worktree: String, _ request: PluginFileRequest) -> Data? {
+        let work: @Sendable () async -> Result<PluginFileReply, PluginFilesError>
+        switch PluginFiles.route(actions.worktreeLocation(worktree), worktree: worktree, remote: manifest.remote) {
+        case .refused(let reason): return errorReply(id, code: -32003, reason)
+        case .local(let root):
+            work = { await Task.detached(priority: .userInitiated) { PluginFiles.perform(request, in: root) }.value }
+        case .remote(let host, let root):
+            work = { await PluginFiles.remote(request, host: host, root: root) }
+        }
         return replyLater(id) { [weak self] in
-            let outcome = await Task.detached(priority: .userInitiated) { work(root) }.value
+            let outcome = await work()
             guard let self else { return Data() }
             switch outcome {
             case .success(let result): return self.encode(PluginResponse(id: id, result: result, error: nil))
             case .failure(let error): return self.errorReply(id, code: -32003, error.message)
             }
         }
-    }
-
-    /// Processes and files run on this Mac, so a worktree on a remote host is out of reach.
-    private func worktreeRefusal(_ id: JSONRPCID, _ worktree: String) -> Data? {
-        guard case .remote(let host)? = actions.worktreeLocation(worktree) else {
-            return errorReply(id, code: -32003, "unknown worktree \(worktree)")
-        }
-        return errorReply(
-            id, code: -32003, "worktree \(worktree) is on remote host \(host); plugins can't run commands or use files there yet")
     }
 
     // MARK: - Processes
@@ -927,31 +924,64 @@ final class PluginHost {
         guard (params.stdin?.utf8.count ?? 0) <= Self.maxProcessStdinBytes, !(longRunning && params.stdin != nil) else {
             return errorReply(id, code: -32602, "stdin is up to 256 KiB, and only for process/run")
         }
-        guard case .local(let directory)? = actions.worktreeLocation(params.worktree) else { return worktreeRefusal(id, params.worktree) }
+        let route = PluginFiles.route(actions.worktreeLocation(params.worktree), worktree: params.worktree, remote: manifest.remote)
+        switch route {
+        case .refused(let reason): return errorReply(id, code: -32003, reason)
+        case .remote:
+            if let refusal = RemotePluginProcess.argvRefusal(entry.command + args, process: entry.id) {
+                return errorReply(id, code: -32003, refusal)
+            }
+        case .local: break
+        }
         guard processes.count < Self.maxProcessesRunning else {
             return errorReply(id, code: -32003, "at most \(Self.maxProcessesRunning) processes running")
         }
-        // Checked before launching, so a refused reply never leaves a process behind.
-        guard longRunning || requests.count < Self.maxRequestsInFlight else {
+        // Checked before launching, so a refused reply never leaves a process behind. A remote start waits for the
+        // helper's answer, so it is in flight too.
+        let answersAtOnce: Bool
+        if case .local = route { answersAtOnce = longRunning } else { answersAtOnce = false }
+        guard answersAtOnce || requests.count < Self.maxRequestsInFlight else {
             return errorReply(id, code: -32003, "too many requests in flight")
         }
         let argv = entry.command + args
         // stdout and stderr together, half the message limit, so the reply usually fits as it is; the Run tab keeps
         // the latest output.
         let maxOutput = limits.maxMessageBytes / 2
-        let handle: any PluginProcessHandle
-        do {
-            handle = try launcher.launch(
-                argv, in: directory, stdin: params.stdin.map { Data($0.utf8) },
-                keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
-        } catch {
-            return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
-        }
+        let stdin = params.stdin.map { Data($0.utf8) }
         nextProcess += 1
         let run = "p\(nextProcess)"
+        let handle: any PluginProcessHandle
+        /// A remote process starts in the later delivery: the helper's answer takes a round trip.
+        var startRemote: (@Sendable () async throws -> Void)?
+        switch route {
+        case .local(let directory):
+            do {
+                handle = try launcher.launch(
+                    argv, in: directory, stdin: stdin,
+                    keep: longRunning ? .tail : .head, limit: longRunning ? Self.processRunOutputBytes : maxOutput)
+            } catch {
+                return errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+            }
+        case .remote(let host, let root):
+            let lease = "\(processLease).\(instance)"
+            let limit = longRunning ? Self.processRunOutputBytes : maxOutput
+            let remote = launcher.launchRemote(
+                host: host, procId: RemotePluginProcess.procId(plugin: manifest.id, project: project.id, lease: lease, run: run),
+                lease: lease, keep: longRunning ? .tail : .head, limit: limit)
+            handle = remote
+            // The helper enforces a run's limit too, and its own kill grace, in case Alas is gone by then. A
+            // long-running process has no limit: its lease, renewed while Alas follows it, stops it once Alas is gone.
+            startRemote = {
+                try await remote.start(
+                    argv: argv, cwd: root, stdin: stdin, longRunning: longRunning, limit: limit,
+                    timeout: longRunning ? nil : Self.processTimeout)
+            }
+        case .refused: return nil
+        }
         processes[run] = handle
         let instance = instance
-        if longRunning {
+        let started: @MainActor () -> Data = { [weak self] in
+            guard let self else { return Data() }
             processRuns.append(PluginProcessRun(id: run, process: entry.id, worktree: params.worktree, command: argv))
             if processRuns.count > Self.maxProcessRuns, let oldest = processRuns.firstIndex(where: { $0.exit != nil }) {
                 processRuns.remove(at: oldest)
@@ -960,8 +990,21 @@ final class PluginHost {
             Task { [weak self] in await self?.follow(run, handle, instance: instance) }
             return encode(PluginResponse(id: id, result: PluginProcessStartResult(run: run), error: nil))
         }
+        if answersAtOnce { return started() }
         let sleep = sleep
         return replyLater(id) { [weak self] in
+            do {
+                try await startRemote?()
+            } catch {
+                guard let self else { return Data() }
+                if self.instance == instance { self.processes[run] = nil }
+                return self.errorReply(id, code: -32003, "could not start \(entry.id): \(error)")
+            }
+            if longRunning {
+                // An instance that ended meanwhile has already stopped it, and hears nothing about it.
+                guard self?.instance == instance else { return Data() }
+                return started()
+            }
             let timeout = Task { () -> Bool in
                 do { try await sleep(Self.processTimeout) } catch { return false }
                 handle.terminate()
@@ -972,6 +1015,7 @@ final class PluginHost {
             var stderr = Data()
             var truncated = false
             var exit: Int32 = -1
+            var stoppedAtLimit = false
             for await event in handle.events {
                 switch event {
                 case .stdout(let chunk), .stderr(let chunk):
@@ -980,12 +1024,15 @@ final class PluginHost {
                     if case .stdout = event { stdout.append(chunk.prefix(room)) } else { stderr.append(chunk.prefix(room)) }
                 case .truncated:
                     truncated = true
+                case .timedOut:
+                    stoppedAtLimit = true
                 case .exit(let code):
                     exit = code
                 }
             }
             timeout.cancel()
-            let timedOut = await timeout.value
+            // A remote helper may reach the limit first: its clock starts before the run is answered here.
+            let timedOut = await timeout.value || stoppedAtLimit
             guard let self else { return Data() }
             if self.instance == instance { self.processes[run] = nil }
             return self.processRunReply(
@@ -1026,7 +1073,7 @@ final class PluginHost {
             case .stdout(let chunk), .stderr(let chunk):
                 guard let index else { continue }
                 processRuns[index].append(chunk, keeping: Self.processRunOutputBytes)
-            case .truncated:
+            case .truncated, .timedOut:
                 break
             case .exit(let code):
                 exit = code

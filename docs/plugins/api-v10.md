@@ -7,6 +7,7 @@
 
 API 10 tells a plugin which SSH host its project runs on, and says so when a
 command or file request can't reach a worktree on that host.
+[API 11](api-v11.md) lets a plugin that declares `remote: true` use files and run commands there.
 
 ## The `api` field
 

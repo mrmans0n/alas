@@ -121,6 +121,129 @@ enum PluginFiles {
     }
 }
 
+/// A `file/*` request, carried out on this Mac or by the Alas helper on an SSH host (API 11).
+enum PluginFileRequest: Equatable, Sendable {
+    case read(path: String)
+    case list(dir: String)
+    case write(path: String, content: String)
+}
+
+/// Where a `file/*` request for a worktree goes.
+enum PluginFileRoute: Equatable, Sendable {
+    case local(URL)
+    /// The worktree's real path on `host`.
+    case remote(host: String, root: String)
+    case refused(String)
+}
+
+/// Why a remote file request could not reach the helper.
+enum PluginRemoteFileProblem: Error, Equatable {
+    case unreachable
+    case helperMissing
+}
+
+extension PluginFiles {
+    static func perform(_ request: PluginFileRequest, in root: URL) -> Result<PluginFileReply, PluginFilesError> {
+        switch request {
+        case .read(let path): read(path, in: root).map { .read(PluginFileReadResult(content: $0)) }
+        case .list(let dir): list(dir, in: root).map { .list($0) }
+        case .write(let path, let content): write(path, content: content, in: root).map { .written }
+        }
+    }
+
+    /// Local worktrees are used here. A remote one only when the plugin declares `remote` (API 11); otherwise it gets
+    /// API 10's refusal, which names the host.
+    static func route(_ location: PluginWorktreeLocation?, worktree: String, remote: Bool) -> PluginFileRoute {
+        switch location {
+        case .local(let root)?: .local(root)
+        case .remote(let host, let root)? where remote: .remote(host: host, root: root)
+        case .remote(let host, _)?: .refused(remoteRefusal(worktree, host: host))
+        case nil: .refused("unknown worktree \(worktree)")
+        }
+    }
+
+    static func remoteRefusal(_ worktree: String, host: String) -> String {
+        "worktree \(worktree) is on remote host \(host); plugins can't run commands or use files there yet"
+    }
+
+    /// Carries out `request` in the worktree at `root` on `host`, through the Alas helper there, which checks the
+    /// path and does the work in one call. Without the helper the request is refused: a shell command cannot check
+    /// and act atomically.
+    static func remote(
+        _ request: PluginFileRequest, host: String, root: String
+    ) async -> Result<PluginFileReply, PluginFilesError> {
+        do {
+            // The probe tells a host that is down from one without the helper, and is cached per host.
+            guard let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host) else {
+                throw PluginRemoteFileProblem.unreachable
+            }
+            guard capabilities.helperHandshake != nil else { throw PluginRemoteFileProblem.helperMissing }
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            switch request {
+            case .read(let path):
+                return .success(.read(try await client.pluginFile(
+                    "fs/scoped-read", RemoteHelperScopedPathParams(root: root, path: path))))
+            case .list(let dir):
+                return .success(.list(try await client.pluginFile(
+                    "fs/scoped-list", RemoteHelperScopedListParams(root: root, dir: dir))))
+            case .write(let path, let content):
+                let _: PluginEmptyPayload = try await client.pluginFile(
+                    "fs/scoped-write", RemoteHelperScopedWriteParams(root: root, path: path, content: content))
+                return .success(.written)
+            }
+        } catch {
+            return .failure(remoteFailure(error, host: host))
+        }
+    }
+
+    /// What the plugin is told when a remote file request fails. The helper's own refusals pass through as they are.
+    /// `need` says what the plugin needs the helper for.
+    static func remoteFailure(_ error: Error, host: String, need: String = "use files there") -> PluginFilesError {
+        let unreachable = PluginFilesError.refused("remote host \(host) is unreachable")
+        switch error {
+        case PluginRemoteFileProblem.unreachable: return unreachable
+        case PluginRemoteFileProblem.helperMissing:
+            return .refused("the Alas helper is not installed on remote host \(host); plugins need it to \(need)")
+        case RemoteHelperClientError.jsonrpc(let error) where error.code == -32601:
+            return .refused("the Alas helper on remote host \(host) is out of date; plugins need a newer one to \(need)")
+        case RemoteHelperClientError.jsonrpc(let error): return .refused(error.message)
+        case RemoteHelperClientError.decoding(let message): return .refused("the Alas helper on \(host) answered badly: \(message)")
+        default: return unreachable
+        }
+    }
+}
+
+/// What a `file/*` request answers.
+enum PluginFileReply: Encodable, Equatable, Sendable {
+    case read(PluginFileReadResult)
+    case list(PluginFileListResult)
+    case written
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .read(let result): try result.encode(to: encoder)
+        case .list(let result): try result.encode(to: encoder)
+        case .written: try PluginEmptyPayload().encode(to: encoder)
+        }
+    }
+}
+
+struct RemoteHelperScopedPathParams: Encodable {
+    let root: String
+    let path: String
+}
+
+struct RemoteHelperScopedListParams: Encodable {
+    let root: String
+    let dir: String
+}
+
+struct RemoteHelperScopedWriteParams: Encodable {
+    let root: String
+    let path: String
+    let content: String
+}
+
 enum PluginFilesError: Error, Equatable {
     case refused(String)
     case notFound(String)
@@ -149,12 +272,12 @@ struct PluginFileWriteParams: Decodable, Sendable {
     let content: String
 }
 
-struct PluginFileReadResult: Encodable, Equatable, Sendable {
+struct PluginFileReadResult: Codable, Equatable, Sendable {
     let content: String
 }
 
-struct PluginFileListResult: Encodable, Equatable, Sendable {
-    struct Entry: Encodable, Equatable, Sendable {
+struct PluginFileListResult: Codable, Equatable, Sendable {
+    struct Entry: Codable, Equatable, Sendable {
         let name: String
         let kind: String
     }

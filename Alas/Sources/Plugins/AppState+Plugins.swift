@@ -153,7 +153,9 @@ extension AppState {
             worktreeLocation: { [weak self] id in
                 guard let worktree = self?.projectsManager.worktreesByProject[project.id]?.first(where: { $0.id == id })
                 else { return nil }
-                if let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) { return .remote(host: host) }
+                if let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) {
+                    return .remote(host: host, root: RemotePath.realPath(worktree.path.path))
+                }
                 return .local(worktree.path)
             })
     }

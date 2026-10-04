@@ -1,3 +1,4 @@
+mod plugin_proc;
 mod watch;
 
 use alas_helper::acp_broker_process;
@@ -251,7 +252,8 @@ fn capabilities() -> Value {
             "write": true,
             "stat": true,
             "lineCounts": true,
-            "list": true
+            "list": true,
+            "scoped": true
         },
         "search": true,
         "ping": true,
@@ -289,6 +291,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("plugin-proc-supervise") => plugin_proc::supervise_main(args.next()),
+        Some("plugin-proc-anchor") => plugin_proc::anchor_main(),
         Some("acp-broker-supervise") => {
             let Some(dir) = args.next() else {
                 eprintln!("usage: alas-helper acp-broker-supervise <broker-dir>");
@@ -365,6 +369,14 @@ fn serve() -> io::Result<()> {
                 // request — so a single slow or wedged broker would stall the
                 // whole app. Run them off this thread and let the response
                 // come back through the same channel the watchers use.
+                // A plugin spawn can wait seconds for the login environment and
+                // the process to start: run it off this thread too.
+                if let (Some((id, params)), Some(sender)) =
+                    (plugin_spawn_request(&line), state.event_sender.clone())
+                {
+                    answer_plugin_spawn_off_thread(id, params, sender);
+                    continue;
+                }
                 match AcpJob::from_line(&line) {
                     Some(job) => match state.event_sender.clone() {
                         Some(sender) => dispatch_acp_job(job, &sender, &mut acp_queues),
@@ -671,6 +683,39 @@ fn dispatch_acp_job(
     }
 }
 
+/// A `pproc/spawn` request's id and params, for the worker that answers it.
+fn plugin_spawn_request(line: &str) -> Option<(Value, Option<Value>)> {
+    let request: JsonRpcRequest = serde_json::from_str(line).ok()?;
+    (request.method.as_deref() == Some("pproc/spawn")).then_some(())?;
+    Some((request.id?, request.params))
+}
+
+/// Answers a plugin spawn on a thread of its own, through the channel the
+/// watchers and ACP workers answer on. A thread that can't start answers the
+/// caller with an error rather than leaving it waiting.
+fn answer_plugin_spawn_off_thread(
+    id: Value,
+    params: Option<Value>,
+    responses: Sender<ServerMessage>,
+) {
+    let worker = responses.clone();
+    let failed_id = id.clone();
+    let spawned = std::thread::Builder::new().spawn(move || {
+        let response = match plugin_proc::handle("pproc/spawn", params, Some(worker.clone())) {
+            Ok(result) => success_response(id, result),
+            Err(error) => error_response(id, error.code, error.message),
+        };
+        let _ = worker.send(ServerMessage::Response(response));
+    });
+    if spawned.is_err() {
+        let _ = responses.send(ServerMessage::Response(error_response(
+            failed_id,
+            -32000,
+            "helper could not start a worker for this request",
+        )));
+    }
+}
+
 fn handle_line(state: &mut HelperState, line: &str) -> Option<String> {
     let request: Result<JsonRpcRequest, _> = serde_json::from_str(line);
     let request = match request {
@@ -718,12 +763,18 @@ fn handle_request(
         "fs/stat" => fs_stat(state, params),
         "fs/line-counts" => fs_line_counts(state, params),
         "fs/list" => fs_list(state, params),
+        // Plugin file access (API 11): containment is checked in the same call as the operation.
+        method if method.starts_with("fs/scoped-") => alas_helper::scoped_fs::handle_request(method, params)
+            .map_err(|error| HelperError { code: error.code, message: error.message }),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
         "proc/spawn" => fenced_proc_request(state, method, params),
         "proc/attach" => proc_attach(state, params),
         "proc/write" | "proc/kill" => fenced_proc_request(state, method, params),
         "proc/list" => proc_list(),
+        method if method.starts_with("pproc/") => {
+            plugin_proc::handle(method, params, state.event_sender.clone())
+        }
         method if method.starts_with("lease/") || method.starts_with("replica/") => {
             remote_session_store(state)?
                 .handle(method, params, alas_helper::remote_sessions::now(), |proc_id| {
