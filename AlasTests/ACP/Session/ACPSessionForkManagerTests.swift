@@ -13,10 +13,13 @@ struct ACPSessionForkManagerTests {
         let restored = try #require(manager.placeholderSession(id: source.id))
         await manager.hydrateIfNeeded(id: source.id)
         restored.transcript.streamingState = .streaming
-        restored.builtInMCPRegistration = .registered
-        restored.mcpAttachmentSummary = .init(statuses: [
+        let builtInSummary = MCPAttachmentSummary(statuses: [
             .init(id: BuiltInAlasMCP.statusId, name: "alas", transport: .stdio, disposition: .requested),
         ], configurationFingerprint: "test")
+        if archive {
+            restored.builtInMCPRegistration = .registered
+            restored.mcpAttachmentSummary = builtInSummary
+        }
         restored.replaceComposerDraft(ACPComposerDraft(segments: [.text("Unsent draft")]))
         #expect(await manager.enqueuePrompt(id: UUID(), text: "Existing task", into: source.id))
 
@@ -29,7 +32,7 @@ struct ACPSessionForkManagerTests {
         }.joined()
         #expect(sourceID == source.id)
         #expect(text.contains("New finding"))
-        #expect(text.contains("session_read("))
+        #expect(text.contains("session_read(") == archive)
         #expect(!text.contains("Inherited answer"))
         #expect(item.delegatedSource?.sessionId == fork.id)
         #expect(restored.transcript.streamingState == .streaming)
@@ -38,6 +41,8 @@ struct ACPSessionForkManagerTests {
         #expect(try store.loadSession(id: fork.id)?.archived == archive)
         #expect(try store.loadMessages(sessionId: fork.id).count == 2)
         if !archive {
+            restored.builtInMCPRegistration = .registered
+            restored.mcpAttachmentSummary = builtInSummary
             fork.transcript.appendMessage(.systemNotice(id: UUID(), text: "Reconnected"))
             manager.persistTrailingMessages(fork, fromIndex: 2)
             _ = try await manager.mergeForkBack(id: fork.id, archive: false)

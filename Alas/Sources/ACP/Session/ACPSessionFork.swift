@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct ACPForkMessageBoundary: Equatable, Sendable {
@@ -255,6 +256,18 @@ private struct CopiedUserPayload: Codable {
 enum ACPSessionForkMergeContext {
     static let characterBudget = 8_000
     static let entryBudget = 2_000
+
+    @MainActor
+    static func deliveryIdentity(fork: ACPSessionForkRecord, messages: [ACPMessage]) throws -> String {
+        let offset = ACPSessionTranscriptReader.entries(Array(messages.prefix(fork.inheritedMessageCount))).count
+        let conversation = ACPSessionTranscriptReader.entries(messages).dropFirst(offset)
+            .filter { $0.role == "user" || $0.role == "agent" }
+            .map { ["role": $0.role, "text": $0.text] }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(conversation)
+        return "fork-merge-" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 
     @MainActor
     static func prompt(

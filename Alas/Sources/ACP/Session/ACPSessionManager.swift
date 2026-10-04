@@ -1,4 +1,3 @@
-import CryptoKit
 import Combine
 import Foundation
 
@@ -2004,6 +2003,7 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionForkMergeError.noConversation
         }
         let messageCount = session.transcript.messages.count
+        let deliveryIdentity = try ACPSessionForkMergeContext.deliveryIdentity(fork: fork, messages: session.transcript.messages)
         let sourceID = fork.sourceSessionID
         guard let sourceRow = try await persistence.loadSession(id: sourceID), !sourceRow.archived else {
             throw ACPSessionForkMergeError.sourceUnavailable
@@ -2042,7 +2042,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let accepted = await enqueueDelegatedPrompt(
             text: prompt,
-            source: .init(sessionId: id, messageId: "fork-merge-" + SHA256.hash(data: Data(prompt.utf8)).map { String(format: "%02x", $0) }.joined()),
+            source: .init(sessionId: id, messageId: deliveryIdentity),
             into: sourceID,
             requiringWriter: true
         )
