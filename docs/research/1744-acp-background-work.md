@@ -162,6 +162,11 @@ Local validation passed:
   reproduced stale summary and terminal-state data before the fix. Pending
   notifications now retain their delivery identity while refreshing their
   persisted text; sending, failed, and uncertain deliveries keep their snapshot.
+- The late-reannouncement race fix passed **223 tests in two suites**:
+  `ACPSessionTests` and `ACPSessionRunnerQueueTests`. The existing in-flight
+  loss test now also reannounces the task before completion; that variant
+  failed before the fix because the completion notification was consumed
+  under the earlier loss notification's identity.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 

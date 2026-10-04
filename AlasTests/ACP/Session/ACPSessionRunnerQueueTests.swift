@@ -1380,8 +1380,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.isEmpty)
     }
 
-    @Test("an in-flight loss notification cannot consume a later completion notification")
-    func completionWhileLossNotificationIsSending() async throws {
+    @Test("an in-flight loss notification cannot consume a later completion notification", arguments: [false, true])
+    func completionWhileLossNotificationIsSending(reannounced: Bool) async throws {
         let (runner, mock, session, _) = try mkRunner(agentID: "codex")
         var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")
         task.loseObservation()
@@ -1392,16 +1392,22 @@ struct ACPSessionRunnerQueueTests {
         defer { runner.stop() }
         await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
         await probe.waitUntilFirstStarted()
+        if reannounced {
+            mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
+                sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"))))
+            try await waitUntil { session.backgroundTasks[0].state == "running" }
+        }
         mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
             sessionUpdate: "async_task_state_update", asyncTaskId: "watch", state: "completed"))))
-        try await waitUntil { session.queue.count == 2 }
+        try await waitUntil { session.backgroundTasks[0].state == "completed" }
+        await runner.flushPersistence()
         let states = try session.queue.map { item -> String? in
             guard case .text(let text) = item.blocks.first else { throw CocoaError(.coderInvalidValue) }
             let facts = Data(try #require(text.split(separator: "\n").last).utf8)
             return (try JSONSerialization.jsonObject(with: facts) as? [String: Any])?["state"] as? String
         }
         #expect(states == ["lost", "completed"])
-        #expect(session.queue[0].id != session.queue[1].id)
+        #expect(Set(session.queue.map(\.id)).count == 2)
         await probe.releaseFirst()
         try await waitUntil { session.queue.isEmpty && session.backgroundTasks[0].wakeDelivered }
         await runner.flushPersistence()

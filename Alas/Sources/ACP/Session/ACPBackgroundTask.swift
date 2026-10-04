@@ -122,8 +122,10 @@ struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
         if !isActive {
             finishedAt = wasLost ? Date() : (finishedAt ?? Date())
             stopError = nil
+            // Reobserved work completes under a fresh identity even if its
+            // earlier loss notification is still awaiting delivery.
             if wakeOnCompletion, ["completed", "failed"].contains(state),
-               wakeId == nil || wasLost || (wasActive && wakeDelivered) {
+               wakeId == nil || wasLost || wasActive {
                 wakeId = UUID()
                 wakeDelivered = false
             }
