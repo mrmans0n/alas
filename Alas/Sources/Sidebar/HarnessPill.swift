@@ -44,6 +44,7 @@ struct HarnessPill: View {
         case .running:  return theme.color("add")
         case .awaiting: return theme.color("mod")
         case .limited:  return theme.color("warn")
+        case .failed:   return theme.color("del")
         }
     }
 
@@ -52,6 +53,7 @@ struct HarnessPill: View {
         case .running:  return "run"
         case .awaiting: return "wait"
         case .limited:  return "limit"
+        case .failed:   return "fail"
         }
     }
 }
@@ -85,7 +87,7 @@ struct HarnessSessionBadge: View {
     }
 
     private var tooltip: String {
-        "\(session.agent.displayName) · \(session.state == .running ? "running" : session.state == .limited ? "limited" : "waiting")"
+        "\(session.agent.displayName) · \(session.state.statusNote)"
     }
 }
 
@@ -108,7 +110,7 @@ struct HarnessSessionOverflowBadge: View {
                         Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
                     }
                 }
-                .badge(session.state == .running ? "Running" : "Waiting")
+                .badge(session.state.statusNote.capitalized)
             }
         } label: {
             Text("+\(sessions.count)")
@@ -134,6 +136,7 @@ enum HarnessSessionBadgeSurface: Equatable {
     case running
     case awaiting
     case limited
+    case failed
     case mixed
 
     init(state: HarnessService.AggregatedState) {
@@ -141,12 +144,13 @@ enum HarnessSessionBadgeSurface: Equatable {
         case .running: self = .running
         case .awaiting: self = .awaiting
         case .limited: self = .limited
+        case .failed: self = .failed
         }
     }
 
     init(sessions: [HarnessService.WorktreeHarnessSession]) {
-        if !sessions.isEmpty, sessions.allSatisfy({ $0.state == .limited }) {
-            self = .limited
+        if let first = sessions.first, sessions.allSatisfy({ $0.state == first.state }) {
+            self.init(state: first.state)
             return
         }
         let hasRunning = sessions.contains { $0.state == .running }
@@ -155,7 +159,10 @@ enum HarnessSessionBadgeSurface: Equatable {
         switch (hasRunning, hasAwaiting) {
         case (true, true): self = .mixed
         case (true, false): self = .running
-        case (false, true), (false, false): self = .awaiting
+        case (false, true): self = .awaiting
+        case (false, false):
+            // Only stopped sessions remain; a failure is the one to act on.
+            self = sessions.contains { $0.state == .failed } ? .failed : .awaiting
         }
     }
 }
@@ -208,6 +215,8 @@ struct HarnessSessionBadgeChrome: ViewModifier {
             gradientColors = colors(for: "caution")
         case .limited:
             gradientColors = colors(for: "warn")
+        case .failed:
+            gradientColors = colors(for: "del")
         case .mixed:
             let stops = Self.mixedSurfaceRamp(
                 running: theme.tokens["add"],

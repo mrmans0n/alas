@@ -224,7 +224,10 @@ final class HarnessService {
             }
             backgroundActivityIdsBySession[event.sessionId, default: []].insert(activityId)
             let foregroundState = activityBySession[event.sessionId]?.state
-            if foregroundState != .awaitingInput, foregroundState != .permissionRequest {
+            // Background work does not answer a question or a failed turn;
+            // `hasBackgroundActivity` reports its liveness instead.
+            if foregroundState != .awaitingInput, foregroundState != .permissionRequest,
+               foregroundState != .failed {
                 activityBySession[event.sessionId] = HarnessActivityState(
                     agent: event.agent, state: .busy, pid: event.pid,
                     lastBody: nil, updatedAt: Date()
@@ -348,6 +351,9 @@ final class HarnessService {
         shouldNotifyOnCommit: Bool = true
     ) {
         let previous = activityBySession[event.sessionId]
+        // A hook idle after an ACP failure is the same turn ending (Pi maps
+        // `agent_end` to idle); a new turn passes through busy first.
+        if previous?.state == .failed { return }
         if backgroundActivityIdsBySession[event.sessionId]?.isEmpty == false {
             deferredForegroundIdleBySession[event.sessionId] = DeferredForegroundIdle(
                 event: event,
@@ -401,7 +407,7 @@ final class HarnessService {
 
     nonisolated static func shouldRefreshWorktreeStatus(after state: ActivityState) -> Bool {
         switch state {
-        case .busy, .idle, .awaitingInput, .permissionRequest, .limited:
+        case .busy, .idle, .awaitingInput, .permissionRequest, .limited, .failed:
             return true
         }
     }
@@ -419,6 +425,12 @@ final class HarnessService {
         activeSocketLifecycleBySession.removeAll()
         latestSocketLifecycleOrderBySession.removeAll()
         retiredSocketLifecycleIdsBySession.removeAll()
+    }
+
+    /// Whether a hook-reported background workflow is still running for the
+    /// session, independent of the foreground state it shows.
+    func hasBackgroundActivity(sessionId: String) -> Bool {
+        backgroundActivityIdsBySession[sessionId]?.isEmpty == false
     }
 
     func forgetSession(_ sessionId: String) {
@@ -505,7 +517,7 @@ final class HarnessService {
     }
 
     enum AggregatedState: String, Equatable {
-        case running, awaiting, limited
+        case running, awaiting, limited, failed
     }
 
     struct WorktreeHarnessSession: Equatable, Identifiable {
@@ -533,6 +545,8 @@ final class HarnessService {
                 return (WorktreeHarnessSession(id: id, state: .running, agent: activity.agent), activity.updatedAt, offset)
             case .limited:
                 return (WorktreeHarnessSession(id: id, state: .limited, agent: activity.agent), activity.updatedAt, offset)
+            case .failed:
+                return (WorktreeHarnessSession(id: id, state: .failed, agent: activity.agent), activity.updatedAt, offset)
             case .idle:
                 return nil
             }
@@ -567,12 +581,24 @@ final class HarnessService {
 }
 
 extension HarnessService.AggregatedState {
-    /// Worktree roll-up priority: awaiting > running > limited.
+    /// Worktree roll-up priority: awaiting > failed > running > limited.
+    /// A failed turn needs the user, so it outranks work still in progress.
     var rollUpRank: Int {
         switch self {
         case .awaiting: 0
-        case .running: 1
-        case .limited: 2
+        case .failed: 1
+        case .running: 2
+        case .limited: 3
+        }
+    }
+
+    /// Lowercase status word for sidebar tooltips and notes.
+    var statusNote: String {
+        switch self {
+        case .running: "running"
+        case .awaiting: "waiting"
+        case .limited: "limited"
+        case .failed: "failed"
         }
     }
 }

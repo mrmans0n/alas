@@ -33,14 +33,14 @@ enum AttentionKind: String, Codable, Sendable {
     case agentAwaiting, agentPermission, runScriptFailure, gitOperation
     case conflicts, reviewReply, failedChecks, actionableFeedback
     case reviewSyncBlocked, hostDisconnected, agentFinished, agentReady
-    case agentLimited
+    case agentLimited, agentFailed
 }
 
 extension AttentionKind {
     /// A condition can be worth recording without requiring the user's intervention.
     var requiresAction: Bool {
         switch self {
-        case .agentAwaiting, .agentPermission, .runScriptFailure, .conflicts, .hostDisconnected:
+        case .agentAwaiting, .agentPermission, .runScriptFailure, .conflicts, .hostDisconnected, .agentFailed:
             true
         case .agentReady, .gitOperation, .reviewReply, .failedChecks, .actionableFeedback,
              .reviewSyncBlocked, .agentFinished, .agentLimited:
@@ -68,7 +68,7 @@ extension AttentionKind {
             title.replacingOccurrences(of: " needs action", with: " required action")
         case .reviewSyncBlocked:
             title.replacingOccurrences(of: " is ahead", with: " was ahead")
-        case .reviewReply, .failedChecks, .agentFinished, .agentReady, .agentLimited:
+        case .reviewReply, .failedChecks, .agentFinished, .agentReady, .agentLimited, .agentFailed:
             title
         }
     }

@@ -261,11 +261,7 @@ extension AppState {
         var observations = harness.activityBySession.flatMap { sessionID, activity -> [AttentionObservation] in
             guard let worktree = attentionWorktree(forSessionID: sessionID),
                   let context = attentionContext(for: worktree) else {
-                return [
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):limited"))
-                ]
+                return AttentionProducer.harnessSourceKeys(sessionID: sessionID).map { .inactive(sourceKey: $0) }
             }
             return AttentionProducer.harness(
                 sessionID: sessionID, agent: activity.agent, state: activity.state,
@@ -277,11 +273,7 @@ extension AppState {
         observations += restoredAttentionSessionIDs()
             .subtracting(knownHarnessSessionIDs)
             .flatMap { sessionID in
-                [
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission")),
-                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):limited"))
-                ]
+                AttentionProducer.harnessSourceKeys(sessionID: sessionID).map { .inactive(sourceKey: $0) }
             }
         for entry in attentionWorktrees {
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
@@ -738,8 +730,8 @@ extension AppState {
         // Forget can arrive after the tab or session owner has already been removed.
         guard let state = transition.state else {
             cancelPendingHarnessAttention(for: transition.sessionID)
-            for suffix in ["awaiting", "permission", "limited"] {
-                observeAttention(.inactive(sourceKey: .init(rawValue: "session:\(transition.sessionID):\(suffix)")), at: transition.occurredAt)
+            for key in AttentionProducer.harnessSourceKeys(sessionID: transition.sessionID) {
+                observeAttention(.inactive(sourceKey: key), at: transition.occurredAt)
             }
             return
         }
@@ -862,7 +854,8 @@ extension AppState {
             requiresUserInput: transition.requiresUserInput
         )
         if !transition.isSnapshot,
-           transition.previousState == .awaitingInput || transition.previousState == .permissionRequest,
+           transition.previousState == .awaitingInput || transition.previousState == .permissionRequest
+            || transition.previousState == .failed,
            state == .busy || state == .idle {
             acknowledgeSessionTarget(worktreeID: resolution.worktree.id, owner: resolution.owner, sessionID: transition.sessionID)
         }

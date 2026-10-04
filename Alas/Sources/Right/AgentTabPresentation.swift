@@ -448,6 +448,8 @@ struct AgentSidebarRowView: View {
             theme.color("warn")
         case .idle:
             theme.color("accent")
+        case .failed:
+            theme.color("del")
         case .detached:
             theme.color("fg-faint")
         case .unknown:
@@ -470,6 +472,7 @@ extension AgentSidebarState {
         case .awaitingInput: "Awaiting input"
         case .permissionRequest: "Permission"
         case .idle: "Idle"
+        case .failed: "Failed"
         case .detached: "History"
         case .unknown: "Unknown"
         }

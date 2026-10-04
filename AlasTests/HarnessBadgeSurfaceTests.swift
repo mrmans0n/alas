@@ -42,10 +42,16 @@ struct HarnessBadgeSurfaceTests {
     @Test func overflowSurfaceReflectsOnlyHiddenSessionStates() {
         let running = HarnessService.WorktreeHarnessSession(id: "running", state: .running, agent: .claude)
         let awaiting = HarnessService.WorktreeHarnessSession(id: "awaiting", state: .awaiting, agent: .pi)
+        let limited = HarnessService.WorktreeHarnessSession(id: "limited", state: .limited, agent: .codex)
+        let failed = HarnessService.WorktreeHarnessSession(id: "failed", state: .failed, agent: .claude)
 
         #expect(HarnessSessionBadgeSurface(sessions: [running]) == .running)
         #expect(HarnessSessionBadgeSurface(sessions: [awaiting]) == .awaiting)
         #expect(HarnessSessionBadgeSurface(sessions: [running, awaiting]) == .mixed)
+        #expect(HarnessSessionBadgeSurface(sessions: [limited]) == .limited)
+        #expect(HarnessSessionBadgeSurface(sessions: [failed]) == .failed)
+        #expect(HarnessSessionBadgeSurface(sessions: [limited, failed]) == .failed)
+        #expect(HarnessSessionBadgeSurface(sessions: [running, failed]) == .running)
     }
 
     @Test func mixedRampTransitionsFromRunningToAwaitingHue() throws {
