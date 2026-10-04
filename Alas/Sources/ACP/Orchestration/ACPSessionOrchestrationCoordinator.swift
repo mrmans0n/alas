@@ -717,13 +717,22 @@ final class ACPSessionOrchestrationCoordinator {
             }
         }
         let undelivered = !((try? await environment.persistence.pendingMessages(targetSessionId: sessionId)) ?? []).isEmpty
+        let settled = archived || ACPSessionOrchestrationPolicy.waitSettled(
+            phase: phase, runtime: runtime, hasPendingPrompts: queued || undelivered
+        )
+        // A settled child that is not live here still has its result in its
+        // stored transcript; load it only now, not on every poll.
+        var transcriptSession = session
+        if transcriptSession == nil, settled, !archived, phase == .ready, let record,
+           let location = await resolveDeliveryTarget(sessionID: sessionId, callerParent: record, targetParent: record) {
+            await location.manager.hydrateIfNeeded(id: sessionId)
+            transcriptSession = location.manager.liveSession(for: sessionId)
+        }
         return .init(
             sessionId: sessionId,
             state: ACPSessionOrchestrationPolicy.publicState(phase: phase, runtime: runtime, archived: archived).rawValue,
-            settled: archived || ACPSessionOrchestrationPolicy.waitSettled(
-                phase: phase, runtime: runtime, hasPendingPrompts: queued || undelivered
-            ),
-            lastAgentText: session.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
+            settled: settled,
+            lastAgentText: transcriptSession.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) },
             failure: record?.failureMessage
         )
     }

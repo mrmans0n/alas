@@ -8,7 +8,7 @@ struct ACPSessionTranscriptReaderTests {
         texts.enumerated().map { .init(index: $0.offset, role: "agent", text: $0.element) }
     }
 
-    @Test("messages become text entries; tool calls are summarized and thoughts left out")
+    @Test("messages become verbatim text entries; tool calls are summarized and thoughts left out")
     func entriesSummarizeTranscript() {
         let messages: [ACPMessage] = [
             .user(id: UUID(), text: "Fix the parser", attachments: []),
@@ -16,14 +16,14 @@ struct ACPSessionTranscriptReaderTests {
             .toolCall(.init(toolCallId: "t1", title: "Run tests", status: "completed", content: "huge output", name: "Bash")),
             .fileEdit(id: UUID(), .init(path: "Sources/Parser.swift", added: 3, removed: 1)),
             .agent(id: UUID(), StreamingText("  ")),
-            .agent(id: UUID(), StreamingText("Done.")),
+            .agent(id: UUID(), StreamingText("    let indented = true\n")),
         ]
 
         let result = ACPSessionTranscriptReader.entries(messages)
 
         #expect(result.map(\.role) == ["user", "tool", "tool", "agent"])
         #expect(result.map(\.text) == [
-            "Fix the parser", "Bash [completed]", "Edited Sources/Parser.swift (+3 -1)", "Done.",
+            "Fix the parser", "Bash [completed]", "Edited Sources/Parser.swift (+3 -1)", "    let indented = true\n",
         ])
         #expect(result.map(\.index) == [0, 1, 2, 3])
     }

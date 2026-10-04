@@ -852,6 +852,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let coordinator: ACPSessionOrchestrationCoordinator
         let persistence: ACPOrchestrationPersistence
         let manager: ACPSessionManager
+        var sessionPath = ""
     }
 
     /// A parent session that exists but cannot attach (missing agent), so
@@ -906,7 +907,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             notifyChanged: {},
             pause: pause
         ))
-        return .init(coordinator: coordinator, persistence: persistence, manager: manager)
+        return .init(coordinator: coordinator, persistence: persistence, manager: manager, sessionPath: sessionPath)
     }
 
     private func insertReadyChild(_ persistence: ACPOrchestrationPersistence) async throws {
@@ -1162,6 +1163,26 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
         #expect(response.timedOut)
         #expect(response.sessions.map(\.settled) == [false])
+    }
+
+    @Test("a settled child that is not live here reports its stored result")
+    func waitLoadsStoredResultOfNonLiveChild() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        let store = try ACPSessionStore(path: fixture.sessionPath)
+        try store.upsertSession(.init(id: "child", agentId: "codex", title: "Child",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let message: ACPMessage = .agent(id: UUID(), StreamingText("Parser fixed."))
+        try store.appendMessage(sessionId: "child", id: "m0", kind: message.kind,
+                                seq: 0, payload: try ACPMessageCodec.encode(message), createdAt: 1)
+
+        let response = try decoded(ACPOrchestrationWaitResponse.self, await fixture.coordinator.perform(
+            origin: parentOrigin, .wait(.init(targetSessionIds: ["child"], timeoutMillis: 0))
+        ))
+
+        #expect(response.sessions.map(\.settled) == [true])
+        #expect(response.sessions.first?.lastAgentText == "Parser fixed.")
     }
 
     @Test("interrupting a running child this instance does not drive reports no cancellation")

@@ -41,9 +41,10 @@ enum ACPSessionTranscriptReader {
     @MainActor
     static func entries(_ messages: [ACPMessage]) -> [Entry] {
         var entries: [Entry] = []
+        // Text stays verbatim (an indented code block keeps its indent);
+        // trimming only drops entries with nothing to read.
         func append(_ role: String, _ text: String) {
-            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             entries.append(Entry(index: entries.count, role: role, text: text))
         }
         for message in messages {
