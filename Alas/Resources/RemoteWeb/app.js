@@ -2056,6 +2056,10 @@ function queuedStatus(item) {
   return item.scheduledAt ? "Scheduled for " + new Date(item.scheduledAt).toLocaleString() : "Queued";
 }
 
+function canEditQueuedPrompt(item) {
+  return item.canRemove !== false && item.imageCount === 0 && item.resourceCount === 0;
+}
+
 function queuedActions(item) {
   const actions = el("div", "queued-actions");
   const button = (cls, glyph, label, onclick) => {
@@ -2073,7 +2077,7 @@ function queuedActions(item) {
   // Editing an item whose images or file mentions the web client never
   // received would silently drop them, so the pencil is withheld rather
   // than made lossy.
-  if (item.canRemove !== false && item.imageCount === 0 && item.resourceCount === 0) {
+  if (canEditQueuedPrompt(item)) {
     actions.appendChild(button("qa-edit", "✎", "Edit",
       () => queueAction("queueEdit", item.id)));
   }

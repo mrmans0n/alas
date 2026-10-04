@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 import Testing
 
 struct RemoteWebAssetTests {
@@ -13,6 +14,16 @@ struct RemoteWebAssetTests {
             .appendingPathComponent("RemoteWeb")
             .appendingPathComponent(relativePath)
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func javascriptFunction(_ name: String) throws -> JSValue {
+        let source = try asset("app.js")
+        let start = try #require(source.range(of: "function \(name)("))
+        let end = try #require(source.range(of: "\n}", range: start.upperBound..<source.endIndex))
+        let context = try #require(JSContext())
+        context.evaluateScript(String(source[start.lowerBound..<end.upperBound]))
+        #expect(context.exception == nil)
+        return try #require(context.objectForKeyedSubscript(name))
     }
 
     // Cache-busting versions (`/app.js?v=N`) are bumped routinely. Tests derive
@@ -525,15 +536,12 @@ struct RemoteWebAssetTests {
         #expect(!sw.contains(#""/remote-info","#))
     }
 
-    @Test func remoteWebDerivesComposerActionLikeNativePane() throws {
-        let js = try asset("app.js")
-
-        #expect(js.contains("function composerAction(streamingState, hasText)"))
-        #expect(js.contains(#"return hasText ? "send" : "hidden";"#))
-        #expect(js.contains(#"return hasText ? "queue" : "stop";"#))
-        #expect(js.contains("function queueBadgeCount()"))
-        #expect(js.contains("function submitPrompt(intent)"))
-        #expect(js.contains(#"intent: intent || "auto""#))
+    @Test(arguments: [("idle", false, false, "hidden"), ("idle", false, true, "stop"), ("idle", true, true, "send"),
+                      ("streaming", false, false, "stop"), ("sending", true, false, "queue"),
+                      ("awaitingPermission", false, true, "stop"), ("awaitingInput", true, true, "queue")])
+    func remoteWebDerivesComposerActionLikeNativePane(state: String, hasText: Bool, backgroundWork: Bool, expected: String) throws {
+        let action = try javascriptFunction("composerAction")
+        #expect(action.call(withArguments: [state, hasText, backgroundWork])?.toString() == expected)
     }
 
     @Test func remoteWebRendersQueueSplitCapsule() throws {
@@ -620,22 +628,13 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"case "queueEditRestored""#))
     }
 
-    @Test func queuedBubblesHideEditWhenTheItemCarriesImages() throws {
-        let js = try asset("app.js")
-        #expect(js.contains("🖼"))
-    }
-
-    // Regression (codex review, PR #964): the web client must never offer an
-    // action that would silently discard content it cannot represent. A
-    // queued item with a resource/file mention is just as lossy to edit as
-    // one with an image (the browser never gets the URI), so Edit must be
-    // gated on BOTH counts and the resource chip must be visible so the
-    // user can see why.
-    @Test func queuedBubblesHideEditWhenTheItemCarriesResources() throws {
-        let js = try asset("app.js")
-        #expect(js.contains("if (item.imageCount === 0 && item.resourceCount === 0)"))
-        #expect(js.contains("📎"))
-        #expect(js.contains("queued-resources"))
+    @Test(arguments: [(0, 0, nil, true), (0, 0, true, true), (0, 0, false, false),
+                      (1, 0, nil, false), (0, 1, nil, false)] as [(Int, Int, Bool?, Bool)])
+    func queueEditsPreserveProtectedPayloads(images: Int, resources: Int, canRemove: Bool?, expected: Bool) throws {
+        let canEdit = try javascriptFunction("canEditQueuedPrompt")
+        var item: [String: Any] = ["imageCount": images, "resourceCount": resources]
+        if let canRemove { item["canRemove"] = canRemove }
+        #expect(canEdit.call(withArguments: [item])?.toBool() == expected)
     }
 
     // Regression (final branch review): native never renders a `.sending`

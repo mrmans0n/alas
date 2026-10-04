@@ -279,6 +279,13 @@ Local validation passed:
   and manager writes released before the confirmation callback completes.
   All manager queue writers now preserve the settled background attempt
   without changing captured ordinary prompts.
+- CI assertion corrections passed **107 tests in two suites**:
+  `RemoteWebAssetTests` and `CommitDetailsTests`. Source-string checks were
+  replaced by JavaScriptCore execution of composer and queue-edit decisions,
+  including idle background Stop, protected notifications and older frames.
+  The existing copy-diff test now handles the documented soft subprocess cap:
+  a final chunk can retain the requested section, while an earlier stop throws.
+  Both successful bounded and unbounded results must exclude source hunks.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing
