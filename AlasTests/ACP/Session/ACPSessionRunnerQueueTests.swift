@@ -748,6 +748,39 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.messages.count == 1)
     }
 
+    @Test("a failed steering row transaction leaves one retryable submission")
+    func failedSteeringRowTransactionDoesNotDuplicateRetry() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let text = StreamingText("working")
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
+        try store.db.exec("""
+            CREATE TRIGGER fail_steering_user BEFORE INSERT ON messages
+            WHEN NEW.kind = 'user'
+            BEGIN SELECT RAISE(ABORT, 'transient row failure'); END;
+            """)
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(session.transcript.messages.count == 1)
+        #expect(text.metadata == nil)
+        let retry = try #require(session.queue.first)
+        #expect(!retry.transcriptRecorded)
+        #expect(mock.sent.isEmpty)
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.isEmpty)
+        try store.db.exec("DROP TRIGGER fail_steering_user")
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.forceSendQueuedItem(id: retry.id)
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.filter { $0.kind == "user" }.count == 1)
+        #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.count == 1)
+    }
+
     @Test("a second steer stays queued until the owned continuation reaches handoff")
     func secondSteerWaitsForContinuationHandoff() async throws {
         var steeringReturned = false

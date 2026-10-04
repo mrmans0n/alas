@@ -3292,11 +3292,11 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-                self.session.allowsStreamingBoundaryCrossing = true
-                self.persistIndices(self.session.beginSteeringOutputBoundary())
                 if recordUserPrompt {
                     let before = self.session.transcript.messages.count
                     let titleBefore = self.session.title
+                    let titleSourceBefore = self.session.titleSource
+                    let completedBoundaryBefore = self.session.transcript.completedOutputBoundaryMessageIds
                     if !self.session.followsTranscriptTail {
                         self.session.followsTranscriptTail = true
                         self.onResumeTranscriptTail?()
@@ -3305,12 +3305,34 @@ extension ACPSessionRunner {
                         text: Self.textPreview(of: blocks),
                         attachments: Self.attachments(of: blocks, draft: draft),
                         delegatedSource: delegatedSource)
+                    let recordedTitle = self.session.title
                     guard await self.persistSteeringUserRow(at: before, queueItemID: durableQueueItem.item.id) else {
+                        if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation,
+                           let index = self.session.transcript.messages.firstIndex(where: {
+                               if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
+                               return false
+                           }) {
+                            self.session.transcript.messages.remove(at: index)
+                            self.session.transcript.lastContentTouchIndex = nil
+                            self.session.transcript.completedOutputBoundaryMessageIds = completedBoundaryBefore
+                            if self.session.title == recordedTitle, self.session.titleSource == .fallback {
+                                self.session.title = titleBefore
+                                self.session.titleSource = titleSourceBefore
+                            }
+                        }
+                        recordedMessageID = nil
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
                     }
                     recordedMessagePersisted = true
                     recoveryPersisted = true
+                    guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
+                    else { throw CancellationError() }
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    self.persistIndices(self.session.beginSteeringOutputBoundary(beforeUserMessageAt: before))
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
+                } else {
+                    self.session.allowsStreamingBoundaryCrossing = true
+                    self.persistIndices(self.session.beginSteeringOutputBoundary())
                 }
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),

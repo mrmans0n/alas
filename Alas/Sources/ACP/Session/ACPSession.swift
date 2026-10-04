@@ -637,10 +637,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Split live text items at a follow-up without changing existing row IDs.
     /// Persist the next segment's ID on its predecessor so subsequent chunks
     /// keep the same binding after rehydration, including repeated steering.
-    func beginSteeringOutputBoundary() -> Set<Int> {
+    func beginSteeringOutputBoundary(beforeUserMessageAt end: Int? = nil) -> Set<Int> {
         var dirty = flushPendingReplayCandidates()
-        let start = (transcript.latestUserMessageIndex ?? -1) + 1
-        for index in start..<transcript.messages.count {
+        let end = end ?? transcript.messages.count
+        let previousUser = transcript.messages[..<end].lastIndex {
+            if case .user = $0 { return true }
+            return false
+        }
+        let start = (previousUser ?? -1) + 1
+        for index in start..<end {
             switch transcript.messages[index] {
             case .agent(_, .some, let text), .thought(_, .some, let text):
                 let continuation = "alas-steering:\(UUID().uuidString)"
