@@ -489,6 +489,7 @@ final class ACPSessionRunner {
 
     private var observedBackgroundTaskIds: Set<String> = []
     private var backgroundStopRequests: Set<String> = []
+    private var backgroundWakeConfirmations: Set<UUID> = []
     private var backgroundCancellationInProgress = false
 
     func start() {
@@ -2373,10 +2374,14 @@ final class ACPSessionRunner {
             if let stoppedID = intended.queueHeadID,
                let current = session.queue.first,
                current.id == stoppedID,
-               current.status == .sending {
+                current.status == .sending {
                 let wakeRows = markBackgroundWakeDelivered(id: stoppedID)
-                session.queue.removeFirst()
-                persistBackgroundWakeAndQueue(rows: wakeRows)
+                if current.backgroundTaskWake != nil {
+                    persistBackgroundWakeAndQueue(rows: wakeRows, consuming: current)
+                } else {
+                    session.queue.removeFirst()
+                    persistQueue()
+                }
             }
             appendAndPersistSystemNotice("Interrupted by user.")
             // Only force state to .idle if a successor prompt hasn't
@@ -4060,18 +4065,19 @@ extension ACPSessionRunner {
                             ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
                         if let queuedItemId {
                             let wakeRows = self.markBackgroundWakeDelivered(id: queuedItemId)
-                            _ = self.session.popQueueHead()
+                            let completedItem = self.session.queue.first
                             self.session.normalQueuedTurnIDs.remove(queuedItemId)
                             self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: queuedItemId)
-                            if !wakeRows.isEmpty {
-                                self.persistBackgroundWakeAndQueue(rows: wakeRows,
+                            if let completedItem, completedItem.backgroundTaskWake != nil {
+                                self.persistBackgroundWakeAndQueue(rows: wakeRows, consuming: completedItem,
                                     deliveredForkContext: deliveredForkContext, acknowledging: promptAcknowledgement)
-                            } else if deliveredForkContext {
-                                self.persistForkContextDeliveredAndQueue(
-                                    acknowledging: promptAcknowledgement
-                                )
                             } else {
-                                self.persistQueue(acknowledging: promptAcknowledgement)
+                                _ = self.session.popQueueHead()
+                                if deliveredForkContext {
+                                    self.persistForkContextDeliveredAndQueue(acknowledging: promptAcknowledgement)
+                                } else {
+                                    self.persistQueue(acknowledging: promptAcknowledgement)
+                                }
                             }
                         }
                         if !wasCancelled, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
@@ -5001,31 +5007,49 @@ extension ACPSessionRunner {
     }
 
     private func persistBackgroundWakeAndQueue(
-        rows: Set<Int>, deliveredForkContext: Bool = false,
+        rows: Set<Int>, consuming item: QueuedPrompt, deliveredForkContext: Bool = false,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
-        guard !rows.isEmpty else {
-            persistQueue(acknowledging: acknowledgement)
-            return
-        }
-        guard holdsLeaseForWrite() else { return }
+        guard holdsLeaseForWrite(), backgroundWakeConfirmations.insert(item.id).inserted else { return }
         let messages = rows.sorted().compactMap { index -> ACPStoredMessage? in
             guard let payload = try? ACPMessageCodec.encode(session.transcript.messages[index]) else { return nil }
             return .init(id: messageRowID(index), sessionId: self.sessionId,
                 kind: session.transcript.messages[index].kind, seq: Int64(index),
                 payload: payload, createdAt: createdAt(forMessageAt: index))
         }
-        let items = session.queue
+        let items = session.queue.filter { $0.id != item.id }
         let sessionId = sessionId
         let fence = leaseFenceProvider()
+        session.pendingQueuePersistenceCount += 1
         enqueuePersistence({ persistence in
             try await persistence.persistBackgroundWakeAndQueue(
                 sessionId: sessionId, messages: messages, items: items,
                 deliveredForkContext: deliveredForkContext, fence: fence)
         }, completion: { persisted in
+            self.backgroundWakeConfirmations.remove(item.id)
+            self.session.pendingQueuePersistenceCount -= 1
             if persisted == true {
                 self.commitPersistedMessageRows(messages)
+                guard self.isConnectionCurrent(), !self.stopped else { return }
+                self.session.queue.removeAll { $0.id == item.id }
                 acknowledgement?()
+                self.onPromptWorkChanged?()
+                if !self.sendPendingQueueForceSendsAfterPersistence() { self.flushQueueIfIdle() }
+            } else {
+                guard self.isConnectionCurrent(), !self.stopped, self.holdsLeaseForWrite(),
+                      let index = self.session.queue.firstIndex(where: { $0.id == item.id }) else { return }
+                self.session.queue[index].status = .pending
+                self.session.queue[index].lastError = "Could not save background work delivery confirmation. Retry may repeat the notification."
+                self.session.queue[index].deliveryUncertain = true
+                if var task = self.session.backgroundTasks.first(where: { $0.wakeId == item.id }) {
+                    task.wakeDelivered = false
+                    self.persistIndices(self.session.saveBackgroundTask(task))
+                }
+                if deliveredForkContext, var fork = self.session.forkRecord {
+                    fork.contextDeliveryPending = true
+                    self.session.forkRecord = fork
+                }
+                self.persistQueue(completion: { _ in self.onPromptWorkChanged?() })
             }
         })
     }

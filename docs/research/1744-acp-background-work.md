@@ -134,6 +134,10 @@ active-work list and its original tool call carries output.
 
 Completion and loss notifications carry a persistent UUID shared with their
 queue item. Delivery state and queue removal are saved in one transaction.
+The item remains in memory until that transaction commits. A failed save
+retains a visible, delivery-uncertain entry for explicit retry, restores the
+undelivered task state, and prevents automatic replay. Concurrent Stop and
+prompt completion cannot consume the same wake twice.
 Replayed spawns cannot reopen completed work. A successful attach to a
 surviving broker retains running tasks; replacement marks only prior tasks
 that the new adapter has not reported again as lost observation.
@@ -174,6 +178,12 @@ Local validation passed:
   `ACPSubagentRoutingTests`. The existing queue-drain test now covers live
   background tasks and native children; it failed before the fix because
   foreground Stop also cancelled that independent work.
+- Delivery-save failure handling passed **225 tests in three suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`, and
+  `ACPSessionPersistenceTests`. A SQLite trigger reproduced the lost retry
+  entry after successful or cancelled delivery. A gated Stop during
+  confirmation also reproduced duplicate consumption before its guard.
+  All variants retain a durable, visible entry without automatic replay.
 - The pinned adapter-runtime probe, `node --check` for that probe, and
   `git diff --check` passed.
 
@@ -181,6 +191,9 @@ The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing
 Ghostty build script populated its artifact from the shared cache, and
 `xcodegen generate` registered the two new Swift source files.
+The final delivery-save selection used `COMPILER_INDEX_STORE_ENABLE=NO`
+after local disk-space and signing failures, clearing only unused generated
+compiler caches from this worktree before the successful rerun.
 
 The adapter-runtime probe and Swift tests exercise translation, ordering,
 persistence and routing with in-memory provider inputs. No authenticated model

@@ -1358,6 +1358,61 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.count == 1)
     }
 
+    @Test("a failed delivery transaction retains a visible background wake without automatic replay", arguments: ["completed", "cancelled", "cancelDuringConfirmation"])
+    func backgroundDeliveryPersistenceFailure(outcome: String) async throws {
+        let (runner, mock, session, store) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        let probe = StrictSingleFlightPromptProbe()
+        let confirmationStarted = QueueTestGate()
+        let releaseConfirmation = QueueTestGate()
+        var heldConfirmation = false
+        runner.beforePersistenceForTesting = {
+            if outcome == "cancelDuringConfirmation", !heldConfirmation, session.backgroundTasks.first?.wakeDelivered == true {
+                heldConfirmation = true
+                await confirmationStarted.open()
+                await releaseConfirmation.wait()
+            }
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed", summary: "Result"), ownerSessionId: "s")
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        let wakeID = try #require(session.queue.first?.id)
+        try store.db.exec("""
+        CREATE TRIGGER reject_wake_delivery BEFORE UPDATE OF payload ON messages
+        WHEN CAST(NEW.payload AS TEXT) LIKE '%"wakeDelivered":true%'
+        BEGIN SELECT RAISE(ABORT, 'delivery write failed'); END;
+        """)
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await probe.waitUntilFirstStarted()
+        if outcome == "cancelled" { await runner.userCancel() }
+        await probe.releaseFirst()
+        if outcome == "cancelDuringConfirmation" {
+            await confirmationStarted.wait()
+            await runner.userCancel()
+            await releaseConfirmation.open()
+        }
+        try await waitUntil { session.transcript.streamingState == .idle }
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0].needsWake)
+        let held = try #require(session.queue.first)
+        #expect(held.id == wakeID)
+        #expect(held.status == .pending)
+        #expect(held.lastError != nil && held.deliveryUncertain && held.isShownToUser)
+        #expect(try store.loadQueue(sessionId: "s") == [held])
+        try store.db.exec("DROP TRIGGER reject_wake_delivery")
+        runner.persistQueue()
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        #expect(session.queue == [held])
+        #expect(try store.loadQueue(sessionId: "s") == [held])
+        #expect(await probe.callCount == 1)
+    }
+
     @Test("task corrections preserve dispatched and retry-held notification snapshots", arguments: ["sending", "failed", "uncertain"])
     func backgroundCorrectionPreservesDeliverySnapshot(delivery: String) async throws {
         let (runner, mock, session, _) = try mkRunner(agentID: "codex")
