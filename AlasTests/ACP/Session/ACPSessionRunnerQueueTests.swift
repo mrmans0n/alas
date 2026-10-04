@@ -933,14 +933,18 @@ struct ACPSessionRunnerQueueTests {
         #expect(user.seq == 2)
     }
 
-    @Test("a failed steering row transaction leaves one retryable submission")
-    func failedSteeringRowTransactionDoesNotDuplicateRetry() async throws {
+    @Test("a failed steering row transaction preserves replay output and one retryable submission", arguments: [false, true])
+    func failedSteeringRowTransactionDoesNotDuplicateRetry(heldReplay: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
         defer { runner.stop() }
         session.supportsSteering = true
         session.transcript.streamingState = .streaming
         let text = StreamingText("working")
         session.transcript.appendMessage(.agent(id: UUID(), messageId: "live", text))
+        if heldReplay {
+            session.allowsStreamingBoundaryCrossing = false
+            session.apply(.agentMessageChunk(.init(messageId: "replay", content: .text("work"))))
+        }
         try store.db.exec("""
             CREATE TRIGGER fail_steering_user BEFORE INSERT ON messages
             WHEN NEW.kind = 'user'
@@ -951,12 +955,21 @@ struct ACPSessionRunnerQueueTests {
         try await waitUntil { accepted != nil }
         await runner.flushPersistence()
         #expect(accepted == true)
-        #expect(session.transcript.messages.count == 1)
+        #expect(session.transcript.messages.count == (heldReplay ? 2 : 1))
         #expect(text.metadata == nil)
         let retry = try #require(session.queue.first)
         #expect(!retry.transcriptRecorded)
         #expect(mock.sent.isEmpty)
         #expect(try store.loadMessages(sessionId: "s").filter { $0.kind == "user" }.isEmpty)
+        if heldReplay {
+            let rows = try store.loadMessages(sessionId: "s")
+            let replay = try #require(rows.first { $0.seq == 1 })
+            guard case .agent(_, _, let text) = try ACPMessageCodec.decode(kind: replay.kind, payload: replay.payload) else {
+                Issue.record("expected the preserved replay output")
+                return
+            }
+            #expect(text.value == "work")
+        }
         try store.db.exec("DROP TRIGGER fail_steering_user")
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
         runner.forceSendQueuedItem(id: retry.id)

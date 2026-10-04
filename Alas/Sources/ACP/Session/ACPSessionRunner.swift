@@ -3372,6 +3372,10 @@ extension ACPSessionRunner {
                            }) {
                             boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
                             self.session.transcript.messages.remove(at: index)
+                            // Replay output materialized before this user row
+                            // belongs to the preceding turn, even if steering
+                            // persistence failed. Save it independently.
+                            self.persistFromIndex(before)
                             self.session.transcript.lastContentTouchIndex = nil
                             self.session.transcript.completedOutputBoundaryMessageIds = completedBoundaryBefore
                             if self.session.title == recordedTitle, self.session.titleSource == .fallback {
