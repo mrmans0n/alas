@@ -525,8 +525,7 @@ final class ACPSessionRunner {
                 guard self.isConnectionCurrent() else { continue }
                 if case .usageUpdate(let info) = u.update, let cost = info.cost {
                     self.costLog.append((self.dequeuedUpdateCount, cost))
-                    // ponytail: only recent entries; a turn resolves within a second of its result.
-                    if self.costLog.count > 32 { self.costLog.removeFirst() }
+                    if self.costLog.count > 32 { self.compactCostLog() }
                 }
                 self.enqueueIncomingUpdate(u)
             }
@@ -1934,6 +1933,15 @@ final class ACPSessionRunner {
     private func nextSentAt() -> Int64 {
         lastSentAt = max(Int64(Date().timeIntervalSince1970 * 1000), lastSentAt + 1)
         return lastSentAt
+    }
+
+    /// A turn's cost is the newest entry before the next prompt went out, so of the entries between two sends only
+    /// the newest is ever read: the rest go, which keeps the log as short as the sends tracked.
+    private func compactCostLog() {
+        let sends = sentStreamStarts.values
+        costLog = costLog.indices.filter { i in
+            i == costLog.count - 1 || sends.contains { costLog[i].index <= $0 && $0 < costLog[i + 1].index }
+        }.map { costLog[$0] }
     }
 
     private func noteSent(_ promptID: Int, streamStart: Int) {

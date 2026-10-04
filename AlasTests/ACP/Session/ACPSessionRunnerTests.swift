@@ -442,6 +442,44 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
+    /// A stopped turn keeps its own cost however many the next turn sends before its result arrives.
+    @Test func aStoppedTurnKeepsItsCostThroughManyOfTheNextTurns() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        var dequeued = 0
+        runner.beforeDequeueForTesting = { dequeued += 1 }
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : never).wait()
+            return Data("{}".utf8)
+        }
+        func cost(_ amount: Double?) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: amount.map { .init(amount: $0, currency: "USD") })))
+        }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        mock.emit(cost(0.5))
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 })
+        for step in 1...40 { mock.emit(cost(0.5 + Double(step) / 100)) }
+        // Reaching the one after them means all of them were taken off the stream.
+        mock.emit(cost(nil))
+        #expect(await awaitCondition { dequeued == 42 })
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        await never.open()
+    }
+
     /// More stopped turns waiting on their results than the runner keeps: the oldest is still recorded, without
     /// tokens, when it makes room.
     @Test func aStoppedTurnPastTheKeptOnesIsStillRecorded() async throws {
