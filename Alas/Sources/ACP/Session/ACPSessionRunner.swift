@@ -283,6 +283,8 @@ final class ACPSessionRunner {
     /// ahead of the steer's replacement prompt. Once the redirect is in
     /// flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    private var queueSaveGeneration = 0
+    private var deferredQueueAcknowledgements: [(generation: Int, acknowledgement: ACPDurableConsumptionAcknowledgement?)] = []
     private var nativeSteeringGeneration = 0
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
@@ -1626,6 +1628,8 @@ final class ACPSessionRunner {
 
     func stop() {
         stopped = true
+        session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
+        deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
@@ -2649,6 +2653,7 @@ extension ACPSessionRunner {
     /// honor its result before proceeding.
     func persistQueue(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
+        retainOnFailure: Bool = false,
         completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
         guard holdsLeaseForWrite() else {
@@ -2658,34 +2663,37 @@ extension ACPSessionRunner {
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        if acknowledgement != nil || completion != nil {
-            session.pendingQueuePersistenceCount += 1
-            enqueuePersistence({ persistence in
-                try await persistence.upsertQueue(
-                    sessionId: sessionId,
-                    items: items,
-                    fence: fence
-                )
-            }, completion: { persisted in
-                let didPersist = persisted == true
-                self.session.pendingQueuePersistenceCount -= 1
-                if didPersist {
-                    acknowledgement?()
-                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil {
+        queueSaveGeneration += 1
+        let generation = queueSaveGeneration
+        let counted = acknowledgement != nil || completion != nil || retainOnFailure
+        if counted { session.pendingQueuePersistenceCount += 1 }
+        enqueuePersistence({ persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }, completion: { persisted in
+            let didPersist = persisted == true
+            if counted { self.session.pendingQueuePersistenceCount -= 1 }
+            if didPersist {
+                // A newer committed snapshot durably supersedes failed saves.
+                // Release their protected cursors before permitting dispatch.
+                let deferred = self.deferredQueueAcknowledgements.filter { $0.generation <= generation }
+                self.deferredQueueAcknowledgements.removeAll { $0.generation <= generation }
+                self.session.pendingQueuePersistenceCount -= deferred.count
+                deferred.forEach { $0.acknowledgement?() }
+                acknowledgement?()
+                if !deferred.isEmpty, self.session.lastError == "Could not save follow-up delivery confirmation." {
+                    self.session.lastError = nil
+                }
+                if counted || !deferred.isEmpty {
+                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil || !deferred.isEmpty {
                         self.flushQueueIfIdle()
                     }
                 }
-                completion?(didPersist)
-            })
-        } else {
-            enqueuePersistence { persistence in
-                _ = try await persistence.upsertQueue(
-                    sessionId: sessionId,
-                    items: items,
-                    fence: fence
-                )
+            } else if retainOnFailure, self.isConnectionCurrent(), !self.stopped {
+                self.deferredQueueAcknowledgements.append((generation, acknowledgement))
+                self.session.pendingQueuePersistenceCount += 1
             }
-        }
+            completion?(didPersist)
+        })
     }
 
     /// Persist that the one-time MCP context preamble has been delivered:
@@ -3044,7 +3052,6 @@ extension ACPSessionRunner {
         }
 
         let item = session.queue.remove(at: idx)
-        persistQueue()
         let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
         let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
         if session.canSteerRunningTurn {
@@ -3056,6 +3063,7 @@ extension ACPSessionRunner {
                 onPromptFinished: nil, recoveryQueueItem: (item, idx))
             return
         }
+        persistQueue()
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
@@ -3298,11 +3306,11 @@ extension ACPSessionRunner {
                     // Submission is accepted if its content is retained for
                     // retry; restoring the draft as well would duplicate it.
                     let accepted = succeeded || self.session.queue.contains { $0.id == durableQueueItem.item.id }
-                    self.persistQueue(acknowledging: steeringAcknowledgement, completion: { persisted in
+                    self.persistQueue(acknowledging: steeringAcknowledgement, retainOnFailure: true, completion: { persisted in
                         if !persisted, self.isConnectionCurrent(), !self.stopped {
                             self.session.lastError = "Could not save follow-up delivery confirmation."
                         }
-                        if succeeded { self.flushQueueIfIdle() }
+                        if succeeded, persisted { self.flushQueueIfIdle() }
                         onPromptFinished?(accepted)
                     })
                 } else {
@@ -3625,6 +3633,7 @@ extension ACPSessionRunner {
     var hasRetainedCleanupPromptWork: Bool {
         steerInProgress
             || detachedSteeringTurn
+            || !deferredQueueAcknowledgements.isEmpty
             || activePromptID != nil
             || session.transcript.streamingState != .idle
             || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)

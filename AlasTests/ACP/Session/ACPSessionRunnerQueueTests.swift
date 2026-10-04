@@ -608,6 +608,61 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
     }
 
+    @Test("forced steering keeps the saved prompt when recovery persistence fails")
+    func forcedSteeringKeepsSavedPromptUntilRecoveryCommit() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("redirect")])
+        let id = try #require(session.queue.first?.id)
+        try store.upsertQueue(sessionId: "s", items: session.queue)
+        try store.db.exec("""
+            CREATE TRIGGER fail_recovery_insert BEFORE INSERT ON session_queue
+            BEGIN SELECT RAISE(ABORT, 'recovery write failed'); END;
+            """)
+        let persistenceStarted = QueueTestGate()
+        runner.beforePersistenceForTesting = { await persistenceStarted.open() }
+        runner.forceSendQueuedItem(id: id)
+        await persistenceStarted.wait()
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s").first?.id == id)
+        #expect(!mock.sent.contains { $0.method == "_session/steering" })
+    }
+
+    @Test("a failed steering confirmation save holds dispatch and retains its acknowledgement")
+    func failedSteeringConfirmationSaveRetainsAcknowledgement() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        let acknowledgement = DurableAcknowledgementRecorder()
+        mock.scriptResponse(method: "_session/steering") { _ in
+            try store.db.exec("""
+                CREATE TRIGGER fail_confirmation_delete BEFORE DELETE ON session_queue
+                BEGIN SELECT RAISE(ABORT, 'confirmation write failed'); END;
+                """)
+            return ACPResponse(body: Data(#"{"outcome":"injected"}"#.utf8),
+                               durableConsumptionAcknowledgement: { acknowledgement.record() })
+        }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        #expect(acknowledgement.recordedCount == 0)
+        session.transcript.streamingState = .idle
+        session.enqueue(blocks: [.text("tail")])
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        try store.db.exec("DROP TRIGGER fail_confirmation_delete")
+        runner.persistQueue()
+        try await waitUntil { acknowledgement.recordedCount == 1 && session.queue.isEmpty }
+        #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("tail")]])
+    }
+
     @Test("steering acknowledgement observes durable delivery or recovery", arguments: ["injected", "startedNewTurn", "unknown", "malformed"])
     func steeringAcknowledgementWaitsForDurableQueueRemoval(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner()
