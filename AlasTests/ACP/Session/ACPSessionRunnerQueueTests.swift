@@ -1366,6 +1366,52 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.count == 1)
     }
 
+    @Test("unchanged task replay repairs a failed write before acknowledgement", arguments: [false, true])
+    func backgroundReplayRepairsFailedWrite(repairBeforeReplay: Bool) async throws {
+        let (runner, _, session, store) = try mkRunner(agentID: "codex")
+        session.transcript.streamingState = .awaitingPermission
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: "async_task_spawned", asyncTaskId: "job", name: "Tests"))))
+        await runner.flushPersistence()
+        try store.db.exec("""
+        CREATE TRIGGER reject_background_state BEFORE UPDATE OF payload ON messages
+        WHEN CAST(NEW.payload AS TEXT) LIKE '%"state":"completed"%'
+        BEGIN SELECT RAISE(ABORT, 'task write failed'); END;
+        """)
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let done = ACPSessionUpdateParams(sessionId: "s", update: .asyncTask(.init(
+            sessionUpdate: "async_task_state_update", asyncTaskId: "job", state: "completed", summary: "Passed")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() })
+        runner.applyIncomingUpdateForTesting(done)
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 0)
+        #expect(session.queue.isEmpty)
+        let wakeID = try #require(session.backgroundTasks.first?.wakeId)
+        if repairBeforeReplay { try store.db.exec("DROP TRIGGER reject_background_state") }
+        runner.applyIncomingUpdateForTesting(done)
+        await runner.flushPersistence()
+        if !repairBeforeReplay {
+            #expect(acknowledgement.recordedCount == 0)
+            #expect(session.queue.isEmpty)
+            let row = try #require(store.loadMessages(sessionId: "s").first)
+            let task = try #require(ACPBackgroundTask(toolCall: JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload)))
+            #expect(task.state == "running")
+            try store.db.exec("DROP TRIGGER reject_background_state")
+            runner.applyIncomingUpdateForTesting(done)
+            await runner.flushPersistence()
+        }
+        #expect(acknowledgement.recordedCount == 1)
+        #expect(session.queue.map(\.id) == [wakeID])
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+        let row = try #require(store.loadMessages(sessionId: "s").first)
+        let restoredTask = try #require(ACPBackgroundTask(toolCall: JSONDecoder().decode(ACPMessage.ToolCall.self, from: row.payload)))
+        #expect(restoredTask.state == "completed" && restoredTask.wakeId == wakeID && restoredTask.needsWake)
+        runner.applyIncomingUpdateForTesting(done)
+        await runner.flushPersistence()
+        #expect(acknowledgement.recordedCount == 2)
+        #expect(session.queue.map(\.id) == [wakeID])
+    }
+
     @Test("force-sent background wakes confirm delivery atomically through steering and fallback", arguments: [("injected", true), ("startedNewTurn", true), ("promptRequired", true), ("unsupported", true), ("fallback", true), ("injected", false), ("promptRequired", false), ("fallback", false)])
     func forcedBackgroundWakeConfirmsDelivery(outcome: String, committed: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")

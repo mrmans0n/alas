@@ -138,6 +138,8 @@ The item remains in memory until that transaction commits. A failed save
 retains a visible, delivery-uncertain entry for explicit retry, restores the
 undelivered task state, and prevents automatic replay. Concurrent Stop and
 prompt completion cannot consume the same wake twice.
+Identical task replays re-save the current snapshot before acknowledgement,
+so an earlier failed write cannot leave only an in-memory completion behind.
 Confirmation reconciles the cached session even after its runner stops or is
 replaced, while preserving a newer retry attempt. Retired runners do not
 dispatch successor work or issue recovery writes.
@@ -222,6 +224,12 @@ Local validation passed:
   A Node probe of the web functions passed the composer-action matrix and
   hidden-row insertion/removal checks; JavaScript syntax and SwiftFormat lint
   also passed.
+- Failed-write replay recovery passed **228 tests in three suites**:
+  `ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`, and
+  `ACPSessionPersistenceTests`. A SQLite trigger reproduced acknowledgements
+  advancing without repairing the task row or queuing its wake. Repeated
+  failed replays now remain unacknowledged; successful replay repairs durable
+  state and queues the original wake identity exactly once.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

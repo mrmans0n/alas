@@ -1175,9 +1175,12 @@ final class ACPSessionRunner {
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
-                let dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
+                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
                 let identity = ACPBackgroundTask(ownerSessionId: params.sessionId,
                     asyncTaskId: update.asyncTaskId, name: update.asyncTaskId).id
+                // An identical replay can match a mutation whose earlier write
+                // failed. Save its current row before consuming the broker event.
+                if let index = session.transcript.toolCallIndex(toolCallId: identity) { dirty.insert(index) }
                 observedBackgroundTaskIds.insert(identity)
                 let wakeId = session.backgroundTasks.first(where: { $0.id == identity })?.wakeId
                 if dirty.isEmpty {
@@ -1186,8 +1189,8 @@ final class ACPSessionRunner {
                     flushStreamingPersist()
                     persistIndices(dirty, completion: { [weak self] persisted in
                         guard persisted else { return }
-                        durableConsumptionAcknowledgement?()
                         self?.enqueuePendingBackgroundWakes(persistedWakeIds: Set(wakeId.map { [$0] } ?? []))
+                        durableConsumptionAcknowledgement?()
                     })
                 }
             } else {
