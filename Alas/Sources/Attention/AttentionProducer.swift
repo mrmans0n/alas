@@ -4,7 +4,9 @@ import CryptoKit
 enum AttentionProducer {
     static func harnessFingerprint(state: ActivityState, body: String?, requiresUserInput: Bool = false) -> String {
         let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
-        return state == .awaitingInput && requiresUserInput ? "\(fingerprint):input" : fingerprint
+        // A limited session flips between "resuming after reset" and "needs
+        // you" without changing state, so its input intent is part of identity.
+        return (state == .awaitingInput || state == .limited) && requiresUserInput ? "\(fingerprint):input" : fingerprint
     }
 
     static func harness(
@@ -18,6 +20,7 @@ enum AttentionProducer {
     ) -> [AttentionObservation] {
         let awaitingKey = AttentionSourceKey(rawValue: "session:\(sessionID):awaiting")
         let permissionKey = AttentionSourceKey(rawValue: "session:\(sessionID):permission")
+        let limitedKey = AttentionSourceKey(rawValue: "session:\(sessionID):limited")
         let fingerprint = harnessFingerprint(state: state, body: body, requiresUserInput: requiresUserInput)
 
         switch state {
@@ -30,7 +33,8 @@ enum AttentionProducer {
                     body: body,
                     jumpTarget: .session(sessionID: sessionID), display: display
                 )),
-                .inactive(sourceKey: permissionKey)
+                .inactive(sourceKey: permissionKey),
+                .inactive(sourceKey: limitedKey)
             ]
         case .permissionRequest:
             return [
@@ -39,10 +43,26 @@ enum AttentionProducer {
                     sourceKey: permissionKey, fingerprint: fingerprint, owner: owner,
                     kind: .agentPermission, title: "\(agent.displayName) needs permission", body: body,
                     jumpTarget: .session(sessionID: sessionID), display: display
+                )),
+                .inactive(sourceKey: limitedKey)
+            ]
+        case .limited:
+            return [
+                .inactive(sourceKey: awaitingKey),
+                .inactive(sourceKey: permissionKey),
+                .active(signal(
+                    sourceKey: limitedKey, fingerprint: fingerprint, owner: owner,
+                    // Gave up or auto-resume is off: it needs the user.
+                    kind: requiresUserInput ? .agentAwaiting : .agentLimited,
+                    title: requiresUserInput
+                        ? "\(agent.displayName) hit its usage limit"
+                        : "\(agent.displayName) hit its usage limit · resuming after reset",
+                    body: body,
+                    jumpTarget: .session(sessionID: sessionID), display: display
                 ))
             ]
         case .busy, .idle:
-            return [.inactive(sourceKey: awaitingKey), .inactive(sourceKey: permissionKey)]
+            return [.inactive(sourceKey: awaitingKey), .inactive(sourceKey: permissionKey), .inactive(sourceKey: limitedKey)]
         }
     }
 

@@ -209,6 +209,15 @@ actor ACPSessionPersistence {
         try openedStore().setMCPPreamble(sessionId: sessionId, pendingText: pendingText, sent: sent)
     }
 
+    @discardableResult
+    func setUsageLimit(sessionId: String, limit: ACPUsageLimit?, fence: ACPSessionLeaseFence?) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.setUsageLimit(sessionId: sessionId, limit: limit) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try operation()
+        return true
+    }
+
     func setAuthStatus(sessionId: String, status: ACPAuthStatus?) throws {
         try openedStore().setAuthStatus(sessionId: sessionId, status: status)
     }

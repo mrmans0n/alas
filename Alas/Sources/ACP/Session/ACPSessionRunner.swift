@@ -144,6 +144,7 @@ final class ACPSessionRunner {
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
+    private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let localTitleGenerator: @Sendable (String) async -> String?
     private var providerTitleRevision = 0
     private var localTitleAttempted = false
@@ -320,6 +321,7 @@ final class ACPSessionRunner {
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0, fallback: nil) },
          onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
@@ -357,6 +359,7 @@ final class ACPSessionRunner {
         self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
+        self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.localTitleGenerator = localTitleGenerator
         self.onModelsObserved = onModelsObserved
         self.onPersistedConfigOptionValues = onPersistedConfigOptionValues
@@ -1829,14 +1832,7 @@ final class ACPSessionRunner {
         // Guaranteeing the final text needs the completion deferred into
         // `applyPendingCompletedOutputBoundaryIfReady`, the way
         // `NextPromptCompletedTurn` is — tracked as follow-up.
-        let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
-        let lastAgentText: String? = session.transcript.messages[floor...].reversed().lazy
-            .compactMap { message -> String? in
-                guard case .agent(_, _, let text) = message else { return nil }
-                let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
-                return tail.isEmpty ? nil : tail
-            }
-            .first
+        let lastAgentText = currentTurnLastAgentText()
         let completion = ACPTurnCompletion(
             sessionId: sessionId,
             startedAt: startedAt,
@@ -1848,6 +1844,55 @@ final class ACPSessionRunner {
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
         onTurnCompleted?(completion)
+    }
+
+    /// Tail of the last agent message this turn produced, or nil. Only rows at
+    /// or after `activePromptTranscriptFloor` belong to the turn.
+    private func currentTurnLastAgentText() -> String? {
+        let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
+        return session.transcript.messages[floor...].reversed().lazy
+            .compactMap { message -> String? in
+                guard case .agent(_, _, let text) = message else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
+                return tail.isEmpty ? nil : tail
+            }
+            .first
+    }
+
+    /// Agent text still in the incoming-update coalescing buffer, not yet in
+    /// the transcript. Read-only on purpose: draining the buffer at turn end
+    /// collides with queued-successor dispatch (see `emitTurnCompleted`).
+    private func bufferedAgentText() -> String? {
+        let text = pendingIncomingUpdates.compactMap { pending -> String? in
+            guard case .agentMessageChunk(let chunk) = pending.params.update,
+                  case .text(let value) = chunk.content
+            else { return nil }
+            return value
+        }.joined()
+        return text.isEmpty ? nil : text
+    }
+
+    /// A usage limit stopped the active prompt. The prompt itself reached the
+    /// agent (it is in the agent's history), so a queued one is consumed like
+    /// a success; resuming sends a short continue prompt instead.
+    private func applyUsageLimit(_ detected: ACPUsageLimit, failedQueuedItemId: UUID?) {
+        var previous = session.usageLimit
+        if let failedQueuedItemId, session.queue.first?.id == failedQueuedItemId {
+            let consumed = session.popQueueHead()
+            previous = previous ?? consumed?.usageLimit
+            session.normalQueuedTurnIDs.remove(failedQueuedItemId)
+            session.normalQueuedTurnUserMessageIDs.removeValue(forKey: failedQueuedItemId)
+        }
+        let limit = ACPUsageLimitResumePolicy.merge(previous: previous, detected: detected)
+        session.usageLimit = limit
+        persistUsageLimit()
+        if autoResumeAfterUsageLimit(),
+           let resumeAt = ACPUsageLimitResumePolicy.nextResumeAt(limit, now: Date()) {
+            session.upsertUsageLimitResume(limit: limit, scheduledAt: resumeAt)
+        } else {
+            session.removeUsageLimitResume()
+        }
+        persistQueue()
     }
 
     /// Re-upsert the session's persistence row to capture changes to
@@ -2649,6 +2694,19 @@ extension ACPSessionRunner {
         }
     }
 
+    /// Mirror `session.usageLimit` onto the session row. The resume item is
+    /// not enough: a limit with auto-resume off or cancelled has none, and
+    /// the reopened session must still hold the pre-limit queue.
+    private func persistUsageLimit() {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        let limit = session.usageLimit
+        enqueuePersistence { persistence in
+            _ = try await persistence.setUsageLimit(sessionId: sessionId, limit: limit, fence: fence)
+        }
+    }
+
     private func persistForkContextDelivered(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
@@ -2724,7 +2782,10 @@ extension ACPSessionRunner {
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil,
-              !head.deliveryUncertain
+              !head.deliveryUncertain,
+              // Sending a pre-limit item into the limit would consume it.
+              // It drains once a successful turn clears `usageLimit`.
+              !head.isHeld(by: session.usageLimit)
         else { return }
         if case .needsAuth = session.setupState { return }
         guard head.isReady() else {
@@ -3376,6 +3437,13 @@ extension ACPSessionRunner {
                                 self.persistQueue(acknowledging: promptAcknowledgement)
                             }
                         }
+                        if !wasCancelled, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
+                            self.session.usageLimit = nil
+                            self.persistUsageLimit()
+                            if self.session.removeUsageLimitResume() {
+                                self.persistQueue()
+                            }
+                        }
                         self.activePromptID = nil
                         self.emitTurnCompleted(wasCancelled ? .cancelled : .completed)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
@@ -3410,51 +3478,72 @@ extension ACPSessionRunner {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // A prompt stopped by a usage limit reached the agent and a
+                    // continue is scheduled, so the composer must not restore it.
+                    var deliveredBeforeUsageLimit = false
                     if isActivePrompt {
                         self.session.clearRetryStatus()
                         self.flushStreamingPersist()
-                        let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
-                        let errorMessage = authReason ?? error.localizedDescription
-                        if queuedItemId != nil, !wasCancelled, authReason == nil {
-                            // Queued send failed naturally — leave the item
-                            // at the head with lastError so the bubble shows
-                            // Retry. Cancelled queued sends had the item
-                            // discarded elsewhere (steer) and don't surface.
-                            let terminalBrokerFailure: Bool = {
-                                guard brokerOperationKey != nil else { return false }
-                                if case ACPClientError.jsonrpc = error {
-                                    return true
-                                }
-                                return false
-                            }()
-                            self.session.setQueueHeadError(
-                                errorMessage,
-                                advancesBrokerOperationAttempt: terminalBrokerFailure
+                        let usageLimit: ACPUsageLimit? = wasCancelled || ACPAuthFailure.message(from: error) != nil
+                            ? nil
+                            : ACPUsageLimitDetector.detect(
+                                error: error,
+                                // The limit message may still be buffered.
+                                turnAgentText: self.bufferedAgentText() ?? self.currentTurnLastAgentText(),
+                                claudeRateLimit: self.session.latestClaudeRateLimit,
+                                now: Date()
                             )
-                            self.persistQueue()
-                        } else if queuedItemId != nil, authReason != nil {
-                            self.session.restoreQueue(self.session.queue)
-                            self.persistQueue()
-                        } else if queuedItemId == nil, !wasCancelled, authReason == nil {
-                            self.session.lastError = "prompt failed: \(errorMessage)"
-                        }
-                        if let authReason {
-                            self.session.setupState = .needsAuth(
-                                methods: self.session.authMethods,
-                                reason: authReason
-                            )
-                            self.session.agentState = .failed(authReason)
-                            Task { @MainActor in
-                                await self.onAuthRequired?(self, authReason)
+                        if let usageLimit {
+                            deliveredBeforeUsageLimit = true
+                            self.applyUsageLimit(usageLimit, failedQueuedItemId: queuedItemId)
+                            self.activePromptID = nil
+                            self.emitTurnCompleted(.limited)
+                            self.deferCompletedOutputBoundaryUntilUpdatesDrain()
+                            self.onPromptWorkChanged?()
+                        } else {
+                            let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
+                            let errorMessage = authReason ?? error.localizedDescription
+                            if queuedItemId != nil, !wasCancelled, authReason == nil {
+                                // Queued send failed naturally — leave the item
+                                // at the head with lastError so the bubble shows
+                                // Retry. Cancelled queued sends had the item
+                                // discarded elsewhere (steer) and don't surface.
+                                let terminalBrokerFailure: Bool = {
+                                    guard brokerOperationKey != nil else { return false }
+                                    if case ACPClientError.jsonrpc = error {
+                                        return true
+                                    }
+                                    return false
+                                }()
+                                self.session.setQueueHeadError(
+                                    errorMessage,
+                                    advancesBrokerOperationAttempt: terminalBrokerFailure
+                                )
+                                self.persistQueue()
+                            } else if queuedItemId != nil, authReason != nil {
+                                self.session.restoreQueue(self.session.queue)
+                                self.persistQueue()
+                            } else if queuedItemId == nil, !wasCancelled, authReason == nil {
+                                self.session.lastError = "prompt failed: \(errorMessage)"
                             }
+                            if let authReason {
+                                self.session.setupState = .needsAuth(
+                                    methods: self.session.authMethods,
+                                    reason: authReason
+                                )
+                                self.session.agentState = .failed(authReason)
+                                Task { @MainActor in
+                                    await self.onAuthRequired?(self, authReason)
+                                }
+                            }
+                            self.activePromptID = nil
+                            self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage))
+                            self.deferCompletedOutputBoundaryUntilUpdatesDrain()
+                            self.onPromptWorkChanged?()
                         }
-                        self.activePromptID = nil
-                        self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage))
-                        self.deferCompletedOutputBoundaryUntilUpdatesDrain()
-                        self.onPromptWorkChanged?()
                     }
                     if !hasNewerActivePrompt {
-                        onPromptFinished?(wasCancelled)
+                        onPromptFinished?(wasCancelled || deliveredBeforeUsageLimit)
                     }
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)

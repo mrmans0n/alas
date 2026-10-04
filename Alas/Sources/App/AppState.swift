@@ -12706,6 +12706,9 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            autoResumeAfterUsageLimit: { [weak self] in
+                self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
+            },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
@@ -13174,6 +13177,9 @@ final class AppState {
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
+            },
+            autoResumeAfterUsageLimit: { [weak self] in
+                self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
             },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in

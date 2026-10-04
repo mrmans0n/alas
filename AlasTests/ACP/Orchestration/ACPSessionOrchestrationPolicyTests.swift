@@ -408,12 +408,15 @@ struct ACPSessionOrchestrationPolicyTests {
             result: .completed, lastParentReportAt: 100, turnStartedAt: 100) == .notice)
     }
 
-    @Test("failed turn always wakes, cancelled turn only notices")
+    @Test("failed turn always wakes; cancelled and usage-limited turns only notice")
     func failedWakesCancelledNotices() {
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: .failed("boom"), lastParentReportAt: 500, turnStartedAt: 100) == .wake)
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: .cancelled, lastParentReportAt: nil, turnStartedAt: 100) == .notice)
+        // A limited child resumes on its own; the parent shouldn't burn a turn.
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .limited, lastParentReportAt: nil, turnStartedAt: 0) == .notice)
     }
 
     private static func head(

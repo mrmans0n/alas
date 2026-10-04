@@ -401,7 +401,7 @@ final class HarnessService {
 
     nonisolated static func shouldRefreshWorktreeStatus(after state: ActivityState) -> Bool {
         switch state {
-        case .busy, .idle, .awaitingInput, .permissionRequest:
+        case .busy, .idle, .awaitingInput, .permissionRequest, .limited:
             return true
         }
     }
@@ -505,7 +505,7 @@ final class HarnessService {
     }
 
     enum AggregatedState: String, Equatable {
-        case running, awaiting
+        case running, awaiting, limited
     }
 
     struct WorktreeHarnessSession: Equatable, Identifiable {
@@ -531,12 +531,16 @@ final class HarnessService {
                 return (WorktreeHarnessSession(id: id, state: .awaiting, agent: activity.agent), activity.updatedAt, offset)
             case .busy:
                 return (WorktreeHarnessSession(id: id, state: .running, agent: activity.agent), activity.updatedAt, offset)
+            case .limited:
+                return (WorktreeHarnessSession(id: id, state: .limited, agent: activity.agent), activity.updatedAt, offset)
             case .idle:
                 return nil
             }
         }
         .sorted { lhs, rhs in
-            if lhs.session.state != rhs.session.state { return lhs.session.state == .awaiting }
+            if lhs.session.state != rhs.session.state {
+                return lhs.session.state.rollUpRank < rhs.session.state.rollUpRank
+            }
             if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
             return lhs.offset < rhs.offset
         }
@@ -560,4 +564,15 @@ final class HarnessService {
         )
     }
     #endif
+}
+
+extension HarnessService.AggregatedState {
+    /// Worktree roll-up priority: awaiting > running > limited.
+    var rollUpRank: Int {
+        switch self {
+        case .awaiting: 0
+        case .running: 1
+        case .limited: 2
+        }
+    }
 }

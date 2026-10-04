@@ -31,6 +31,16 @@ struct AttentionProducerTests {
         })
     }
 
+    @Test("a limited session is informational while a resume is scheduled, actionable otherwise", arguments: [false, true])
+    func limitedAttention(requiresUserInput: Bool) {
+        let observations = AttentionProducer.harness(
+            sessionID: "s", agent: .claude, state: .limited, body: nil,
+            owner: Fixtures.owner, display: Fixtures.display, requiresUserInput: requiresUserInput
+        )
+        let kinds = observations.compactMap { $0.activeSignal?.kind }
+        #expect(kinds == [requiresUserInput ? .agentAwaiting : .agentLimited])
+    }
+
     @Test func attentionEventsCapPersistedBodiesWithoutMutatingLiveSignal() throws {
         let body = String(repeating: "a", count: 8_193)
         let signal = try #require(AttentionProducer.harness(
