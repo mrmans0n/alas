@@ -286,6 +286,11 @@ Local validation passed:
   The existing copy-diff test now handles the documented soft subprocess cap:
   a final chunk can retain the requested section, while an earlier stop throws.
   Both successful bounded and unbounded results must exclude source hunks.
+- Hidden snapshot-marker handling passed **108 tests in the same two suites**.
+  The new in-memory web regression reproduced an earlier visible node surviving
+  a hidden marker during snapshot insertion. Snapshot and delta paths now both
+  retire that node and retain the hidden marker's index for pagination; the
+  regression also covers markers without an earlier visible node.
 
 The recorded Xcode runs used the local `.build/xcode/DerivedData` directory,
 `-skipPackagePluginValidation`, and `-skipMacroValidation`. The existing

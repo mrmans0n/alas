@@ -2112,7 +2112,12 @@ function resubscribe() {
 // Insert a message node at its index-ordered DOM position. Nodes carry
 // dataset.index; the common case (append at the tail) is O(1).
 function insertMessage(m, open) {
-  if (m.isHidden === true) { messages.set(m.stableId, m); return; }
+  if (m.isHidden === true) {
+    messageNodes.get(m.stableId)?.remove();
+    messageNodes.delete(m.stableId);
+    messages.set(m.stableId, m);
+    return;
+  }
   const box = $("messages");
   const node = renderMessage(m, m.stableId, open);
   node.dataset.sid = m.stableId;

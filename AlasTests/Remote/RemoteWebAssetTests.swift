@@ -637,6 +637,27 @@ struct RemoteWebAssetTests {
         #expect(canEdit.call(withArguments: [item])?.toBool() == expected)
     }
 
+    @Test(arguments: [("insertMessage", false), ("insertMessage", true), ("upsertMessage", false), ("upsertMessage", true)])
+    func hiddenTranscriptMarkersRetirePreviouslyVisibleContent(function: String, previouslyVisible: Bool) throws {
+        let apply = try javascriptFunction(function)
+        let context = try #require(apply.context)
+        context.evaluateScript("""
+        const messages = new Map();
+        const messageNodes = new Map();
+        let removed = false;
+        """)
+        if previouslyVisible {
+            context.evaluateScript("messageNodes.set('row', { remove() { removed = true; } });")
+        }
+        let marker: [String: Any] = ["stableId": "row", "index": 11, "isHidden": true]
+        apply.call(withArguments: [marker, NSNull()])
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("removed")?.toBool() == previouslyVisible)
+        #expect(context.evaluateScript("messageNodes.has('row')")?.toBool() == false)
+        #expect(context.evaluateScript("messages.get('row').index")?.toInt32() == 11)
+        #expect(context.evaluateScript("messages.get('row').isHidden")?.toBool() == true)
+    }
+
     // Regression (final branch review): native never renders a `.sending`
     // queue item (ACPTranscriptQueuePolicy.shouldRenderQueueBubble returns
     // false for it) — flushQueueIfIdle marks the head `.sending` while it's still in
