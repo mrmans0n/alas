@@ -127,6 +127,23 @@ struct PluginManifestTests {
         }
     }
 
+    /// `usage.read` and `turn.finished` are API 12, which this Alas does not advertise yet, so the test widens the range.
+    @Test(arguments: [
+        (manifest(api: 11, #","capabilities":["usage.read"]"#), PluginManifestError?.some(.needsNewerAPI(#"capability "usage.read""#, api: 12))),
+        (manifest(api: 11, #","capabilities":["session.read"],"events":["turn.finished"]"#), .needsNewerAPI(#"event "turn.finished""#, api: 12)),
+        (manifest(api: 12, #","capabilities":["session.read"],"events":["turn.finished"]"#), .eventNeedsCapability("turn.finished")),
+        (manifest(api: 12, #","capabilities":["usage.read"],"events":["turn.finished"]"#), nil),
+    ])
+    func usageNeedsAPI12(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8), supportedAPIs: 4...12)
+            #expect(expected == nil)
+            #expect(parsed.events == [.turnFinished])
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {
         let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"a","title":"A","kind":"view"},{"id":"b","title":"B"}]}}"#.utf8))
         #expect(manifest.tabs.map(\.kind) == [.view, .canvas])

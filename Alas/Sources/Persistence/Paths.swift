@@ -221,6 +221,10 @@ extension Paths {
     static var runHistoryDB: URL {
         appSupportRoot.appendingPathComponent("run-history.sqlite")
     }
+
+    static var usageHistoryDB: URL {
+        appSupportRoot.appendingPathComponent("usage-history.sqlite")
+    }
 }
 
 extension Paths {

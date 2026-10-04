@@ -29,4 +29,6 @@ struct ACPTurnCompletion: Equatable, Sendable {
     /// Trimmed tail of the final agent message of the turn, or nil when the
     /// turn produced no agent text.
     let lastAgentText: String?
+    /// The turn's own `_meta.quota`; nil when the adapter sent none or the turn ended without a prompt result.
+    var quota: ACPPromptQuota? = nil
 }

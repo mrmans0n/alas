@@ -1811,7 +1811,7 @@ final class ACPSessionRunner {
     /// Snapshot the finished turn and hand it to `onTurnCompleted`. Must be
     /// called on the main actor inside the `isActivePrompt` branch so a
     /// superseded prompt never reports.
-    private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
+    private func emitTurnCompleted(_ result: ACPTurnCompletion.Result, quota: ACPPromptQuota? = nil) {
         guard let startedAt = activePromptStartedAt else { return }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever
@@ -1838,7 +1838,8 @@ final class ACPSessionRunner {
             startedAt: startedAt,
             result: result,
             delegatedSource: activePromptDelegatedSource,
-            lastAgentText: lastAgentText
+            lastAgentText: lastAgentText,
+            quota: quota
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
@@ -3445,7 +3446,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed)
+                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard normalUserTurn,

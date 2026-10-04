@@ -157,7 +157,8 @@ extension AppState {
                     return .remote(host: host, root: RemotePath.realPath(worktree.path.path))
                 }
                 return .local(worktree.path)
-            })
+            },
+            usageHistory: usageHistory)
     }
 
     /// Starts a run script for a plugin the way the Run tab's start button does: a finished run, or one whose

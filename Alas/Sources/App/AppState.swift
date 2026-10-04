@@ -272,6 +272,8 @@ final class AppState {
     /// Immutable completed-run history. A missing store keeps the live Run
     /// tab functional when Application Support cannot be opened.
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
+    /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
+    @ObservationIgnored let usageHistory: UsageHistoryStore?
     var runHistoryRevision = 0
     var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
     var runHistoryError: String?
@@ -1422,6 +1424,7 @@ final class AppState {
         runScriptLocalMonitorGrace: Duration = .seconds(2),
         runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        usageHistory: UsageHistoryStore? = try? UsageHistoryStore(),
         runScheduler: RunScheduler? = nil,
         acpModelCatalog: ACPAgentModelCatalog? = nil,
         tabsManager: TabsManager? = nil,
@@ -1500,6 +1503,7 @@ final class AppState {
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
         self.runHistoryStore = runHistoryStore
+        self.usageHistory = usageHistory
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -12789,6 +12793,7 @@ final class AppState {
                 )
             },
             onTurnCompleted: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
                 Task { @MainActor [weak self] in
                     self?.scheduledAgentTurns.deliver(completion)
                     await self?.acpOrchestration.childTurnCompleted(completion)
@@ -13251,6 +13256,7 @@ final class AppState {
                 )
             },
             onTurnCompleted: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }

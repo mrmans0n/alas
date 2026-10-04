@@ -79,6 +79,8 @@ struct PluginHostActions {
     }
     /// Where a worktree of this project lives; nil for any other id.
     var worktreeLocation: (_ worktree: String) -> PluginWorktreeLocation? = { _ in nil }
+    /// Usage history of every project; requests filter it to this one unless they ask for all (API 12).
+    var usageHistory: UsageHistoryStore? = nil
 
     /// For hosts whose owner is gone: reads nothing and refuses every action.
     static var inert: PluginHostActions {
@@ -130,6 +132,8 @@ final class PluginHost {
         "file/list": .filesRead,
         "file/write": .filesWrite,
         "prompts/set": nil,
+        "usage/turns": .usageRead,
+        "usage/limits": .usageRead,
     ]
     /// Methods a manifest for an older API does not know.
     private static let api6Methods: Set<String> = [
@@ -137,6 +141,10 @@ final class PluginHost {
         "process/run", "process/start", "process/stop", "file/read", "file/list", "file/write",
     ]
     private static let api9Methods: Set<String> = ["prompts/set"]
+    private static let api12Methods: Set<String> = ["usage/turns", "usage/limits"]
+    /// Rows a `usage/*` request returns at most, and when it names no `limit`.
+    static let maxUsageRows = 1000
+    static let defaultUsageRows = 200
     static let maxProcessesRunning = 2
     static let maxProcessArgs = 32
     static let maxProcessStdinBytes = 256 << 10
@@ -656,7 +664,8 @@ final class PluginHost {
     private func handleRequest(_ method: String, id: JSONRPCID, data: Data) -> Data? {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
-              manifest.api >= 9 || !Self.api9Methods.contains(method)
+              manifest.api >= 9 || !Self.api9Methods.contains(method),
+              manifest.api >= 12 || !Self.api12Methods.contains(method)
         else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -814,8 +823,40 @@ final class PluginHost {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
             return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
+        case "usage/turns", "usage/limits":
+            return usageReply(method, id: id, data: data)
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
+        }
+    }
+
+    /// `usage/turns` and `usage/limits` (API 12): newest first, bounded, this project's unless `scope` is `all`.
+    private func usageReply(_ method: String, id: JSONRPCID, data: Data) -> Data? {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginUsageParams>.self, from: data).params,
+              params.scope == nil || ["project", "all"].contains(params.scope),
+              (1...Self.maxUsageRows).contains(params.limit ?? Self.defaultUsageRows)
+        else {
+            return errorReply(
+                id, code: -32602,
+                "invalid params for \(method): since in epoch milliseconds, a limit of 1 to \(Self.maxUsageRows), scope project or all")
+        }
+        guard let store = actions.usageHistory else { return errorReply(id, code: -32003, "usage history is not available") }
+        let scoped = params.scope == "all" ? nil : project.id
+        let limit = params.limit ?? Self.defaultUsageRows
+        return replyLater(id) { [weak self] in
+            guard let self else { return Data() }
+            do {
+                if method == "usage/turns" {
+                    let page = try await store.turns(project: scoped, since: params.since, until: params.until, limit: limit)
+                    return self.encode(PluginResponse(
+                        id: id, result: PluginUsageTurnsResult(turns: page.turns, truncated: page.truncated), error: nil))
+                }
+                let page = try await store.limits(project: scoped, since: params.since, until: params.until, limit: limit)
+                return self.encode(PluginResponse(
+                    id: id, result: PluginUsageLimitsResult(limits: page.limits, truncated: page.truncated), error: nil))
+            } catch {
+                return self.errorReply(id, code: -32003, "usage history could not be read: \(error)")
+            }
         }
     }
 
