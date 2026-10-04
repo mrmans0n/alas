@@ -150,11 +150,28 @@ struct EditorDisplayIntegrationTests {
         let file = root.appendingPathComponent("file.swift")
         try Data("let value = 1\n".utf8).write(to: file)
         let transport = FakeTransport()
+        // Like a real server, stop offering the annotation once the source
+        // spells it out; otherwise the post-edit refresh would recreate a hint
+        // with the same positional ID. That refresh is also held back until
+        // the stale-ID assertion has run, so the assertion sees the edit's own
+        // invalidation and not a refresh that cleared the hint for it.
+        var text = ""
+        var holdingRefresh = true
+        var held: [LSPJSONValue] = []
+        func answer(_ id: LSPJSONValue, _ result: LSPJSONValue) {
+            transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData(), as: UTF8.self))
+        }
         transport.onSend = { sent in
-            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)), let id = request["id"] else { return }
+            guard let request = try? LSPJSONValue.decode(from: Data(sent.utf8)) else { return }
+            if let opened = request["params"]?["textDocument"]?["text"]?.stringValue { text = opened }
+            if case .array(let changes)? = request["params"]?["contentChanges"], let changed = changes.last?["text"]?.stringValue { text = changed }
+            guard let id = request["id"] else { return }
             let result: LSPJSONValue
             switch request["method"]?.stringValue {
             case "initialize": result = .object(["capabilities": .object(["inlayHintProvider": .bool(true)])])
+            case "textDocument/inlayHint" where text.contains(": Int"):
+                guard !holdingRefresh else { return held.append(id) }
+                result = .array([])
             case "textDocument/inlayHint":
                 result = .array([.object([
                     "position": .object(["line": .number("0"), "character": .number("9")]),
@@ -163,7 +180,7 @@ struct EditorDisplayIntegrationTests {
                 ])])
             default: result = .null
             }
-            transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData(), as: UTF8.self))
+            answer(id, result)
         }
         let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _, _ in client })
@@ -206,6 +223,8 @@ struct EditorDisplayIntegrationTests {
         try await Self.eventually("applied inlay with undo") { buffer.storage.string == "let value: Int = 1\n" && buffer.undoManager.canUndo && window.attachedSheet == nil }
         #expect(try String(contentsOf: file, encoding: .utf8) == "let value = 1\n")
         #expect(!inlay.activate(.edits, id: originalID))
+        holdingRefresh = false
+        for id in held { answer(id, .array([])) }
         buffer.undoManager.undo()
         try await Self.eventually("inlay undo") { buffer.storage.string == "let value = 1\n" && buffer.undoManager.canRedo }
         #expect(!buffer.undoManager.canUndo)
