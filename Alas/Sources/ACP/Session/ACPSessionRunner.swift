@@ -487,6 +487,12 @@ final class ACPSessionRunner {
         }
     }
 
+    private var observedBackgroundTaskIds: Set<String> = []
+    private var backgroundStopRequests: Set<String> = []
+    private var backgroundWakeConfirmations: [UUID: Int] = [:]
+    private var backgroundWakeAcknowledgements: [UUID: [ACPDurableConsumptionAcknowledgement]] = [:]
+    private var backgroundCancellationInProgress = false
+
     func start() {
         session.clearRetryStatus()
         updatesTask = Task { [weak self] in
@@ -1123,7 +1129,7 @@ final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
             return []
         }
     }
@@ -1166,6 +1172,37 @@ final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
+        if case .asyncTask(let update) = params.update {
+            let root = session.remoteSessionId ?? sessionId
+            if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
+                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
+                let identity = ACPBackgroundTask(ownerSessionId: params.sessionId,
+                    asyncTaskId: update.asyncTaskId, name: update.asyncTaskId).id
+                // An identical replay can match a mutation whose earlier write
+                // failed. Save its current row before consuming the broker event.
+                if let index = session.transcript.toolCallIndex(toolCallId: identity) { dirty.insert(index) }
+                observedBackgroundTaskIds.insert(identity)
+                let wakeId = session.backgroundTasks.first(where: { $0.id == identity })?.wakeId
+                if dirty.isEmpty {
+                    acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+                } else {
+                    flushStreamingPersist()
+                    persistIndices(dirty, completion: { [weak self] persisted in
+                        guard persisted else { return }
+                        self?.enqueuePendingBackgroundWakes(persistedWakeIds: Set(wakeId.map { [$0] } ?? []))
+                        durableConsumptionAcknowledgement?()
+                    })
+                }
+            } else {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
+            }
+            if suppressingLoadReplay, let target = loadReplaySuppressionTarget,
+               observedUpdateCount >= target {
+                finishLoadReplaySuppression()
+            }
+            applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
+            return
+        }
         if isSubagentUpdate(params) {
             applySubagentUpdate(
                 params,
@@ -1903,8 +1940,14 @@ final class ACPSessionRunner {
     /// a success; resuming sends a short continue prompt instead.
     private func applyUsageLimit(_ detected: ACPUsageLimit, failedQueuedItemId: UUID?) {
         var previous = session.usageLimit
+        var consumedWake: QueuedPrompt?
         if let failedQueuedItemId, session.queue.first?.id == failedQueuedItemId {
-            let consumed = session.popQueueHead()
+            let consumed = session.queue.first
+            if consumed?.backgroundTaskWake != nil {
+                consumedWake = consumed
+            } else {
+                _ = session.popQueueHead()
+            }
             previous = previous ?? consumed?.usageLimit
             session.normalQueuedTurnIDs.remove(failedQueuedItemId)
             session.normalQueuedTurnUserMessageIDs.removeValue(forKey: failedQueuedItemId)
@@ -1918,7 +1961,11 @@ final class ACPSessionRunner {
         } else {
             session.removeUsageLimitResume()
         }
-        persistQueue()
+        if let consumedWake {
+            persistBackgroundWakeAndQueue(rows: markBackgroundWakeDelivered(id: consumedWake.id), consuming: consumedWake)
+        } else {
+            persistQueue()
+        }
     }
 
     /// Re-upsert the session's persistence row to capture changes to
@@ -2234,6 +2281,35 @@ final class ACPSessionRunner {
     func userCancel(confirmingLease: Bool = true) async -> Bool {
         guard isConnectionCurrent() else { return false }
         invalidateNativeSteering()
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        let backgroundIds = session.backgroundTaskStopSupported
+            ? session.activeBackgroundTasks.filter(\.canStop).map(\.id) : []
+        let childIds = session.orderedSubagents.filter { $0.isRunning && $0.capabilities.supportsCancel }
+            .map(\.subagentSessionId)
+        let cancellingBackground = activePromptID == nil && session.transcript.streamingState == .idle
+            && session.transcript.pendingUserInputs.isEmpty && (!backgroundIds.isEmpty || !childIds.isEmpty)
+        if cancellingBackground {
+            guard !backgroundCancellationInProgress else { return false }
+            backgroundCancellationInProgress = true
+        }
+        defer {
+            if cancellingBackground {
+                backgroundCancellationInProgress = false
+                flushQueueIfIdle()
+            }
+        }
+        if cancellingBackground {
+            var sent = false
+            for id in backgroundIds {
+                let reachedAgent = await stopBackgroundTask(id: id)
+                sent = sent || reachedAgent
+            }
+            for id in childIds {
+                let reachedAgent = await cancelSubagent(subagentSessionId: id)
+                sent = sent || reachedAgent
+            }
+            return sent
+        }
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -2317,9 +2393,14 @@ final class ACPSessionRunner {
             if let stoppedID = intended.queueHeadID,
                let current = session.queue.first,
                current.id == stoppedID,
-               current.status == .sending {
-                session.queue.removeFirst()
-                persistQueue()
+                current.status == .sending {
+                let wakeRows = markBackgroundWakeDelivered(id: stoppedID)
+                if current.backgroundTaskWake != nil {
+                    persistBackgroundWakeAndQueue(rows: wakeRows, consuming: current)
+                } else {
+                    session.queue.removeFirst()
+                    persistQueue()
+                }
             }
             appendAndPersistSystemNotice("Interrupted by user.")
             // Only force state to .idle if a successor prompt hasn't
@@ -2349,15 +2430,21 @@ extension ACPSessionRunner {
     /// The child's terminal state comes back as a `subagent_state_update`;
     /// nothing is assumed locally, because an agent may finish the child
     /// normally in the window before the cancel lands.
-    func cancelSubagent(subagentSessionId: String) async {
-        guard isConnectionCurrent() else { return }
+    @discardableResult
+    func cancelSubagent(subagentSessionId: String) async -> Bool {
+        guard isConnectionCurrent() else { return false }
         guard let run = session.subagentRun(subagentSessionId),
               run.capabilities.supportsCancel,
               run.isRunning
-        else { return }
-        guard await hasConfirmedLeaseForSideEffect() else { return }
-        guard isConnectionCurrent() else { return }
-        try? await connection.cancel(sessionId: subagentSessionId)
+        else { return false }
+        guard await hasConfirmedLeaseForSideEffect() else { return false }
+        guard isConnectionCurrent() else { return false }
+        do {
+            try await connection.cancel(sessionId: subagentSessionId)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Legacy callsite shim: defaults to `.auto` intent (immediate send
@@ -2660,6 +2747,34 @@ extension ACPSessionRunner {
         )
     }
 
+    func queueSnapshotForPersistence(
+        consuming consumed: QueuedPrompt? = nil, waitForPendingConfirmations: Bool = false
+    ) -> @MainActor @Sendable () async -> [QueuedPrompt] {
+        let items = session.queue.filter { item in
+            guard let consumed else { return true }
+            return item.id != consumed.id || item.brokerOperationAttempt != consumed.brokerOperationAttempt
+        }
+        let confirmations = backgroundWakeConfirmations
+        let confirmationTail = confirmations.isEmpty ? nil : persistenceTail
+        return {
+            // Manager writes have a separate persistence pipeline. Wait for
+            // the confirmation callback before either writer reads its result.
+            await confirmationTail?.value
+            if waitForPendingConfirmations {
+                let pendingTail = self.backgroundWakeConfirmations.isEmpty ? nil : self.persistenceTail
+                await pendingTail?.value
+            }
+            // Preserve its removal or failed-save recovery, without changing
+            // unrelated items or a newer retry captured under the same ID.
+            // A manager snapshot can precede the confirmation itself.
+            return items.compactMap { item in
+                guard confirmations[item.id] == item.brokerOperationAttempt
+                    || (waitForPendingConfirmations && item.backgroundTaskWake != nil) else { return item }
+                return self.session.queue.first { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
+            }
+        }
+    }
+
     /// Persist the current queue snapshot. Called after every mutation:
     /// enqueue, edit, remove, reorder, head-status flip. Fire-and-forget
     /// snapshots swallow write failures, matching transcript persistence.
@@ -2674,7 +2789,7 @@ extension ACPSessionRunner {
             Task { @MainActor in completion?(false) }
             return
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         queueSaveGeneration += 1
@@ -2682,7 +2797,8 @@ extension ACPSessionRunner {
         let counted = acknowledgement != nil || completion != nil || retainOnFailure
         if counted { session.pendingQueuePersistenceCount += 1 }
         enqueuePersistence({ persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }, completion: { persisted in
             let didPersist = persisted == true
             if counted { self.session.pendingQueuePersistenceCount -= 1 }
@@ -2773,10 +2889,11 @@ extension ACPSessionRunner {
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
     ) {
         guard holdsLeaseForWrite() else { return }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         enqueuePersistence({ persistence in
+            let items = await queueSnapshot()
             guard try await persistence.clearForkContextDeliveryPending(
                 targetSessionID: sessionId,
                 fence: fence
@@ -2806,7 +2923,8 @@ extension ACPSessionRunner {
         guard isConnectionCurrent() else { return }
         guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
-        guard !nativeForkBarrierActive,
+        guard !backgroundCancellationInProgress,
+              !nativeForkBarrierActive,
               !session.holdsPromptsForDelegatedSelection,
               !steerInProgress,
               !detachedSteeringTurn,
@@ -3077,6 +3195,9 @@ extension ACPSessionRunner {
                 onPromptFinished: nil, recoveryQueueItem: (item, idx))
             return
         }
+        if item.backgroundTaskWake != nil {
+            session.queue.insert(item, at: min(idx, session.queue.count))
+        }
         persistQueue()
         steer(
             blocks: item.blocks,
@@ -3087,6 +3208,7 @@ extension ACPSessionRunner {
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
+            recoveryQueueItemID: item.backgroundTaskWake == nil ? nil : item.id,
             onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id)
         )
     }
@@ -3112,8 +3234,9 @@ extension ACPSessionRunner {
     }
 
     /// Inject into the running turn where supported, otherwise interrupt and
-    /// send a fresh turn. Only the fallback removes the cancelled queue head;
-    /// every other pending item keeps its position.
+    /// send a fresh turn. The fallback removes an ordinary cancelled queue
+    /// head; a background wake stays until cancellation is durably confirmed.
+    /// Every other pending item keeps its position.
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
@@ -3136,7 +3259,10 @@ extension ACPSessionRunner {
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        session.queue.removeAll { $0.status == .sending }
+        let interruptedBackgroundWake = session.queue.first.map {
+            $0.status == .sending && $0.backgroundTaskWake != nil
+        } ?? false
+        session.queue.removeAll { $0.status == .sending && $0.backgroundTaskWake == nil }
         persistQueue()
         let interruptedPromptTask = activePromptID == nil ? nil : latestPromptTask
         // Invalidate the in-flight prompt NOW (before awaiting userCancel)
@@ -3178,6 +3304,9 @@ extension ACPSessionRunner {
             // settles. Keep cleanup observers informed before waiting on it.
             self.onPromptWorkChanged?()
             await interruptedPromptTask?.value
+            if interruptedBackgroundWake {
+                await self.flushPersistence()
+            }
             await MainActor.run {
                 // Detach and restart both invalidate this runner, but a
                 // replacement may already have put the shared session back
@@ -3307,6 +3436,17 @@ extension ACPSessionRunner {
             let finishPrompt: @MainActor (Bool) -> Void = { [weak self] succeeded in
                 if let self, !self.stopped, self.isConnectionCurrent() {
                     if succeeded {
+                        if let wake = self.session.queue.first(where: {
+                            $0.id == durableQueueItem.item.id && $0.backgroundTaskWake != nil
+                        }) {
+                            self.session.normalQueuedTurnIDs.remove(wake.id)
+                            self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: wake.id)
+                            self.persistBackgroundWakeAndQueue(
+                                rows: self.markBackgroundWakeDelivered(id: wake.id), consuming: wake,
+                                acknowledging: steeringAcknowledgement)
+                            onPromptFinished?(true)
+                            return
+                        }
                         self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
                         self.session.normalQueuedTurnIDs.remove(durableQueueItem.item.id)
                         self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: durableQueueItem.item.id)
@@ -3619,13 +3759,14 @@ extension ACPSessionRunner {
             }
         } catch { return false }
         session.queue[queueIndex].transcriptRecorded = true
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence()
         let sessionId = sessionId
         let fence = leaseFenceProvider()
         session.pendingQueuePersistenceCount += 1
         return await withCheckedContinuation { continuation in
             enqueuePersistence({ persistence in
-                try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
+                let items = await queueSnapshot()
+                return try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
             }, completion: { persisted in
                 self.session.pendingQueuePersistenceCount -= 1
                 if persisted == true { self.commitPersistedMessageRows(rows) }
@@ -4001,15 +4142,20 @@ extension ACPSessionRunner {
                             ?? recordedUserMessageID
                             ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
                         if let queuedItemId {
-                            _ = self.session.popQueueHead()
+                            let wakeRows = self.markBackgroundWakeDelivered(id: queuedItemId)
+                            let completedItem = self.session.queue.first
                             self.session.normalQueuedTurnIDs.remove(queuedItemId)
                             self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: queuedItemId)
-                            if deliveredForkContext {
-                                self.persistForkContextDeliveredAndQueue(
-                                    acknowledging: promptAcknowledgement
-                                )
+                            if let completedItem, completedItem.backgroundTaskWake != nil {
+                                self.persistBackgroundWakeAndQueue(rows: wakeRows, consuming: completedItem,
+                                    deliveredForkContext: deliveredForkContext, acknowledging: promptAcknowledgement)
                             } else {
-                                self.persistQueue(acknowledging: promptAcknowledgement)
+                                _ = self.session.popQueueHead()
+                                if deliveredForkContext {
+                                    self.persistForkContextDeliveredAndQueue(acknowledging: promptAcknowledgement)
+                                } else {
+                                    self.persistQueue(acknowledging: promptAcknowledgement)
+                                }
                             }
                         }
                         if !wasCancelled, self.session.usageLimit != nil || self.session.usageLimitResumeItem != nil {
@@ -4438,7 +4584,7 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
             return false
         }
     }
@@ -4856,5 +5002,199 @@ extension ACPSessionRunner {
                 self.commitPersistedMessageRows(messageRows)
             })
         }
+    }
+}
+
+extension ACPSessionRunner {
+    /// Reconcile only after a successful attach. A disconnected socket alone
+    /// does not establish that the adapter, or any process it started, died.
+    func reconcileBackgroundTasks(adapterSurvived: Bool, previousTaskIds: Set<String>) async {
+        guard isConnectionCurrent(), holdsLeaseForWrite() else { return }
+        // The attach response can arrive before updatesTask has dequeued its
+        // replay. Drain the captured client watermark before deciding which
+        // tasks the replacement adapter failed to reannounce.
+        let updateWatermark = connection.client.yieldedUpdateCount
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        while appliedUpdateCount < updateWatermark {
+            guard !stopped, !Task.isCancelled, isConnectionCurrent(), holdsLeaseForWrite(),
+                  session.agentState != .disconnected else { return }
+            await Task.yield()
+            flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        }
+        guard !stopped, !Task.isCancelled, isConnectionCurrent(), holdsLeaseForWrite() else { return }
+        var dirty: Set<Int> = []
+        if !adapterSurvived {
+            for var task in session.backgroundTasks where previousTaskIds.contains(task.id)
+                && !observedBackgroundTaskIds.contains(task.id) && task.isActive {
+                task.loseObservation()
+                dirty.formUnion(session.saveBackgroundTask(task))
+            }
+        }
+        // Recover both pending completions and obsolete loss wakes after a
+        // crash between the task snapshot write and its queue update.
+        let wakeTasks = session.backgroundTasks.filter { $0.needsWake || ($0.isActive && $0.wakeId != nil) }
+        for task in wakeTasks {
+            if let index = session.transcript.toolCallIndex(toolCallId: task.id) { dirty.insert(index) }
+        }
+        let wakeIds = Set(wakeTasks.compactMap(\.wakeId))
+        persistIndices(dirty, completion: { [weak self] persisted in
+            if persisted { self?.enqueuePendingBackgroundWakes(persistedWakeIds: wakeIds) }
+        })
+    }
+
+    private func enqueuePendingBackgroundWakes(persistedWakeIds: Set<UUID>) {
+        guard isConnectionCurrent(), !stopped, !suppressingLoadReplay, holdsLeaseForWrite() else { return }
+        let reobservedTaskIds = Set(session.backgroundTasks.filter { task in
+            task.isActive && task.wakeId.map { persistedWakeIds.contains($0) } == true
+        }.map(\.id))
+        let previousQueueCount = session.queue.count
+        session.queue.removeAll { item in
+            guard let taskId = item.backgroundTaskWake else { return false }
+            return reobservedTaskIds.contains(taskId) && item.status == .pending
+                && item.lastError == nil && !item.deliveryUncertain
+        }
+        let pending = session.backgroundTasks.filter { task in
+            guard task.needsWake, let id = task.wakeId, persistedWakeIds.contains(id) else { return false }
+            guard let item = session.queue.first(where: { $0.id == id }) else { return true }
+            return item.status == .pending && item.lastError == nil && !item.deliveryUncertain
+        }
+        guard !pending.isEmpty || session.queue.count != previousQueueCount else { return }
+        for task in pending {
+            guard let id = task.wakeId else { continue }
+            if let index = session.queue.firstIndex(where: { $0.id == id }) {
+                // Enrich an undispatched wake without moving it in the queue
+                // or changing the identity used for durable delivery.
+                session.queue[index].blocks = [.text(task.wakeText)]
+                continue
+            }
+            // Replace an undispatched observation for this task with the newer
+            // one. A sending/failed/uncertain item retains its own snapshot.
+            session.queue.removeAll { $0.backgroundTaskWake == task.id && $0.status == .pending
+                && $0.lastError == nil && !$0.deliveryUncertain }
+            let insertAt = session.queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: session.usageLimit))
+            } ?? session.queue.endIndex
+            session.queue.insert(.init(id: id, blocks: [.text(task.wakeText)],
+                backgroundTaskWake: task.id, transcriptRecorded: true), at: insertAt)
+        }
+        persistQueue(completion: { [weak self] persisted in
+            guard let self, self.isConnectionCurrent() else { return }
+            if persisted {
+                self.flushQueueIfIdle()
+            } else {
+                for task in pending {
+                    if let index = self.session.queue.firstIndex(where: { $0.id == task.wakeId }) {
+                        self.session.queue[index].lastError = "Could not save background work notification; retry to deliver it."
+                    }
+                }
+            }
+        })
+    }
+
+    private func markBackgroundWakeDelivered(id: UUID) -> Set<Int> {
+        guard var task = session.backgroundTasks.first(where: { $0.wakeId == id && !$0.wakeDelivered }) else {
+            // Confirming an older snapshot must preserve newer task facts,
+            // including when their earlier write failed.
+            guard let taskId = session.queue.first(where: { $0.id == id })?.backgroundTaskWake,
+                  let index = session.transcript.toolCallIndex(toolCallId: taskId) else { return [] }
+            return [index]
+        }
+        task.wakeDelivered = true
+        return session.saveBackgroundTask(task)
+    }
+
+    private func persistBackgroundWakeAndQueue(
+        rows: Set<Int>, consuming item: QueuedPrompt, deliveredForkContext: Bool = false,
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        guard holdsLeaseForWrite() else { return }
+        if let acknowledgement {
+            backgroundWakeAcknowledgements[item.id, default: []].append(acknowledgement)
+        }
+        guard backgroundWakeConfirmations[item.id] == nil else { return }
+        backgroundWakeConfirmations[item.id] = item.brokerOperationAttempt
+        let messages = rows.sorted().compactMap { index -> ACPStoredMessage? in
+            guard let payload = try? ACPMessageCodec.encode(session.transcript.messages[index]) else { return nil }
+            return .init(id: messageRowID(index), sessionId: self.sessionId,
+                kind: session.transcript.messages[index].kind, seq: Int64(index),
+                payload: payload, createdAt: createdAt(forMessageAt: index))
+        }
+        let queueSnapshot = queueSnapshotForPersistence(consuming: item)
+        let sessionId = sessionId
+        let fence = leaseFenceProvider()
+        session.pendingQueuePersistenceCount += 1
+        enqueuePersistence({ persistence in
+            let items = await queueSnapshot()
+            return try await persistence.persistBackgroundWakeAndQueue(
+                sessionId: sessionId, messages: messages, items: items,
+                deliveredForkContext: deliveredForkContext, fence: fence)
+        }, completion: { persisted in
+            defer { self.backgroundWakeConfirmations.removeValue(forKey: item.id) }
+            let acknowledgements = self.backgroundWakeAcknowledgements.removeValue(forKey: item.id) ?? []
+            self.session.pendingQueuePersistenceCount -= 1
+            if persisted == true {
+                self.commitPersistedMessageRows(messages)
+                // Committed delivery survives teardown; a newer retry under
+                // the same wake ID still owns its separate attempt.
+                self.session.queue.removeAll { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
+                acknowledgements.forEach { $0() }
+                guard self.isConnectionCurrent(), !self.stopped else { return }
+                self.onPromptWorkChanged?()
+                if !self.sendPendingQueueForceSendsAfterPersistence() { self.flushQueueIfIdle() }
+            } else {
+                guard let index = self.session.queue.firstIndex(where: {
+                    $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt
+                }) else { return }
+                self.session.queue[index].status = .pending
+                self.session.queue[index].lastError = "Could not save background work delivery confirmation. Retry may repeat the notification."
+                self.session.queue[index].deliveryUncertain = true
+                var restoredRows: Set<Int> = []
+                if var task = self.session.backgroundTasks.first(where: { $0.wakeId == item.id }) {
+                    task.wakeDelivered = false
+                    restoredRows = self.session.saveBackgroundTask(task)
+                }
+                if deliveredForkContext, var fork = self.session.forkRecord {
+                    fork.contextDeliveryPending = true
+                    self.session.forkRecord = fork
+                }
+                guard self.isConnectionCurrent(), !self.stopped, self.holdsLeaseForWrite() else { return }
+                self.persistIndices(restoredRows)
+                self.persistQueue(completion: { _ in self.onPromptWorkChanged?() })
+            }
+        })
+    }
+
+    @discardableResult
+    func stopBackgroundTask(id: String) async -> Bool {
+        guard isConnectionCurrent(), session.backgroundTaskStopSupported,
+              let task = session.backgroundTasks.first(where: { $0.id == id }),
+              task.isActive, task.canStop, !backgroundStopRequests.contains(id) else { return false }
+        backgroundStopRequests.insert(id)
+        defer { backgroundStopRequests.remove(id) }
+        guard await hasConfirmedLeaseForSideEffect(), isConnectionCurrent() else { return false }
+        var reachedAgent = false
+        let errorMessage: String?
+        do {
+            // Both adapters keep the control runtime on the ROOT session even
+            // when a notification is routed to a native child transcript.
+            let stopped = try await connection.stopBackgroundTask(
+                sessionId: session.remoteSessionId ?? sessionId, asyncTaskId: task.asyncTaskId)
+            reachedAgent = true
+            errorMessage = stopped ? nil : "The adapter did not stop this task."
+            guard isConnectionCurrent(), holdsLeaseForWrite() else { return reachedAgent }
+            if stopped, var current = session.backgroundTasks.first(where: { $0.id == id }), current.isActive {
+                current.merge(.init(sessionUpdate: "async_task_state_update", asyncTaskId: current.asyncTaskId,
+                    state: "stopped"), wakeOnCompletion: false)
+                persistIndices(session.saveBackgroundTask(current))
+            }
+        } catch {
+            errorMessage = "Could not stop task: \(error.localizedDescription)"
+        }
+        guard isConnectionCurrent(), holdsLeaseForWrite(),
+              var current = session.backgroundTasks.first(where: { $0.id == id }),
+              current.isActive else { return reachedAgent }
+        current.stopError = errorMessage
+        persistIndices(session.saveBackgroundTask(current))
+        return reachedAgent
     }
 }

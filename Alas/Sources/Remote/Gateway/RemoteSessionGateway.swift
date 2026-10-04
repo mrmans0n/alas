@@ -590,7 +590,8 @@ final class RemoteSessionGateway {
         // another full resync happens. Reset it atomically with the send.
         state.generation += 1
         let capturedGeneration = state.generation
-        let wire = await wireTail(id: id, session: session, indices: first..<count)
+        let superseded = Self.supersededBackgroundRows(in: session.transcript.messages)
+        let wire = await wireTail(id: id, session: session, indices: first..<count, superseded: superseded)
         // If another send (a concurrent snapshot or dirty delta) claimed a
         // later generation while this one was suspended fetching truncated
         // tool-call content, THIS snapshot's payload is now stale relative
@@ -602,6 +603,8 @@ final class RemoteSessionGateway {
         if state.generation == capturedGeneration {
             state.sentVersion = newSentVersion
             state.revision = 0
+            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
+            state.sentSupersededBackgroundRows = superseded
             send(.transcriptSnapshot(sessionId: id,
                                      streamingState: Self.stateString(session.transcript.streamingState),
                                      canDrive: provider.isWriter(for: id),
@@ -609,7 +612,8 @@ final class RemoteSessionGateway {
                                      firstIndex: wire.first?.index ?? count,
                                      totalCount: count,
                                      epoch: state.epoch,
-                                     revision: 0))
+                                     revision: 0,
+                                     hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
         }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
@@ -658,6 +662,9 @@ final class RemoteSessionGateway {
                 // objectWillChange fires for queue mutations too, and the
                 // queue changes far more often than the config does.
                 self.sendQueueState(id: id, session: session)
+                if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {
+                    await self.sendDelta(id: id, session: session)
+                }
                 let cfg = RemoteSessionConfig(
                     sessionId: id,
                     models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
@@ -688,13 +695,19 @@ final class RemoteSessionGateway {
             // (streamingState / pending prompt). Send a content-free delta
             // so the client still tracks state.
             state.revision += 1
+            state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
             send(.transcriptDelta(sessionId: id,
                                   streamingState: Self.stateString(session.transcript.streamingState),
                                   canDrive: provider.isWriter(for: id),
                                   upserts: [],
                                   epoch: state.epoch,
-                                  revision: state.revision))
-        case .dirty(let indices):
+                                  revision: state.revision,
+                                  hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
+        case .dirty(let dirtyIndices):
+            let superseded = Self.supersededBackgroundRows(in: session.transcript.messages)
+            // Appending a task snapshot also retires its earlier positional
+            // rows, even though the change log only dirtied the new index.
+            let indices = Set(dirtyIndices).union(superseded.symmetricDifference(state.sentSupersededBackgroundRows)).sorted()
             guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
                 await sendSnapshot(id: id, session: session)
                 return
@@ -729,19 +742,22 @@ final class RemoteSessionGateway {
                     state.invalidateToolContent(tc.toolCallId)
                 }
             }
-            let batches = await wireBatches(id: id, session: session, indices: indices)
+            let batches = await wireBatches(id: id, session: session, indices: indices, superseded: superseded)
             guard state.generation == capturedGeneration else { return }
             state.sentVersion = newSentVersion
+            state.sentSupersededBackgroundRows = superseded
             // Send all batches without suspension, preserving the generation
             // check and giving each frame the next revision clients expect.
             for wire in batches {
                 state.revision += 1
+                state.sentBackgroundWorkCancellable = session.hasCancellableBackgroundWork
                 send(.transcriptDelta(sessionId: id,
                                       streamingState: Self.stateString(session.transcript.streamingState),
                                       canDrive: provider.isWriter(for: id),
                                       upserts: wire,
                                       epoch: state.epoch,
-                                      revision: state.revision))
+                                      revision: state.revision,
+                                      hasCancellableBackgroundWork: session.hasCancellableBackgroundWork))
             }
         }
         emitPendingPermissionIfAny(id: id, session: session)
@@ -773,11 +789,14 @@ final class RemoteSessionGateway {
 
     /// Build the newest contiguous suffix that fits. Older rows remain
     /// reachable through fetchOlder instead of disappearing from history.
-    private func wireTail(id: String, session: ACPSession, indices: Range<Int>) async -> [RemoteWireMessage] {
+    private func wireTail(
+        id: String, session: ACPSession, indices: Range<Int>, superseded: Set<Int>? = nil
+    ) async -> [RemoteWireMessage] {
+        let superseded = superseded ?? Self.supersededBackgroundRows(in: session.transcript.messages)
         var wire: [RemoteWireMessage] = []
         var remaining = RemoteTranscriptSync.payloadBudget(sessionId: id)
         for index in indices.reversed() {
-            guard let row = await wireMessage(id: id, session: session, index: index) else { continue }
+            guard let row = await wireMessage(id: id, session: session, index: index, superseded: superseded.contains(index)) else { continue }
             guard row.byteCount + 1 <= remaining else { break }
             remaining -= row.byteCount + 1
             wire.append(row.message)
@@ -786,13 +805,15 @@ final class RemoteSessionGateway {
         return wire
     }
 
-    private func wireBatches(id: String, session: ACPSession, indices: [Int]) async -> [[RemoteWireMessage]] {
+    private func wireBatches(
+        id: String, session: ACPSession, indices: [Int], superseded: Set<Int>
+    ) async -> [[RemoteWireMessage]] {
         let budget = RemoteTranscriptSync.payloadBudget(sessionId: id)
         var batches: [[RemoteWireMessage]] = []
         var batch: [RemoteWireMessage] = []
         var remaining = budget
         for index in indices {
-            guard let row = await wireMessage(id: id, session: session, index: index) else { continue }
+            guard let row = await wireMessage(id: id, session: session, index: index, superseded: superseded.contains(index)) else { continue }
             if row.byteCount + 1 > remaining {
                 batches.append(batch)
                 batch = []
@@ -806,16 +827,38 @@ final class RemoteSessionGateway {
     }
 
     private func wireMessage(
-        id: String, session: ACPSession, index: Int
+        id: String, session: ACPSession, index: Int, superseded: Bool
     ) async -> (message: RemoteWireMessage, byteCount: Int)? {
         // Re-check across awaits: a structural mutation can shrink the array;
         // the caller's generation check will discard the stale serialization.
         guard session.transcript.messages.indices.contains(index) else { return nil }
         let message = session.transcript.messages[index]
+        if superseded {
+            return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
+                                     index: index, isHidden: true)
+                .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
+        }
         return Self.toWire(
             message, index: index,
             fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)
         ).boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)
+    }
+
+    /// Inspect the full transcript so an older page cannot revive a task
+    /// superseded outside that page. Keep positional IDs and paging cursors.
+    private static func supersededBackgroundRows(in messages: [ACPMessage]) -> Set<Int> {
+        var latest: [String: Int] = [:]
+        var backgroundIds: Set<String> = []
+        for (index, message) in messages.enumerated() {
+            guard case .toolCall(let call) = message else { continue }
+            latest[call.toolCallId] = index
+            if ACPBackgroundTask(toolCall: call) != nil { backgroundIds.insert(call.toolCallId) }
+        }
+        return Set(messages.enumerated().compactMap { index, message in
+            guard case .toolCall(let call) = message, backgroundIds.contains(call.toolCallId),
+                  latest[call.toolCallId] != index else { return nil }
+            return index
+        })
     }
 
     private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
@@ -1262,6 +1305,11 @@ final class RemoteSessionGateway {
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil, index: index)
         case .toolCall(let call):
+            if ACPBackgroundTask(toolCall: call)?.showInTranscript == false {
+                // Keep a positional marker so deltas can hide an existing row
+                // and an entirely hidden page still advances its history cursor.
+                return .init(stableId: sid, kind: "toolCall", text: nil, json: nil, index: index, isHidden: true)
+            }
             return .init(
                 stableId: sid,
                 kind: "toolCall",

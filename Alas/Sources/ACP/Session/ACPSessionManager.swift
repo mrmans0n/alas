@@ -1336,6 +1336,7 @@ final class ACPSessionManager: ObservableObject {
     var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var beforePersistenceForTesting: (@MainActor () async -> Void)?
     var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces
@@ -1720,9 +1721,15 @@ final class ACPSessionManager: ObservableObject {
     ) -> Task<Void, Never> {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         let task = Task { @MainActor [weak self] in
             await previous?.value
+#if DEBUG
+            await beforePersistence?()
+#endif
             guard !Task.isCancelled else { return }
             do {
                 try await operation(persistence)
@@ -1739,9 +1746,15 @@ final class ACPSessionManager: ObservableObject {
     ) -> Task<Result?, Never> {
         let previous = persistenceTail
         let persistence = persistence
+#if DEBUG
+        let beforePersistence = beforePersistenceForTesting
+#endif
         persistenceGeneration += 1
         let resultTask = Task<Result?, Never> { @MainActor [weak self] in
             await previous?.value
+#if DEBUG
+            await beforePersistence?()
+#endif
             guard !Task.isCancelled else { return nil }
             do {
                 return try await operation(persistence)
@@ -2562,6 +2575,10 @@ final class ACPSessionManager: ObservableObject {
     /// subagent row revealed by later backfill still finds its child
     /// transcript in memory.
     private static func restoreSubagents(from result: HydrationResult, in session: ACPSession) {
+        session.restoreBackgroundTasks(rows: result.messages.compactMap {
+            if case .toolCall(let row) = $0.wire { return row }
+            return nil
+        })
         var rows: [ACPMessage.ToolCall] = []
         for message in result.messages {
             guard case .toolCall(let toolCall) = message.wire,
@@ -3284,6 +3301,14 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: sessionId)
     }
 
+    private func queueSnapshotForPersistence(for session: ACPSession) -> @MainActor @Sendable () async -> [QueuedPrompt] {
+        if let runner = runners[session.id], runner.session === session {
+            return runner.queueSnapshotForPersistence(waitForPendingConfirmations: true)
+        }
+        let items = session.queue
+        return { items }
+    }
+
     /// Persist the in-memory queue to SQLite. The runner has the same
     /// `persistQueue` method, but UI actions on a session that has no
     /// runner yet (setup nudge, launch failure) must still reach the
@@ -3303,9 +3328,10 @@ final class ACPSessionManager: ObservableObject {
             runner.persistQueue()
             return
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: sessionId)
         enqueuePersistence { persistence in
+            let items = await queueSnapshot()
             _ = try await persistence.upsertQueue(
                 sessionId: sessionId,
                 items: items,
@@ -5872,6 +5898,7 @@ extension ACPSessionManager {
         // backfill is done.
         await awaitBackfill(id: sessionId)
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+        let previousBackgroundTaskIds = Set(session.activeBackgroundTasks.map(\.id))
         // Re-verify the session still exists; a close during the await above
         // would have cleared it.
         guard sessions[sessionId] === session else {
@@ -6175,6 +6202,7 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
+            connection.backgroundTaskLifecycleEnabled = ["claude", "codex"].contains(session.agentId)
             let initialized = try await connection.initialize(
                 brokerOperationKey: Self.brokerStartupOperationKey(
                     sessionId: sessionId,
@@ -6203,6 +6231,7 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
             session.supportsCodexSteeringCompletion = ["@agentclientprotocol/codex-acp", "codex-acp"].contains(initialized.agentInfo?.name ?? "")
+            session.backgroundTaskStopSupported = connection.supportsBackgroundTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
@@ -7502,6 +7531,12 @@ extension ACPSessionManager {
                     return
                 }
             }
+            await runner.reconcileBackgroundTasks(
+                adapterSurvived: (connection.client as? ACPBrokerClient)?.adoptedRunningAgent == true
+                    && !createdFreshRemoteSession,
+                previousTaskIds: previousBackgroundTaskIds)
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+                  session.agentState == .spawning else { return }
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
@@ -8074,10 +8109,11 @@ extension ACPSessionManager {
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: sessionId)
         guard onPersisted != nil else {
             enqueuePersistence { persistence in
+                let items = await queueSnapshot()
                 _ = try await persistence.upsertQueue(
                     sessionId: sessionId,
                     items: items,
@@ -8087,7 +8123,8 @@ extension ACPSessionManager {
             return
         }
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
@@ -8096,9 +8133,10 @@ extension ACPSessionManager {
             session.pendingQueuePersistenceCount -= 1
             if !persisted, let scheduledId {
                 if session.removeFromQueue(id: scheduledId) {
-                    let items = session.queue
+                    let queueSnapshot = queueSnapshotForPersistence(for: session)
                     let fence = leaseFence(sessionId: sessionId)
                     let rollback = enqueuePersistence { persistence in
+                        let items = await queueSnapshot()
                         _ = try await persistence.upsertQueue(
                             sessionId: sessionId,
                             items: items,
@@ -8187,11 +8225,12 @@ extension ACPSessionManager {
             session.enqueue(id: itemID, blocks: blocks, delegatedSource: source, ahead: ahead)
         }
         let fence = deliveryFence ?? leaseFence(sessionId: sessionId)
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
@@ -8365,12 +8404,13 @@ extension ACPSessionManager {
            !session.removeFromQueue(id: item.id) {
             return false
         }
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         let fence = leaseFence(sessionId: id)
         beginManagerQueuePersistence(sessionId: id)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
@@ -8523,11 +8563,12 @@ extension ACPSessionManager {
             delegatedSource: source
         )
         let fence = leaseFence(sessionId: sessionId)
-        let items = session.queue
+        let queueSnapshot = queueSnapshotForPersistence(for: session)
         beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
-            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+            let items = await queueSnapshot()
+            return try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1

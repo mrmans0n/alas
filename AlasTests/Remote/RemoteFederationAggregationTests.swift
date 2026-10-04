@@ -242,7 +242,7 @@ struct RemoteFederationAggregationTests {
 
         try await phone.send(.subscribe(sessionId: "srv-b:\(bSession)"))
         let snapshot = try await phone.receive { message -> [RemoteWireMessage]? in
-            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, let messages, _, _, _, _) = message { return messages }
+            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, let messages, _, _, _, _, _) = message { return messages }
             return nil
         }
         #expect(snapshot.contains { $0.text == "hello-from-b" })
@@ -264,7 +264,7 @@ struct RemoteFederationAggregationTests {
         defer { phone.close() }
         try await phone.send(.subscribe(sessionId: "srv-b:\(bSession)"))
         _ = try await phone.receive { message -> Bool? in
-            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, _, _, _, _, _) = message { return true }
+            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, _, _, _, _, _, _) = message { return true }
             return nil
         }
 
@@ -340,7 +340,7 @@ struct RemoteFederationAggregationTests {
         defer { phone.close() }
         try await phone.send(.subscribe(sessionId: "srv-b:\(bSession)"))
         _ = try await phone.receive { message -> Bool? in
-            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, _, _, _, _, _) = message { return true }
+            if case .transcriptSnapshot("srv-b:\(bSession)", _, _, _, _, _, _, _, _) = message { return true }
             return nil
         }
 

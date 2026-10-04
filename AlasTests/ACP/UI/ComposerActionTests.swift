@@ -4,6 +4,12 @@ import Testing
 
 @Suite("ComposerAction derive function")
 struct ComposerActionTests {
+    @Test("idle background work offers Stop while preserving Send for a typed prompt", arguments: [false, true])
+    func idleBackgroundWork(hasText: Bool) {
+        #expect(composerAction(streamingState: .idle, hasText: hasText, agentState: .ready,
+            hasCancellableBackgroundWork: true) == (hasText ? .send : .stop))
+    }
+
     @Test("schedule presets use the local calendar and round later today up to 30 minutes")
     func schedulePresets() {
         var calendar = Calendar(identifier: .gregorian)

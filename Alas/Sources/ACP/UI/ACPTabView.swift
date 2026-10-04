@@ -241,6 +241,13 @@ private struct ACPSessionView: View {
                     hydrationFailureBanner(message: msg)
                 }
             }
+            if !session.activeBackgroundTasks.isEmpty {
+                ACPBackgroundTaskList(tasks: session.activeBackgroundTasks,
+                    canStop: !isMirror && session.backgroundTaskStopSupported && session.agentState == .ready,
+                    stop: { id in
+                        Task { await manager.runners[sessionId]?.stopBackgroundTask(id: id) }
+                    })
+            }
             transcriptAndComposer
         }
         .onChange(of: isFirstRunConnecting) { oldValue, newValue in
@@ -306,6 +313,7 @@ private struct ACPSessionView: View {
               || session.transcript.streamingState == .awaitingPermission
               || session.transcript.streamingState == .awaitingInput
               || !session.transcript.pendingUserInputs.isEmpty
+              || session.hasCancellableBackgroundWork
         else { return }
         Task {
             if let runner = manager.runners[sessionId] {

@@ -78,4 +78,24 @@ struct ACPTranscriptRowWindowTests {
 
         #expect(rows.map(\.index) == [1, 2])
     }
+
+    @Test("the latest background-task snapshot controls rendered rows and anchors", arguments: [true, false])
+    @MainActor
+    func backgroundTaskVisibilityUsesLatestSnapshot(showInTranscript: Bool) {
+        var task = ACPBackgroundTask(ownerSessionId: "root", asyncTaskId: "job", name: "Tests")
+        task.showInTranscript = !showInTranscript
+        let previous = ACPMessage.toolCall(task.transcriptRow)
+        task.showInTranscript = showInTranscript
+        let latest = ACPMessage.toolCall(task.transcriptRow)
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), messageId: "before", text: "Before", attachments: []),
+            previous, latest,
+            .user(id: UUID(), messageId: "after", text: "After", attachments: [])
+        ]
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages, visibleHead: 0, visibleTail: messages.count, stableId: { $0.stableId })
+        #expect(rows.map(\.index) == (showInTranscript ? [0, 2, 3] : [0, 3]))
+        let lookup = ACPTranscriptVisibleRowLookup(rows: rows.map { .message($0) })
+        #expect(lookup.transcriptIndex(for: latest.stableId) == (showInTranscript ? 2 : nil))
+    }
 }

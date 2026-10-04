@@ -5,6 +5,7 @@ import SwiftUI
 /// text button on the right.
 struct ACPQueueHeader: View {
     let count: Int
+    var canClear = true
     let onClear: () -> Void
 
     @Environment(\.theme) private var theme
@@ -17,13 +18,15 @@ struct ACPQueueHeader: View {
                 .textCase(.uppercase)
                 .foregroundStyle(theme.color("fg-faint"))
             Spacer()
-            Button(action: onClear) {
-                Text("Clear")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-muted"))
+            if canClear {
+                Button(action: onClear) {
+                    Text("Clear")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-muted"))
+                }
+                .buttonStyle(.plain)
+                .help("Remove pending prompts; background work notifications are retained")
             }
-            .buttonStyle(.plain)
-            .help("Remove all pending items (a sending item is left alone)")
         }
         .padding(.horizontal, 4)
     }

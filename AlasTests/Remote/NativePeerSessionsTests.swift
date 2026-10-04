@@ -872,11 +872,13 @@ struct NativePeerSessionsTests {
         ))
     }
 
-    @Test func stopControlIsShownForEveryActivePeerState() {
+    @Test(arguments: [false, true])
+    func stopControlIsShownForEveryActivePeerState(hasCancellableBackgroundWork: Bool) {
         #expect(NativePeerSessionControls.showsStop(for: "streaming"))
         #expect(NativePeerSessionControls.showsStop(for: "awaitingPermission"))
         #expect(NativePeerSessionControls.showsStop(for: "awaitingInput"))
-        #expect(!NativePeerSessionControls.showsStop(for: "idle"))
+        #expect(NativePeerSessionControls.showsStop(for: "idle", hasCancellableBackgroundWork: hasCancellableBackgroundWork)
+            == hasCancellableBackgroundWork)
     }
 
     @Test func pendingPromptCannotBeRoutedTwiceBeforeConfirmation() {

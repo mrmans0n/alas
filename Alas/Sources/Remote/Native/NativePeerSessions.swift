@@ -487,10 +487,10 @@ final class NativePeerSessions {
         }
         let promptConfirmationRows: [RemoteWireMessage]
         switch message {
-        case .transcriptSnapshot(_, _, _, let rows, _, _, let epoch, let revision)
+        case .transcriptSnapshot(_, _, _, let rows, _, _, let epoch, let revision, _)
             where transcript?.epoch == epoch && transcript?.revision == revision:
             promptConfirmationRows = rows
-        case .transcriptDelta(_, _, _, let upserts, let epoch, let revision)
+        case .transcriptDelta(_, _, _, let upserts, let epoch, let revision, _)
             where transcript?.epoch == epoch && transcript?.revision == revision:
             promptConfirmationRows = upserts
         default:

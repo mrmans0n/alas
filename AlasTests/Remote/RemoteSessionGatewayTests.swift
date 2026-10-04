@@ -826,7 +826,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
         #expect(sent.contains { message in
-            if case .transcriptSnapshot(let id, _, _, _, _, _, _, _) = message {
+            if case .transcriptSnapshot(let id, _, _, _, _, _, _, _, _) = message {
                 return id == "s1"
             }
             return false
@@ -890,6 +890,122 @@ struct RemoteSessionGatewayTests {
         #expect(sent.last == .worktreeList(worktrees: provider.worktrees))
     }
 
+    @Test("remote projection hides background rows across snapshots and deltas", arguments: [false, true])
+    func backgroundRowVisibility(showInTranscript: Bool) {
+        var task = ACPBackgroundTask(ownerSessionId: "s1", asyncTaskId: "job", name: "Monitor")
+        task.showInTranscript = showInTranscript
+        let row = RemoteSessionGateway.toWire(.toolCall(task.transcriptRow), index: 10)
+        if !showInTranscript { #expect(row.json == nil && row.text == nil) }
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        mirror.apply(.transcriptSnapshot(sessionId: "s1", streamingState: "idle", canDrive: true,
+            messages: [row], firstIndex: 10, totalCount: 11, epoch: 1, revision: 0))
+        #expect(mirror.messages.count == (showInTranscript ? 1 : 0))
+        #expect(mirror.olderPageBeforeIndex == 10)
+        task.showInTranscript.toggle()
+        mirror.apply(.transcriptDelta(sessionId: "s1", streamingState: "idle", canDrive: true,
+            upserts: [RemoteSessionGateway.toWire(.toolCall(task.transcriptRow), index: 10)], epoch: 1, revision: 1))
+        #expect(mirror.messages.count == (showInTranscript ? 0 : 1))
+        #expect(mirror.totalCount == 11)
+        task.showInTranscript = false
+        mirror.apply(.transcriptPage(sessionId: "s1", epoch: 1, firstIndex: 0,
+            messages: [RemoteSessionGateway.toWire(.toolCall(task.transcriptRow), index: 0)]))
+        #expect(mirror.olderPageBeforeIndex == nil)
+        #expect(mirror.messages.count == (showInTranscript ? 0 : 1))
+    }
+
+    @Test("latest background snapshots suppress older positional rows across tail, backfill and deltas", .timeLimit(.minutes(1)), arguments: [("snapshot", false), ("snapshot", true), ("page", false), ("page", true), ("delta", false), ("delta", true)])
+    func latestBackgroundSnapshotsSuppressOlderRows(path: String, latestVisible: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("unused")
+        var task = ACPBackgroundTask(ownerSessionId: "s1", asyncTaskId: "job", name: "Older")
+        session.transcript.messages = [.toolCall(task.transcriptRow)]
+        if path == "page" {
+            for index in 0...RemoteTranscriptSync.tailWindow {
+                session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Filler \(index)")))
+            }
+        }
+        task.name = "Latest"
+        task.showInTranscript = latestVisible
+        let latest = ACPMessage.toolCall(task.transcriptRow)
+        if path != "delta" { session.transcript.appendMessage(latest) }
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gw = RemoteSessionGateway(provider: provider) { frame in
+            sent.append(frame)
+            if case .transcriptDelta = frame, let waiter = nextDelta {
+                nextDelta = nil
+                waiter.resume(returning: frame)
+            }
+        }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        var mirror = NativePeerTranscript(sessionId: "s1")
+        mirror.apply(try #require(sent.first))
+        if path != "delta" {
+            #expect(mirror.messages.filter { $0.kind == "toolCall" }.map(\.index)
+                == (latestVisible ? [session.transcript.messages.count - 1] : []))
+        }
+        let frame: RemoteServerMessage
+        if path == "delta" {
+            frame = await withCheckedContinuation { nextDelta = $0
+                session.transcript.appendMessage(latest) }
+        } else {
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: session.transcript.messages.count - 1, limit: 200))
+            frame = try #require(sent.last)
+        }
+        let rows: [RemoteWireMessage]
+        switch frame {
+        case .transcriptDelta(_, _, _, let upserts, _, _, _): rows = upserts
+        case .transcriptPage(_, _, let first, let page):
+            #expect(first == 0)
+            rows = page
+        default: Issue.record("Expected a delta or page")
+            return
+        }
+        let older = try #require(rows.first(where: { $0.index == 0 }))
+        #expect(older.stableId == "m0")
+        #expect(older.isHidden == true && older.json == nil && older.text == nil)
+        mirror.apply(frame)
+        let visibleTasks = mirror.messages.filter { $0.kind == "toolCall" }
+        #expect(visibleTasks.map(\.index) == (latestVisible ? [session.transcript.messages.count - 1] : []))
+        #expect(mirror.olderPageBeforeIndex == nil)
+    }
+
+    @Test("remote snapshots and state-only deltas advertise cancellable background work while idle", .timeLimit(.minutes(1)), arguments: [false, true])
+    func idleBackgroundStopSnapshot(supported: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithUserMessages(0)
+        session.agentState = .ready
+        session.backgroundTaskStopSupported = supported
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "job", canStop: true), ownerSessionId: "s1")
+        provider.sessions["s1"] = session
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gateway = RemoteSessionGateway(provider: provider) {
+            sent.append($0)
+            if case .transcriptDelta = $0, let continuation = nextDelta {
+                nextDelta = nil
+                continuation.resume(returning: $0)
+            }
+        }
+        defer { gateway.close() }
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        let data = try JSONEncoder().encode(try #require(sent.first))
+        let fields = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(fields["streamingState"] as? String == "idle")
+        #expect(fields["hasCancellableBackgroundWork"] as? Bool == supported)
+        var mirror = NativePeerTranscript(sessionId: "peer:s1")
+        mirror.apply(try #require(sent.first).replacingSessionId("peer:s1"))
+        #expect(mirror.hasCancellableBackgroundWork == supported)
+        let delta = await withCheckedContinuation { continuation in
+            nextDelta = continuation
+            session.backgroundTaskStopSupported = !supported
+        }
+        mirror.apply(delta.replacingSessionId("peer:s1"))
+        #expect(mirror.hasCancellableBackgroundWork == !supported)
+        #expect(mirror.streamingState == "idle")
+    }
+
     @Test func snapshotRestoresFullTruncatedToolCallContent() async throws {
         let provider = FakeSessionsProvider()
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
@@ -910,7 +1026,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
 
-        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _)? = sent.first,
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _)? = sent.first,
               let json = msgs.first(where: { $0.kind == "toolCall" })?.json,
               let data = json.data(using: .utf8)
         else {
@@ -943,7 +1059,7 @@ struct RemoteSessionGatewayTests {
             if case .transcriptSnapshot = msg { return true }
             return false
         }
-        guard case .transcriptSnapshot(let id, _, let canDrive, _, _, _, _, _)? = snap else {
+        guard case .transcriptSnapshot(let id, _, let canDrive, _, _, _, _, _, _)? = snap else {
             Issue.record("expected a snapshot after takeOver, got \(sent)")
             return
         }
@@ -1638,7 +1754,7 @@ struct RemoteSessionGatewayTests {
 
         await gateway.handle(.subscribe(sessionId: "s1"))
 
-        guard case .transcriptSnapshot(_, _, _, let rows, _, _, _, _) = try #require(sent.first) else {
+        guard case .transcriptSnapshot(_, _, _, let rows, _, _, _, _, _) = try #require(sent.first) else {
             Issue.record("Expected initial snapshot")
             return
         }
@@ -1658,7 +1774,7 @@ struct RemoteSessionGatewayTests {
         defer { gateway.close() }
         await gateway.handle(.subscribe(sessionId: "s1"))
         let snapshot = try #require(sent.first)
-        guard case .transcriptSnapshot(_, _, _, _, let first, let total, _, _) = snapshot else {
+        guard case .transcriptSnapshot(_, _, _, _, let first, let total, _, _, _) = snapshot else {
             Issue.record("Expected initial snapshot")
             return
         }
@@ -1726,7 +1842,7 @@ struct RemoteSessionGatewayTests {
             switch frame {
             case .transcriptSnapshot:
                 mirror.apply(frame)
-            case .transcriptDelta(_, _, _, let rows, _, let revision):
+            case .transcriptDelta(_, _, _, let rows, _, let revision, _):
                 #expect(try JSONEncoder().encode(frame).count <= 8 * 1024 * 1024)
                 let needsResubscribe = mirror.apply(frame)
                 #expect(!needsResubscribe, "Splitting must not trigger a resubscription")
@@ -1751,7 +1867,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision)? = sent.first else {
+        guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }
@@ -1774,7 +1890,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.messages.append(.systemNotice(id: UUID(), text: "done"))
         try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
         let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, _, let u, _, _) = msg { return u }
+            if case .transcriptDelta(_, _, _, let u, _, _, _) = msg { return u }
             return nil
         }.last
         #expect(delta?.count == 1)
@@ -1789,7 +1905,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _)? = sent.first else {
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _, _)? = sent.first else {
             Issue.record("expected snapshot")
             return
         }
@@ -1798,7 +1914,7 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 250_000_000)
         let resync = sent.last { if case .transcriptSnapshot = $0 { return true }
         return false }
-        guard case .transcriptSnapshot(_, _, _, let msgs, _, let total, let epoch1, _)? = resync else {
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, let total, let epoch1, _, _)? = resync else {
             Issue.record("expected resync snapshot, got \(sent)")
             return
         }
@@ -1925,7 +2041,7 @@ struct RemoteSessionGatewayTests {
         return false } ?? false) {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard case .transcriptSnapshot(_, _, _, _, _, _, let resyncEpoch, _)? = sent.last else {
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let resyncEpoch, _, _)? = sent.last else {
             Issue.record("expected a resync snapshot from the structural change, got \(sent)")
             return
         }
@@ -1982,7 +2098,7 @@ struct RemoteSessionGatewayTests {
         // A SAME-epoch snapshot lands via takeOver — no structural change,
         // so the transcript's epoch never moves.
         await gw.handle(.takeOver(sessionId: "s1"))
-        guard case .transcriptSnapshot(_, _, _, _, _, _, let snapshotEpoch, _)? = sent.last else {
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let snapshotEpoch, _, _)? = sent.last else {
             Issue.record("expected a snapshot from takeOver, got \(sent)")
             return
         }
@@ -2040,7 +2156,7 @@ struct RemoteSessionGatewayTests {
         for _ in 0..<50 where sent.isEmpty {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard case .transcriptDelta(_, _, _, let firstUpserts, _, _)? = sent.last else {
+        guard case .transcriptDelta(_, _, _, let firstUpserts, _, _, _)? = sent.last else {
             Issue.record("expected the overlapping dirty delta to land, got \(sent)")
             return
         }
@@ -2104,7 +2220,7 @@ struct RemoteSessionGatewayTests {
         for _ in 0..<50 where sent.isEmpty {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard case .transcriptDelta(_, _, _, let upserts, _, _)? = sent.last else {
+        guard case .transcriptDelta(_, _, _, let upserts, _, _, _)? = sent.last else {
             Issue.record("expected the overlapping dirty delta to land, got \(sent)")
             return
         }
@@ -2219,7 +2335,7 @@ struct RemoteSessionGatewayTests {
         for _ in 0..<50 where sent.isEmpty {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard case .transcriptDelta(_, _, _, let upserts, _, _)? = sent.last else {
+        guard case .transcriptDelta(_, _, _, let upserts, _, _, _)? = sent.last else {
             Issue.record("expected the concurrent delta to land, got \(sent)")
             return
         }
@@ -2303,7 +2419,7 @@ struct RemoteSessionGatewayTests {
         for _ in 0..<50 where sent.isEmpty {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        guard case .transcriptDelta(_, _, _, _, _, let winningRevision)? = sent.last else {
+        guard case .transcriptDelta(_, _, _, _, _, let winningRevision, _)? = sent.last else {
             Issue.record("expected the superseding delta to land, got \(sent)")
             return
         }
@@ -2351,7 +2467,7 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(_, _, _, _, let firstIndex, _, _, _)? = sent.first else {
+        guard case .transcriptSnapshot(_, _, _, _, let firstIndex, _, _, _, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }

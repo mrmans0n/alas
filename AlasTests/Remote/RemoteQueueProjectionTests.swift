@@ -124,7 +124,7 @@ struct RemoteQueueProjectionTests {
         #expect(RemoteQueueProjection.visibleCount(projected) == 2)
     }
 
-    @Test func omitsWaitingDelegatedPrompts() {
+    @Test func showsFailedInternalPromptsWithTheirAllowedActions() {
         let report = QueuedPrompt(
             blocks: [.text("report")],
             delegatedSource: ACPDelegatedPromptSource(sessionId: "child", messageId: "m")
@@ -134,8 +134,11 @@ struct RemoteQueueProjectionTests {
             delegatedSource: ACPDelegatedPromptSource(sessionId: "child", messageId: "m2")
         )
         failed.lastError = "boom"
-        let projected = RemoteQueueProjection.project([item(text: "mine"), report, failed])
-        #expect(projected.map(\.text) == ["mine", "failed report"])
+        let waitingWake = QueuedPrompt(blocks: [.text("waiting wake")], backgroundTaskWake: "waiting")
+        let failedWake = QueuedPrompt(blocks: [.text("failed wake")], lastError: "Retry required", backgroundTaskWake: "failed")
+        let projected = RemoteQueueProjection.project([item(text: "mine"), report, failed, waitingWake, failedWake])
+        #expect(projected.map(\.text) == ["mine", "failed report", "failed wake"])
+        #expect(projected.map(\.canRemove) == [true, true, false])
     }
 
     @Test func plainTextFlattensTextMentionsAndReferences() {

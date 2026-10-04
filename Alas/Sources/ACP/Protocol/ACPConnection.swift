@@ -118,6 +118,9 @@ struct ACPSteeringParams: Encodable {
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
 /// methods for the messages we send.
 final class ACPConnection: @unchecked Sendable {
+    /// AIR changes ordinary rendering too; opt in only for the probed adapters.
+    var backgroundTaskLifecycleEnabled = false
+    private(set) var supportsBackgroundTasks = false
     let client: ACPClient
     private let durableResponseLock = NSLock()
     private var pendingDurableSessionResponses: [ACPDurableConsumptionAcknowledgement] = []
@@ -143,12 +146,17 @@ final class ACPConnection: @unchecked Sendable {
                                 protocolVersion: ACPProtocolVersion.current,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
-                                    terminal: client.advertisesTerminalCapability)),
+                                    terminal: client.advertisesTerminalCapability,
+                                    meta: backgroundTaskLifecycleEnabled ? .backgroundTasks : .terminalAuth)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
+        supportsBackgroundTasks = backgroundTaskLifecycleEnabled && result.meta?.advertisesAsyncTasks == true
+        let airGoal = result.meta?.airFields["goal"]
+            .flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { try? JSONDecoder().decode(ACPGoalCapability.self, from: $0) }
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -156,7 +164,7 @@ final class ACPConnection: @unchecked Sendable {
             sessionCapabilities: capabilities?.sessionCapabilities ?? .init(),
             mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
             providerCapabilities: capabilities?.providerCapabilities,
-            goalCapability: capabilities?.meta.goal,
+            goalCapability: capabilities?.meta.goal ?? airGoal,
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
@@ -282,6 +290,16 @@ final class ACPConnection: @unchecked Sendable {
         // spec-compliant agents, so the UI never returned to idle.
         try await client.notify(ACPRequest(method: "session/cancel",
                                            params: ACPSessionCancelParams(sessionId: sessionId)))
+    }
+
+    func stopBackgroundTask(sessionId: String, asyncTaskId: String) async throws -> Bool {
+        struct Params: Encodable { let sessionId: String
+        let asyncTaskId: String }
+        struct Result: Decodable { let stopped: Bool }
+        let response = try await client.send(ACPRequest(
+            method: "_session/async_task/stop", params: Params(sessionId: sessionId, asyncTaskId: asyncTaskId)))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(Result.self, from: response.body).stopped
     }
 
     // ACP wire methods use snake_case (`session/set_mode`,

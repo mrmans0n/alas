@@ -9,6 +9,7 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
     let text: String?
     let json: String?         // JSON string for structured kinds; nil otherwise
     let index: Int            // transcript position; the client orders and windows by this
+    var isHidden: Bool? = nil
 
     /// A conservative bound for compact JSONEncoder output, without serializing
     /// or copying the bodies. The fixed overhead covers keys, punctuation,
@@ -23,6 +24,7 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
         if let json {
             count += 10 + Self.escapedTransportByteCount(json)
         }
+        if isHidden != nil { count += 17 }
         return count
     }
 
@@ -77,6 +79,7 @@ struct RemoteQueuedPrompt: Codable, Equatable, Sendable {
     let status: String      // "pending" | "sending"
     let lastError: String?
     let scheduledAt: Double? // Unix milliseconds for JavaScript Date
+    var canRemove: Bool? = nil // Absent from older peers, which allow generic queue actions.
 }
 
 struct RemoteWorktreeSummary: Codable, Equatable, Sendable {

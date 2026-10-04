@@ -63,6 +63,100 @@ struct ACPSessionManagerTests {
         }
     }
 
+    @Test("manager queue writes preserve background confirmation across independent save ordering", arguments: [(true, false, false), (false, false, false), (true, true, false), (false, true, false), (true, false, true), (false, false, true), (true, true, true), (false, true, true)])
+    func managerQueueWritesPreserveBackgroundConfirmation(committed: Bool, recovering: Bool, beforeConfirmation: Bool) async throws {
+        let store = try ACPSessionStore(path: FileManager.default.temporaryDirectory.appendingPathComponent("mgr-wake-order-\(UUID()).sqlite").path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let promptResponse = AsyncGate()
+        client.scriptAsync(method: "session/prompt") { _ in
+            if beforeConfirmation { await promptResponse.enterAndWait() }
+            return Data("{}".utf8)
+        }
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let confirmation = AsyncGate()
+        let managerWrite = AsyncGate()
+        defer {
+            manager.shutdownBackgroundTasks()
+            Task {
+                await confirmation.release()
+                await managerWrite.release()
+                await promptResponse.release()
+            }
+        }
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushPersistence()
+        let runner = try #require(manager.runners[session.id])
+        session.transcript.streamingState = .awaitingPermission
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
+            state: "completed"), ownerSessionId: "remote")
+        await runner.reconcileBackgroundTasks(adapterSurvived: true, previousTaskIds: [])
+        await runner.flushPersistence()
+        let wakeID = try #require(session.queue.first?.id)
+        var heldConfirmation = false
+        runner.beforePersistenceForTesting = {
+            if !heldConfirmation, session.backgroundTasks[0].wakeDelivered {
+                heldConfirmation = true
+                await confirmation.enterAndWait()
+            }
+        }
+        if !committed {
+            try store.db.exec("""
+            CREATE TRIGGER reject_wake_confirmation BEFORE UPDATE OF payload ON messages
+            WHEN CAST(NEW.payload AS TEXT) LIKE '%"wakeDelivered":true%'
+            BEGIN SELECT RAISE(ABORT, 'confirmation failed'); END;
+            """)
+        }
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        if beforeConfirmation { await promptResponse.waitUntilEntered() }
+        else { await confirmation.waitUntilEntered() }
+        session.transcript.streamingState = .awaitingPermission
+        var heldManagerWrite = false
+        manager.beforePersistenceForTesting = {
+            if !heldManagerWrite {
+                heldManagerWrite = true
+                await managerWrite.enterAndWait()
+            }
+        }
+        let enqueue = Task { @MainActor in
+            if recovering {
+                return await withCheckedContinuation { continuation in
+                    manager.enqueueWhileRecovering(text: "Later report", attachments: [], into: session.id,
+                        onPersisted: { continuation.resume(returning: $0) })
+                }
+            }
+            return await manager.enqueueDelegatedPrompt(text: "Later report",
+                source: .init(sessionId: "child", messageId: "result"), into: session.id)
+        }
+        #expect(await awaitCondition { session.queue.count == 2 })
+        let reportID = try #require(session.queue.last?.id)
+        await managerWrite.waitUntilEntered()
+        if beforeConfirmation {
+            await promptResponse.release()
+            await confirmation.waitUntilEntered()
+        } else {
+            // This writer must wait for the runner's independent callback.
+            await managerWrite.release()
+        }
+        await confirmation.release()
+        await runner.flushPersistence()
+        // A response that was held before confirmation returns the session
+        // to idle. Keep the later report queued while comparing both stores.
+        session.transcript.streamingState = .awaitingPermission
+        await managerWrite.release()
+        #expect(await enqueue.value)
+        await manager.flushPersistence()
+        #expect(session.queue.map(\.id) == (committed ? [reportID] : [wakeID, reportID]))
+        let storedQueue = try store.loadQueue(sessionId: session.id)
+        #expect(storedQueue == session.queue)
+        #expect(session.backgroundTasks[0].wakeDelivered == committed)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+    }
+
     @Test("ordinary stable prompt is persisted only once")
     func ordinaryStablePromptIsPersistedOnlyOnce() async throws {
         let url = FileManager.default.temporaryDirectory
