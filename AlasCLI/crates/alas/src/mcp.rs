@@ -1477,6 +1477,12 @@ fn is_preview_command(command: &Command) -> bool {
     matches!(command, Command::Preview(_))
 }
 
+/// Calls that can block for seconds in the app. The stdio loop runs them on
+/// a worker so it keeps reading other calls and cancellations meanwhile.
+fn runs_on_worker(command: &Command) -> bool {
+    is_preview_command(command) || matches!(command, Command::SessionWait { .. })
+}
+
 fn is_preview_cancel_command(command: &Command) -> bool {
     matches!(
         command,
@@ -1606,7 +1612,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
         }
         match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
             Ok(Some((id, command))) => {
-                if !is_preview_command(&command) {
+                if !runs_on_worker(&command) {
                     let result = match dispatch(env, &command) {
                         Ok(resp) => tool_result(&command, resp),
                         Err(err) => transport_error_result(&err),
@@ -1627,7 +1633,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                     let _ = reply_tx.send(error_reply(
                         id,
                         -32000,
-                        "too many concurrent Alas MCP preview calls",
+                        "too many concurrent Alas MCP worker calls",
                     ));
                     continue;
                 }
@@ -1640,7 +1646,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                 let fallback_key = key.clone();
                 let worker_reply_tx = reply_tx.clone();
                 let spawn = std::thread::Builder::new()
-                    .name("alas-mcp-preview-tool".into())
+                    .name("alas-mcp-tool-worker".into())
                     .spawn(move || {
                         let result = match dispatch(&env, &command) {
                             Ok(resp) => tool_result(&command, resp),
@@ -1660,7 +1666,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
                     let _ = reply_tx.send(error_reply(
                         fallback_id,
                         -32000,
-                        "could not start preview tool worker",
+                        "could not start tool worker",
                     ));
                 }
             }
@@ -2024,7 +2030,7 @@ mod tests {
         CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result, is_initialize_message,
-        parse_http_request, tools_call_command,
+        parse_http_request, runs_on_worker, tools_call_command,
     };
     use alas_client::{Command, Response};
     use serde_json::{Value, json};
@@ -2892,6 +2898,14 @@ mod tests {
                 max_chars: None,
             }
         );
+        // A wait blocks for seconds; the stdio loop must keep reading meanwhile.
+        assert!(runs_on_worker(&alas_client::Command::SessionWait {
+            session_ids: vec!["a".into()],
+            timeout_ms: None,
+        }));
+        assert!(!runs_on_worker(&alas_client::Command::SessionInterrupt {
+            session_id: "a".into(),
+        }));
         for (tool, invalid) in [
             ("session_wait", json!({ "session_ids": [] })),
             ("session_wait", json!({ "session_ids": "a" })),

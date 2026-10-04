@@ -69,7 +69,13 @@ enum ACPSessionTranscriptReader {
     /// nil, up to `limit` entries and `maxChars` characters of text. The
     /// first entry always fits: one longer than the budget is cut (keeping
     /// its head when reading forward, its tail when reading the latest).
-    static func page(_ entries: [Entry], offset: Int?, limit: Int, maxChars: Int) -> Page {
+    ///
+    /// `lastEntryIsLive` is set while the session runs: its last entry (a
+    /// streaming message, or a tool call still in progress) changes in
+    /// place, so `end` stops on it and the next page reads it again.
+    static func page(
+        _ entries: [Entry], offset: Int?, limit: Int, maxChars: Int, lastEntryIsLive: Bool = false
+    ) -> Page {
         let total = entries.count
         var budget = maxChars
         var picked: [Entry] = []
@@ -88,18 +94,22 @@ enum ACPSessionTranscriptReader {
             return true
         }
 
+        func resumePoint(_ end: Int) -> Int {
+            lastEntryIsLive && end == total && picked.last?.index == total - 1 ? total - 1 : end
+        }
+
         if let offset {
             let start = min(max(offset, 0), total)
             for entry in entries[start...] {
                 guard take(entry, keepTail: false) else { break }
             }
-            return Page(entries: picked, start: start, end: start + picked.count, total: total)
+            return Page(entries: picked, start: start, end: resumePoint(start + picked.count), total: total)
         }
         for entry in entries.reversed() {
             guard take(entry, keepTail: true) else { break }
         }
         picked.reverse()
-        return Page(entries: picked, start: picked.first?.index ?? total, end: total, total: total)
+        return Page(entries: picked, start: picked.first?.index ?? total, end: resumePoint(total), total: total)
     }
 
     /// Case-insensitive substring matches, one per entry, in transcript

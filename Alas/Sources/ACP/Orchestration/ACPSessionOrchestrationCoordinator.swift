@@ -519,16 +519,17 @@ final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
     ) async -> AlasCLIResponse {
-        let messages: [ACPMessage]
-        switch await readableTranscript(origin: origin, targetSessionId: request.targetSessionId) {
-        case .success(let transcript): messages = transcript
+        let session: ACPSession
+        switch await readableSession(origin: origin, targetSessionId: request.targetSessionId) {
+        case .success(let readable): session = readable
         case .failure(let error): return .error(error.message)
         }
         let page = ACPSessionTranscriptReader.page(
-            ACPSessionTranscriptReader.entries(messages),
+            ACPSessionTranscriptReader.entries(session.transcript.messages),
             offset: request.offset,
             limit: request.limit,
-            maxChars: request.maxChars
+            maxChars: request.maxChars,
+            lastEntryIsLive: Self.runtimeState(session) != .idle
         )
         return json(ACPOrchestrationReadResponse(
             sessionId: request.targetSessionId,
@@ -561,10 +562,11 @@ final class ACPSessionOrchestrationCoordinator {
         var matches: [ACPOrchestrationSearchResponse.Match] = []
         var truncated = false
         search: for target in targets {
-            guard case .success(let messages) = await readableTranscript(
+            guard case .success(let session) = await readableSession(
                 origin: origin, targetSessionId: target.sessionId
             ) else { continue }
-            for match in ACPSessionTranscriptReader.search(ACPSessionTranscriptReader.entries(messages), query: query) {
+            let entries = ACPSessionTranscriptReader.entries(session.transcript.messages)
+            for match in ACPSessionTranscriptReader.search(entries, query: query) {
                 guard matches.count < request.limit else {
                     truncated = true
                     break search
@@ -649,13 +651,13 @@ final class ACPSessionOrchestrationCoordinator {
         let message: String
     }
 
-    /// The transcript of a direct parent or child, the same edge
+    /// A direct parent or child whose transcript may be read, the same edge
     /// `session_send` may use. A session that is not live is hydrated from
     /// its stored transcript; an archived one is not readable.
-    private func readableTranscript(
+    private func readableSession(
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
-    ) async -> Result<[ACPMessage], ObservationError> {
+    ) async -> Result<ACPSession, ObservationError> {
         let callerParent: ACPDelegationRecord?
         let targetParent: ACPDelegationRecord?
         do {
@@ -689,7 +691,7 @@ final class ACPSessionOrchestrationCoordinator {
         guard let session = location.manager.liveSession(for: targetSessionId) else {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
-        return .success(session.transcript.messages)
+        return .success(session)
     }
 
     private func waitSnapshot(sessionId: String) async -> ACPOrchestrationWaitResponse.Session {

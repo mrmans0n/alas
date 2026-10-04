@@ -380,6 +380,8 @@ appear as one-line summaries such as `Bash [completed]`; their output is not
 included. Thoughts and plans are left out. Without `--offset`, `session_read`
 returns the latest entries; otherwise it reads forward from that index. The
 reply's `end` is the offset to continue from, and `total` is the entry count.
+While the session is running, `end` stops on its last entry, which may still
+be growing, so the next page reads that entry again in full.
 `--limit` (1 to 100, default 20) caps entries and `--max-chars` (1 to 100,000,
 default 8,000) caps their combined text. When the first entry alone is over the
 budget it is cut and marked `"truncated": true`. Search matches carry the

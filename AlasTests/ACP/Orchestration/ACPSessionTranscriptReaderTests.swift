@@ -51,6 +51,20 @@ struct ACPSessionTranscriptReaderTests {
         #expect(past.entries.isEmpty && past.start == 4 && past.end == 4)
     }
 
+    @Test("while the session runs, end stays on its last entry so a growing message is read again", arguments: [
+        Int?.some(1), nil,
+    ])
+    func liveLastEntryIsTheResumePoint(offset: Int?) {
+        let all = entries(["aaaa", "bbbb", "partial"])
+
+        let live = ACPSessionTranscriptReader.page(all, offset: offset, limit: 5, maxChars: 100, lastEntryIsLive: true)
+        let idle = ACPSessionTranscriptReader.page(all, offset: offset, limit: 5, maxChars: 100)
+
+        #expect(live.entries.last?.text == "partial")
+        #expect(live.end == 2)
+        #expect(idle.end == 3)
+    }
+
     @Test("an entry larger than the budget is cut rather than skipped", arguments: [
         (Int?.some(0), "abc"),
         (Int?.none, "xyz"),
