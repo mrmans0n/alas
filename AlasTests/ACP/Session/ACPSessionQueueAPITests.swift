@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Alas
@@ -490,5 +491,27 @@ struct ACPSessionQueueAPITests {
         let session = mkSession()
         session.restoreQueue([roundTripped])
         #expect(session.usageLimit == limit)
+    }
+
+    @Test("a restored limit is never published ahead of its resume item")
+    func restoreQueuePublishesResumeItemBeforeLimit() {
+        let limit = ACPUsageLimit(detectedAt: Date(), resetsAt: nil, resetSource: .unknown,
+                                  probeAttempt: 0, resettable: true)
+        let item = QueuedPrompt(blocks: [.text(ACPUsageLimitResumePolicy.continueText)],
+                                scheduledAt: Date().addingTimeInterval(900), usageLimit: limit)
+        let session = mkSession()
+        var resumeScheduledAtEachLimit: [Bool] = []
+        // `@Published` emits in willSet, after the queue it reads was stored.
+        let observation = session.$usageLimit.dropFirst().sink { published in
+            guard published != nil else { return }
+            resumeScheduledAtEachLimit.append(session.usageLimitResumeItem != nil)
+        }
+        defer { observation.cancel() }
+
+        session.restoreQueue([item], markLegacySendingUncertain: true, persistedUsageLimit: limit)
+
+        #expect(session.usageLimit == limit)
+        #expect(!resumeScheduledAtEachLimit.isEmpty)
+        #expect(!resumeScheduledAtEachLimit.contains(false))
     }
 }

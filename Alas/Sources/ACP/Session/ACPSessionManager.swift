@@ -2326,10 +2326,11 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
-        // Before `restoreQueue`: the row wins, and the resume-item fallback
-        // only fills in for rows written before `usage_limit` existed.
-        session.usageLimit = result.row.usageLimit
-        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
+        session.restoreQueue(
+            result.queue,
+            markLegacySendingUncertain: true,
+            persistedUsageLimit: result.row.usageLimit
+        )
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
         // Only restore the draft when the live composer is still pristine
@@ -5221,7 +5222,11 @@ extension ACPSessionManager {
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
-        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
+        session.restoreQueue(
+            result.queue,
+            markLegacySendingUncertain: true,
+            persistedUsageLimit: result.row.usageLimit
+        )
         scheduleScheduledQueueReconnect(sessionId: sessionId)
         // Before the early returns below: a mirror's child transcripts come
         // only from the store, so every refresh has to carry them.
@@ -5326,9 +5331,8 @@ extension ACPSessionManager {
         session.authStatus = row.authStatus
         session.pendingMCPPreamble = row.mcpPreamblePending
         session.mcpPreambleSent = row.mcpPreambleSent
-        // The queue restore that follows re-derives it from a resume item
-        // when the row predates `usage_limit`.
-        session.usageLimit = row.usageLimit
+        // `usageLimit` is restored with the queue (see the caller), not here,
+        // so it is never published ahead of its resume item.
         // Mirrors never run their own attach, so the persisted suggestions
         // list is the ONLY source for their pills and chips. A fresh list
         // wins over an empty one; the writer's newer list replaces the old.

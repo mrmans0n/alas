@@ -2598,6 +2598,19 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    /// Restore a persisted queue and Limited state as one snapshot. The queue
+    /// is published first, so an observer never sees the limit without the
+    /// resume item that makes it non-actionable. The row's limit wins; the
+    /// resume item covers rows written before `usage_limit` existed.
+    func restoreQueue(
+        _ items: [QueuedPrompt],
+        markLegacySendingUncertain: Bool,
+        persistedUsageLimit: ACPUsageLimit?
+    ) {
+        restoreQueue(items, markLegacySendingUncertain: markLegacySendingUncertain)
+        usageLimit = persistedUsageLimit ?? usageLimitResumeItem?.usageLimit
+    }
+
     /// Holds prompts dispatched on a broker generation that this connection
     /// cannot adopt. Queue items with no dispatch provenance remain eligible.
     @discardableResult
