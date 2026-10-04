@@ -64,9 +64,15 @@ struct PluginWebTests {
     @MainActor
     @Test(.timeLimit(.minutes(1)))
     func aHostilePageStaysInsideTheSandbox() async throws {
-        let server = try ConnectionCounter()
+        let server = try RequestRecorder()
         defer { server.listener.cancel() }
         let origin = "http://127.0.0.1:\(try await server.port())"
+        // Positive control: an unsandboxed web view loading from the same listener is seen, so the zero below means
+        // the sandbox blocked every load, not that the listener saw nothing.
+        let control = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        control.loadHTMLString(#"<img src="\#(origin)/control.png">"#, baseURL: nil)
+        #expect(await server.nextRequest() == "/control.png")
+        control.stopLoading()
         let ping = "</script><img src=x onerror=alert(1)>\"'`${x}\u{2028}"
         let manifest = try PluginManifest.parse(
             Data(#"{"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8),
@@ -97,7 +103,8 @@ struct PluginWebTests {
         #expect(report.filter { !$0.value }.keys.sorted() == [])
         #expect(report.count == 9)
         #expect(opened.isEmpty)
-        #expect(server.connections == 0)
+        // Only the control's request; a sandbox leak, even a bare preconnect that sends nothing, adds another entry.
+        #expect(server.requests.allSatisfy { $0 == "/control.png" })
     }
 
     /// Echoes the page: its report and the echo of a tricky string come back in one final `web/post`.
@@ -167,19 +174,40 @@ struct PluginWebTests {
     }
 }
 
-/// Counts every TCP connection the page manages to open to it.
-private final class ConnectionCounter: @unchecked Sendable {
+/// Records every TCP connection the web views open to it: the request path, or "?" for one that sends nothing.
+private final class RequestRecorder: @unchecked Sendable {
     let listener: NWListener
     private let lock = NSLock()
-    private var count = 0
-    var connections: Int { lock.withLock { count } }
+    private var recorded: [String] = []
+    private let (stream, continuation) = AsyncStream<String>.makeStream()
+    var requests: [String] { lock.withLock { recorded } }
 
     init() throws {
         listener = try NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { [weak self] connection in
-            self?.lock.withLock { self?.count += 1 }
-            connection.cancel()
+            guard let self else { return }
+            let index = lock.withLock {
+                recorded.append("?")
+                return recorded.count - 1
+            }
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
+                let line = data.map { String(decoding: $0, as: UTF8.self) }?.split(separator: "\r\n").first ?? ""
+                let parts = line.split(separator: " ")
+                let path = parts.count > 1 ? String(parts[1]) : "?"
+                self?.lock.withLock { self?.recorded[index] = path }
+                self?.continuation.yield(path)
+                connection.send(
+                    content: Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8),
+                    completion: .contentProcessed { _ in connection.cancel() })
+            }
         }
+    }
+
+    /// The path of the next request that arrives; the test's time limit is the deadline.
+    func nextRequest() async -> String? {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()
     }
 
     func port() async throws -> UInt16 {

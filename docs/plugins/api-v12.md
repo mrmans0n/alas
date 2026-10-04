@@ -60,8 +60,9 @@ alas.context              // { tab, theme: "light" | "dark" }
   `--alas-tone-danger`, `--alas-tone-success`, `--alas-tone-warning`,
   `--alas-tone-info`.
 
-The page lives while its tab is on screen. When the tab is hidden, closed, or
-the plugin stops, the page goes away; showing the tab again loads a fresh one.
+The page lives while its tab is on screen. When the tab is hidden (another tab
+is selected), closed, or the plugin stops, the page goes away; a hidden web tab
+reloads its page from scratch when it is shown again.
 So have the page post a "ready" message when it starts, and answer it with the
 state to show.
 
