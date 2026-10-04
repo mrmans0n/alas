@@ -185,6 +185,22 @@ struct AlasCLIRequestTests {
         ))
     }
 
+    @Test(arguments: [
+        (#"{"session_id":"child"}"#, "session_read",
+         ACPDelegatedSessionAction.read(.init(targetSessionId: "child"))),
+        (#"{"session_id":"child","offset":0,"limit":5,"max_chars":300}"#, "session_read",
+         .read(.init(targetSessionId: "child", offset: 0, limit: 5, maxChars: 300))),
+        (#"{"query":" parser "}"#, "session_search", .search(.init(query: "parser"))),
+        (#"{"session_ids":["a","b"],"timeout_ms":500}"#, "session_wait",
+         .wait(.init(targetSessionIds: ["a", "b"], timeoutMillis: 500))),
+        (#"{"session_ids":["a"]}"#, "session_wait", .wait(.init(targetSessionIds: ["a"]))),
+        (#"{"session_id":"child"}"#, "session_interrupt", .interrupt(targetSessionId: "child")),
+    ])
+    func decodesSessionActionRequests(params: String, command: String, expected: ACPDelegatedSessionAction) throws {
+        let json = #"{"v":1,"kind":"cli","command":"\#(command)","session_id":"s1","params":\#(params)}"#
+        #expect(try AlasCLIRequest.decode(from: Data(json.utf8)).command == .sessionAction(expected))
+    }
+
     @Test func decodesWorkspaceAutomationRequests() throws {
         let checkoutID = UUID()
         let memberID = UUID()
@@ -217,6 +233,14 @@ struct AlasCLIRequestTests {
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"feature","new_worktree":{"branch":"child"}}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"  "}}}"#,
             #"{"v":1,"kind":"cli","command":"session_send","session_id":"s1","params":{"session_id":"child","prompt":3}}"#,
+            #"{"v":1,"kind":"cli","command":"session_read","session_id":"s1","params":{"session_id":"child","offset":-1}}"#,
+            #"{"v":1,"kind":"cli","command":"session_read","session_id":"s1","params":{"session_id":"child","limit":101}}"#,
+            #"{"v":1,"kind":"cli","command":"session_read","session_id":"s1","params":{"session_id":"child","max_chars":0}}"#,
+            #"{"v":1,"kind":"cli","command":"session_search","session_id":"s1","params":{"query":"  "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_wait","session_id":"s1","params":{"session_ids":[]}}"#,
+            #"{"v":1,"kind":"cli","command":"session_wait","session_id":"s1","params":{"session_ids":[" "]}}"#,
+            #"{"v":1,"kind":"cli","command":"session_wait","session_id":"s1","params":{"session_ids":["a"],"timeout_ms":20001}}"#,
+            #"{"v":1,"kind":"cli","command":"session_interrupt","session_id":"s1","params":{}}"#,
         ] {
             #expect(throws: AlasCLIRequestError.malformed, "should reject: \(invalid)") {
                 try AlasCLIRequest.decode(from: Data(invalid.utf8))

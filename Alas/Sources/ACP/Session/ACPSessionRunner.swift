@@ -2223,8 +2223,11 @@ final class ACPSessionRunner {
     /// any pending permission continuation, marks in-flight tool calls as
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
-    func userCancel(confirmingLease: Bool = true) async {
-        guard isConnectionCurrent() else { return }
+    /// Returns whether the cancel reached the agent: false when the runner
+    /// lost its connection or writer lease before sending it.
+    @discardableResult
+    func userCancel(confirmingLease: Bool = true) async -> Bool {
+        guard isConnectionCurrent() else { return false }
         invalidateNativeSteering()
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
@@ -2258,20 +2261,20 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         if confirmingLease {
             // A former writer that lost the lease must not send a cancel RPC to
             // the agent for a session another instance now owns. The local
             // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
             // it only affects this runner's own sendNow catch path and has no
             // cross-instance side effects.
-            guard await hasConfirmedLeaseForSideEffect() else { return }
+            guard await hasConfirmedLeaseForSideEffect() else { return false }
         }
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return false }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
-        guard isConnectionCurrent() else { return }
+        guard isConnectionCurrent() else { return true }
         await MainActor.run {
             guard self.isConnectionCurrent() else { return }
             flushStreamingPersist()
@@ -2329,6 +2332,7 @@ final class ACPSessionRunner {
             }
             flushQueueIfIdle()
         }
+        return true
     }
 }
 
