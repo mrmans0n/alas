@@ -198,7 +198,7 @@ struct ACPUsageLimitTests {
         #expect(ACPUsageLimitResumePolicy.nextResumeAt(c.limit, now: c.now) == c.expected)
     }
 
-    @Test("a repeated limit keeps the first detection and counts the attempt")
+    @Test("a repeated limit keeps the first detection, counts the attempt, and holds prompts queued before the latest hit")
     func mergeRepeatedLimit() {
         let first = Self.limit(detectedAt: Self.now - 900)
         let again = Self.limit(detectedAt: Self.now, resetsAt: Self.now + 600)
@@ -207,5 +207,9 @@ struct ACPUsageLimitTests {
         #expect(merged.probeAttempt == 1)
         #expect(merged.resetsAt == Self.now + 600)
         #expect(ACPUsageLimitResumePolicy.merge(previous: nil, detected: again) == again)
+        // Queued while a message sent during the episode was in flight.
+        let queuedBetweenHits = QueuedPrompt(blocks: [.text("b")], enqueuedAt: Self.now - 300)
+        #expect(queuedBetweenHits.isHeld(by: merged))
+        #expect(!QueuedPrompt(blocks: [.text("c")], enqueuedAt: Self.now + 1).isHeld(by: merged))
     }
 }

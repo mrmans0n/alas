@@ -137,11 +137,11 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     }
 
     /// Whether a usage limit holds this item back from the flusher: it was
-    /// queued at or before `limit` stopped the session, and is not the
+    /// queued at or before `limit` last stopped the session, and is not the
     /// resume item itself. Held items wait until the Limited state clears.
     func isHeld(by limit: ACPUsageLimit?) -> Bool {
         guard let limit, usageLimit == nil else { return false }
-        return enqueuedAt <= limit.detectedAt
+        return enqueuedAt <= limit.holdCutoff
     }
 
     func isReady(at date: Date = Date()) -> Bool {

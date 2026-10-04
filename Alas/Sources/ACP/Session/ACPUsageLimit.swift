@@ -22,6 +22,12 @@ struct ACPUsageLimit: Codable, Equatable, Sendable {
     /// False for blocks a reset does not lift (org out of credits, seat
     /// type). Those are shown but never auto-resumed.
     var resettable: Bool
+    /// Latest hit of this episode when it repeated; nil after the first.
+    /// The queue hold cutoff, while `detectedAt` drives the give-up window.
+    var lastHitAt: Date? = nil
+
+    /// Prompts queued at or before this were queued into a known limit.
+    var holdCutoff: Date { lastHitAt ?? detectedAt }
 }
 
 extension ACPUsageLimit {
@@ -251,6 +257,7 @@ enum ACPUsageLimitResumePolicy {
         guard let previous else { return detected }
         var merged = detected
         merged.detectedAt = previous.detectedAt
+        merged.lastHitAt = detected.detectedAt
         merged.probeAttempt = previous.probeAttempt + 1
         return merged
     }
