@@ -1277,21 +1277,29 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.first?.deliveryUncertain == false)
     }
 
-    @Test("queue dispatch provenance is durable before broker handoff")
-    func queueDispatchProvenanceIsPersistedBeforeHandoff() async throws {
+    @Test("queue dispatch provenance is durable before broker handoff", arguments: [false, true])
+    func queueDispatchProvenanceIsPersistedBeforeHandoff(nativeContinuation: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
         let generation = ACPBrokerGeneration(rawValue: 7)
         mock.brokerGenerationForTesting = generation
         let requestStarted = QueueTestGate()
         let responseRelease = QueueTestGate()
-        mock.scriptAsync(method: "session/prompt") { _ in
+        mock.scriptAsync(method: "session/prompt") { request in
+            let operationKey = try store.loadQueue(sessionId: "s").first?.brokerOperationKey
+            #expect(request.brokerOperationKey == operationKey)
             await requestStarted.open()
             await responseRelease.wait()
             return Data("null".utf8)
         }
-        session.enqueue(blocks: [.text("queued")])
-
-        runner.flushQueueIfIdle()
+        if nativeContinuation {
+            session.supportsSteering = true
+            session.transcript.streamingState = .streaming
+            mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"promptRequired"}"#.utf8) }
+            runner.send(blocks: [.text("queued")], intent: .steer)
+        } else {
+            session.enqueue(blocks: [.text("queued")])
+            runner.flushQueueIfIdle()
+        }
         await requestStarted.wait()
 
         #expect(session.queue.first?.dispatchedBrokerGeneration == generation)

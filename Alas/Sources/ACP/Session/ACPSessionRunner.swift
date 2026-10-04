@@ -2810,27 +2810,52 @@ extension ACPSessionRunner {
         guard let brokerOperationKey = session.markQueueHeadSending() else {
             return
         }
+        sendQueuedHead(head, brokerOperationKey: brokerOperationKey)
+    }
+
+    /// Shared durable dispatch boundary for ordinary queue drains and owned
+    /// continuations whose steering request did not consume the content.
+    private func sendQueuedHead(
+        _ head: QueuedPrompt,
+        brokerOperationKey: String,
+        onPromptFinished: (@MainActor (Bool) -> Void)? = nil,
+        onDispatchSettled: (@MainActor () -> Void)? = nil
+    ) {
         persistQueue(completion: { [weak self] persisted in
-            guard let self else { return }
+            guard let self else {
+                onPromptFinished?(false)
+                onDispatchSettled?()
+                return
+            }
             guard persisted else {
                 guard self.isConnectionCurrent(),
                       !self.stopped,
                       self.session.queue.first?.id == head.id,
                       self.session.queue.first?.status == .sending
-                else { return }
+                else {
+                    onPromptFinished?(false)
+                    onDispatchSettled?()
+                    return
+                }
                 self.session.setQueueHeadError(
                     "Could not save queued message; it was not sent.",
                     clearDispatchProvenance: true
                 )
                 self.persistQueue()
                 self.onPromptWorkChanged?()
+                onPromptFinished?(false)
+                onDispatchSettled?()
                 return
             }
             guard self.isConnectionCurrent(),
                   !self.stopped,
                   self.session.queue.first?.id == head.id,
                   self.session.queue.first?.status == .sending
-            else { return }
+            else {
+                onPromptFinished?(false)
+                onDispatchSettled?()
+                return
+            }
             self.sendNow(
                 blocks: head.blocks,
                 queuedItemId: head.id,
@@ -2846,8 +2871,10 @@ extension ACPSessionRunner {
                 draft: head.draft,
                 onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
                 beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id),
-                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id)
+                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id),
+                onPromptFinished: onPromptFinished
             )
+            onDispatchSettled?()
         })
     }
 
@@ -3345,7 +3372,7 @@ extension ACPSessionRunner {
                     ownedContinuationStarted = true
                     self.session.queue.removeAll { $0.id == durableQueueItem.item.id }
                     var continuationItem = durableQueueItem.item
-                    continuationItem.status = .sending
+                    continuationItem.status = .pending
                     continuationItem.transcriptRecorded = continuationItem.transcriptRecorded || recordedMessageID != nil
                     continuationItem.lastError = nil
                     continuationItem.deliveryUncertain = false
@@ -3354,13 +3381,13 @@ extension ACPSessionRunner {
                         self.session.normalQueuedTurnIDs.insert(continuationItem.id)
                         self.session.normalQueuedTurnUserMessageIDs[continuationItem.id] = recordedMessageID
                     }
-                    self.persistQueue()
-                    self.sendNow(
-                        blocks: blocks, queuedItemId: durableQueueItem.item.id, delegatedSource: delegatedSource,
-                        recordUserPrompt: false, normalUserTurn: normalUserTurn,
-                        recordedUserMessageID: recordedMessageID, draft: draft,
-                        onPromptFinished: finishPrompt)
-                    self.finishNativeSteering(generation: generation)
+                    guard let brokerOperationKey = self.session.markQueueHeadSending() else {
+                        throw CancellationError()
+                    }
+                    self.sendQueuedHead(
+                        continuationItem, brokerOperationKey: brokerOperationKey,
+                        onPromptFinished: finishPrompt,
+                        onDispatchSettled: { [weak self] in self?.finishNativeSteering(generation: generation) })
                 case .failed:
                     throw ACPClientError.jsonrpc(.init(
                         code: -32000, message: "The agent could not inject the follow-up.", data: nil))
