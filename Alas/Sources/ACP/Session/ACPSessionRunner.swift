@@ -3301,12 +3301,13 @@ extension ACPSessionRunner {
                         self.session.followsTranscriptTail = true
                         self.onResumeTranscriptTail?()
                     }
-                    recordedMessageID = self.session.recordUserPrompt(
+                    let userMessageID = self.session.recordUserPrompt(
                         text: Self.textPreview(of: blocks),
                         attachments: Self.attachments(of: blocks, draft: draft),
                         delegatedSource: delegatedSource)
+                    recordedMessageID = userMessageID
                     let recordedTitle = self.session.title
-                    guard await self.persistSteeringUserRow(at: before, queueItemID: durableQueueItem.item.id) else {
+                    guard await self.persistSteeringUserRow(from: before, userMessageID: userMessageID, queueItemID: durableQueueItem.item.id) else {
                         if !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation,
                            let index = self.session.transcript.messages.firstIndex(where: {
                                if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
@@ -3328,7 +3329,12 @@ extension ACPSessionRunner {
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
                     self.session.allowsStreamingBoundaryCrossing = true
-                    self.persistIndices(self.session.beginSteeringOutputBoundary(beforeUserMessageAt: before))
+                    if let userIndex = self.session.transcript.messages.firstIndex(where: {
+                        if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
+                        return false
+                    }) {
+                        self.persistIndices(self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex))
+                    }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 } else {
                     self.session.allowsStreamingBoundaryCrossing = true
@@ -3479,15 +3485,26 @@ extension ACPSessionRunner {
         }
     }
 
-    private func persistSteeringUserRow(at index: Int, queueItemID: UUID) async -> Bool {
+    private func persistSteeringUserRow(from index: Int, userMessageID: UUID, queueItemID: UUID) async -> Bool {
         flushStreamingPersist()
-        guard holdsLeaseForWrite(), session.transcript.messages.indices.contains(index),
-              let queueIndex = session.queue.firstIndex(where: { $0.id == queueItemID }),
-              let payload = try? ACPMessageCodec.encode(session.transcript.messages[index])
+        guard holdsLeaseForWrite(),
+              let userIndex = session.transcript.messages.firstIndex(where: {
+                  if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
+                  return false
+              }), userIndex >= index,
+              let queueIndex = session.queue.firstIndex(where: { $0.id == queueItemID })
         else { return false }
-        let message = session.transcript.messages[index]
-        let row = ACPStoredMessage(id: messageRowID(index), sessionId: sessionId, kind: message.kind,
-                                   seq: Int64(index), payload: payload, createdAt: createdAt(forMessageAt: index))
+        // Recording the prompt may first materialize held replay candidates.
+        // Persist them and the identified user row in the same transaction.
+        let rows: [ACPStoredMessage]
+        do {
+            rows = try (index...userIndex).map { index in
+                let message = session.transcript.messages[index]
+                return ACPStoredMessage(id: messageRowID(index), sessionId: self.sessionId, kind: message.kind,
+                                        seq: Int64(index), payload: try ACPMessageCodec.encode(message),
+                                        createdAt: createdAt(forMessageAt: index))
+            }
+        } catch { return false }
         session.queue[queueIndex].transcriptRecorded = true
         let items = session.queue
         let sessionId = sessionId
@@ -3495,10 +3512,10 @@ extension ACPSessionRunner {
         session.pendingQueuePersistenceCount += 1
         return await withCheckedContinuation { continuation in
             enqueuePersistence({ persistence in
-                try await persistence.persistMessagesAndQueue([row], sessionId: sessionId, items: items, fence: fence)
+                try await persistence.persistMessagesAndQueue(rows, sessionId: sessionId, items: items, fence: fence)
             }, completion: { persisted in
                 self.session.pendingQueuePersistenceCount -= 1
-                if persisted == true { self.commitPersistedMessageRows([row]) }
+                if persisted == true { self.commitPersistedMessageRows(rows) }
                 continuation.resume(returning: persisted == true)
             })
         }

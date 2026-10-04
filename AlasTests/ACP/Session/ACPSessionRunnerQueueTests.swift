@@ -748,6 +748,33 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.messages.count == 1)
     }
 
+    @Test("steering persists a held replay row and its following user row")
+    func steeringPersistsUserAfterHeldReplayCandidate() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop() }
+        session.supportsSteering = true
+        session.transcript.streamingState = .streaming
+        session.transcript.appendMessage(.agent(id: UUID(), messageId: "old", StreamingText("hello there")))
+        session.allowsStreamingBoundaryCrossing = false
+        session.apply(.agentMessageChunk(.init(messageId: "replay", content: .text("hello"))))
+        #expect(session.transcript.messages.count == 1)
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        var accepted: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
+        try await waitUntil { accepted != nil }
+        await runner.flushPersistence()
+        #expect(accepted == true)
+        let rows = try store.loadMessages(sessionId: "s")
+        #expect(rows.map(\.kind) == ["agent", "agent", "user"])
+        let user = try #require(rows.last)
+        guard case .user(_, _, let text, _, _) = try ACPMessageCodec.decode(kind: user.kind, payload: user.payload) else {
+            Issue.record("expected the persisted steering user row")
+            return
+        }
+        #expect(text == "redirect")
+        #expect(user.seq == 2)
+    }
+
     @Test("a failed steering row transaction leaves one retryable submission")
     func failedSteeringRowTransactionDoesNotDuplicateRetry() async throws {
         let (runner, mock, session, store) = try mkRunner()
