@@ -7,30 +7,36 @@ struct ProjectUpdate: Equatable {
     var startupScripts: ProjectStartupScripts = .defaults
     /// `nil` means this update does not change the project's MCP configuration.
     var mcpServers: [ProjectMCPServer]?
+    /// Nil leaves naming unchanged; a blank string resets to the global default.
+    var worktreeBranchTemplate: String?
 
     init(
         name: String,
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts = .defaults,
-        mcpServers: [ProjectMCPServer]? = nil
+        mcpServers: [ProjectMCPServer]? = nil,
+        worktreeBranchTemplate: String? = nil
     ) {
         self.name = name
         self.icon = icon
         self.startupScripts = startupScripts
         self.mcpServers = mcpServers
+        self.worktreeBranchTemplate = worktreeBranchTemplate
     }
 
     init(
         name: String,
         color: String,
         startupScripts: ProjectStartupScripts = .defaults,
-        mcpServers: [ProjectMCPServer]? = nil
+        mcpServers: [ProjectMCPServer]? = nil,
+        worktreeBranchTemplate: String? = nil
     ) {
         self.init(
             name: name,
             icon: ProjectIcon.default(color: color),
             startupScripts: startupScripts,
-            mcpServers: mcpServers
+            mcpServers: mcpServers,
+            worktreeBranchTemplate: worktreeBranchTemplate
         )
     }
 }
@@ -119,6 +125,7 @@ final class ProjectsManager {
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
+        worktreeBranchTemplate: String? = nil,
         approvedRepoHookHashes: [String] = []
     ) async throws -> ProjectConfig {
         let storedPath: String
@@ -147,6 +154,7 @@ final class ProjectsManager {
             icon: icon,
             startupScripts: startupScripts,
             mcpServers: mcpServers,
+            worktreeBranchTemplate: WorktreeBranchName.normalizedTemplate(worktreeBranchTemplate),
             host: host,
             approvedRepoHookHashes: approvedRepoHookHashes
         )
@@ -182,6 +190,9 @@ final class ProjectsManager {
         projects[idx].startupScripts = update.startupScripts
         if let mcpServers = update.mcpServers {
             projects[idx].mcpServers = mcpServers
+        }
+        if let template = update.worktreeBranchTemplate {
+            projects[idx].worktreeBranchTemplate = WorktreeBranchName.normalizedTemplate(template)
         }
     }
 

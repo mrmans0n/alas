@@ -23,10 +23,11 @@ struct NewWorktreeDialog: View {
     // `base` is seeded from the persisted Worktrees settings in .onAppear
     // (this literal is a placeholder only — the real default comes from
     // state.config.worktrees.baseBranch). `branch`/`stackName` hold a bare
-    // name: the branch prefix is composed in `effectiveBranch`, never typed.
+    // name: the branch naming policy is applied in `effectiveBranch`.
     @State private var base: String = ""
     @State private var branch: String = ""
     @State private var stackName: String = ""
+    @State private var branchTemplateDate = Date()
     @State private var runStartup: Bool = true
     @State private var ggMode: GGWorktreeMode
     @State private var openAfterCreate: Bool = true
@@ -269,9 +270,8 @@ struct NewWorktreeDialog: View {
 
     /// Nil while the field is empty: an untouched dialog should not shout a
     /// red "cannot be empty" — the disabled Create button already says so.
-    /// Validates the composed branch, not the typed name, since the prefix
-    /// (gg's `<username>/` or the configured worktree prefix) is part of the
-    /// ref git will be asked to create.
+    /// Validates the branch after applying the template, prefix or gg naming
+    /// convention, since that is the ref git will be asked to create.
     private var branchValidationMessage: String? {
         guard !activeName.isEmpty else { return nil }
         switch GitNameValidator.validateBranchName(effectiveBranch) {
@@ -338,13 +338,20 @@ struct NewWorktreeDialog: View {
 
     /// The branch actually created. Neither prefix is ever typed into the
     /// name field: in stack mode the branch follows gg's `<username>/<name>`
-    /// convention, otherwise the configured worktree branch prefix is
-    /// composed with the typed name.
+    /// convention, otherwise the project/global template or legacy prefix
+    /// is applied to the typed name.
     private var effectiveBranch: String {
         if createsGGStack, case .enabled(let username) = ggStackAvailability {
             return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
-        return Self.composedBranch(prefix: state.config.worktrees.branchPrefix, name: branch)
+        let project = state.projects.first(where: { $0.id == projectId })
+        return WorktreeBranchName.compose(
+            name: branch,
+            prefix: state.config.worktrees.branchPrefix,
+            globalTemplate: state.config.worktrees.branchTemplate,
+            projectTemplate: project?.worktreeBranchTemplate,
+            now: branchTemplateDate
+        )
     }
 
     /// When creating a gg stack, the worktree base is pinned to gg's
@@ -629,6 +636,7 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         cancelNameSuggestion()
+        let createdBranch = effectiveBranch
         let dest = URL(fileURLWithPath: renderedPath)
         let issueDraft = issueState.draft
         guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
@@ -653,7 +661,7 @@ struct NewWorktreeDialog: View {
             let id = await state.createWorktree(
                 projectId: project.id,
                 base: base,
-                branch: effectiveBranch,
+                branch: createdBranch,
                 destination: dest,
                 runStartup: runStartup,
                 launchSurface: surface,
@@ -742,10 +750,6 @@ struct NewWorktreeDialog: View {
         stackPinnedBase: String?
     ) -> String {
         stackPinnedBase ?? configuredDefault
-    }
-
-    nonisolated static func composedBranch(prefix: String, name: String) -> String {
-        name.isEmpty ? "" : prefix + name
     }
 
     nonisolated static func branchPreview(branch: String, base: String?) -> String {

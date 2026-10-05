@@ -5555,6 +5555,7 @@ final class AppState {
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
+        worktreeBranchTemplate: String? = nil,
         approvedRepoHookHashes: [String] = []
     ) async throws {
         guard !projectsManager.projects.contains(where: { $0.id == id }) else {
@@ -5569,6 +5570,7 @@ final class AppState {
             id: id,
             startupScripts: startupScripts,
             mcpServers: mcpServers,
+            worktreeBranchTemplate: worktreeBranchTemplate,
             approvedRepoHookHashes: approvedRepoHookHashes
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
@@ -6587,7 +6589,8 @@ final class AppState {
         name: String,
         icon: ProjectIcon,
         startupScripts: ProjectStartupScripts,
-        mcpServers: [ProjectMCPServer]
+        mcpServers: [ProjectMCPServer],
+        worktreeBranchTemplate: String? = nil
     ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -6598,7 +6601,8 @@ final class AppState {
                 name: trimmedName,
                 icon: icon,
                 startupScripts: startupScripts,
-                mcpServers: mcpServers
+                mcpServers: mcpServers,
+                worktreeBranchTemplate: worktreeBranchTemplate
             )
         )
         saveProjects()

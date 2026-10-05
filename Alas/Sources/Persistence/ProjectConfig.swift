@@ -155,6 +155,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     /// Typed successor to the legacy launch fields. Nil keeps old files and
     /// callers behaviorally identical; decoding derives its effective value.
     var worktreeLaunchPreference: CreationLaunchPreference?
+    /// Nil inherits the global worktree branch template.
+    var worktreeBranchTemplate: String?
     /// SSH destination when this project lives on another machine.
     var host: String?
     /// Per-project stacked-diffs (gg) mode. Defaults to `.auto`.
@@ -185,7 +187,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, ggMode,
              ggWorktreeModes, issueAttachments, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
     }
@@ -206,6 +208,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOpenAfterCreate: Bool? = nil,
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil,
         worktreeLaunchPreference: CreationLaunchPreference? = nil,
+        worktreeBranchTemplate: String? = nil,
         host: String? = nil,
         ggMode: GGProjectMode = .auto,
         ggWorktreeModes: [String: GGWorktreeMode] = [:],
@@ -229,6 +232,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
         self.worktreeLaunchPreference = worktreeLaunchPreference
+        self.worktreeBranchTemplate = worktreeBranchTemplate
         self.host = host
         self.ggMode = ggMode
         self.ggWorktreeModes = ggWorktreeModes
@@ -264,6 +268,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
         worktreeLaunchPreference = try? c.decode(CreationLaunchPreference.self, forKey: .worktreeLaunchPreference)
+        worktreeBranchTemplate = try? c.decode(String.self, forKey: .worktreeBranchTemplate)
         if worktreeLaunchPreference == nil,
            worktreeOpenAfterCreate != nil || worktreeDefaultLauncherMode != nil {
             worktreeLaunchPreference = .init(
@@ -373,6 +378,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
         try c.encodeIfPresent(worktreeLaunchPreference, forKey: .worktreeLaunchPreference)
+        try c.encodeIfPresent(worktreeBranchTemplate, forKey: .worktreeBranchTemplate)
         try c.encodeIfPresent(host, forKey: .host)
         try c.encode(ggMode, forKey: .ggMode)
         let sparseGGWorktreeModes = ggWorktreeModes.filter { $0.value != .inherit }

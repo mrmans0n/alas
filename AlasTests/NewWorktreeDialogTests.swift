@@ -699,18 +699,6 @@ struct NewWorktreeDialogTests {
             "Branch: feature/login-fix")
     }
 
-    @Test func composedBranchPrependsTheConfiguredPrefix() {
-        #expect(NewWorktreeDialog.composedBranch(prefix: "feature/", name: "login-fix") ==
-            "feature/login-fix")
-        #expect(NewWorktreeDialog.composedBranch(prefix: "", name: "login-fix") == "login-fix")
-    }
-
-    /// The prefix is composed, never typed, so an empty field must not
-    /// render as a bare prefix — Create stays disabled on emptiness alone.
-    @Test func composedBranchIsEmptyWhileTheNameIsEmpty() {
-        #expect(NewWorktreeDialog.composedBranch(prefix: "feature/", name: "").isEmpty)
-    }
-
     @Test(arguments: [
         (GGProjectMode.off, false, GGWorktreeMode.off),
         (GGProjectMode.off, true, GGWorktreeMode.off),

@@ -101,6 +101,7 @@ private struct ProjectDialog: View {
     @State private var sshHosts: [SSHConfigHost] = []
     @State private var sshHostsLoading = false
     @State private var name: String = ""
+    @State private var worktreeBranchTemplate: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
     @State private var iconTransparent = false
@@ -323,6 +324,18 @@ private struct ProjectDialog: View {
         }
         DialogField(label: "Display name") {
             AlasField(text: $name, placeholder: "repo-folder")
+        }
+        DialogField(label: "Worktree branch template") {
+            AlasField(
+                text: $worktreeBranchTemplate,
+                placeholder: WorktreeBranchName.normalizedTemplate(state.config.worktrees.branchTemplate)
+                    ?? state.config.worktrees.branchPrefix + "{name}",
+                monospaced: true,
+                disablesAutomaticTextSubstitutions: true
+            )
+            Text("Variables: {name}, {date}, {time}. Leave blank to use the global default. Applies to regular Git branches.")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
         }
         DialogField(label: "Icon") {
             projectIconSection
@@ -1030,6 +1043,7 @@ private struct ProjectDialog: View {
         case .edit(let project):
             path = project.path
             name = project.name
+            worktreeBranchTemplate = project.worktreeBranchTemplate ?? ""
             iconMode = project.icon.mode
             iconColor = project.icon.color
             iconTransparent = project.icon.transparentBackground
@@ -1343,7 +1357,8 @@ private struct ProjectDialog: View {
                 name: name,
                 icon: draftIcon,
                 startupScripts: draftStartupScripts,
-                mcpServers: mcpServers
+                mcpServers: mcpServers,
+                worktreeBranchTemplate: worktreeBranchTemplate
             )
             presented = false
         }
@@ -1384,6 +1399,7 @@ private struct ProjectDialog: View {
                     id: pendingProjectId,
                     startupScripts: draftStartupScripts,
                     mcpServers: mcpServers,
+                    worktreeBranchTemplate: worktreeBranchTemplate,
                     approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
                 )
                 presented = false
@@ -1416,6 +1432,7 @@ private struct ProjectDialog: View {
                 id: pendingProjectId,
                 startupScripts: draftStartupScripts,
                 mcpServers: mcpServers,
+                worktreeBranchTemplate: worktreeBranchTemplate,
                 approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
             )
             sshSetupPresented = false

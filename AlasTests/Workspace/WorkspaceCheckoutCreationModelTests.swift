@@ -20,6 +20,17 @@ struct WorkspaceCheckoutCreationModelTests {
         #expect(model.request().branch == "feature/my-change")
     }
 
+    @Test func templateExpansionIsSharedByTheRequestAndCheckoutFolder() {
+        var model = WorkspaceCheckoutCreationModel(
+            workspace: fixtureWorkspace(), branchPrefix: "ignored/",
+            branchTemplate: "team/{name}", branchTemplateDate: .distantPast
+        )
+        model.selectCheckoutParent("/checkouts")
+        model.setBranch(" My Change ")
+        #expect(model.request().branch == "team/my-change")
+        #expect(model.rootPath == "/checkouts/team-my-change")
+    }
+
     @Test func checkoutFolderForSelectedParentIncludesBranch() {
         #expect(
             WorkspaceCheckoutCreationModel.checkoutRoot(

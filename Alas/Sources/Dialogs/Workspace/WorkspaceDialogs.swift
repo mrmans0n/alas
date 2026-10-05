@@ -285,7 +285,11 @@ struct CreateWorkspaceCheckoutDialog: View {
         self.state = state
         self.workspace = workspace
         self._presented = presented
-        self._model = State(initialValue: .init(workspace: workspace, branchPrefix: state.config.worktrees.branchPrefix))
+        self._model = State(initialValue: .init(
+            workspace: workspace,
+            branchPrefix: state.config.worktrees.branchPrefix,
+            branchTemplate: state.config.worktrees.branchTemplate
+        ))
     }
 
     var body: some View {

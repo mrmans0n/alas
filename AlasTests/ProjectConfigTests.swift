@@ -3,6 +3,22 @@ import Foundation
 @testable import Alas
 
 struct ProjectConfigTests {
+    @Test(arguments: [(nil, false), (nil, true), ("team/{name}-{date}", false)] as [(String?, Bool)])
+    func branchTemplateCodingKeepsOlderProjectsUsableAndPersistsOverrides(template: String?, malformed: Bool) throws {
+        let project = ProjectConfig(id: "p", name: "Repo", path: "/tmp/repo", color: "#fff", addedAt: .distantPast)
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(project)
+        ) as? [String: Any])
+        object["worktreeBranchTemplate"] = template
+        if malformed { object["worktreeBranchTemplate"] = 42 }
+        let decoded = try JSONDecoder().decode(
+            ProjectConfig.self, from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.worktreeBranchTemplate == template)
+        #expect(decoded.id == project.id)
+        #expect(try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(decoded)) == decoded)
+    }
+
     /// Remote projects persisted before virtual paths carry real paths in
     /// every worktree-keyed field; decoding moves them under the host's
     /// namespace and reports the id renames. Local projects are untouched.

@@ -3,6 +3,21 @@ import Foundation
 @testable import Alas
 
 struct AppConfigTests {
+    @Test(arguments: [(nil, false), (nil, true), ("team/{name}-{date}", false)] as [(String?, Bool)])
+    func worktreeBranchTemplateCodingPreservesLegacyFallbackAndOverrides(template: String?, malformed: Bool) throws {
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(AppConfig.defaults.worktrees)
+        ) as? [String: Any])
+        object["branchTemplate"] = template
+        if malformed { object["branchTemplate"] = 42 }
+        let decoded = try JSONDecoder().decode(
+            AppConfig.Worktrees.self, from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.branchTemplate == template)
+        #expect(decoded.branchPrefix == AppConfig.defaults.worktrees.branchPrefix)
+        #expect(try JSONDecoder().decode(AppConfig.Worktrees.self, from: JSONEncoder().encode(decoded)) == decoded)
+    }
+
     @Test(arguments: [
         (false, false, false, Optional<Bool>.none, false, false),
         (true, false, false, nil, true, true),
