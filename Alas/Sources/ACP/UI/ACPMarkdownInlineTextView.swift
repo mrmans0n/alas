@@ -38,7 +38,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             theme: theme,
             memoizesInlineMarkdown: memoizesInlineMarkdown,
             chipping: context.environment.acpUpstreamReferenceChipping,
-            chipsAbsolutePaths: context.environment.acpAbsolutePathChipping
+            chipsAbsolutePaths: context.environment.acpAbsolutePathChipping,
+            pastedTextContents: context.environment.acpPastedTextContents
         )
         guard context.coordinator.shouldRender(renderState) else { return }
 
@@ -49,6 +50,15 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             role: role,
             memoizeInlineMarkdown: memoizesInlineMarkdown
         )
+        // Before path and reference chipping: a marker's label contains
+        // "#N", which reference chipping would otherwise claim.
+        let pastedChipCount = context.environment.acpPastedTextContents.map { contents in
+            ACPPastedTextChip.chipify(rendered, contents: contents, excluding: { range in
+                let attributes = rendered.attributes(at: range.location, effectiveRange: nil)
+                return attributes[.link] != nil || ACPMarkdownInlineRenderer.isInlineCode(attributes)
+            })
+        } ?? 0
+        (textView as? ACPMarkdownInlineNSTextView)?.hasPastedTextChips = pastedChipCount > 0
         let chipping = context.environment.acpUpstreamReferenceChipping
         // Only subscribe the paragraph to store revisions, and only install
         // its hover tracking area, when it actually holds a chip: most
@@ -231,6 +241,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let memoizesInlineMarkdown: Bool
         let chipping: ACPUpstreamReferenceChipping?
         let chipsAbsolutePaths: Bool
+        let pastedTextContents: ACPPastedTextContents?
     }
 }
 
@@ -239,6 +250,21 @@ extension NSAttributedString.Key {
 }
 
 final class ACPMarkdownInlineNSTextView: NSTextView {
+    private let pastedTextHover = ACPPastedTextHoverController()
+
+    /// Set on paragraphs that render pasted-text chips; like
+    /// `upstreamReferences`, it is what installs hover tracking.
+    var hasPastedTextChips = false {
+        didSet {
+            guard hasPastedTextChips != oldValue else { return }
+            if !hasPastedTextChips { pastedTextHover.hide() }
+            updateScrollObservation()
+            updateTrackingAreas()
+        }
+    }
+
+    private var tracksChipHover: Bool { upstreamReferences != nil || hasPastedTextChips }
+
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     var isShowingUpstreamReferenceCard: Bool { upstreamReferenceHover.isShowingCard }
     private var upstreamRevisionObservation: AnyCancellable?
@@ -270,7 +296,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// Only views that render chips observe.
     private func updateScrollObservation() {
         removeScrollObservers()
-        guard upstreamReferences != nil else { return }
+        guard tracksChipHover else { return }
         var ancestor = superview
         while let view = ancestor {
             if let scrollView = view as? NSScrollView {
@@ -284,7 +310,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                     object: clipView,
                     queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide() }
+                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide(); self?.pastedTextHover.hide() }
                 })
             }
             ancestor = view.superview
@@ -324,7 +350,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         where area.owner === self && area.userInfo?[Self.upstreamHoverTrackingKind] != nil {
             removeTrackingArea(area)
         }
-        guard upstreamReferences != nil else { return }
+        guard tracksChipHover else { return }
         addTrackingArea(NSTrackingArea(
             rect: bounds,
             options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
@@ -340,7 +366,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// orphaned over whatever now occupies this row.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { upstreamReferenceHover.hide() }
+        if window == nil { upstreamReferenceHover.hide(); pastedTextHover.hide() }
         updateScrollObservation()
     }
 
@@ -354,14 +380,20 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         upstreamReferenceHover.update(
             at: convert(event.locationInWindow, from: nil), in: self, store: upstreamReferences
         )
+        pastedTextHover.update(at: convert(event.locationInWindow, from: nil), in: self)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         upstreamReferenceHover.hide()
+        pastedTextHover.hideUnlessPinned()
     }
 
     override func mouseDown(with event: NSEvent) {
+        if let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            pastedTextHover.pin(hit.attachment, range: hit.range, in: self)
+            return
+        }
         if let chip = ACPPathChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: chip.path)])
             return

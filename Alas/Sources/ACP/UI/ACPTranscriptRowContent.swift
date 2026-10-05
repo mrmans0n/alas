@@ -174,7 +174,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
 
     var body: some View {
         switch message {
-        case .user(_, _, let text, let attachments, let delegatedSource, _):
+        case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
             ACPMessageGutter(
                 copySource: .text(text),
                 messageCreatedAt: messageCreatedAt,
@@ -203,6 +203,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     UserMessageRow(
                         text: text,
                         attachments: attachments,
+                        pastedSpans: pastedSpans,
                         contentMaxWidth: contentMaxWidth,
                         typography: typography,
                         session: session,

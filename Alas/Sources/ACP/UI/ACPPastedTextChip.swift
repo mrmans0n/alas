@@ -97,3 +97,73 @@ enum ACPPastedTextChip {
         )
     }
 }
+
+private struct ACPPastedTextContentsKey: EnvironmentKey {
+    static let defaultValue: ACPPastedTextContents? = nil
+}
+
+extension EnvironmentValues {
+    /// The content behind pasted-text markers in a rendered user message.
+    /// Set by `ACPUserMessageText` and the queue row; nil everywhere else.
+    var acpPastedTextContents: ACPPastedTextContents? {
+        get { self[ACPPastedTextContentsKey.self] }
+        set { self[ACPPastedTextContentsKey.self] = newValue }
+    }
+}
+
+extension ACPPastedTextChip {
+    /// Stands in for a pasted span in user-message markdown. Private-use
+    /// delimiters can't be typed, and inside a code block, where nothing is
+    /// chipped, the label still reads correctly.
+    static func marker(label: String) -> String {
+        "\u{E000}\(label)\u{E001}"
+    }
+
+    /// The `N` in a label built by `ACPPastedTextPolicy.label`.
+    static func ordinal(inLabel label: String) -> Int? {
+        guard let hash = label.firstIndex(of: "#") else { return nil }
+        return Int(label[label.index(after: hash)...].prefix(while: \.isNumber))
+    }
+
+    /// Replaces each marker in rendered text with a chip whose content comes
+    /// from `contents`, last to first. Markers in an excluded range (inline
+    /// code, links) or with an unknown ordinal stay as text. Run before path
+    /// and reference chipping, so the `#N` in a label is never read as an
+    /// issue reference. Returns how many markers became chips.
+    @MainActor
+    @discardableResult
+    static func chipify(
+        _ storage: NSMutableAttributedString,
+        contents: ACPPastedTextContents,
+        excluding: (NSRange) -> Bool = { _ in false }
+    ) -> Int {
+        let source = storage.string as NSString
+        var matches: [(range: NSRange, ordinal: Int, label: String)] = []
+        var searchStart = 0
+        while searchStart < source.length {
+            let open = source.range(of: "\u{E000}", options: .literal,
+                                    range: NSRange(location: searchStart, length: source.length - searchStart))
+            guard open.location != NSNotFound else { break }
+            let labelStart = NSMaxRange(open)
+            let close = source.range(of: "\u{E001}", options: .literal,
+                                     range: NSRange(location: labelStart, length: source.length - labelStart))
+            guard close.location != NSNotFound else { break }
+            let range = NSRange(location: open.location, length: NSMaxRange(close) - open.location)
+            let label = source.substring(with: NSRange(location: labelStart, length: close.location - labelStart))
+            if let ordinal = ordinal(inLabel: label), !excluding(range) {
+                matches.append((range, ordinal, label))
+            }
+            searchStart = NSMaxRange(close)
+        }
+        var replaced = 0
+        for match in matches.reversed() {
+            guard let content = contents.content(ordinal: match.ordinal) else { continue }
+            let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
+            storage.replaceCharacters(in: match.range, with: attributedChip(
+                ordinal: match.ordinal, content: content, label: match.label, attributes: attributes
+            ))
+            replaced += 1
+        }
+        return replaced
+    }
+}

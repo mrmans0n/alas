@@ -1,58 +1,83 @@
 import Foundation
 
 /// Splices a small inline-code tag into a user message's text at each image
-/// attachment's captured position, so the transcript bubble shows *something*
+/// attachment's captured position, and a pasted-text marker in place of each
+/// pasted span, so the transcript bubble shows *something*
 /// where the image chip sat instead of an empty gap — image chips contribute
 /// no text of their own (see `ACPInputField.Coordinator.extract`), and the
 /// image itself renders separately as a thumbnail above the bubble.
 enum ACPUserMessageImageMarkers {
     /// Returns `text` with a `` `🖼 …` `` marker inserted at each image
-    /// attachment's `textOffset`. A single image gets an unnumbered
+    /// attachment's `textOffset`, and each valid pasted span replaced by
+    /// `ACPPastedTextChip.marker(label:)`. A single image gets an unnumbered
     /// `` `🖼 image` `` marker; two or more get `` `🖼 1` ``, `` `🖼 2` ``, …,
     /// numbered by position among ALL image attachments (in attachment-array
-    /// order) — the same order `UserMessageRow` renders their thumbnails in,
-    /// so a marker's number always matches its thumbnail.
+    /// order) — the same order `UserMessageRow` renders their thumbnails in.
     ///
-    /// An image attachment with no `textOffset` (legacy rows, agent-echoed
-    /// attachments, heuristic-restored queue items) contributes no marker,
-    /// but still consumes a number so the remaining markers stay aligned
-    /// with their thumbnails. `text` is returned unchanged when no image has
-    /// a usable offset.
+    /// Image offsets are `Character` counts and are converted to UTF-16
+    /// locations; pasted spans are already UTF-16. An image location that
+    /// falls inside a span moves to the span's end. `offsetAdjustment`
+    /// (characters) and `utf16OffsetAdjustment` (UTF-16 units) re-anchor
+    /// offsets captured against the full message when the caller renders
+    /// only part of it. An invalid span set is ignored as a whole. `text`
+    /// is returned unchanged when there is nothing to splice.
     static func displayText(
         text: String,
         attachments: [ACPMessage.Attachment],
-        offsetAdjustment: Int = 0
+        pastedSpans: [ACPPastedTextSpan] = [],
+        offsetAdjustment: Int = 0,
+        utf16OffsetAdjustment: Int = 0
     ) -> String {
         let images = attachments.enumerated().filter { $0.element.mimeType?.hasPrefix("image/") == true }
-        guard !images.isEmpty else { return text }
-        let chars = Array(text)
-        let needsNumbering = images.count > 1
-        // `offsetAdjustment` lets a caller that renders only part of the
-        // message (a leading command's pill sits outside this text; only
-        // its `rest` is passed here) re-anchor offsets captured against the
-        // FULL message. An offset that lands before this slice starts — an
-        // image attached before a leading command, whose offset is 0 in the
-        // full message — clamps to the front of `rest` instead of being
-        // dropped; the marker still shows, just no longer glued to a pill
-        // it can't render next to.
-        let markers: [(offset: Int, label: String)] = images.enumerated().compactMap { position, item in
-            guard let offset = item.element.textOffset else { return nil }
-            let clamped = min(max(offset + offsetAdjustment, 0), chars.count)
-            let label = needsNumbering ? "🖼 \(position + 1)" : "🖼 image"
-            return (clamped, label)
+        let spans = pastedSpans.isEmpty ? [] : ACPPastedTextContents(
+            text: text,
+            spans: pastedSpans.map {
+                ACPPastedTextSpan(ordinal: $0.ordinal, utf16Offset: $0.utf16Offset + utf16OffsetAdjustment, utf16Length: $0.utf16Length)
+            }
+        )?.spans ?? []
+        guard !images.isEmpty || !spans.isEmpty else { return text }
+
+        struct Edit {
+            let location: Int
+            let length: Int
+            let replacement: String
         }
-        guard !markers.isEmpty else { return text }
-        // Swift's sort is stable, so markers sharing an offset keep the
-        // attachment order they were built in.
-        let ordered = markers.sorted { $0.offset < $1.offset }
+        let source = text as NSString
+        let needsNumbering = images.count > 1
+        var edits: [Edit] = images.enumerated().compactMap { position, item in
+            guard let offset = item.element.textOffset else { return nil }
+            // An offset before this slice starts (an image attached before a
+            // leading command) clamps to the front instead of being dropped.
+            let index = text.index(text.startIndex, offsetBy: max(offset + offsetAdjustment, 0), limitedBy: text.endIndex)
+                ?? text.endIndex
+            var location = index.utf16Offset(in: text)
+            if let span = spans.first(where: { $0.utf16Offset < location && location < NSMaxRange($0.utf16Range) }) {
+                location = NSMaxRange(span.utf16Range)
+            }
+            let label = needsNumbering ? "🖼 \(position + 1)" : "🖼 image"
+            return Edit(location: location, length: 0, replacement: "`\(label)`")
+        }
+        edits += spans.map { span in
+            Edit(
+                location: span.utf16Offset,
+                length: span.utf16Length,
+                replacement: ACPPastedTextChip.marker(label: ACPPastedTextPolicy.label(
+                    ordinal: span.ordinal, content: source.substring(with: span.utf16Range)
+                ))
+            )
+        }
+        // Zero-length image inserts sort ahead of a span starting at the same
+        // location. Swift's sort is stable, so images sharing an offset keep
+        // the attachment order they were built in.
+        edits.sort { ($0.location, $0.length) < ($1.location, $1.length) }
         var result = ""
         var cursor = 0
-        for marker in ordered {
-            append(String(chars[cursor..<marker.offset]), to: &result)
-            append("`\(marker.label)`", to: &result)
-            cursor = marker.offset
+        for edit in edits {
+            append(source.substring(with: NSRange(location: cursor, length: edit.location - cursor)), to: &result)
+            append(edit.replacement, to: &result)
+            cursor = edit.location + edit.length
         }
-        append(String(chars[cursor...]), to: &result)
+        append(source.substring(from: cursor), to: &result)
         return result
     }
 
