@@ -63,13 +63,17 @@ struct TitlelessWindowTests {
 
         #expect(window.isMovable == false)
 
-        configurationView.prepareForSystemWindowMove()
+        let firstGeneration = configurationView.prepareForSystemWindowMove()
         #expect(window.isMovable == true)
 
         configurationView.configureWindowIfNeeded()
         #expect(window.isMovable == true)
 
-        configurationView.restoreDragPolicy()
+        let secondGeneration = configurationView.prepareForSystemWindowMove()
+        configurationView.finishDisplayReconfiguration(firstGeneration)
+        #expect(window.isMovable == true)
+
+        configurationView.finishDisplayReconfiguration(secondGeneration)
         #expect(window.isMovable == false)
     }
 

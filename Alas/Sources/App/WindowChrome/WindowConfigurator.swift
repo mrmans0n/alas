@@ -39,6 +39,7 @@ final class WindowConfigurationView: NSView {
     }
 
     private var systemWindowMoveReasons: SystemWindowMoveReasons = []
+    private var displayReconfigurationGeneration: UInt = 0
     private var displayWillReconfigureObserver: NSObjectProtocol?
     private var screensDidSleepObserver: NSObjectProtocol?
     private var screensDidWakeObserver: NSObjectProtocol?
@@ -54,7 +55,7 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.beginSystemWindowMove(.displayReconfiguration)
+                _ = self?.prepareForSystemWindowMove()
             }
         }
         _ = installWindowDisplayReconfigurationCallback
@@ -84,10 +85,11 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.beginSystemWindowMove(.displayReconfiguration)
+                guard let self else { return }
+                let generation = self.prepareForSystemWindowMove()
                 RunLoop.main.perform { [weak self] in
                     MainActor.assumeIsolated {
-                        self?.endSystemWindowMove(.displayReconfiguration)
+                        self?.finishDisplayReconfiguration(generation)
                     }
                 }
             }
@@ -126,13 +128,16 @@ final class WindowConfigurationView: NSView {
         applyDragPolicy()
     }
 
-    func prepareForSystemWindowMove() {
+    @discardableResult
+    func prepareForSystemWindowMove() -> UInt {
+        displayReconfigurationGeneration &+= 1
         beginSystemWindowMove(.displayReconfiguration)
+        return displayReconfigurationGeneration
     }
 
-    func restoreDragPolicy() {
-        systemWindowMoveReasons = []
-        applyDragPolicy()
+    func finishDisplayReconfiguration(_ generation: UInt) {
+        guard generation == displayReconfigurationGeneration else { return }
+        endSystemWindowMove(.displayReconfiguration)
     }
 
     private func beginSystemWindowMove(_ reason: SystemWindowMoveReasons) {
