@@ -42,7 +42,7 @@ enum RemoteQueueProjection {
     }
 
     /// Flatten a restored composer draft into the plain text the web
-    /// composer can hold. Mentions and references keep their visible spelling;
+    /// composer can hold. Mentions and references keep their visible spelling; pasted-text badges expand to their full content;
     /// image segments are dropped, since the web client cannot re-stage bytes
     /// it never had. The queued bubble hides Edit when `imageCount > 0`, so
     /// dropping an image here is a defensive fallback, not the expected path.
@@ -54,6 +54,8 @@ enum RemoteQueueProjection {
                 out += value
             case .upstreamReference(let reference):
                 out += reference.spelling
+            case .pastedText(_, let content):
+                out += content
             case .mention(let displayName, _):
                 out += "@\(displayName) "
             case .image:

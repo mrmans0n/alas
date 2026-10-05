@@ -238,7 +238,7 @@ private extension ACPMessage {
     var hasForkableText: Bool {
         let text: String
         switch self {
-        case .user(_, _, let value, _, _): text = value
+        case .user(_, _, let value, _, _, _): text = value
         case .agent(_, _, let buffer): text = buffer.value
         default: return false
         }

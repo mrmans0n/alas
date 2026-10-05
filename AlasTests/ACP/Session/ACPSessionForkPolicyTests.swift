@@ -244,7 +244,7 @@ struct ACPSessionForkPolicyTests {
         #expect(copied.map(\.kind) == ["user", "agent"])
         #expect(copied.map(\.seq) == [0, 1])
         let copiedUser = try ACPMessageWire.decode(kind: copied[0].kind, payload: copied[0].payload)
-        guard case .user(_, _, let attachments, let delegatedSource) = copiedUser else {
+        guard case .user(_, _, let attachments, let delegatedSource, _) = copiedUser else {
             Issue.record("Expected copied user message")
             return
         }

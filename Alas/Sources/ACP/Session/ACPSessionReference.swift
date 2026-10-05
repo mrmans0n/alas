@@ -57,7 +57,7 @@ enum ACPSessionReference {
     static func attachedSessionIds(in messages: [ACPMessage]) -> Set<String> {
         var ids = Set<String>()
         for message in messages {
-            guard case .user(_, _, _, let attachments, let delegatedSource) = message,
+            guard case .user(_, _, _, let attachments, let delegatedSource, _) = message,
                   delegatedSource == nil else { continue }
             for attachment in attachments {
                 if let id = sessionId(fromURI: attachment.uri) { ids.insert(id) }

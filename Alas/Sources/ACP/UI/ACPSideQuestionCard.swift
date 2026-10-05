@@ -139,7 +139,7 @@ struct ACPSideQuestionCard: View {
             let own = ownMessages
             let latestStart = latestTurn.startIndex
             return own[own.startIndex..<latestStart].compactMap {
-                if case .user(_, _, let text, _, _) = $0 { text } else { nil }
+                if case .user(_, _, let text, _, _, _) = $0 { text } else { nil }
             }
         }
 
@@ -291,7 +291,7 @@ struct ACPSideQuestionCard: View {
         @ViewBuilder
         private func row(_ message: ACPMessage, isFirstOfTurn: Bool) -> some View {
             switch message {
-            case .user(_, _, let text, _, _):
+            case .user(_, _, let text, _, _, _):
                 // The question that opened the card is already the header.
                 if !(isFirstOfTurn && earlierQuestions.isEmpty) {
                     followUpLine(text)

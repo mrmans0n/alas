@@ -16,7 +16,7 @@ import SwiftUI
 private extension ACPMessage {
     var rowViewIdentity: AnyHashable {
         switch self {
-        case .user(let id, _, _, _, _): id
+        case .user(let id, _, _, _, _, _): id
         case .agent(let id, _, _): id
         case .thought(let id, _, _): id
         case .fileEdit(let id, _): id
@@ -189,7 +189,7 @@ private struct ACPSubagentMessageRow: View {
             ACPSubagentTextRow(buffer: buffer, typography: typography, isLive: isLiveNarration)
         case .thought(_, _, let buffer):
             ACPThoughtView(buffer: buffer, isLive: isLiveNarration)
-        case .user(_, _, let text, let attachments, _):
+        case .user(_, _, let text, let attachments, _, _):
             ACPSubagentPromptRow(text: text, attachments: attachments)
         case .toolCall(let toolCall):
             ACPToolCallCard(toolCall: toolCall, trustedImageRoot: trustedImageRoot)

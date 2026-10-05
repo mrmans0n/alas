@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Collapse large pastes in the ACP composer into a `Pasted text #N` badge. Hover or click it to preview the text, double-click to expand it back inline, and see the same badge in the transcript and queue while the agent still receives the full text.
+
 ### 🐛 Fixes
 
 - Keep center-pane tabs draggable without moving the window while preserving window dragging from empty tab-bar space.

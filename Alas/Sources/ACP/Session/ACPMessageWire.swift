@@ -6,7 +6,7 @@ import Foundation
 /// converts each variant into a full `ACPMessage`, which is the only
 /// place we allocate `StreamingText` (a `@MainActor` class).
 enum ACPMessageWire: Sendable, Equatable {
-    case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource?)
+    case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource?, pastedSpans: [ACPPastedTextSpan] = [])
     case agent(messageId: String?, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?)
     case thought(messageId: String?, text: String, phase: ACPMessagePhase?, metadata: AnyCodable?)
     case toolCall(ACPMessage.ToolCall)
@@ -39,7 +39,7 @@ enum ACPMessageWire: Sendable, Equatable {
         switch kind {
         case "user":
             let p = try decoder.decode(UserPayload.self, from: payload)
-            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource)
+            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try decoder.decode(TextPayload.self, from: payload)
             return .agent(messageId: p.messageId, text: p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata)
@@ -64,8 +64,8 @@ enum ACPMessageWire: Sendable, Equatable {
     @MainActor
     func toMessage() -> ACPMessage {
         switch self {
-        case .user(let messageId, let text, let attachments, let delegatedSource):
-            return .user(id: UUID(), messageId: messageId, text: text, attachments: attachments, delegatedSource: delegatedSource)
+        case .user(let messageId, let text, let attachments, let delegatedSource, let pastedSpans):
+            return .user(id: UUID(), messageId: messageId, text: text, attachments: attachments, delegatedSource: delegatedSource, pastedSpans: pastedSpans)
         case .agent(let messageId, let text, let phase, let metadata):
             return .agent(id: UUID(), messageId: messageId, StreamingText(text, phase: phase, metadata: metadata))
         case .thought(let messageId, let text, let phase, let metadata):
@@ -88,19 +88,21 @@ enum ACPMessageWire: Sendable, Equatable {
     @MainActor
     func toMessage(preservingIdentityFrom existing: ACPMessage) -> ACPMessage {
         switch (self, existing) {
-        case let (.user(messageId, text, attachments, delegatedSource),
-                  .user(id, existingMessageId, existingText, existingAttachments, existingDelegatedSource)):
+        case let (.user(messageId, text, attachments, delegatedSource, pastedSpans),
+                  .user(id, existingMessageId, existingText, existingAttachments, existingDelegatedSource, existingPastedSpans)):
             guard messageId != existingMessageId
                     || text != existingText
                     || attachments != existingAttachments
                     || delegatedSource != existingDelegatedSource
+                    || pastedSpans != existingPastedSpans
             else { return existing }
             return .user(
                 id: id,
                 messageId: messageId,
                 text: text,
                 attachments: attachments,
-                delegatedSource: delegatedSource
+                delegatedSource: delegatedSource,
+                pastedSpans: pastedSpans
             )
         case let (.agent(messageId, text, phase, metadata),
                   .agent(id, existingMessageId, existingText)):
@@ -147,6 +149,7 @@ enum ACPMessageWire: Sendable, Equatable {
         let text: String
         let attachments: [ACPMessage.Attachment]
         let delegatedSource: ACPDelegatedPromptSource?
+        let pastedSpans: [ACPPastedTextSpan]?
     }
     private struct PlanPayload: Decodable { let items: [ACPMessage.PlanItem] }
 }

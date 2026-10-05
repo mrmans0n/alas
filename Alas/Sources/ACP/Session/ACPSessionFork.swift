@@ -193,7 +193,7 @@ enum ACPSessionForkSnapshotResolver {
 
         let conversation = decoded[0...boundaryIndex].compactMap { wire -> ACPSessionForkConversationMessage? in
             switch wire {
-            case .user(_, let text, _, _):
+            case .user(_, let text, _, _, _):
                 text.isEmpty ? nil : .init(role: .user, text: text)
             case .agent(_, let text, _, _):
                 text.isEmpty ? nil : .init(role: .agent, text: text)
@@ -211,7 +211,7 @@ enum ACPSessionForkSnapshotResolver {
     @MainActor
     private static func matches(_ live: ACPMessage, _ stored: ACPMessageWire) -> Bool {
         switch (live, stored) {
-        case let (.user(_, liveMessageID, liveText, _, _), .user(storedMessageID, storedText, _, _)):
+        case let (.user(_, liveMessageID, liveText, _, _, _), .user(storedMessageID, storedText, _, _, _)):
             liveMessageID == storedMessageID && liveText == storedText
         case let (.agent(_, liveMessageID, liveText), .agent(storedMessageID, storedText, _, _)):
             liveMessageID == storedMessageID && liveText.value == storedText

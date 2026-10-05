@@ -121,4 +121,37 @@ struct ACPUserMessageImageMarkersTests {
             ])
         #expect(text == "look at `🖼 image`")
     }
+
+    @Test("pasted spans become markers and image markers keep their character positions around them")
+    func pastedMarkersWithImages() {
+        // "😀 " is 2 characters and 3 UTF-16 units. The image sat right after the paste (character 9).
+        let display = ACPUserMessageImageMarkers.displayText(
+            text: "😀 LOG\nLOG tail",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 9)],
+            pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 3, utf16Length: 7)]
+        )
+        #expect(display == "😀 " + ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines") + "`🖼 image` tail")
+    }
+
+    @Test("a UTF-16 adjustment re-anchors pasted spans recorded against the full message")
+    func pastedMarkersWithAdjustment() {
+        let display = ACPUserMessageImageMarkers.displayText(
+            text: "LOG\nLOG",
+            attachments: [],
+            pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 8, utf16Length: 7)],
+            utf16OffsetAdjustment: -8
+        )
+        #expect(display == ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines"))
+    }
+
+    @Test("typed text that looks like a generated marker is not left as one")
+    func literalDelimitersAreNeutralized() {
+        let fake = ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines")
+        let display = ACPUserMessageImageMarkers.displayText(
+            text: fake + "LOG\nLOG",
+            attachments: [],
+            pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: fake.utf16.count, utf16Length: 7)]
+        )
+        #expect(display == "\u{FFFD}Pasted text #1 · 2 lines\u{FFFD}" + ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines"))
+    }
 }

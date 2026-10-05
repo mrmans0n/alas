@@ -84,7 +84,7 @@ struct SessionSummaryContext: Equatable, Sendable {
 
         for message in messages {
             switch message {
-            case .user(_, _, let text, let attachments, let delegatedSource):
+            case .user(_, _, let text, let attachments, let delegatedSource, _):
                 appendCompleteTurn()
                 if turns.count >= limit { return turns }
                 assistant.removeAll(keepingCapacity: true)

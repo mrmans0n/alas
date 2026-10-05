@@ -633,6 +633,7 @@ struct ACPUserMessageText: View {
     /// `ACPSlashCommand.match` ever saw it.
     let text: String
     let attachments: [ACPMessage.Attachment]
+    let pastedSpans: [ACPPastedTextSpan]
     let typography: ACPChatTypography
     let session: ACPSession
     /// False for remote sessions, where a local existence check says nothing.
@@ -644,12 +645,14 @@ struct ACPUserMessageText: View {
     init(
         text: String,
         attachments: [ACPMessage.Attachment],
+        pastedSpans: [ACPPastedTextSpan],
         typography: ACPChatTypography,
         session: ACPSession,
         chipsAbsolutePaths: Bool
     ) {
         self.text = text
         self.attachments = attachments
+        self.pastedSpans = pastedSpans
         self.typography = typography
         self.session = session
         self.chipsAbsolutePaths = chipsAbsolutePaths
@@ -657,7 +660,9 @@ struct ACPUserMessageText: View {
     }
 
     var body: some View {
-        content
+        let pasted = ACPPastedTextContents(text: text, spans: pastedSpans)
+        content(pasted: pasted)
+            .environment(\.acpPastedTextContents, pasted)
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
             .onReceive(session.$promptSuggestions) { latest in
@@ -676,19 +681,21 @@ struct ACPUserMessageText: View {
     }
 
     @ViewBuilder
-    private var content: some View {
-        if let match = ACPSlashCommand.match(in: text, suggestions: suggestions) {
-            // Markers are spliced into `rest` only, with each image's
-            // offset (captured against the FULL message) re-anchored by
-            // however many characters the command consumed — an image
-            // attached before the command still gets a marker, now at the
-            // front of `rest`, rather than one glued to a pill it can't
-            // render next to.
-            let consumed = text.count - match.rest.count
+    private func content(pasted: ACPPastedTextContents?) -> some View {
+        // A leading command counts only when the user typed it: a paste
+        // that itself starts with `/command` renders as ordinary text.
+        if let match = ACPSlashCommand.match(in: text, suggestions: suggestions),
+           pasted?.spansStart(atOrAfter: match.rest.startIndex.utf16Offset(in: text)) ?? true {
+            // Markers are spliced into `rest` only, with offsets captured
+            // against the FULL message re-anchored by however much the
+            // command consumed: characters for images, UTF-16 units for
+            // pasted spans.
             let rest = ACPUserMessageImageMarkers.displayText(
                 text: String(match.rest),
                 attachments: attachments,
-                offsetAdjustment: -consumed
+                pastedSpans: pastedSpans,
+                offsetAdjustment: -text.distance(from: text.startIndex, to: match.rest.startIndex),
+                utf16OffsetAdjustment: -match.rest.startIndex.utf16Offset(in: text)
             )
             // Multi-line content (a blank line, a following paragraph) goes
             // below the pill in its own row instead of the same HStack —
@@ -715,7 +722,7 @@ struct ACPUserMessageText: View {
             }
         } else {
             ACPMarkdownText(
-                raw: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments),
+                raw: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments, pastedSpans: pastedSpans),
                 typography: typography
             )
         }

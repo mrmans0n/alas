@@ -157,7 +157,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     }
 
     static func checkpointID(in message: ACPMessage) -> CheckpointID? {
-        guard case .user(_, _, _, let attachments, _) = message else { return nil }
+        guard case .user(_, _, _, let attachments, _, _) = message else { return nil }
         for attachment in attachments {
             if let checkpointID = attachment.checkpointID { return checkpointID }
         }
@@ -174,7 +174,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
 
     var body: some View {
         switch message {
-        case .user(_, _, let text, let attachments, let delegatedSource):
+        case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
             ACPMessageGutter(
                 copySource: .text(text),
                 messageCreatedAt: messageCreatedAt,
@@ -203,6 +203,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     UserMessageRow(
                         text: text,
                         attachments: attachments,
+                        pastedSpans: pastedSpans,
                         contentMaxWidth: contentMaxWidth,
                         typography: typography,
                         session: session,

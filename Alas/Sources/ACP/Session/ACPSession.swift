@@ -515,7 +515,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
-            case .user(_, _, let text, _, _):
+            case .user(_, _, let text, _, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .agent(_, _, let buffer):
                 return !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -531,7 +531,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func canForkMessage(at index: Int) -> Bool {
         guard transcript.messages.indices.contains(index) else { return false }
         switch transcript.messages[index] {
-        case .user(_, _, let text, _, _):
+        case .user(_, _, let text, _, _, _):
             return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .agent(_, _, let buffer):
             guard !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -610,6 +610,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func recordUserPrompt(
         text: String,
         attachments: [ACPMessage.Attachment],
+        pastedSpans: [ACPPastedTextSpan] = [],
         delegatedSource: ACPDelegatedPromptSource? = nil
     ) -> UUID {
         // Materialise any held replay candidate before the new prompt so
@@ -623,7 +624,8 @@ final class ACPSession: ObservableObject, Identifiable {
             messageId: nil,
             text: text,
             attachments: attachments,
-            delegatedSource: delegatedSource
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
         ))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -758,9 +760,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func attachCheckpoint(_ checkpointID: CheckpointID, toUserMessage id: UUID) -> Bool {
         guard let index = transcript.messages.firstIndex(where: {
-            guard case .user(let messageID, _, _, _, _) = $0 else { return false }
+            guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
             return messageID == id
-        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource) = transcript.messages[index]
+        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index]
         else { return false }
 
         let updatedAttachments = attachments.filter { !$0.isCheckpointReference }
@@ -770,7 +772,8 @@ final class ACPSession: ObservableObject, Identifiable {
             messageId: remoteMessageID,
             text: text,
             attachments: updatedAttachments,
-            delegatedSource: delegatedSource
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
         ))
         return true
     }
@@ -3572,7 +3575,7 @@ final class ACPSession: ObservableObject, Identifiable {
             switch (kind, transcript.messages[i]) {
             case (.agent, .agent(_, nil, _)): return i
             case (.thought, .thought(_, nil, _)): return i
-            case (.user, .user(_, nil, _, _, _)): return i
+            case (.user, .user(_, nil, _, _, _, _)): return i
             default: continue
             }
         }
@@ -3603,7 +3606,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
         let located = messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
         if let i = located,
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
             if text == mergedText && attachments == mergedAttachments {
@@ -3633,7 +3636,10 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments,
-                delegatedSource: delegatedSource))
+                delegatedSource: delegatedSource,
+                // Spans index into `text`; an attachment-only update leaves
+                // the text untouched, but any text change invalidates them.
+                pastedSpans: mergedText == text ? pastedSpans : []))
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
             }
@@ -3642,7 +3648,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
 
         if let i = lastEchoedLocalUserPromptIndex(matching: addition, attachments: newAttachments),
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[i] {
             if existingMessageId == nil {
                 if let messageId {
                     transcript.replaceMessage(at: i, with: .user(
@@ -3650,7 +3656,8 @@ final class ACPSession: ObservableObject, Identifiable {
                         messageId: messageId,
                         text: text,
                         attachments: Self.mergingAttachments(attachments, newAttachments),
-                        delegatedSource: delegatedSource))
+                        delegatedSource: delegatedSource,
+                        pastedSpans: pastedSpans))
                     reconciledLocalUserPromptMessageIds.insert(messageId)
                     transcript.noteStreamingChange(at: i)
                 } else {
@@ -3662,7 +3669,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if messageId == nil,
            let i = lastLegacyUserChunkIndex(),
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, _) = transcript.messages[i] {
             let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             if text == mergedText && attachments == mergedAttachments {
@@ -3729,7 +3736,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func lastLegacyUserChunkIndex() -> Int? {
         guard let index = transcript.messages.indices.last else { return nil }
-        if case .user(let id, let messageId, _, _, _) = transcript.messages[index],
+        if case .user(let id, let messageId, _, _, _, _) = transcript.messages[index],
            messageId == nil,
            legacyUserChunkMessageIds.contains(id) {
             return index
@@ -3740,7 +3747,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func lastEchoedLocalUserPromptIndex(matching text: String, attachments: [ACPMessage.Attachment]) -> Int? {
         guard !text.isEmpty || !attachments.isEmpty else { return nil }
         return transcript.messages.indices.reversed().first { index in
-            if case .user(let id, let messageId, let existing, let existingAttachments, _) = transcript.messages[index] {
+            if case .user(let id, let messageId, let existing, let existingAttachments, _, _) = transcript.messages[index] {
                 guard messageId == nil,
                       !legacyUserChunkMessageIds.contains(id) else { return false }
                 if !text.isEmpty {
@@ -3846,7 +3853,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         guard !text.isEmpty || !attachments.isEmpty else { return false }
         return transcript.messages.contains { message in
-            guard case .user(_, _, let existing, let existingAttachments, _) = message else { return false }
+            guard case .user(_, _, let existing, let existingAttachments, _, _) = message else { return false }
             if !text.isEmpty, existing.contains(text) {
                 return true
             }
