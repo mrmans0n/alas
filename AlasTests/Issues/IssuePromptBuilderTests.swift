@@ -90,4 +90,73 @@ struct IssuePromptBuilderTests {
         #expect(prompt.contains("The parser crashes for malformed input."))
         #expect(!prompt.localizedCaseInsensitiveContains("work item"))
     }
+
+    private static var githubSource: IssueSnapshot {
+        .init(codeHostIssue: CodeHostIssueSnapshot(
+            identity: .init(provider: .github, host: "github.com", repositorySlug: "acme/alas", number: 1842),
+            canonicalURL: URL(string: "https://github.com/acme/alas/issues/1842")!,
+            title: "Fix parser crash",
+            body: "The parser crashes for malformed input.",
+            state: .open,
+            labels: ["bug"],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: .distantPast,
+            refreshError: nil
+        ))
+    }
+
+    @Test func genericPromptIsUnchanged() {
+        let prompt = IssuePromptBuilder.build(source: Self.githubSource, kind: nil)
+
+        #expect(prompt == IssuePromptBuilder.build(source: Self.githubSource))
+        #expect(prompt.hasPrefix("""
+        Implement GitHub issue #1842.
+        Inspect the attached issue context, keep the change focused, add regression coverage, and verify the result.
+
+        ## Issue context
+        """))
+    }
+
+    @Test(arguments: [
+        (IssueKind.bug, "Fix GitHub issue #1842.", "Reproduce the problem first"),
+        (.enhancement, "Implement GitHub issue #1842.", "Confirm the scope and acceptance criteria"),
+        (.research, "Investigate GitHub issue #1842.", "Do not change code unless asked."),
+        (.docs, "Update documentation for GitHub issue #1842.", "No build or test run is needed."),
+        (.chore, "Handle GitHub issue #1842.", "No behavior change is intended."),
+    ])
+    func kindChangesOnlyTheInstructions(kind: IssueKind, opening: String, instruction: String) {
+        let generic = IssuePromptBuilder.build(source: Self.githubSource)
+        let prompt = IssuePromptBuilder.build(source: Self.githubSource, kind: kind)
+        let lines = prompt.components(separatedBy: "\n")
+
+        #expect(lines[0] == opening)
+        #expect(lines[1].contains(instruction))
+        #expect(prompt.components(separatedBy: "## Issue context").last
+            == generic.components(separatedBy: "## Issue context").last)
+    }
+
+    @Test func manualSourceUsesKindVerb() {
+        let source = IssueSnapshot(
+            identity: .init(providerID: .manual, stableID: "https://example.com/t/1"),
+            canonicalURL: URL(string: "https://example.com/t/1")!,
+            providerLabel: "example.com",
+            displayReference: nil,
+            repositoryLocator: nil,
+            title: "Investigate slow startup",
+            body: "",
+            state: .unknown,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: .distantPast,
+            refreshError: nil,
+            contentOrigin: .manual,
+            isEditable: true,
+            isRefreshable: false
+        )
+
+        #expect(IssuePromptBuilder.openingLine(for: source, kind: .research) == "Investigate the linked issue.")
+        #expect(IssuePromptBuilder.openingLine(for: source) == "Implement the linked issue.")
+    }
 }
