@@ -347,17 +347,19 @@ private struct ACPGoalPopover: View {
             }
         }
 
-        let stats = stats(for: goal)
-        if !stats.isEmpty {
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(stats, id: \.self) { stat in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(stat.label)
-                            .font(.system(size: 10))
-                            .foregroundStyle(theme.color("fg-dim"))
-                        Text(stat.value)
-                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(theme.color("fg"))
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            let stats = stats(for: goal, now: context.date)
+            if !stats.isEmpty {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(stats, id: \.self) { stat in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(stat.label)
+                                .font(.system(size: 10))
+                                .foregroundStyle(theme.color("fg-dim"))
+                            Text(stat.value)
+                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(theme.color("fg"))
+                        }
                     }
                 }
             }
@@ -400,7 +402,7 @@ private struct ACPGoalPopover: View {
             .accessibilityValue("\(Int((progress * 100).rounded())) percent")
     }
 
-    private func stats(for goal: ACPGoalState) -> [Stat] {
+    private func stats(for goal: ACPGoalState, now: Date) -> [Stat] {
         var stats: [Stat] = []
         if let seconds = goal.timeUsedSeconds {
             stats.append(Stat(label: "Elapsed", value: ACPGoalControl.formattedDuration(seconds)))
@@ -409,7 +411,7 @@ private struct ACPGoalPopover: View {
             stats.append(Stat(label: "Iterations", value: "\(iterations)"))
         }
         if let updatedAt = goal.updatedAt {
-            stats.append(Stat(label: "Updated", value: relativeTime(updatedAt)))
+            stats.append(Stat(label: "Updated", value: relativeTime(updatedAt, now: now)))
         }
         return stats
     }
