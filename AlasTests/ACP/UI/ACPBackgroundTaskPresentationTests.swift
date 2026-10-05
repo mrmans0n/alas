@@ -33,11 +33,17 @@ struct ACPBackgroundTaskPresentationTests {
         #expect(!ACPBackgroundTaskPresentation.defaultExpanded(taskCount: 4))
     }
 
-    @Test("tray height follows task count and expansion", arguments: [
-        (0, nil, 0.0), (1, nil, 58.0), (3, nil, 110.0), (4, nil, 32.0), (4, true, 136.0), (2, false, 32.0),
-    ] as [(Int, Bool?, CGFloat)])
-    func trayHeight(count: Int, override: Bool?, expected: CGFloat) {
-        #expect(ACPBackgroundTaskPresentation.trayHeight(taskCount: count, expandedOverride: override) == expected)
+    @Test("tray height follows task count, errors, expansion and the scroll cap", arguments: [
+        (0, 0, nil, 0.0), (1, 0, nil, 58.0), (3, 0, nil, 110.0), (4, 0, nil, 32.0),
+        (4, 0, true, 136.0), (2, 0, false, 32.0), (1, 1, nil, 90.0), (10, 0, true, 188.0),
+    ] as [(Int, Int, Bool?, CGFloat)])
+    func trayHeight(count: Int, errorCount: Int, override: Bool?, expected: CGFloat) {
+        let tasks = (0..<count).map { index -> ACPBackgroundTask in
+            var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "t\(index)", name: "sleep 1")
+            if index < errorCount { task.stopError = "stop failed" }
+            return task
+        }
+        #expect(ACPBackgroundTaskPresentation.trayHeight(tasks: tasks, expandedOverride: override) == expected)
     }
 
     @Test("elapsed time formats by magnitude", arguments: [

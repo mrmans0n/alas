@@ -52,12 +52,24 @@ enum ACPBackgroundTaskPresentation {
     /// Whether the tray starts expanded when the user hasn't toggled it.
     static func defaultExpanded(taskCount: Int) -> Bool { taskCount <= 3 }
 
+    static let headerHeight: CGFloat = 32
+    static let rowHeight: CGFloat = 26
+    /// A failed stop shows up to two lines of error under its row.
+    static let rowErrorHeight: CGFloat = 32
+    /// Expanded rows scroll beyond this height so a long list can't push the
+    /// header off the top of a short chat.
+    static let maxRowsHeight: CGFloat = 6 * rowHeight
+
+    static func rowsHeight(_ tasks: [ACPBackgroundTask]) -> CGFloat {
+        tasks.reduce(0) { $0 + rowHeight + ($1.stopError == nil ? 0 : rowErrorHeight) }
+    }
+
     /// Height the tray occupies above the composer, so the transcript's tail
     /// spacer can keep the last line clear of it. Zero when there is no work.
-    static func trayHeight(taskCount: Int, expandedOverride: Bool?) -> CGFloat {
-        guard taskCount > 0 else { return 0 }
-        let expanded = expandedOverride ?? defaultExpanded(taskCount: taskCount)
-        return 32 + (expanded ? CGFloat(taskCount) * 26 : 0)
+    static func trayHeight(tasks: [ACPBackgroundTask], expandedOverride: Bool?) -> CGFloat {
+        guard !tasks.isEmpty else { return 0 }
+        let expanded = expandedOverride ?? defaultExpanded(taskCount: tasks.count)
+        return headerHeight + (expanded ? min(rowsHeight(tasks), maxRowsHeight) : 0)
     }
 
     static func elapsedText(_ interval: TimeInterval) -> String {
@@ -77,7 +89,7 @@ enum ACPBackgroundTaskPresentation {
 extension ACPSession {
     var backgroundTrayHeight: CGFloat {
         ACPBackgroundTaskPresentation.trayHeight(
-            taskCount: activeBackgroundTasks.count, expandedOverride: backgroundTrayExpanded)
+            tasks: activeBackgroundTasks, expandedOverride: backgroundTrayExpanded)
     }
 }
 
@@ -108,7 +120,14 @@ struct ACPBackgroundTaskTray: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if isExpanded {
-                ForEach(tasks) { task in row(task) }
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(tasks) { task in row(task) }
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: min(ACPBackgroundTaskPresentation.rowsHeight(tasks),
+                                   ACPBackgroundTaskPresentation.maxRowsHeight))
             }
         }
         .padding(.horizontal, 12)
