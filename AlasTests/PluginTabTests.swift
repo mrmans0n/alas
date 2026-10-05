@@ -91,4 +91,15 @@ struct PluginTabTests {
         #expect(PluginPanelItem.selected(PluginPanelRef(pluginID: "io.x.b", panelID: "issues"), in: items) == nil)
         #expect(PluginPanelItem.selected(nil, in: items) == nil)
     }
+
+    @Test(arguments: [
+        (false, true, [PluginHostState.active], "Not approved"),
+        (true, false, [.active], "Disabled"),
+        (true, true, [], "Enabled"),
+        (true, true, [.active], "Enabled · active in 1 of 1 project"),
+        (true, true, [.active, .failed("trap"), .activating, .deactivating, .active], "Enabled · active in 2 of 5 projects"),
+    ])
+    func pluginStatusCountsOnlyActiveHosts(approved: Bool, enabled: Bool, states: [PluginHostState], expected: String) {
+        #expect(PluginStatusText.make(approved: approved, enabled: enabled, hostStates: states) == expected)
+    }
 }
