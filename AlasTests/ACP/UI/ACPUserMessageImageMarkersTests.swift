@@ -143,4 +143,15 @@ struct ACPUserMessageImageMarkersTests {
         )
         #expect(display == ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines"))
     }
+
+    @Test("typed text that looks like a generated marker is not left as one")
+    func literalDelimitersAreNeutralized() {
+        let fake = ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines")
+        let display = ACPUserMessageImageMarkers.displayText(
+            text: fake + "LOG\nLOG",
+            attachments: [],
+            pastedSpans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: fake.utf16.count, utf16Length: 7)]
+        )
+        #expect(display == "\u{FFFD}Pasted text #1 · 2 lines\u{FFFD}" + ACPPastedTextChip.marker(label: "Pasted text #1 · 2 lines"))
+    }
 }

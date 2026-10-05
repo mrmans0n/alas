@@ -69,12 +69,21 @@ enum ACPUserMessageImageMarkers {
         edits.sort { ($0.location, $0.length) < ($1.location, $1.length) }
         var result = ""
         var cursor = 0
+        // Typed text can carry the private-use delimiters too (they can be
+        // pasted), so they are replaced here: only markers built below may
+        // become chips.
+        func typed(_ piece: String) -> String {
+            guard !spans.isEmpty else { return piece }
+            return piece
+                .replacingOccurrences(of: "\u{E000}", with: "\u{FFFD}")
+                .replacingOccurrences(of: "\u{E001}", with: "\u{FFFD}")
+        }
         for edit in edits {
-            append(source.substring(with: NSRange(location: cursor, length: edit.location - cursor)), to: &result)
+            append(typed(source.substring(with: NSRange(location: cursor, length: edit.location - cursor))), to: &result)
             append(edit.replacement, to: &result)
             cursor = edit.location + edit.length
         }
-        append(source.substring(from: cursor), to: &result)
+        append(typed(source.substring(from: cursor)), to: &result)
         return result
     }
 
