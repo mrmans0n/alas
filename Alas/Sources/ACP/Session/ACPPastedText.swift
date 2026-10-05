@@ -20,29 +20,33 @@ enum ACPPastedTextPolicy {
         text.utf16.count > maxInlineUTF16Units || lineCount(text) > maxInlineLines
     }
 
-    /// Line-break separated lines, ignoring one trailing break. `\r\n` is a
-    /// single break, and a bare `\r` (old Mac text) counts too, so CRLF, CR,
-    /// and LF text count the same.
+    /// Line-break separated lines, ignoring one trailing break. A break is
+    /// LF, CR, VT, FF, NEL, U+2028, or U+2029; `\r\n` is a single break, so
+    /// CRLF, CR, and LF text count the same.
     static func lineCount(_ text: String) -> Int {
         guard !text.isEmpty else { return 0 }
         var breaks = 0
-        var previous: UInt8 = 0
-        for byte in text.utf8 {
-            if byte == 0x0A {
-                if previous != 0x0D { breaks += 1 }
-            } else if byte == 0x0D {
-                breaks += 1
-            }
-            previous = byte
+        var previous: UInt32 = 0
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            if isLineBreak(value), !(value == 0x0A && previous == 0x0D) { breaks += 1 }
+            previous = value
         }
-        if previous == 0x0A || previous == 0x0D { breaks -= 1 }
+        if isLineBreak(previous) { breaks -= 1 }
         return breaks + 1
+    }
+
+    private static func isLineBreak(_ value: UInt32) -> Bool {
+        switch value {
+        case 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029: true
+        default: false
+        }
     }
 
     static func label(ordinal: Int, content: String) -> String {
         let lines = lineCount(content)
         let size: String
-        if lines > 1 || content.utf8.contains(where: { $0 == 0x0A || $0 == 0x0D }) {
+        if lines > 1 || content.unicodeScalars.contains(where: { isLineBreak($0.value) }) {
             size = lines == 1 ? "1 line" : "\(lines) lines"
         } else {
             size = ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file)
