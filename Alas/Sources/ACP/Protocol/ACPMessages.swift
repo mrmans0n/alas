@@ -802,7 +802,14 @@ struct ACPSessionMeta: Codable, Equatable, Sendable {
         let options: Options
     }
 
-    let claudeCode: ClaudeCode?
+    /// Read by `antigravity-acp`, which removes the named built-in tools
+    /// from the session.
+    struct Agy: Codable, Equatable, Sendable {
+        let disabledTools: [String]
+    }
+
+    var claudeCode: ClaudeCode? = nil
+    var agy: Agy? = nil
 }
 
 struct ACPSessionNewParams: Codable, Equatable {

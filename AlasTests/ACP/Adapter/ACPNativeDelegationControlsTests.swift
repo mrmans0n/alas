@@ -12,7 +12,7 @@ struct ACPNativeDelegationControlsTests {
             ("pi", .toolOmission(.piCommandWrapper)),
             ("cursor-agent", .unverified),
             ("gemini", .unverified),
-            ("antigravity", .unverified),
+            ("antigravity", .toolOmission(.antigravityDisabledTools)),
             ("copilot", .unverified),
             ("opencode", .toolOmission(.openCodeConfigContent)),
             ("omp", .toolOmission(.ompConfigOverlay)),
@@ -22,7 +22,7 @@ struct ACPNativeDelegationControlsTests {
     func supportResolution(agentID: String, expected: ACPNativeDelegationSupport) {
         let support = ACPNativeDelegationSupport.resolve(agentID: agentID)
         #expect(support == expected)
-        #expect(support.canEnforce == ["claude", "codex", "opencode", "omp", "pi"].contains(agentID))
+        #expect(support.canEnforce == ["claude", "codex", "opencode", "omp", "pi", "antigravity"].contains(agentID))
         // Unenforceable states never carry the activation/enforcement copy.
         if !support.canEnforce {
             #expect(support.settingsRowDescription(isOn: true, alasToolsExposed: true)
@@ -63,6 +63,19 @@ struct ACPNativeDelegationControlsTests {
             nativeSubagentsDisabled: policyOn,
             isDelegatedChild: isDelegatedChild
         ) == nil)
+    }
+
+    @Test(
+        "Antigravity disables start_subagent only when the policy is on",
+        arguments: [(false, false), (false, true), (true, false), (true, true)]
+    )
+    func antigravitySessionMeta(policyOn: Bool, isDelegatedChild: Bool) {
+        let meta = ACPNativeDelegationControls.sessionMeta(
+            agentID: "antigravity",
+            nativeSubagentsDisabled: policyOn,
+            isDelegatedChild: isDelegatedChild
+        )
+        #expect(meta == (policyOn ? ACPSessionMeta(agy: .init(disabledTools: ["start_subagent"])) : nil))
     }
 
     @Test("CODEX_CONFIG merge keeps unrelated keys and forces every enforcement key off")
@@ -598,6 +611,8 @@ struct ACPNativeDelegationControlsTests {
             ("omp", "18.2.10", false),
             ("pi", "0.0.34", true),
             ("pi", "0.0.33", false),
+            ("antigravity", "1.3.0", true),
+            ("antigravity", "1.2.9", false),
         ]
     )
     func adapterVersionGate(agentID: String, version: String, passes: Bool) {

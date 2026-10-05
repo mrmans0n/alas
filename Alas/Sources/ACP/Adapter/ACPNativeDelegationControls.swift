@@ -23,6 +23,10 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// runs `pi` with `--exclude-tools` for every tool of the known Pi
     /// subagent extensions (`ACPPiSubagentExtensions`).
     case piCommandWrapper
+    /// `antigravity-acp`: `_meta.agy.disabledTools` on every session/new,
+    /// session/load, and session/resume. The server stores the filter with
+    /// the session, and a request without it restores the stored one.
+    case antigravityDisabledTools
 
     /// The `agentInfo.name` of the adapter whose contract was verified. A
     /// different ACP server that happens to share the binary name (Alas
@@ -34,6 +38,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .openCodeConfigContent: ACPOpenCodeTaskPolicy.adapterName
         case .ompConfigOverlay: "oh-my-pi"
         case .piCommandWrapper: ACPManagedAdapterDescriptor.pi.packageName
+        case .antigravityDisabledTools: "antigravity-acp"
         }
     }
 
@@ -55,6 +60,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .openCodeConfigContent: "1.18.33"
         case .ompConfigOverlay: "18.2.11"
         case .piCommandWrapper: "0.0.34"
+        case .antigravityDisabledTools: "1.3.0"
         }
     }
 
@@ -64,7 +70,8 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     var firstUnverifiedMajorVersion: Int? {
         switch self {
         case .openCodeConfigContent: 2
-        case .claudeDisallowedTools, .codexConfigEnvironment, .ompConfigOverlay, .piCommandWrapper: nil
+        case .claudeDisallowedTools, .codexConfigEnvironment, .ompConfigOverlay, .piCommandWrapper,
+             .antigravityDisabledTools: nil
         }
     }
 }
@@ -90,7 +97,8 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case ACPOpenCodeTaskPolicy.agentID: .toolOmission(.openCodeConfigContent)
         case ACPManagedAdapterDescriptor.pi.agentID: .toolOmission(.piCommandWrapper)
         case "omp": .toolOmission(.ompConfigOverlay)
-        case "cursor-agent", "gemini", "antigravity", "copilot": .unverified
+        case "antigravity": .toolOmission(.antigravityDisabledTools)
+        case "cursor-agent", "gemini", "copilot": .unverified
         default: .unsupported
         }
     }
@@ -138,6 +146,10 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
                 + "model's tool list, by starting Pi through an Alas wrapper that adds "
                 + "--exclude-tools. Tools from other extensions are not affected. Your Pi "
                 + "settings and any PI_ACP_PI_COMMAND you set are kept. Local sessions only."
+        case .toolOmission(.antigravityDisabledTools):
+            return "Removes Antigravity's invoke_subagent, define_subagent, "
+                + "manage_subagents, and send_message tools from the model's tool list "
+                + "for the session. Your Antigravity settings are not changed."
         case .runtimeDenial:
             return "The native subagent tool stays visible to the model, but "
                 + "its calls are rejected."
@@ -282,6 +294,10 @@ enum ACPNativeDelegationControls {
     /// outside Alas's parent/child authorization. Delegated children always
     /// lose them, because they must report through Alas's `session_send`.
     static let claudeCrossSessionTools = ["SendMessage", "ListAgents"]
+    /// Antigravity's built-in tool switch for subagents. Disabling it removes
+    /// invoke_subagent, define_subagent, manage_subagents, and send_message
+    /// (verified against antigravity-acp 1.3.0).
+    static let antigravitySubagentTool = "start_subagent"
     static let codexConfigKey = "CODEX_CONFIG"
     /// The whole OMP overlay. It sets nothing else, so every other key keeps
     /// the value from the user's global and project settings.
@@ -290,14 +306,22 @@ enum ACPNativeDelegationControls {
     /// The `_meta` Alas sends on every session request. With the policy on,
     /// Claude loses its native subagent tools and its cross-session tools. A
     /// delegated child always loses the cross-session tools, whatever the
-    /// policy, so it reports only through Alas.
+    /// policy, so it reports only through Alas. Antigravity loses its
+    /// subagent tools with the policy on.
     static func sessionMeta(
         agentID: String,
         nativeSubagentsDisabled: Bool,
         isDelegatedChild: Bool
     ) -> ACPSessionMeta? {
-        guard ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism == .claudeDisallowedTools
-        else { return nil }
+        switch ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism {
+        case .claudeDisallowedTools:
+            break
+        case .antigravityDisabledTools:
+            guard nativeSubagentsDisabled else { return nil }
+            return ACPSessionMeta(agy: .init(disabledTools: [antigravitySubagentTool]))
+        default:
+            return nil
+        }
         let disallowed: [String]
         if nativeSubagentsDisabled {
             disallowed = claudeNativeSubagentTools + claudeCrossSessionTools
@@ -330,7 +354,7 @@ enum ACPNativeDelegationControls {
             if isRemote { throw ACPNativeDelegationError.remoteHostUnsupported(agentID: spec.agentID) }
         }
         switch mechanism {
-        case .claudeDisallowedTools:
+        case .claudeDisallowedTools, .antigravityDisabledTools:
             // Session-level control (`sessionMeta`); nothing to launch with.
             return spec
         case .codexConfigEnvironment:

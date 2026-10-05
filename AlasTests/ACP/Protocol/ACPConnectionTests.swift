@@ -431,6 +431,13 @@ struct ACPConnectionTests {
             ) as? [String: Any]
         )
         #expect(plain["_meta"] == nil)
+        // antigravity-acp reads only the camelCase `_meta.agy.disabledTools`.
+        let agyWire = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            ACPSessionNewParams(cwd: "/tmp", mcpServers: [], meta: .init(agy: .init(disabledTools: ["start_subagent"])))
+        )) as? [String: Any])
+        let agyMeta = try #require(agyWire["_meta"] as? [String: Any])
+        #expect(agyMeta["claudeCode"] == nil)
+        #expect((agyMeta["agy"] as? [String: Any])?["disabledTools"] as? [String] == ["start_subagent"])
     }
 
     @Test("loadSession sends session/load with cwd and remote session id")
