@@ -176,17 +176,30 @@ struct ACPAdapterVersionChecker: Sendable {
 
         if isIgnoredPrerelease(packageName: packageName, version: latest) { return .upToDate }
         if current == latest    { return .upToDate }
-        let currentBase = downstreamBaseVersion(packageName: packageName, version: current) ?? current
-        let latestBase = downstreamBaseVersion(packageName: packageName, version: latest) ?? latest
-        if compareSemver(currentBase, latestBase) == .orderedDescending { return .upToDate }
+        let currentRelease = downstreamRelease(packageName: packageName, version: current)
+        let latestRelease = downstreamRelease(packageName: packageName, version: latest)
+        if let currentRelease, let latestRelease {
+            switch compareSemver(currentRelease.base, latestRelease.base) {
+            case .orderedDescending:
+                return .upToDate
+            case .orderedSame where currentRelease.revision >= latestRelease.revision:
+                return .upToDate
+            default:
+                break
+            }
+        } else {
+            let currentBase = currentRelease?.base ?? current
+            let latestBase = latestRelease?.base ?? latest
+            if compareSemver(currentBase, latestBase) == .orderedDescending { return .upToDate }
+        }
         return .available(current: current, latest: latest)
     }
 
     private static func isIgnoredPrerelease(packageName: String, version: String) -> Bool {
-        version.contains("-") && downstreamBaseVersion(packageName: packageName, version: version) == nil
+        version.contains("-") && downstreamRelease(packageName: packageName, version: version) == nil
     }
 
-    private static func downstreamBaseVersion(packageName: String, version: String) -> String? {
+    private static func downstreamRelease(packageName: String, version: String) -> (base: String, revision: Int)? {
         guard packageName.hasPrefix("@alas-ide/"),
               let suffixRange = version.range(of: "-alas.", options: .backwards)
         else { return nil }
@@ -197,12 +210,12 @@ struct ACPAdapterVersionChecker: Sendable {
               !suffix.isEmpty,
               suffix.first != "0",
               suffix.allSatisfy(\.isNumber),
-              Int(suffix) != nil,
+              let revision = Int(suffix),
               base.split(separator: ".", omittingEmptySubsequences: false)
                 .allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
         else { return nil }
 
-        return base
+        return (base, revision)
     }
 
     /// Lexicographic per-component numeric compare. Good enough for

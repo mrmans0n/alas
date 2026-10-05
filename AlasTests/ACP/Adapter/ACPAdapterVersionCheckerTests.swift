@@ -84,6 +84,14 @@ struct ACPAdapterVersionCheckerTests {
             expected: .available(current: "2.1.1-alas.1", latest: "2.1.1-alas.2")
         ),
         DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.1-alas.2", latest: "2.1.1-alas.1",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
+            packageName: "@alas-ide/codex-acp", current: "2.1.1-alas.2", latest: "2.1.1-alas.2",
+            expected: .upToDate
+        ),
+        DownstreamVersionCase(
             packageName: "@alas-ide/claude-agent-acp", current: "2.1.0-alas.9", latest: "2.1.1-alas.1",
             expected: .available(current: "2.1.0-alas.9", latest: "2.1.1-alas.1")
         ),
