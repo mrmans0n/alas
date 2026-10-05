@@ -2816,15 +2816,25 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func consumeInterruptedTurns(resume: Bool) -> Bool {
         let itemIDs = interruptedQueueItemIDs
-        let answeredTurn = interruptedAnsweredTurn
+        var answeredTurn = interruptedAnsweredTurn
         interruptedQueueItemIDs = []
         interruptedAnsweredTurn = false
         guard resume else { return !itemIDs.isEmpty || answeredTurn }
         var changed = !itemIDs.isEmpty
+        // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent
+        // and answered after hydration is only visible in the live
+        // transcript, and resending it would repeat the agent's side effects.
+        let liveDelivered = QueuedPrompt.deliveredRecordedPromptIDs(
+            in: queue, liveTranscript: transcript.messages)
         for item in queue where itemIDs.contains(item.id)
             && item.deliveryUncertain
             && item.lastError == QueuedPrompt.deliveryUncertaintyMessage {
-            changed = retryQueueItem(id: item.id) || changed
+            if liveDelivered.contains(item.id) {
+                queue.removeAll { $0.id == item.id }
+                answeredTurn = true
+            } else {
+                changed = retryQueueItem(id: item.id) || changed
+            }
         }
         if answeredTurn {
             let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex

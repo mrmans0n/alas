@@ -180,20 +180,52 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         in queue: [QueuedPrompt],
         transcript: [ACPMessageWire]
     ) -> Set<UUID> {
+        deliveredRecordedPromptIDs(in: queue, newestFirst: transcript.reversed().lazy.map {
+            if $0.isAgentSideProgress { return .progress }
+            guard case .user(_, let text, let attachments, _) = $0 else { return .other }
+            return .user(text: text, attachments: attachments)
+        })
+    }
+
+    /// The same check against the live transcript, which hydration-time
+    /// evidence cannot see: output that arrived after hydration.
+    static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        liveTranscript: [ACPMessage]
+    ) -> Set<UUID> {
+        deliveredRecordedPromptIDs(in: queue, newestFirst: liveTranscript.reversed().lazy.map {
+            if $0.isAgentSideProgress { return .progress }
+            guard case .user(_, _, let text, let attachments, _) = $0 else { return .other }
+            return .user(text: text, attachments: attachments)
+        })
+    }
+
+    enum TranscriptEntry {
+        case progress
+        case user(text: String, attachments: [ACPMessage.Attachment])
+        case other
+    }
+
+    private static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        newestFirst entries: some Sequence<TranscriptEntry>
+    ) -> Set<UUID> {
         var answered = false
-        for message in transcript.reversed() {
-            if message.isAgentSideProgress {
+        for entry in entries {
+            switch entry {
+            case .progress:
                 answered = true
+            case .other:
                 continue
+            case .user(let text, let attachments):
+                guard answered else { return [] }
+                return Set(queue.lazy.filter {
+                    $0.transcriptRecorded
+                        && $0.dispatchCount <= 1
+                        && $0.brokerOperationAttempt == 0
+                        && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
+                }.map(\.id))
             }
-            guard case .user(_, let text, let attachments, _) = message else { continue }
-            guard answered else { return [] }
-            return Set(queue.lazy.filter {
-                $0.transcriptRecorded
-                    && $0.dispatchCount <= 1
-                    && $0.brokerOperationAttempt == 0
-                    && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
-            }.map(\.id))
         }
         return []
     }

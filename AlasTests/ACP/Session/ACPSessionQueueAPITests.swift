@@ -426,6 +426,27 @@ struct ACPSessionQueueAPITests {
         #expect(!s.consumeInterruptedTurns(resume: true))
     }
 
+    @Test("resuming does not resend a prompt the live transcript shows answered after hydration")
+    func resumeUsesLiveDeliveryEvidence() {
+        let s = mkSession()
+        let generation = ACPBrokerGeneration(rawValue: 7)
+        let head = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: generation)
+        // Hydration saw no agent output, so its snapshot does not cover the head.
+        s.restoreQueue([head], markLegacySendingUncertain: true)
+        #expect(s.deliveredQueuedPromptIDs.isEmpty)
+        s.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .agent(id: UUID(), StreamingText("started the migration")),
+        ]
+        s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+
+        #expect(s.consumeInterruptedTurns(resume: true))
+
+        #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)]])
+    }
+
     @Test("interrupted prompts stay held without the setting and are persisted as held",
           arguments: [false, true])
     func interruptedPromptsStayHeld(settingOnNextLaunch: Bool) throws {
