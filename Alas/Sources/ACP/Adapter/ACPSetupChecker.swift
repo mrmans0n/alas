@@ -80,7 +80,10 @@ struct ACPSetupChecker {
         guard !prefix.isEmpty else { return false }
         let globalBinary = URL(fileURLWithPath: prefix, isDirectory: true)
             .appendingPathComponent("bin/\(descriptor.binaryName)").path
-        return ACPLaunchPathResolver.isPackageOwnedExecutable(atPath: globalBinary, package: name)
+        return ACPLaunchPathResolver.isPackageOwnedExecutable(
+            atPath: globalBinary,
+            packageDirectory: packageDirectory.path
+        )
     }
 }
 

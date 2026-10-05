@@ -8844,7 +8844,8 @@ extension ACPSessionManager {
             let resolver = ACPLaunchPathResolver(
                 env: env,
                 additionalPathDirectories: AgentPath.wellKnownDirectories,
-                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
+                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env),
+                npmGlobalRootDirectory: ACPLaunchPathResolver.defaultNpmGlobalRootDirectory(env: env))
             guard let path = await resolver.resolvedLaunchPath(for: spec) else {
                 if case .npxPackage(let package) = spec.setupCheck {
                     throw ACPLaunchPathError.packageExecutableUnavailable(package)

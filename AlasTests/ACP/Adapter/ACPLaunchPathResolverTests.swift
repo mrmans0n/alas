@@ -53,7 +53,7 @@ struct ACPLaunchPathResolverTests {
         let gemini = try #require(ACPLaunchCatalog.spec(for: "gemini"))   // .binaryOnPath, npmPackageName == nil
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": "/usr/bin"], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { nil })
+            npmGlobalBinDirectory: { nil }, npmGlobalRootDirectory: { nil })
         let path = await resolver.resolvedLaunchPath(for: gemini)
         #expect(path == nil)
     }
@@ -76,10 +76,43 @@ struct ACPLaunchPathResolverTests {
         let codex = try #require(ACPLaunchCatalog.spec(for: "codex"))
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": pathDir.path], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { npmBinDir.path })
+            npmGlobalBinDirectory: { npmBinDir.path },
+            npmGlobalRootDirectory: {
+                npmBinDir.deletingLastPathComponent().appendingPathComponent("lib/node_modules").path
+            })
         let path = await resolver.resolvedLaunchPath(for: codex)
         #expect(path == owned.path)
         #expect(path != shadow.path)
+    }
+
+    @Test("npxPackage rejects the same package from a different npm root")
+    func packageOnlyRejectsDifferentNpmRoot() async throws {
+        let activePrefix = tmp()
+        let stalePrefix = tmp()
+        let activeBin = activePrefix.appendingPathComponent("bin", isDirectory: true)
+        let activeRoot = activePrefix.appendingPathComponent("lib/node_modules", isDirectory: true)
+        let staleExecutable = stalePrefix
+            .appendingPathComponent("lib/node_modules/@alas-ide/codex-acp/dist/index.js")
+        _ = try makeExecutable(
+            named: staleExecutable.lastPathComponent,
+            inDir: staleExecutable.deletingLastPathComponent())
+        try FileManager.default.createDirectory(at: activeRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: activeBin, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: activeBin.appendingPathComponent("codex-acp"),
+            withDestinationURL: staleExecutable)
+        defer {
+            try? FileManager.default.removeItem(at: activePrefix)
+            try? FileManager.default.removeItem(at: stalePrefix)
+        }
+
+        let codex = try #require(ACPLaunchCatalog.spec(for: "codex"))
+        let resolver = ACPLaunchPathResolver(
+            env: ["PATH": "/var/empty"], additionalPathDirectories: [],
+            npmGlobalBinDirectory: { activeBin.path },
+            npmGlobalRootDirectory: { activeRoot.path })
+
+        #expect(await resolver.resolvedLaunchPath(for: codex) == nil)
     }
 
     @Test("npxPackage does not fall back to a same-named PATH binary")
@@ -90,7 +123,7 @@ struct ACPLaunchPathResolverTests {
         let codex = try #require(ACPLaunchCatalog.spec(for: "codex"))
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": pathDir.path], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { nil })   // npm-global unavailable
+            npmGlobalBinDirectory: { nil }, npmGlobalRootDirectory: { nil })   // npm-global unavailable
         let path = await resolver.resolvedLaunchPath(for: codex)
         #expect(path == nil)
         #expect(FileManager.default.isExecutableFile(atPath: onPath.path))
@@ -111,7 +144,7 @@ struct ACPLaunchPathResolverTests {
         let pi = try #require(ACPLaunchCatalog.spec(for: "pi"))
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": pathDir.path], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { npmBinDir.path })
+            npmGlobalBinDirectory: { npmBinDir.path }, npmGlobalRootDirectory: { nil })
         let path = await resolver.resolvedLaunchPath(for: pi)
         #expect(path == onPath.path)
         #expect(path != inNpm.path)
@@ -125,7 +158,7 @@ struct ACPLaunchPathResolverTests {
         let pi = try #require(ACPLaunchCatalog.spec(for: "pi"))
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": "/var/empty"], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { npmBinDir.path })
+            npmGlobalBinDirectory: { npmBinDir.path }, npmGlobalRootDirectory: { nil })
         let path = await resolver.resolvedLaunchPath(for: pi)
         #expect(path == inNpm.path)
     }
@@ -135,7 +168,7 @@ struct ACPLaunchPathResolverTests {
         let codex = try #require(ACPLaunchCatalog.spec(for: "codex"))
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": "/var/empty"], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { nil })
+            npmGlobalBinDirectory: { nil }, npmGlobalRootDirectory: { nil })
         let path = await resolver.resolvedLaunchPath(for: codex)
         #expect(path == nil)
     }
@@ -205,7 +238,7 @@ struct ACPLaunchPathResolverTests {
         let checker = ACPSetupChecker(env: ["PATH": pathDir.path], additionalPathDirectories: [])
         let resolver = ACPLaunchPathResolver(
             env: ["PATH": pathDir.path], additionalPathDirectories: [],
-            npmGlobalBinDirectory: { nil })
+            npmGlobalBinDirectory: { nil }, npmGlobalRootDirectory: { nil })
 
         #expect(claude.setupCheck == .binaryOnPath(name: "custom-claude-acp"))
         #expect(await checker.evaluate(claude.setupCheck) == .ready)

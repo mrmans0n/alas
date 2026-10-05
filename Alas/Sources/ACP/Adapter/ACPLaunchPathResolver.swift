@@ -23,6 +23,8 @@ struct ACPLaunchPathResolver {
     let additionalPathDirectories: [String]
     /// Returns the npm global bin directory (e.g. `<npm prefix -g>/bin`), or nil.
     let npmGlobalBinDirectory: () async -> String?
+    /// Returns the active npm global package root (`npm root -g`), or nil.
+    let npmGlobalRootDirectory: () async -> String?
 
     func resolvedLaunchPath(for spec: ACPLaunchSpec) async -> String? {
         // Mirror the setup check's verification precedence so launch runs
@@ -54,10 +56,16 @@ struct ACPLaunchPathResolver {
         let candidate = "\(binDir)/\(spec.command)"
         guard FileManager.default.isExecutableFile(atPath: candidate) else { return nil }
         guard let package else { return candidate }
-        return Self.isPackageOwnedExecutable(atPath: candidate, package: package) ? candidate : nil
+        guard let root = await npmGlobalRootDirectory() else { return nil }
+        let packageDirectory = URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent(package, isDirectory: true).path
+        return Self.isPackageOwnedExecutable(
+            atPath: candidate,
+            packageDirectory: packageDirectory
+        ) ? candidate : nil
     }
 
-    static func isPackageOwnedExecutable(atPath candidate: String, package: String) -> Bool {
+    static func isPackageOwnedExecutable(atPath candidate: String, packageDirectory: String) -> Bool {
         guard FileManager.default.isExecutableFile(atPath: candidate) else { return false }
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
             return false
@@ -68,7 +76,10 @@ struct ACPLaunchPathResolver {
             : binDir
                 .appendingPathComponent(destination)
                 .standardizedFileURL.path
-        return target.contains("/node_modules/\(package)/")
+        let canonicalTarget = URL(fileURLWithPath: target).resolvingSymlinksInPath().path
+        let canonicalPackageDirectory = URL(fileURLWithPath: packageDirectory, isDirectory: true)
+            .resolvingSymlinksInPath().path
+        return canonicalTarget.hasPrefix(canonicalPackageDirectory + "/")
     }
 
     /// The PATH-resolved absolute path of `command`, if any.
@@ -83,6 +94,31 @@ struct ACPLaunchPathResolver {
         env: [String: String],
         additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
     ) -> () async -> String? {
+        defaultNpmGlobalDirectory(
+            env: env,
+            additionalPathDirectories: additionalPathDirectories,
+            arguments: ["prefix", "-g"],
+            suffix: "bin"
+        )
+    }
+
+    static func defaultNpmGlobalRootDirectory(
+        env: [String: String],
+        additionalPathDirectories: [String] = AgentPath.wellKnownDirectories
+    ) -> () async -> String? {
+        defaultNpmGlobalDirectory(
+            env: env,
+            additionalPathDirectories: additionalPathDirectories,
+            arguments: ["root", "-g"]
+        )
+    }
+
+    private static func defaultNpmGlobalDirectory(
+        env: [String: String],
+        additionalPathDirectories: [String],
+        arguments: [String],
+        suffix: String? = nil
+    ) -> () async -> String? {
         return {
             guard let npm = AgentPath.resolveExecutable(
                 named: "npm", base: env["PATH"], wellKnown: additionalPathDirectories) else { return nil }
@@ -90,12 +126,14 @@ struct ACPLaunchPathResolver {
                 env, additionalPathDirectories: additionalPathDirectories)
             guard let result = try? await Process.run(
                 npm,
-                args: ["prefix", "-g"],
+                args: arguments,
                 env: augmentedEnv
             ) else { return nil }
-            let prefix = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !prefix.isEmpty else { return nil }
-            return "\(prefix)/bin"
+            let directory = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !directory.isEmpty else { return nil }
+            guard let suffix else { return directory }
+            return URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(suffix, isDirectory: true).path
         }
     }
 }
