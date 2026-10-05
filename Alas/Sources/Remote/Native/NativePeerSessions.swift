@@ -17,6 +17,11 @@ final class NativePeerSessions {
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
     private(set) var deliveryError: String?
+    static let peerUnavailableMessage = "Peer is unavailable."
+    private(set) var newSession: NativePeerNewSession?
+    /// A session the peer just created for us, selected once its row arrives
+    /// in the peer's next session list.
+    @ObservationIgnored private var pendingCreatedSessionId: String?
     private(set) var workspace = NativePeerWorkspace()
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
@@ -106,6 +111,8 @@ final class NativePeerSessions {
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
         deliveryError = nil
+        newSession = nil
+        pendingCreatedSessionId = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
@@ -119,6 +126,13 @@ final class NativePeerSessions {
     func refresh() {
         guard downstream != nil else { return }
         snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries)
+        reconcileNewSession()
+        if let pending = pendingCreatedSessionId,
+           snapshot.groups.contains(where: { $0.sessions.contains { $0.id == pending } }) {
+            pendingCreatedSessionId = nil
+            select(pending)
+            return
+        }
         guard selectedSessionId != nil else { return }
         guard let group = selectedPeer else {
             clearSelection()
@@ -217,6 +231,80 @@ final class NativePeerSessions {
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
+
+    func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup) {
+        guard downstream != nil, peer.state.carriesSessions else { return }
+        newSession = NativePeerNewSession(
+            serverId: peer.serverId, peerName: peer.name, projectId: repo.projectId, repoName: repo.name
+        )
+        requestNewSessionOptions()
+    }
+
+    func createNewSession(worktreeId: String, agentId: String, modelId: String?) {
+        guard let request = newSession, request.phase != .creating, let downstream else { return }
+        newSession?.phase = .creating
+        let token = request.id
+        let sent = federation.request(
+            .createSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId),
+            toPeer: request.serverId, from: downstream
+        ) { [weak self] reply in self?.applyNewSessionReply(reply, token: token) }
+        if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
+    }
+
+    func cancelNewSession() {
+        newSession = nil
+    }
+
+    /// The selected session's worktree, when it belongs to the sheet's peer.
+    var newSessionDefaultWorktreeId: String? {
+        guard let request = newSession, selectedPeer?.serverId == request.serverId else { return nil }
+        return selectedRow?.worktreeId
+    }
+
+    private func requestNewSessionOptions() {
+        guard let request = newSession, let downstream else { return }
+        let token = request.id
+        let sent = [RemoteClientMessage.listWorktrees, .listAgents].allSatisfy { message in
+            federation.request(message, toPeer: request.serverId, from: downstream) { [weak self] reply in
+                self?.applyNewSessionReply(reply, token: token)
+            }
+        }
+        if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
+    }
+
+    private func applyNewSessionReply(_ reply: RemoteServerMessage, token: UUID) {
+        guard let request = newSession, request.id == token else { return }
+        switch reply {
+        case .worktreeList(let all):
+            newSession?.worktrees = NativePeerNewSession.worktrees(
+                all, projectId: request.projectId, repoName: request.repoName
+            )
+        case .agentList(let agents):
+            newSession?.agents = agents
+        case .createSessionFailed(let message):
+            newSession?.phase = .failed(message)
+        case .sessionCreated(let summary):
+            newSession = nil
+            pendingCreatedSessionId = summary.id
+            refresh()
+        default:
+            break
+        }
+    }
+
+    /// Fails the open sheet while its peer is away, and reloads its options
+    /// when the peer is back.
+    private func reconcileNewSession() {
+        guard let request = newSession else { return }
+        let online = snapshot.groups.first { $0.serverId == request.serverId }?.state.carriesSessions == true
+        let unavailable = NativePeerNewSession.Phase.failed(Self.peerUnavailableMessage)
+        if !online, request.phase != unavailable {
+            newSession?.phase = unavailable
+        } else if online, request.phase == unavailable {
+            newSession?.phase = .editing
+            requestNewSessionOptions()
+        }
+    }
 
     /// Re-asks the peer for the selected session's changes and file tree.
     /// Replies land through `receive`.
