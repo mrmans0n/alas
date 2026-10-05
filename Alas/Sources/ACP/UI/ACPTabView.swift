@@ -785,6 +785,7 @@ private struct ACPSessionView: View {
                 result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
                 return result
             },
+            sessionMentions: isWorkspaceCheckoutOwner ? nil : sessionMentions,
             nextPromptOffer: nextPromptOffer,
             takeNextPromptOffer: takeNextPromptOffer,
             dismissNextPromptOffer: dismissNextPromptOffer,
@@ -932,6 +933,21 @@ private struct ACPSessionView: View {
     private var isWorkspaceCheckoutOwner: Bool {
         guard case .workspaceCheckout = owner else { return false }
         return true
+    }
+
+    /// Other sessions of this project, attachable from the composer.
+    private var sessionMentions: ACPSessionMentionSource {
+        ACPSessionMentionSource(
+            candidates: { [state, worktree, sessionId] in
+                await state.acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+            },
+            candidate: { [state, worktree, sessionId] id in
+                guard id != sessionId, let candidate = await state.acpSessionMentionCandidate(sessionId: id),
+                      candidate.projectId == worktree.projectId
+                else { return nil }
+                return candidate
+            }
+        )
     }
 
     private var isSetupNudgeDismissed: Bool {

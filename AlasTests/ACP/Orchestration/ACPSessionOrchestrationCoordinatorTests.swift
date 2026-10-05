@@ -1012,7 +1012,8 @@ struct ACPSessionOrchestrationCoordinatorTests {
         blockedKeys: Set<String> = [],
         escalationSeconds: Int = 30,
         scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
-        pause: @escaping (Duration) async -> Void = { _ in }
+        pause: @escaping (Duration) async -> Void = { _ in },
+        releaseReferencedSession: (() -> Void)? = nil
     ) throws -> OutcomeFixture {
         let orchestrationPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
@@ -1048,6 +1049,14 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 parentReachable && manager.liveSession(for: sessionId) != nil
                     ? .init(origin: .init(sessionId: sessionId, projectId: readScope?.projectId ?? "project",
                                           worktreeId: readScope?.worktreeId ?? "worktree"), manager: manager)
+                    : nil
+            },
+            referencedSessionLocation: { sessionId, _ in
+                manager.liveSession(for: sessionId) != nil
+                    ? .init(
+                        origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"),
+                        manager: manager, release: releaseReferencedSession
+                    )
                     : nil
             },
             manager: { _ in parentReachable ? manager : nil },
@@ -1300,6 +1309,28 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let send = await fixture.coordinator.send(origin: origin, request: .init(targetSessionId: fork.id, prompt: "Run this"))
         guard case .error = send else { Issue.record("Fork read access must not grant send access")
         return }
+    }
+
+    @Test("a session reads another session only once the user attaches it to one of its prompts, then lets it go")
+    func readUserAttachedSession() async throws {
+        var releases = 0
+        let fixture = try makeOutcomeFixture(releaseReferencedSession: { releases += 1 })
+        let other = fixture.manager.createSession(id: "other", agentId: "codex", autoRunDefault: false)
+        other.transcript.messages = [.user(id: UUID(), text: "Plan the release", attachments: [])]
+        let read: () async -> AlasCLIResponse = {
+            await fixture.coordinator.perform(origin: self.parentOrigin, .read(.init(targetSessionId: "other")))
+        }
+
+        #expect(await read() == .error("Only a direct parent, child, or this session's fork transcript can be read."))
+
+        fixture.manager.liveSession(for: "parent")?.transcript.messages = [.user(
+            id: UUID(), text: "Use @Release ",
+            attachments: [.init(uri: ACPSessionReference.uri(sessionId: "other"), name: "Release")]
+        )]
+        let attached = try decoded(ACPOrchestrationReadResponse.self, await read())
+
+        #expect(attached.entries.map(\.text) == ["Plan the release"])
+        #expect(releases == 1)
     }
 
     @Test("session_wait returns once a running child settles, or reports the timeout")

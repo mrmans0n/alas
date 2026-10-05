@@ -7241,6 +7241,9 @@ final class AppState {
                 sessionLocation: { [weak self] sessionId in
                     self?.acpOrchestrationSessionLocation(sessionId: sessionId)
                 },
+                referencedSessionLocation: { [weak self] sessionId, projectId in
+                    await self?.acpReferencedSessionLocation(sessionId, projectId: projectId, loadingFullTranscript: true)
+                },
                 manager: { [weak self] worktree in self?.acpManager(for: worktree) },
                 newWorktreeDestination: { [weak self] projectId, branch in
                     guard let self,
@@ -12702,6 +12705,170 @@ final class AppState {
         acpManagers[owner]
     }
 
+    // MARK: Session references
+
+    /// Sessions of `projectId` the composer can attach, most recent first.
+    /// Covers every worktree of the project, including ones not opened in
+    /// this run, whose stores are read on demand.
+    func acpSessionMentionCandidates(projectId: String, excluding sessionId: String?) async -> [ACPSessionMentionCandidate] {
+        var candidates: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
+        for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: true) {
+            let recentIds = Set(manager.sessionRows.map(\.id))
+            for entry in acpMentionableSessions(in: manager, worktree: worktree) where entry.candidate.id != sessionId {
+                // A live session missing from the just-reloaded recent rows
+                // may have been archived by another instance, which its
+                // cached row cannot show: confirm it in the store.
+                if !recentIds.contains(entry.candidate.id) {
+                    guard let stored = try? await manager.persistence.loadSession(id: entry.candidate.id),
+                          !stored.archived, stored.ephemeralParentId == nil
+                    else { continue }
+                }
+                candidates.append(entry)
+            }
+        }
+        return candidates.sorted { $0.updatedAt > $1.updatedAt }.map(\.candidate)
+    }
+
+    /// A manager for every worktree of `projectId`, created when the worktree
+    /// was not opened in this run. With `loadingRecentRows`, every manager's
+    /// recent rows are reloaded first, since another instance may have
+    /// created or archived sessions since they were cached.
+    private func acpProjectManagers(
+        projectId: String, loadingRecentRows: Bool
+    ) async -> [(worktree: Worktree, manager: ACPSessionManager)] {
+        var result: [(worktree: Worktree, manager: ACPSessionManager)] = []
+        for worktree in projectsManager.worktrees(projectId: projectId) {
+            guard let manager = acpManager(for: worktree) else { continue }
+            if loadingRecentRows {
+                // Queued local writes (an archive, a new session) land first,
+                // so the reload cannot bring back an older row.
+                await manager.flushPersistence()
+                await manager.refreshRecentNow()
+            }
+            result.append((worktree, manager))
+        }
+        return result
+    }
+
+    /// The attachable session `sessionId`, confirmed in its store like the
+    /// picker's candidates: a cached row cannot show another instance's
+    /// archive.
+    func acpSessionMentionCandidate(sessionId: String) async -> ACPSessionMentionCandidate? {
+        for (owner, manager) in acpManagers {
+            guard let worktreeId = owner.worktreeID, let worktree = worktree(withId: worktreeId),
+                  let match = acpMentionableSessions(in: manager, worktree: worktree)
+                    .first(where: { $0.candidate.id == sessionId })
+            else { continue }
+            await manager.flushPersistence()
+            guard let stored = try? await manager.persistence.loadSession(id: sessionId),
+                  !stored.archived, stored.ephemeralParentId == nil
+            else { return nil }
+            return match.candidate
+        }
+        return nil
+    }
+
+    /// `manager`'s non-archived, non-side-question sessions. Like the agent
+    /// sidebar, this unions stored rows with live sessions: the rows are a
+    /// lazily refreshed snapshot that can briefly miss a live session.
+    private func acpMentionableSessions(
+        in manager: ACPSessionManager, worktree: Worktree
+    ) -> [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] {
+        func candidate(id: String, agentId: String, title: String) -> ACPSessionMentionCandidate {
+            ACPSessionMentionCandidate(
+                id: id,
+                projectId: worktree.projectId,
+                title: title,
+                agentName: agent(id: agentId)?.displayName ?? agentId,
+                worktreeName: worktree.name
+            )
+        }
+        var result: [(candidate: ACPSessionMentionCandidate, updatedAt: Int64)] = []
+        var seen = Set<String>()
+        for row in manager.sessionRows {
+            seen.insert(row.id)
+            guard !row.archived, row.ephemeralParentId == nil else { continue }
+            let title = manager.liveSession(for: row.id)?.title ?? row.title
+            result.append((candidate(id: row.id, agentId: row.agentId, title: title), row.updatedAt))
+        }
+        for session in manager.sessions.values where !seen.contains(session.id) && !session.readOnlyRestricted {
+            // A cached session can outlive its row's place among the recent
+            // rows after being archived, e.g. by another instance.
+            if let row = manager.cachedPersistedSessionRow(id: session.id),
+               row.archived || row.ephemeralParentId != nil { continue }
+            result.append((
+                candidate(id: session.id, agentId: session.agentId, title: session.title),
+                Int64(session.createdAt.timeIntervalSince1970)
+            ))
+        }
+        return result
+    }
+
+    /// A session of `projectId`, live or stored, made live. With
+    /// `loadingFullTranscript`, its whole transcript is loaded; otherwise
+    /// only what hydration loads first, the latest messages. Nil when
+    /// unknown or archived. Looked up in each of
+    /// the project's worktree stores, opened or not, rather than the
+    /// recent-row snapshot: an attachment can outlive both. Every lookup
+    /// retains the session until the caller calls the location's `release`,
+    /// so concurrent readers share it and the last one out lets an idle,
+    /// otherwise unreferenced session be evicted again.
+    func acpReferencedSessionLocation(
+        _ sessionId: String, projectId: String, loadingFullTranscript: Bool
+    ) async -> ACPSessionOrchestrationCoordinator.SessionLocation? {
+        for (worktree, manager) in await acpProjectManagers(projectId: projectId, loadingRecentRows: false) {
+            // Check both the store, which another instance may have archived
+            // since this one cached the row, and the cached row. Queued local
+            // writes land first, so a just-created session is in the store
+            // and a local archive is in both.
+            await manager.flushPersistence()
+            guard let stored = try? await manager.persistence.loadSession(id: sessionId), !stored.archived,
+                  let cached = await manager.persistedSessionRow(id: sessionId), !cached.archived,
+                  manager.placeholderSession(id: sessionId) != nil
+            else { continue }
+            manager.retainSession(id: sessionId)
+            let release: () -> Void = { [weak manager] in manager?.releaseSession(id: sessionId) }
+            await manager.hydrateIfNeeded(id: sessionId)
+            if loadingFullTranscript { await manager.awaitBackfill(id: sessionId) }
+            guard manager.liveSession(for: sessionId) != nil else {
+                release()
+                return nil
+            }
+            return .init(
+                origin: ACPOrchestrationSessionOrigin(
+                    sessionId: sessionId, projectId: worktree.projectId, worktreeId: worktree.id
+                ),
+                manager: manager,
+                release: release
+            )
+        }
+        return nil
+    }
+
+    /// What a prompt in `projectId` carries in place of an attached session.
+    /// Sessions of other projects are not resolved.
+    func acpSessionReferenceContext(_ sessionId: String, projectId: String) async -> String? {
+        // The inline context keeps only the latest entries, so it skips the
+        // full-history backfill that `session_read` pages through.
+        guard let location = await acpReferencedSessionLocation(
+            sessionId, projectId: projectId, loadingFullTranscript: false
+        ) else { return nil }
+        defer { location.release?() }
+        guard location.origin.projectId == projectId,
+              let session = location.manager.liveSession(for: sessionId),
+              let worktree = worktree(withId: location.origin.worktreeId)
+        else { return nil }
+        let target = ACPSessionReference.Target(
+            sessionId: sessionId,
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName ?? session.agentId,
+            worktreeName: worktree.name
+        )
+        return ACPSessionReference.context(
+            for: target, entries: ACPSessionTranscriptReader.entries(session.transcript.messages)
+        )
+    }
+
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
@@ -12817,6 +12984,9 @@ final class AppState {
             },
             pluginContext: { [weak self] sessionID in
                 await self?.pluginPromptContext(session: sessionID, worktree: worktree) ?? []
+            },
+            sessionReferenceContext: { [weak self] referencedSessionID in
+                await self?.acpSessionReferenceContext(referencedSessionID, projectId: worktree.projectId)
             },
             launchSpecTransformer: { [weak self] spec, allowsPermissionBypass in
                 guard let self else { return spec }

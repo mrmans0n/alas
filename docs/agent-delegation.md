@@ -379,14 +379,19 @@ Four more tools act on the same direct edges. Each returns one JSON line.
 
 | MCP tool | CLI | Who may call it | What it does |
 |---|---|---|---|
-| `session_read` | `alas session read <id> [--offset <n>] [--limit <n>] [--max-chars <n>]` | parent or child, on the other | One page of the transcript |
+| `session_read` | `alas session read <id> [--offset <n>] [--limit <n>] [--max-chars <n>]` | parent or child, on the other; any session, on a session the user attached to it | One page of the transcript |
 | `session_search` | `alas session search <query> [--limit <n>]` | any session | Case-insensitive text search across its direct parent and children |
 | `session_wait` | `alas session wait <id>... [--timeout-ms <n>]` | parent, on its children | Blocks until every listed child settles, or the timeout passes |
 | `session_interrupt` | `alas session interrupt <id>` | parent, on its children | Cancels the child's running turn, like **Stop** |
 
 Siblings, sessions in other projects, and sessions outside a delegation are
 not reachable, so a child can read its parent but not another child of that
-parent. Delegated children's MCP discovery leaves out `session_wait` and
+parent. The one exception is a session the user attached to one of the
+caller's prompts, by `@`-mentioning it in the composer or dragging its badge
+from the sidebar onto the composer: `session_read` can read it as long as it
+belongs to the caller's project. The prompt itself carries the session's id
+and its latest entries, so agents without the Alas MCP server still get that
+context. Delegated children's MCP discovery leaves out `session_wait` and
 `session_interrupt`, as it leaves out `session_new`, and Alas rejects them from
 a child anyway.
 

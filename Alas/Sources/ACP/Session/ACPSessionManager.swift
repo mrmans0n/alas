@@ -154,6 +154,7 @@ final class ACPSessionManager: ObservableObject {
     private let onChildBlocked: ((ACPChildBlocker) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
+    private let sessionReferenceContext: (@MainActor (_ referencedSessionId: String) async -> String?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -1626,6 +1627,7 @@ final class ACPSessionManager: ObservableObject {
          onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
+         sessionReferenceContext: (@MainActor (_ referencedSessionId: String) async -> String?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -1677,6 +1679,7 @@ final class ACPSessionManager: ObservableObject {
         self.onChildBlocked = onChildBlocked
         self.onCheckpointCapture = onCheckpointCapture
         self.pluginContext = pluginContext
+        self.sessionReferenceContext = sessionReferenceContext
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { spec, _ in spec }
@@ -2368,6 +2371,11 @@ final class ACPSessionManager: ObservableObject {
                 self?.persistenceError = error.localizedDescription
             }
         }
+    }
+
+    /// The stored row already loaded for `id`, without touching the store.
+    func cachedPersistedSessionRow(id: ACPSession.ID) -> ACPSessionRow? {
+        persistedRows[id]
     }
 
     /// Loads one row for an explicit open request. Unlike `sessionRows`, this
@@ -6675,6 +6683,7 @@ extension ACPSessionManager {
                                           },
                                           onCheckpointCapture: onCheckpointCapture,
                                           pluginContext: pluginContext,
+                                          sessionReferenceContext: sessionReferenceContext,
                                           isConnectionCurrent: { [weak self] in
                                               self?.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                           },

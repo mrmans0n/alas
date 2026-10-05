@@ -9,6 +9,15 @@ final class ACPSessionOrchestrationCoordinator {
     struct SessionLocation {
         let origin: ACPOrchestrationSessionOrigin
         let manager: ACPSessionManager
+        /// Lets go of the session a lookup retained to read it; call once
+        /// done reading. Nil when the lookup retained nothing.
+        var release: (() -> Void)? = nil
+    }
+
+    /// A session to read, and what to call once done reading it.
+    private struct ReadableSession {
+        let session: ACPSession
+        let release: () -> Void
     }
 
     struct Environment {
@@ -50,6 +59,10 @@ final class ACPSessionOrchestrationCoordinator {
         /// model check reads it.
         let launchModels: (String, Worktree) -> [ACPAgentModelCatalog.Model]?
         let sessionLocation: (String) -> SessionLocation?
+        /// A non-archived session of the given project, live or stored, made
+        /// live when it was not. Reaches sessions outside a delegation, so it
+        /// is only consulted for sessions the user attached.
+        let referencedSessionLocation: (_ sessionId: String, _ projectId: String) async -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
         /// Creates the worktree for `(projectId, branch, base)`. The last
@@ -82,6 +95,7 @@ final class ACPSessionOrchestrationCoordinator {
             delegationAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary] = { _, _ in [] },
             launchModels: @escaping (String, Worktree) -> [ACPAgentModelCatalog.Model]? = { _, _ in nil },
             sessionLocation: @escaping (String) -> SessionLocation?,
+            referencedSessionLocation: @escaping (String, String) async -> SessionLocation? = { _, _ in nil },
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
             createWorktree: @escaping (String, String, String?, @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>,
@@ -106,6 +120,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.delegationAgents = delegationAgents
             self.launchModels = launchModels
             self.sessionLocation = sessionLocation
+            self.referencedSessionLocation = referencedSessionLocation
             self.manager = manager
             self.newWorktreeDestination = newWorktreeDestination
             self.createWorktree = createWorktree
@@ -529,16 +544,20 @@ final class ACPSessionOrchestrationCoordinator {
         }
     }
 
-    /// `session_read`: one page of a direct relative's or source session's fork transcript.
+    /// `session_read`: one page of a direct relative's transcript, of a fork
+    /// read by its source session, or of a session the user attached to one
+    /// of the caller's prompts.
     func read(
         origin: ACPOrchestrationSessionOrigin,
         request: ACPDelegatedSessionReadRequest
     ) async -> AlasCLIResponse {
-        let session: ACPSession
+        let readable: ReadableSession
         switch await readableSession(origin: origin, targetSessionId: request.targetSessionId) {
-        case .success(let readable): session = readable
+        case .success(let found): readable = found
         case .failure(let error): return .error(error.message)
         }
+        defer { readable.release() }
+        let session = readable.session
         let page = ACPSessionTranscriptReader.page(
             ACPSessionTranscriptReader.entries(session.transcript.messages),
             offset: request.offset,
@@ -577,10 +596,11 @@ final class ACPSessionOrchestrationCoordinator {
         var matches: [ACPOrchestrationSearchResponse.Match] = []
         var truncated = false
         search: for target in targets {
-            guard case .success(let session) = await readableSession(
+            guard case .success(let readable) = await readableSession(
                 origin: origin, targetSessionId: target.sessionId
             ) else { continue }
-            let entries = ACPSessionTranscriptReader.entries(session.transcript.messages)
+            let entries = ACPSessionTranscriptReader.entries(readable.session.transcript.messages)
+            readable.release()
             for match in ACPSessionTranscriptReader.search(entries, query: query) {
                 guard matches.count < request.limit else {
                     truncated = true
@@ -668,15 +688,20 @@ final class ACPSessionOrchestrationCoordinator {
         let message: String
     }
 
-    /// A direct parent or child whose transcript may be read, the same edge
-    /// `session_send` may use. A session that is not live is hydrated from
-    /// its stored transcript; an archived one is not readable.
+    /// A session whose transcript may be read: a fork of the caller, a
+    /// session in the caller's project that the user attached to one of its
+    /// prompts, or a direct parent or child, the same edge `session_send` may
+    /// use. A session that is not live is hydrated from its stored
+    /// transcript; an archived one is not readable (except a fork).
     private func readableSession(
         origin: ACPOrchestrationSessionOrigin,
         targetSessionId: String
-    ) async -> Result<ACPSession, ObservationError> {
+    ) async -> Result<ReadableSession, ObservationError> {
         if let fork = await readableFork(origin: origin, targetSessionId: targetSessionId) {
-            return .success(fork)
+            return .success(ReadableSession(session: fork, release: {}))
+        }
+        if let location = await userAttachedLocation(origin: origin, targetSessionId: targetSessionId) {
+            return await hydratedSession(targetSessionId, at: location)
         }
         let callerParent: ACPDelegationRecord?
         let targetParent: ACPDelegationRecord?
@@ -706,15 +731,46 @@ final class ACPSessionOrchestrationCoordinator {
         ) else {
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
+        return await hydratedSession(targetSessionId, at: location)
+    }
+
+    /// Where `targetSessionId` lives when the user attached it to one of the
+    /// caller's own prompts and it belongs to the caller's project.
+    private func userAttachedLocation(
+        origin: ACPOrchestrationSessionOrigin,
+        targetSessionId: String
+    ) async -> SessionLocation? {
+        guard targetSessionId != origin.sessionId,
+              let callerManager = environment.sessionLocation(origin.sessionId)?.manager
+        else { return nil }
+        // The attaching prompt may sit in older messages still backfilling.
+        await callerManager.awaitBackfill(id: origin.sessionId)
+        guard let caller = callerManager.liveSession(for: origin.sessionId),
+              ACPSessionReference.attachedSessionIds(in: caller.transcript.messages).contains(targetSessionId),
+              let location = await environment.referencedSessionLocation(targetSessionId, origin.projectId)
+        else { return nil }
+        guard location.origin.projectId == origin.projectId else {
+            location.release?()
+            return nil
+        }
+        return location
+    }
+
+    private func hydratedSession(
+        _ targetSessionId: String,
+        at location: SessionLocation
+    ) async -> Result<ReadableSession, ObservationError> {
+        let release = location.release ?? {}
         // A restored tab can still be loading its stored transcript, and
         // hydration applies only the tail before backfilling older messages,
         // which would shift every entry index between pages.
         await location.manager.hydrateIfNeeded(id: targetSessionId)
         await location.manager.awaitBackfill(id: targetSessionId)
         guard let session = location.manager.liveSession(for: targetSessionId) else {
+            release()
             return .failure(.init(message: "The target ACP session has no transcript available."))
         }
-        return .success(session)
+        return .success(ReadableSession(session: session, release: release))
     }
 
     /// Fork access is read-only and scoped to its recorded source in the same store.

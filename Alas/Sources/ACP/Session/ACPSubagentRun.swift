@@ -996,7 +996,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// `uri` at all. Without this, such a block has neither text nor a
     /// matched attachment and the whole prompt update is silently dropped.
     private static func attachments(of block: ACPContentBlock) -> [ACPMessage.Attachment] {
-        var attachments = ACPSessionRunner.attachments(of: [block])
+        var attachments = ACPSessionReference.agentSentAttachments(ACPSessionRunner.attachments(of: [block]))
         if case .image(let data, let uri, let mimeType) = block, uri == nil,
            let data, !data.isEmpty {
             let mime = mimeType ?? "image/png"

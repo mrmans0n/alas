@@ -53,6 +53,8 @@ struct ACPInputField: NSViewRepresentable {
     var nextPromptIsDictating: () -> Bool = { false }
     /// Reference-chip cache for this worktree. `nil` disables reference chips.
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    /// Sessions that can be attached by `@` or by a drop. `nil` offers none.
+    var sessionMentions: ACPSessionMentionSource? = nil
     /// Slash commands Alas handles itself, offered ahead of the agent's.
     var alasCommands: [ACPPromptSuggestion] = []
 
@@ -72,7 +74,8 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.textView = textView
         dropRouter.attach(textView)
         context.coordinator.onImageError = onImageError
-        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
+        textView.registerForDraggedTypes([.fileURL, .URL, .png, .tiff])
+        context.coordinator.sessionMentions = sessionMentions
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
@@ -132,6 +135,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
         context.coordinator.typography = typography
+        context.coordinator.sessionMentions = sessionMentions
         if context.coordinator.upstreamReferences !== upstreamReferences {
             context.coordinator.attachUpstreamReferences(upstreamReferences)
         }
@@ -279,6 +283,7 @@ struct ACPInputField: NSViewRepresentable {
         let onStopDictation: () -> Void
         let onSubmit: ACPComposerSubmitHandler
         let filesProvider: (@Sendable () async -> [URL])?
+        var sessionMentions: ACPSessionMentionSource?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
@@ -1559,8 +1564,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let panel = ACPMentionPanel(
             worktreeRoot: coord.worktreeRoot,
             filesProvider: coord.filesProvider,
+            sessionsProvider: coord.sessionMentions?.candidates,
             onPick: { [weak self] file in
                 self?.insertMention(file)
+            },
+            onPickSession: { [weak self] session in
+                self?.insertSessionMention(session)
             },
             onCancel: { [weak self] in
                 self?.closeMentionPanel()
@@ -2534,7 +2543,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         invalidateNextPromptSuggestion()
         dropPending = true
         onNextPromptStateChange(nextPromptInputState)
-        return hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+        let pasteboard = sender.draggingPasteboard
+        return hasImage(in: pasteboard) || !droppedSessionIds(in: pasteboard).isEmpty
+            ? .copy : super.draggingEntered(sender)
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
@@ -2549,21 +2560,72 @@ final class ACPNSTextView: PairedDelimiterTextView {
             dropPending = false
             onNextPromptStateChange(nextPromptInputState)
         }
+        let sessionIds = droppedSessionIds(in: sender.draggingPasteboard)
+        if !sessionIds.isEmpty {
+            // Drop at the pointer, like dropped text, once the lookup confirms
+            // each session is attachable. Sessions the composer cannot attach
+            // (its own, another project's, an archived one, a terminal's)
+            // resolve to nothing.
+            let point = convert(sender.draggingLocation, from: nil)
+            setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
+            let dropSelection = selectedRange()
+            let coordinator = coordinator
+            let source = coordinator?.sessionMentions
+            // Held like an async image insertion: submit waits for it, and
+            // clearing or replacing the draft invalidates it.
+            let generation = coordinator?.beginPendingImageFileInsertion()
+            Task { @MainActor [weak self, weak coordinator] in
+                defer {
+                    if let generation { coordinator?.finishPendingImageFileInsertion(generation: generation) }
+                }
+                var sessions: [ACPSessionMentionCandidate] = []
+                for id in sessionIds {
+                    if let session = await source?.candidate(id) { sessions.append(session) }
+                }
+                guard let self, !sessions.isEmpty else { return }
+                if let generation, coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+                // Typing or moving the caret while the lookup ran wins over
+                // the drop point, as for async image drops.
+                if self.selectedRange() == dropSelection {
+                    self.setSelectedRange(NSRange(location: min(dropSelection.location, self.string.utf16.count), length: 0))
+                }
+                sessions.forEach { self.insertSessionMention($0) }
+            }
+            return true
+        }
         if insertImages(from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 
+    /// Ids of sessions dragged in from the sidebar, which carry an
+    /// `alas-session://` URL. Empty when this composer offers no sessions.
+    private func droppedSessionIds(in pasteboard: NSPasteboard) -> [String] {
+        guard coordinator?.sessionMentions != nil,
+              let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
+        else { return [] }
+        return urls.compactMap { ACPSessionReference.sessionId(fromURI: $0.absoluteString) }
+    }
+
     @discardableResult
     func insertMention(_ url: URL) -> Bool {
+        insertMention(displayName: url.lastPathComponent, uri: url.absoluteString)
+    }
+
+    @discardableResult
+    func insertSessionMention(_ session: ACPSessionMentionCandidate) -> Bool {
+        insertMention(displayName: session.title, uri: ACPSessionReference.uri(sessionId: session.id))
+    }
+
+    @discardableResult
+    private func insertMention(displayName name: String, uri: String) -> Bool {
         invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
-        let name = url.lastPathComponent
-        let attachment = ACPMentionChipAttachment(displayName: name, uri: url.absoluteString)
+        let attachment = ACPMentionChipAttachment(displayName: name, uri: uri)
         let chipString = NSMutableAttributedString(attachment: attachment)
         // Tag the chip's character range with the uri so submission can
         // recover the mention.
         chipString.addAttributes([
-            .attachmentURI: url.absoluteString,
+            .attachmentURI: uri,
         ], range: NSRange(location: 0, length: chipString.length))
         let baseAttrs = baseTypingAttributes
         chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
@@ -2657,7 +2719,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
 final class ACPMentionPanel: NSPanel {
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
+         sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil,
          onPick: @escaping (URL) -> Void,
+         onPickSession: @escaping (ACPSessionMentionCandidate) -> Void = { _ in },
          onCancel: @escaping () -> Void = {}) {
         super.init(
             contentRect: .init(x: 0, y: 0, width: 360, height: 280),
@@ -2675,9 +2739,14 @@ final class ACPMentionPanel: NSPanel {
 
         let host = NSHostingView(rootView: ACPMentionPickerView(
             worktreeRoot: worktreeRoot,
+            sessionsProvider: sessionsProvider,
             onPick: { [weak self] url in
                 self?.close()
                 onPick(url)
+            },
+            onPickSession: { [weak self] session in
+                self?.close()
+                onPickSession(session)
             },
             onCancel: { [weak self] in
                 self?.close()

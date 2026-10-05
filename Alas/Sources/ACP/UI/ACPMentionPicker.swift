@@ -1,12 +1,37 @@
 import SwiftUI
 import AppKit
 
-/// SwiftUI fuzzy file picker for the composer's @-mention popover.
-/// Hosted inside an NSPanel (see `ACPMentionPickerPanel`) so it can float
-/// above the chat with proper key forwarding.
+/// A session the composer can attach as context (see `ACPSessionReference`).
+struct ACPSessionMentionCandidate: Identifiable, Hashable, Sendable {
+    let id: String
+    let projectId: String
+    let title: String
+    let agentName: String
+    let worktreeName: String
+}
+
+/// Sessions the `@` picker offers, and the lookup a session dropped from
+/// the sidebar goes through. Both leave out the composer's own session and
+/// sessions of other projects.
+struct ACPSessionMentionSource {
+    /// Async: it can read stores of worktrees not opened in this run.
+    let candidates: @MainActor () async -> [ACPSessionMentionCandidate]
+    let candidate: @MainActor (_ sessionId: String) async -> ACPSessionMentionCandidate?
+}
+
+enum MentionPickerItem: Hashable {
+    case session(ACPSessionMentionCandidate)
+    case file(URL)
+}
+
+/// SwiftUI fuzzy file and session picker for the composer's @-mention
+/// popover. Hosted inside an NSPanel (see `ACPMentionPickerPanel`) so it can
+/// float above the chat with proper key forwarding.
 struct ACPMentionPickerView: View {
     let worktreeRoot: URL
+    var sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil
     let onPick: (URL) -> Void
+    var onPickSession: (ACPSessionMentionCandidate) -> Void = { _ in }
     let onCancel: () -> Void
     let filesProvider: (@Sendable () async -> [URL])?
 
@@ -15,7 +40,8 @@ struct ACPMentionPickerView: View {
     @State private var highlight: Int = 0
     @FocusState private var searchFocused: Bool
     @State private var allFiles: [URL] = []
-    @State private var ranked: [URL] = []
+    @State private var sessions: [ACPSessionMentionCandidate] = []
+    @State private var ranked: [MentionPickerItem] = []
     @State private var isIndexing: Bool = true
     @State private var rankTask: Task<Void, Never>?
     @State private var rankGeneration: Int = 0
@@ -42,7 +68,10 @@ struct ACPMentionPickerView: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
-        .onAppear { populateFiles() }
+        .onAppear {
+            populateSessions()
+            populateFiles()
+        }
     }
 
     private var search: some View {
@@ -50,7 +79,12 @@ struct ACPMentionPickerView: View {
             Image(systemName: "at")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
-            TextField("Search files & folders… (/ or ~/ to browse)", text: $query)
+            TextField(
+                sessionsProvider == nil
+                    ? "Search files & folders… (/ or ~/ to browse)"
+                    : "Search files, folders & sessions… (/ or ~/ to browse)",
+                text: $query
+            )
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
@@ -83,11 +117,14 @@ struct ACPMentionPickerView: View {
                             .foregroundStyle(theme.color("fg-faint"))
                             .padding(.horizontal, 10).padding(.vertical, 10)
                     } else {
-                        ForEach(Array(ranked.enumerated()), id: \.element) { idx, file in
-                            // Data-based id (the file URL), not the row
-                            // position: a positional id freezes LazyVStack rows
-                            // against the ranked list changing as you type.
-                            row(idx: idx, file: file).id(file)
+                        ForEach(Array(ranked.enumerated()), id: \.element) { idx, item in
+                            // Data-based id (the item), not the row position:
+                            // a positional id freezes LazyVStack rows against
+                            // the ranked list changing as you type.
+                            switch item {
+                            case .file(let file): row(idx: idx, file: file).id(item)
+                            case .session(let session): row(idx: idx, session: session).id(item)
+                            }
                         }
                     }
                 }
@@ -98,6 +135,39 @@ struct ACPMentionPickerView: View {
                 scrollOnHighlightChange = false
                 guard ranked.indices.contains(new) else { return }
                 proxy.scrollTo(ranked[new], anchor: .center)
+            }
+        }
+    }
+
+    private func row(idx: Int, session: ACPSessionMentionCandidate) -> some View {
+        let isOn = idx == highlight
+        return Button { onPickSession(session) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 10))
+                    .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-faint"))
+                    .frame(width: 14)
+                Text(session.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                Text("\(session.agentName) · \(session.worktreeName)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                scrollOnHighlightChange = false
+                highlight = idx
             }
         }
     }
@@ -154,10 +224,12 @@ struct ACPMentionPickerView: View {
             return .handled
         case .return, .tab:
             guard ranked.indices.contains(highlight) else { return .handled }
-            let file = ranked[highlight]
-            if press.key == .tab, isAbsoluteQuery, file.hasDirectoryPath {
+            switch ranked[highlight] {
+            case .session(let session):
+                onPickSession(session)
+            case .file(let file) where press.key == .tab && isAbsoluteQuery && file.hasDirectoryPath:
                 query = MentionAbsolutePath.query(entering: file)
-            } else {
+            case .file(let file):
                 onPick(file)
             }
             return .handled
@@ -171,6 +243,15 @@ struct ACPMentionPickerView: View {
         guard next != highlight else { return }
         scrollOnHighlightChange = true
         highlight = next
+    }
+
+    /// Sessions load on their own, so they show up while files still index.
+    private func populateSessions() {
+        guard let sessionsProvider else { return }
+        Task { @MainActor in
+            sessions = await sessionsProvider()
+            rescheduleRank()
+        }
     }
 
     private func populateFiles() {
@@ -198,6 +279,9 @@ struct ACPMentionPickerView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = allFiles
         let root = worktreeRoot
+        let sessionItems = !root.isRemoteAlasPath && MentionAbsolutePath.isAbsolute(query: q)
+            ? []
+            : MentionSessionRanking.rank(sessions, query: q).map(MentionPickerItem.session)
         rankTask = Task.detached(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: 16_000_000)
             if Task.isCancelled { return }
@@ -211,9 +295,42 @@ struct ACPMentionPickerView: View {
             }
             if Task.isCancelled { return }
             await MainActor.run {
-                if rankGeneration == gen { ranked = result }
+                if rankGeneration == gen { ranked = sessionItems + result.map(MentionPickerItem.file) }
             }
         }
+    }
+}
+
+/// Sessions shown above the files: the most recent ones for an empty query,
+/// otherwise the best fuzzy matches on title, agent, and worktree.
+enum MentionSessionRanking {
+    static let maxDisplay = 5
+
+    /// `candidates` arrive most recent first; ties keep that order.
+    static func rank(
+        _ candidates: [ACPSessionMentionCandidate], query: String, limit: Int = maxDisplay
+    ) -> [ACPSessionMentionCandidate] {
+        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return Array(candidates.prefix(limit)) }
+        var scored: [(candidate: ACPSessionMentionCandidate, score: Double, order: Int)] = []
+        for (order, candidate) in candidates.enumerated() {
+            let detail = "\(candidate.agentName) \(candidate.worktreeName)"
+            var total = 0.0
+            var matched = true
+            for token in tokens {
+                // Title matches outrank agent or worktree matches.
+                let titleScore = FuzzyMatch.score(query: token, target: candidate.title)?.score.advanced(by: 8)
+                let detailScore = FuzzyMatch.score(query: token, target: detail)?.score
+                guard let best = [titleScore, detailScore].compactMap(\.self).max() else {
+                    matched = false
+                    break
+                }
+                total += best
+            }
+            if matched { scored.append((candidate, total, order)) }
+        }
+        scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
+        return scored.prefix(limit).map(\.candidate)
     }
 }
 

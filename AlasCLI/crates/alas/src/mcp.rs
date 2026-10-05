@@ -286,11 +286,11 @@ fn all_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "session_read",
-            "description": "Read-only: one page of a direct parent's, child's, or this session's fork transcript as JSON entries (user and agent messages, one-line tool-call summaries; thoughts omitted). Archived forks remain readable. Without offset, returns the latest entries. Pass the returned end as offset to read on.",
+            "description": "Read-only: one page of a direct parent's, child's, or this session's fork transcript, or of a session the user attached to your prompt, as JSON entries (user and agent messages, one-line tool-call summaries; thoughts omitted). Archived forks remain readable. Without offset, returns the latest entries. Pass the returned end as offset to read on.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "session_id": { "type": "string", "description": "Direct parent, child, or fork session id." },
+                    "session_id": { "type": "string", "description": "Direct parent, child, fork, or attached session id." },
                     "offset": { "type": "integer", "minimum": 0, "description": "First entry index to return. Omit for the latest entries." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum entries. Default: 20." },
                     "max_chars": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Text budget across entries; an entry over it is cut and marked truncated. Default: 8000." }
