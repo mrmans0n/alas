@@ -17,7 +17,7 @@ final class NativePeerSessions {
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
     private(set) var deliveryError: String?
-    static let peerUnavailableMessage = "Peer is unavailable."
+    static let peerUnavailableMessage = FederatedSessionsProvider.peerUnavailableMessage
     private(set) var newSession: NativePeerNewSession?
     /// A session the peer just created for us, selected once its row arrives
     /// in the peer's next session list.
@@ -183,6 +183,7 @@ final class NativePeerSessions {
             refresh()
             return
         }
+        if sessionId != pendingCreatedSessionId { pendingCreatedSessionId = nil }
         clearSelection()
         selectedSessionId = sessionId
         transcript = NativePeerTranscript(sessionId: sessionId)

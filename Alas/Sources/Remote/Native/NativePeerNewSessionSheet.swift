@@ -18,7 +18,8 @@ struct NativePeerNewSessionSheet: View {
     }
 
     private var canCreate: Bool {
-        guard let request, !request.isLoading, request.phase != .creating else { return false }
+        guard let request, !request.isLoading, request.phase != .creating,
+              request.phase != .failed(NativePeerSessions.peerUnavailableMessage) else { return false }
         return worktreeId != nil && agentId != nil
     }
 

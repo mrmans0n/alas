@@ -41,6 +41,8 @@ final class FederatedDownstream {
 /// controller.
 @MainActor
 final class FederatedSessionsProvider {
+    static let peerUnavailableMessage = "Peer is unavailable."
+
     /// How often a peer is re-asked for its list while anyone is attached.
     /// Matches the web client's own idle poll, so a peer's status changes
     /// reach a phone about as fast as its own Mac's do.
@@ -360,7 +362,7 @@ final class FederatedSessionsProvider {
                 let pending = peerRequests.removeValue(forKey: key) ?? []
                 guard key.kind == .create else { continue }
                 for request in pending {
-                    request.reply?(.createSessionFailed(message: "Peer is unavailable."))
+                    request.reply?(.createSessionFailed(message: Self.peerUnavailableMessage))
                 }
             }
         }

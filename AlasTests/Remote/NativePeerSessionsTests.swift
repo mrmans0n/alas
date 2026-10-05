@@ -1086,16 +1086,16 @@ struct NativePeerSessionsTests {
     }
 
     @Test(arguments: [
-        ("p", "alas", ["w1"]),        // matches on projectId
-        (nil, "alas", ["w1", "w2"]),  // older peer: falls back to project name
-    ] as [(String?, String, [String])])
-    func newSessionWorktreesBelongToTheClickedRepo(projectId: String?, repoName: String, expected: [String]) {
+        (true, ["w1"]),          // matches on projectId
+        (false, ["w1", "w2"]),   // older peer without projectIds: falls back to project name
+    ] as [(Bool, [String])])
+    func newSessionWorktreesBelongToTheClickedRepo(optionsCarryProjectIds: Bool, expected: [String]) {
         let options = [
-            worktreeOption("w1", projectId: projectId == nil ? nil : "p"),
-            worktreeOption("w2", projectId: projectId == nil ? nil : "q"),
-            worktreeOption("w3", projectId: projectId == nil ? nil : "r", projectName: "other"),
+            worktreeOption("w1", projectId: optionsCarryProjectIds ? "p" : nil),
+            worktreeOption("w2", projectId: optionsCarryProjectIds ? "q" : nil),
+            worktreeOption("w3", projectId: optionsCarryProjectIds ? "r" : nil, projectName: "other"),
         ]
-        #expect(NativePeerNewSession.worktrees(options, projectId: projectId, repoName: repoName).map(\.id) == expected)
+        #expect(NativePeerNewSession.worktrees(options, projectId: "p", repoName: "alas").map(\.id) == expected)
     }
 
     @Test func newSessionPreselectsTheSelectedWorktreeThenTheDefaultAgent() {
@@ -1133,5 +1133,41 @@ struct NativePeerSessionsTests {
         #expect(client.newSession?.phase == .editing)
         #expect(links.sent(to: "B").contains(.listWorktrees))
         #expect(links.sent(to: "B").contains(.listAgents))
+    }
+
+    @Test func aCreateInterruptedByThePeerGoingOfflineCanBeRetried() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peerState = "online"
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: peerState)]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
+        let peer = client.snapshot.groups[0]
+        client.beginNewSession(peer: peer, repo: peer.repos(ordering: .lastUpdateDesc)[0])
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        #expect(client.newSession?.phase == .creating)
+
+        peerState = "offline"
+        links.offline("B")
+        client.refresh()
+        #expect(client.newSession?.phase == .failed(NativePeerSessions.peerUnavailableMessage))
+
+        peerState = "online"
+        links.online("B", name: "Mac B")
+        client.refresh()
+        #expect(client.newSession?.phase == .editing)
+    }
+
+    @Test func aCreatedSessionDoesNotStealSelectionFromAnotherSessionTheUserPicked() {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        links.receive(.sessionCreated(session: projectRow("new")), from: "B")
+        client.select("B:s")
+        links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")
+        #expect(client.selectedSessionId == "B:s")
     }
 }

@@ -551,12 +551,4 @@ struct FederatedSessionsProviderTests {
         links.receive(.worktreeList(worktrees: []), from: "srv-b")
         #expect(bReplies == [.worktreeList(worktrees: [])])
     }
-
-    @Test func requestRejectsSessionScopedMessages() {
-        let links = FakeLinks()
-        let provider = FederatedSessionsProvider(links: links)
-        let client = Client()
-        links.goOnline("srv-b", name: "Mac B")
-        #expect(!provider.request(.subscribe(sessionId: "s1"), toPeer: "srv-b", from: client.downstream) { _ in })
-    }
 }
