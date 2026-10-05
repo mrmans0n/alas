@@ -6,9 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-05
+
+### ✨ Features
+
+- Expand ACP orchestration with attachable session context, background-work tracking, fork-context merging, typed child roles, batched delegated results, follow-ups injected into running turns, and recovery after provider usage limits (#1754, #1757, #1765, #1766, #1770, #1771).
+- Add `session_read`, `session_search`, `session_wait`, and `session_interrupt` to the Alas MCP server (#1763).
+- Extend plugins through API 11 and API 12 with remote file and process access, web tabs, and usage history (#1758, #1769).
+- Suggest commit messages on device from staged changes (#1752).
+- Show failed ACP sessions explicitly in the sidebar (#1768).
+
+### 🐛 Fixes
+
+- Stop sent prompts from reappearing after relaunch (#1767).
+- Handle OpenCode 2 correctly in the OpenCode agent integration (#1751).
+
 ### 🏗️ Internal
 
-- Temporarily use the public [Codex ACP fork](https://github.com/mrmans0n/codex-acp) and [Claude Agent ACP fork](https://github.com/mrmans0n/claude-agent-acp) while upstream goal and async-task releases are pending. The minimum candidate versions are `@alas-ide/codex-acp@2.1.1-alas.1` and `@alas-ide/claude-agent-acp@0.85.1-alas.1`.
+- Temporarily use the public [Codex ACP fork](https://github.com/mrmans0n/codex-acp) and [Claude Agent ACP fork](https://github.com/mrmans0n/claude-agent-acp) while upstream goal and async-task releases are pending. The minimum candidate versions are `@alas-ide/codex-acp@2.1.1-alas.1` and `@alas-ide/claude-agent-acp@0.85.1-alas.1` (#1773).
+- Update `tree-sitter-swift` to 0.7.4 and Rust `libc` to 0.2.190 (#1759, #1760).
+- Remove a race between editor inlay edits and post-edit hint refresh in the test suite (#1756).
 
 ## [0.20.1] - 2026-10-03
 
