@@ -468,6 +468,21 @@ struct ACPSessionQueueAPITests {
         #expect(!relaunched.queue[0].deliveryUncertain && !relaunched.queue[0].awaitingInterruptionResume)
     }
 
+    @Test("a queued continuation is removed when the setting was turned off before it was sent")
+    func queuedContinuationRemovedWhenSettingTurnedOff() {
+        let s = mkSession()
+        s.continuesInterruptedTurns = { true }
+        let answered = QueuedPrompt(blocks: [.text("first")], status: .sending, transcriptRecorded: true)
+        let later = QueuedPrompt(blocks: [.text("later")])
+        s.deliveredQueuedPromptIDs = [answered.id]
+        s.restoreQueue([answered, later], markLegacySendingUncertain: true)
+        #expect(s.queue.first?.isInterruptedTurnContinuation == true)
+
+        #expect(s.consumeInterruptedTurns(resume: false))
+
+        #expect(s.queue.map(\.id) == [later.id])
+    }
+
     @Test("interrupted prompts stay held without the setting and are persisted as held",
           arguments: [false, true])
     func interruptedPromptsStayHeld(settingOnNextLaunch: Bool) throws {

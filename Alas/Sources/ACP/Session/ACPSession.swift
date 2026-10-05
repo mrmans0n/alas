@@ -2833,7 +2833,13 @@ final class ACPSession: ObservableObject, Identifiable {
         let itemIDs = Set(queue.filter(\.awaitingInterruptionResume).map(\.id))
         var answeredTurn = false
         for index in queue.indices { queue[index].awaitingInterruptionResume = false }
-        guard resume else { return !itemIDs.isEmpty }
+        guard resume else {
+            // A continuation queued while the setting was on is Alas's own, not
+            // the user's: with it off now, it must not be sent.
+            let count = queue.count
+            queue.removeAll { $0.isInterruptedTurnContinuation }
+            return !itemIDs.isEmpty || queue.count != count
+        }
         var changed = !itemIDs.isEmpty
         // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent
         // and answered after hydration is only visible in the live
