@@ -326,6 +326,11 @@ struct ACPRemoteAdapterManagement {
             \(emit(status: "corrupt"))
             exit \(corruptExitCode)
         fi
+        package=\(SSHCommand.shellQuote(descriptor.packageName))
+        if [ ! -d "$prefix/lib/node_modules/$package" ]; then
+            \(emit(status: "missing"))
+            exit \(missingExitCode)
+        fi
         \(nodeLookup)
         [ -x "$node" ] && [ ! -d "$node" ] || {
             \(emit(status: "prerequisite"))
@@ -449,6 +454,10 @@ struct ACPRemoteAdapterManagement {
             case Self.absentExitCode:
                 return hasStatus("absent", output: result.stdout)
                     ? nil
+                    : .error(message: malformedMessage(descriptor, host: host))
+            case Self.missingExitCode:
+                return hasStatus("missing", output: result.stdout)
+                    ? .missing(reason: "\(descriptor.packageName) is not installed on \(host).")
                     : .error(message: malformedMessage(descriptor, host: host))
             case Self.prerequisiteExitCode:
                 return hasStatus("prerequisite", output: result.stdout)

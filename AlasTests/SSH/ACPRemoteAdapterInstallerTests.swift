@@ -27,7 +27,7 @@ struct ACPRemoteAdapterInstallerTests {
         ])
         let command = commands[0]
         #expect(command.contains("PATH='/opt/node 22/bin':\"$PATH\""))
-        #expect(command.contains("'/opt/node 22/bin/npm' --prefix \"$stage\" install -g '@agentclientprotocol/codex-acp'"))
+        #expect(command.contains("'/opt/node 22/bin/npm' --prefix \"$stage\" install -g '@alas-ide/codex-acp'"))
         #expect(command.contains("staging_root=$HOME/.alas/acp/.staging"))
         #expect(command.contains("live=$HOME/.alas/acp/'codex'"))
         #expect(command.contains("stage=\"$staging_root/codex-"))

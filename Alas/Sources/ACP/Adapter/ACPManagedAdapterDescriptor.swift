@@ -33,6 +33,15 @@ struct ACPManagedAdapterDescriptor: Equatable, Sendable {
         legacyPackageNames: []
     )
 
+    /// Exact identities whose native-delegation contract has been verified.
+    var verifiedPackageNames: [String] {
+        switch agentID {
+        case "claude": [packageName, "@agentclientprotocol/claude-agent-acp"]
+        case "codex": [packageName, "@agentclientprotocol/codex-acp"]
+        default: [packageName]
+        }
+    }
+
     static func descriptor(for agentID: String) -> ACPManagedAdapterDescriptor? {
         switch agentID {
         case claude.agentID: claude

@@ -5,6 +5,24 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test(arguments: ["@alas-ide/codex-acp", "@agentclientprotocol/codex-acp", "codex-acp", "unrelated-acp"])
+    func attachedCodexIdentityEnablesSteeringCompletion(name: String) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1, agentCapabilities: nil, authMethods: [],
+                agentInfo: .init(name: name, version: "1.14.0")))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-codex")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "codex")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.supportsCodexSteeringCompletion == (name != "unrelated-acp"))
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("a broker turn awaiting recovery keeps earlier queued work held across reattachment")
     func recoveryHeldBrokerTurnDoesNotDrainOnReattach() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

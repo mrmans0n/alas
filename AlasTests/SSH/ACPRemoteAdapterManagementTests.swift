@@ -9,6 +9,37 @@ struct ACPRemoteAdapterManagementTests {
         binDirectory: "/opt/node/bin"
     )
 
+    @Test(arguments: [ACPManagedAdapterDescriptor.claude, .codex])
+    func legacyOnlyManagedPrefixRequiresSetup(_ descriptor: ACPManagedAdapterDescriptor) async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let prefix = home.appendingPathComponent(".alas/acp/\(descriptor.agentID)")
+        let bin = prefix.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: prefix.appendingPathComponent("lib/node_modules/\(descriptor.legacyPackageNames[0])"),
+            withIntermediateDirectories: true)
+        for name in [descriptor.binaryName, "node"] {
+            let file = bin.appendingPathComponent(name)
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let management = ACPRemoteAdapterManagement(
+            runner: { _, _, command, _, _ in
+                try await Process.run("/bin/sh", args: ["-c", command], env: ["HOME": home.path, "PATH": bin.path])
+            },
+            nodeResolver: { _ in .init(npmPath: bin.appendingPathComponent("npm").path,
+                                     nodePath: bin.appendingPathComponent("node").path,
+                                     binDirectory: bin.path) }
+        )
+        let resolution = await management.resolve(
+            host: "devbox", descriptor: descriptor, setupCheck: .npxPackage(name: descriptor.packageName))
+        guard case .missing = resolution else {
+            Issue.record("A legacy-only managed prefix must require adapter setup, found \(resolution)")
+            return
+        }
+    }
+
     @Test func managedAdapterWinsWithoutNpm() async {
         let runner = AdapterProbeRunner(results: [
             .init(exitCode: 0, stdout: taggedReady(
