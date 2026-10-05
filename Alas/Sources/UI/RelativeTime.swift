@@ -10,8 +10,8 @@ private enum RelativeTimeFormatters {
 
 /// Compact "now / Nm / Nh / Nd / MMM d" age label, used in commit rows
 /// and commit headers.
-func relativeTime(_ date: Date) -> String {
-    let delta = Date().timeIntervalSince(date)
+func relativeTime(_ date: Date, now: Date = Date()) -> String {
+    let delta = now.timeIntervalSince(date)
     if delta < 60 { return "now" }
     if delta < 3600 { return "\(Int(delta / 60))m" }
     if delta < 86_400 { return "\(Int(delta / 3600))h" }
