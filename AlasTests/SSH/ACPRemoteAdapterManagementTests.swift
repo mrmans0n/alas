@@ -141,6 +141,45 @@ struct ACPRemoteAdapterManagementTests {
         #expect(command?.contains("global_adapter=\"$prefix/bin/$binary\"") == true)
     }
 
+    @Test func globalProbeRejectsBinaryOwnedByLegacyPackage() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let prefix = temp.appendingPathComponent("prefix")
+        let root = prefix.appendingPathComponent("lib/node_modules")
+        let bin = prefix.appendingPathComponent("bin")
+        let downstream = root.appendingPathComponent("@alas-ide/codex-acp")
+        let legacyExecutable = root.appendingPathComponent("@agentclientprotocol/codex-acp/dist/index.js")
+        try FileManager.default.createDirectory(at: downstream, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: legacyExecutable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: legacyExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: legacyExecutable.path)
+        try FileManager.default.createSymbolicLink(
+            at: bin.appendingPathComponent("codex-acp"), withDestinationURL: legacyExecutable)
+
+        let npm = bin.appendingPathComponent("npm")
+        try """
+        #!/bin/sh
+        if [ "$1 $2" = "root -g" ]; then printf '%s\\n' '\(root.path)'; exit 0; fi
+        if [ "$1 $2" = "prefix -g" ]; then printf '%s\\n' '\(prefix.path)'; exit 0; fi
+        exit 1
+        """.write(to: npm, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npm.path)
+
+        let command = ACPRemoteAdapterManagement.globalProbeCommand(
+            descriptor: .codex,
+            setupCheck: managedCheck(.codex),
+            environment: .init(npmPath: npm.path, nodePath: bin.appendingPathComponent("node").path,
+                               binDirectory: bin.path)
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", command])
+
+        #expect(result.exitCode == ACPRemoteAdapterManagement.corruptExitCode)
+        #expect(result.stdout.contains("status=corrupt"))
+    }
+
     @Test func allowedPathFallbackComesAfterMatchingPackageCheck() async throws {
         let runner = AdapterProbeRunner(results: [absentResult(), missingResult()])
         let management = makeManagement(runner: runner)
