@@ -20,6 +20,7 @@ final class AttachIssueDialogModel {
         /// worktree while the user reviews the confirmation step, and with nil
         /// when the user backs out of that step.
         let resolvedIssueChanged: (IssueSnapshot?) -> Void
+        let classifyKind: (@MainActor (IssueSnapshot) async -> IssueKind?)?
 
         init(
             resolve: @escaping (String) async throws -> ResolvedIssue,
@@ -27,7 +28,8 @@ final class AttachIssueDialogModel {
             selectedProjectID: String,
             projects: @escaping () -> [ProjectConfig],
             clipboardText: @escaping () -> String? = { Clipboard.read() },
-            resolvedIssueChanged: @escaping (IssueSnapshot?) -> Void = { _ in }
+            resolvedIssueChanged: @escaping (IssueSnapshot?) -> Void = { _ in },
+            classifyKind: (@MainActor (IssueSnapshot) async -> IssueKind?)? = nil
         ) {
             self.resolve = resolve
             self.loadSuggestions = loadSuggestions
@@ -35,6 +37,7 @@ final class AttachIssueDialogModel {
             self.projects = projects
             self.clipboardText = clipboardText
             self.resolvedIssueChanged = resolvedIssueChanged
+            self.classifyKind = classifyKind
         }
     }
 
@@ -50,6 +53,7 @@ final class AttachIssueDialogModel {
             canContinueManually = false
             errorMessage = nil
             promptIsUserOwned = false
+            resetKind()
         }
     }
     private(set) var phase: Phase = .entry
@@ -72,6 +76,11 @@ final class AttachIssueDialogModel {
     private(set) var canContinueManually = false
     private var generation = 0
     private var promptIsUserOwned = false
+    private(set) var kind: IssueKind?
+    private(set) var kindOrigin: IssueKindOrigin?
+    private(set) var isDetectingKind = false
+    private var kindTask: Task<Void, Never>?
+    private var kindGeneration = 0
     private var fallback: ResolvedIssue?
 
     private let environment: Environment
@@ -90,7 +99,10 @@ final class AttachIssueDialogModel {
             title = initialDraft.source.title
             context = initialDraft.source.body
             prompt = initialDraft.prompt
-            promptIsUserOwned = initialDraft.prompt != IssuePromptBuilder.build(source: initialDraft.source)
+            kind = initialDraft.kind
+            kindOrigin = initialDraft.kindOrigin
+            promptIsUserOwned = initialDraft.prompt
+                != IssuePromptBuilder.build(source: initialDraft.source, kind: initialDraft.kind)
             phase = .confirmation
         } else {
             reference = IssueClipboardPrefill.candidate(from: environment.clipboardText()) ?? ""
@@ -149,6 +161,7 @@ final class AttachIssueDialogModel {
         fallback = nil
         canContinueManually = false
         errorMessage = nil
+        resetKind()
         environment.resolvedIssueChanged(nil)
     }
 
@@ -174,7 +187,9 @@ final class AttachIssueDialogModel {
                 displayReference: source.displayReference,
                 title: source.title
             ),
-            prompt: prompt
+            prompt: prompt,
+            kind: kind,
+            kindOrigin: kindOrigin
         )
     }
 
@@ -192,8 +207,9 @@ final class AttachIssueDialogModel {
         projectID = selectedProjectID(for: resolution)
         title = resolution.source.title
         context = resolution.source.body
+        applyInitialKind(for: resolution.source)
         if !promptIsUserOwned {
-            prompt = IssuePromptBuilder.build(source: resolution.source)
+            prompt = IssuePromptBuilder.build(source: resolution.source, kind: kind)
         }
         fallback = nil
         canContinueManually = false
@@ -204,7 +220,75 @@ final class AttachIssueDialogModel {
 
     private func refreshGeneratedPromptIfNeeded() {
         guard !promptIsUserOwned, phase == .confirmation, let source = draftSource else { return }
-        prompt = IssuePromptBuilder.build(source: source)
+        prompt = IssuePromptBuilder.build(source: source, kind: kind)
+    }
+
+    var kindCaption: String? {
+        if isDetectingKind { return "Detecting…" }
+        switch kindOrigin {
+        case .rule(let reason): return reason
+        case .suggested: return "suggested"
+        case .user, nil: return nil
+        }
+    }
+
+    var canResetPrompt: Bool {
+        promptIsUserOwned && phase == .confirmation
+    }
+
+    /// A user pick always wins: it cancels detection and is never overwritten.
+    func setKind(_ kind: IssueKind?) {
+        cancelKindDetection()
+        self.kind = kind
+        kindOrigin = .user
+        refreshGeneratedPromptIfNeeded()
+    }
+
+    func resetPromptToTemplate() {
+        promptIsUserOwned = false
+        refreshGeneratedPromptIfNeeded()
+    }
+
+    func cancelKindDetection() {
+        kindGeneration += 1
+        kindTask?.cancel()
+        kindTask = nil
+        isDetectingKind = false
+    }
+
+    private func resetKind() {
+        cancelKindDetection()
+        kind = nil
+        kindOrigin = nil
+    }
+
+    /// Rules decide synchronously. Otherwise the model is asked in the
+    /// background, and its answer applies only if nothing the user did has
+    /// superseded it.
+    private func applyInitialKind(for source: IssueSnapshot) {
+        guard kindOrigin != .user else { return }
+        cancelKindDetection()
+        if let decision = IssueKindRules.classify(source) {
+            kind = decision.kind
+            kindOrigin = .rule(reason: decision.reason)
+            return
+        }
+        kind = nil
+        kindOrigin = nil
+        guard let classify = environment.classifyKind else { return }
+        kindGeneration += 1
+        let generation = kindGeneration
+        isDetectingKind = true
+        kindTask = Task { [weak self] in
+            let suggested = await classify(source)
+            guard let self, !Task.isCancelled, generation == self.kindGeneration else { return }
+            self.isDetectingKind = false
+            self.kindTask = nil
+            guard let suggested, self.kindOrigin != .user, !self.promptIsUserOwned else { return }
+            self.kind = suggested
+            self.kindOrigin = .suggested
+            self.refreshGeneratedPromptIfNeeded()
+        }
     }
 
     private func selectedProjectID(for resolution: ResolvedIssue) -> String? {
