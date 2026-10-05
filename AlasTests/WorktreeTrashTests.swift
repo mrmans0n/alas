@@ -141,7 +141,7 @@ struct WorktreeTrashTests {
         ))
     }
 
-    @Test func cleanerReplacementSurvivesWhenSwappedBeforeCleanerLaunch() throws {
+    @Test func cleanerReplacementSurvivesWhenSwappedBeforeCleanerLaunch() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-swap-\(UUID().uuidString)")
         let original = common.appendingPathComponent("original")
@@ -160,18 +160,13 @@ struct WorktreeTrashTests {
         try WorktreeTrash.markCommitted(ticket, at: Date(timeIntervalSince1970: 100))
         let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
 
-        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0) { executable, arguments in
+        try await runCleaner(ticket) {
             try FileManager.default.moveItem(at: ticket.stagedPath, to: displaced)
             try FileManager.default.createDirectory(
                 at: ticket.stagedPath,
                 withIntermediateDirectories: true
             )
             try "keep".write(to: replacementMarker, atomically: true, encoding: .utf8)
-            let process = Foundation.Process()
-            process.executableURL = executable
-            process.arguments = arguments
-            try process.run()
-            process.waitUntilExit()
         }
 
         #expect(FileManager.default.fileExists(atPath: replacementMarker.path))
@@ -183,38 +178,6 @@ struct WorktreeTrashTests {
             olderThan: Date(timeIntervalSince1970: 200)
         )
         #expect(staleTickets.isEmpty)
-    }
-
-    @Test func liveCleanerDoesNotDeleteReplacementSwappedInAfterLaunch() async throws {
-        let common = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-cleaner-live-swap-\(UUID().uuidString)")
-        let displaced = common.appendingPathComponent("displaced")
-        defer { try? FileManager.default.removeItem(at: common) }
-        let ticket = try makeStagedTicket(
-            commonGitDirectory: common,
-            originalBaseName: "clean-me"
-        )
-        try "trash".write(
-            to: ticket.stagedPath.appendingPathComponent("trash.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try WorktreeTrash.markCommitted(ticket)
-        let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
-        let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
-
-        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 1)
-        try FileManager.default.moveItem(at: ticket.stagedPath, to: displaced)
-        try FileManager.default.createDirectory(
-            at: ticket.stagedPath,
-            withIntermediateDirectories: true
-        )
-        try "keep".write(to: replacementMarker, atomically: true, encoding: .utf8)
-        try await Task.sleep(for: .milliseconds(1_500))
-
-        #expect(FileManager.default.fileExists(atPath: replacementMarker.path))
-        #expect(FileManager.default.fileExists(atPath: displaced.path))
-        #expect(FileManager.default.fileExists(atPath: committedMarker.path))
     }
 
     @Test(arguments: [0o000, 0o500])
@@ -246,14 +209,7 @@ struct WorktreeTrashTests {
         try WorktreeTrash.markCommitted(ticket)
         let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
 
-        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
-            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
-            if !stagedExists && !markerExists { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await runCleaner(ticket)
 
         #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
         #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
@@ -262,8 +218,10 @@ struct WorktreeTrashTests {
     @Test func liveCleanerDeletesUserImmutableFiles() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-immutable-\(UUID().uuidString)")
-        defer { try? chflags("nouchg", at: common, recursive: true) }
-        defer { try? FileManager.default.removeItem(at: common) }
+        defer {
+            try? chflags("nouchg", at: common, recursive: true)
+            try? FileManager.default.removeItem(at: common)
+        }
         let ticket = try makeStagedTicket(
             commonGitDirectory: common,
             originalBaseName: "clean-me"
@@ -275,14 +233,7 @@ struct WorktreeTrashTests {
         try WorktreeTrash.markCommitted(ticket)
         let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
 
-        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
-            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
-            if !stagedExists && !markerExists { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await runCleaner(ticket)
 
         #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
         #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
@@ -634,7 +585,8 @@ struct WorktreeTrashTests {
         #expect(!FileManager.default.fileExists(atPath: WorktreeTrash.pendingMarkerURL(for: ticket).path))
     }
 
-    @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
+    @Test(arguments: [0, 6])
+    func liveCleanerDeletesTheTicketAfterItsDelay(delaySeconds: Int) async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: common) }
@@ -650,17 +602,25 @@ struct WorktreeTrashTests {
         try WorktreeTrash.markCommitted(ticket)
         let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
 
-        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
-            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
-            if !stagedExists && !markerExists { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await runCleaner(ticket, delaySeconds: delaySeconds)
 
         #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
         #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
+    }
+
+    private func runCleaner(
+        _ ticket: WorktreeTrashCleanupTicket,
+        delaySeconds: Int = 0,
+        beforeRun: () throws -> Void = {}
+    ) async throws {
+        var command: (executable: URL, arguments: [String])?
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: delaySeconds) { executable, arguments in
+            command = (executable, arguments)
+            try beforeRun()
+        }
+        let captured = try #require(command)
+        let result = try await Process.run(captured.executable.path, args: captured.arguments)
+        try #require(result.exitCode == 0, "Cleaner failed: \(result.stderr)")
     }
 
     private func makeStagedTicket(
