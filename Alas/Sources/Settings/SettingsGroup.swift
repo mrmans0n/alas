@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsGroup<Content: View>: View {
     let title: String?
+    var verticalPadding: CGFloat = 18
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) var theme
 
@@ -16,6 +17,6 @@ struct SettingsGroup<Content: View>: View {
             }
             content()
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, verticalPadding)
     }
 }

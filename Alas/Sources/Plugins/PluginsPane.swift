@@ -12,6 +12,22 @@ extension PluginHostState {
         case .failed(let reason): "Stopped: \(reason)"
         }
     }
+
+    var isFailed: Bool {
+        if case .failed = self { true } else { false }
+    }
+}
+
+/// The status line of an installed plugin in Settings. Hosts still starting or stopping do not count as active.
+enum PluginStatusText {
+    static func make(approved: Bool, enabled: Bool, hostStates: [PluginHostState]) -> String {
+        if !approved { return "Not approved" }
+        if !enabled { return "Disabled" }
+        guard !hostStates.isEmpty else { return "Enabled" }
+        let active = hostStates.filter { $0 == .active }.count
+        let projects = hostStates.count == 1 ? "project" : "projects"
+        return "Enabled · active in \(active) of \(hostStates.count) \(projects)"
+    }
 }
 
 struct PluginsPane: View {
@@ -76,21 +92,27 @@ struct PluginsPane: View {
             SettingsRow(name: "No plugins installed.", desc: nil) { }
         }
         ForEach(manager.plugins) { plugin in
-            SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)") {
-                SettingsRow(name: plugin.id, desc: Self.status(manager, plugin)) {
+            let hosts = manager.hosts(for: plugin)
+            SettingsGroup(title: "\(plugin.manifest.name) \(plugin.manifest.version)", verticalPadding: 8) {
+                SettingsRow(name: plugin.id, desc: PluginStatusText.make(
+                    approved: manager.isApproved(plugin), enabled: manager.isEnabled(plugin),
+                    hostStates: hosts.map(\.host.state))) {
                     if manager.isApproved(plugin) {
-                        AlasToggle(on: Binding(
-                            get: { manager.isEnabled(plugin) },
-                            set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
-                        if let panel = plugin.manifest.configurePanel {
-                            let host = state.pluginConfigureHost(plugin)
-                            AlasButton(title: "Configure…", style: .normal) {
-                                if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
+                        HStack(spacing: 12) {
+                            AlasToggle(on: Binding(
+                                get: { manager.isEnabled(plugin) },
+                                set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
+                            if let panel = plugin.manifest.configurePanel {
+                                let host = state.pluginConfigureHost(plugin)
+                                AlasButton(title: "Configure…", style: .normal) {
+                                    if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
+                                }
+                                .disabled(host == nil)
+                                .help(host == nil ? "Open a project to configure this plugin" : "")
                             }
-                            .disabled(host == nil)
-                            .help(host == nil ? "Open a project to configure this plugin" : "")
+                            Spacer()
+                            AlasButton(title: "Revoke Approval", style: .subtle) { Task { await manager.revoke(plugin) } }
                         }
-                        AlasButton(title: "Revoke Approval", style: .normal) { Task { await manager.revoke(plugin) } }
                     } else {
                         AlasButton(title: "Approve…", style: .normal) { approving = plugin }
                     }
@@ -98,12 +120,15 @@ struct PluginsPane: View {
                 if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
                     PluginSettingsForm(settings: manager.settings(for: plugin))
                 }
-                ForEach(manager.hosts(for: plugin), id: \.key) { entry in
-                    SettingsRow(name: "\(entry.host.project.name) host", desc: entry.host.state.displayText) {
-                        AlasButton(title: "Restart", style: .subtle) { Task { await manager.restart(entry.key) } }
-                    }
-                    if !entry.host.log.isEmpty {
-                        HostLogDisclosure(log: entry.host.log)
+                ForEach(hosts.filter(\.host.state.isFailed), id: \.key) { entry in
+                    hostRow(manager, entry)
+                }
+                if !hosts.isEmpty {
+                    PaneDisclosure(title: "All hosts (\(hosts.count))") {
+                        ForEach(hosts, id: \.key) { entry in
+                            hostRow(manager, entry)
+                        }
+                        .padding(.leading, 14)
                     }
                 }
             }
@@ -115,6 +140,16 @@ struct PluginsPane: View {
                     SettingsRow(name: entry.folder.lastPathComponent, desc: entry.reason, selectable: true) { }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func hostRow(_ manager: PluginManager, _ entry: (key: PluginManager.HostKey, host: PluginHost)) -> some View {
+        SettingsRow(name: "\(entry.host.project.name) host", desc: entry.host.state.displayText) {
+            AlasButton(title: "Restart", style: .subtle) { Task { await manager.restart(entry.key) } }
+        }
+        if !entry.host.log.isEmpty {
+            HostLogDisclosure(log: entry.host.log)
         }
     }
 
@@ -143,6 +178,8 @@ struct PluginsPane: View {
 
     private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
         SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row, failure: installFailures[entry.id]), selectable: true) {
+            capabilitiesLine(row)
+        } control: {
             if busy.contains(entry.id) {
                 ProgressView().controlSize(.small)
             } else {
@@ -159,6 +196,45 @@ struct PluginsPane: View {
                 }
             }
         }
+    }
+
+    /// The capability count with the full list in a tooltip; the approval sheet discloses them again before anything runs.
+    @ViewBuilder
+    private func capabilitiesLine(_ row: PluginCatalogRow) -> some View {
+        switch row {
+        case .install(let version), .update(let version):
+            let summaries = version.capabilities.map { PluginCapability(rawValue: $0)?.summary ?? $0 }
+            let fullAccess = version.capabilities.contains { PluginCapability(rawValue: $0)?.isFullAccess == true }
+            HStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    Text(summaries.isEmpty ? "No capabilities"
+                        : summaries.count == 1 ? "1 capability" : "\(summaries.count) capabilities")
+                    if !summaries.isEmpty { Image(systemName: "info.circle") }
+                }
+                .font(.system(size: 11.5))
+                .foregroundColor(theme.color("fg-dim"))
+                .help(Self.capabilitiesHelp(summaries, fullAccess: fullAccess))
+                if fullAccess {
+                    Text("Full access")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(theme.color("warn").opacity(0.18))
+                        .foregroundColor(theme.color("warn"))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .help("It acts with your permissions, outside the sandbox.")
+                }
+            }
+            .padding(.top, 2)
+        case .installed, .installedLocally, .incompatible:
+            EmptyView()
+        }
+    }
+
+    private static func capabilitiesHelp(_ summaries: [String], fullAccess: Bool) -> String {
+        guard !summaries.isEmpty else { return "" }
+        var lines = ["Asks to:"] + summaries.map { "• \($0)" }
+        if fullAccess { lines.append("Full access: it acts with your permissions, outside the sandbox.") }
+        return lines.joined(separator: "\n")
     }
 
     private func removeButton(_ manager: PluginManager, _ id: String) -> some View {
@@ -180,27 +256,16 @@ struct PluginsPane: View {
         }
     }
 
-    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow, failure: String?) -> String {
+    private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow, failure: String?) -> String? {
         var lines = [entry.summary].compactMap { $0 }
         switch row {
-        case .install(let version), .update(let version):
-            let asks = version.capabilities.map { PluginCapability(rawValue: $0)?.summary ?? $0 }
-            lines.append(asks.isEmpty ? "Asks for no capabilities." : "Asks to: " + asks.joined(separator: "; ") + ".")
-            if version.capabilities.contains(where: { PluginCapability(rawValue: $0)?.isFullAccess == true }) {
-                lines.append("Asks for full access: it acts with your permissions, outside the sandbox.")
-            }
+        case .install, .update: break
         case .installed: lines.append("Installed from the catalog.")
         case .installedLocally: lines.append("Installed locally; the catalog leaves it alone.")
         case .incompatible: lines.append("No version runs on this Alas.")
         }
         if let failure { lines.append(failure) }
-        return lines.joined(separator: "\n")
-    }
-
-    private static func status(_ manager: PluginManager, _ plugin: PluginManager.Plugin) -> String {
-        if !manager.isApproved(plugin) { return "Not approved" }
-        if !manager.isEnabled(plugin) { return "Disabled" }
-        return "Enabled"
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 }
 
@@ -321,15 +386,40 @@ private struct PluginConfigureSheet: View {
     }
 }
 
-/// Host log collapsed by default: PluginHost retains up to 200 entries of up
-/// to 2,000 characters each, so rendering it inline would flood the pane.
-private struct HostLogDisclosure: View {
-    let log: [PluginLogEntry]
+/// A disclosure whose whole label toggles it, chevron included, in one dim color so it stays secondary to the rows.
+private struct PaneDisclosure<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
     @State private var isExpanded = false
     @Environment(\.theme) var theme
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 10)
+                    Text(title).font(.system(size: 11.5))
+                }
+                .foregroundColor(theme.color("fg-dim"))
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isExpanded { content() }
+        }
+    }
+}
+
+/// Host log collapsed by default: PluginHost retains up to 200 entries of up
+/// to 2,000 characters each, so rendering it inline would flood the pane.
+private struct HostLogDisclosure: View {
+    let log: [PluginLogEntry]
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        PaneDisclosure(title: "Log (\(log.count))") {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(log.enumerated()), id: \.offset) { _, entry in
                     Text("[\(entry.level)] \(entry.message)")
@@ -339,10 +429,7 @@ private struct HostLogDisclosure: View {
                 }
             }
             .padding(.vertical, 6)
-        } label: {
-            Text("Log (\(log.count))")
-                .font(.system(size: 11.5))
-                .foregroundColor(theme.color("fg-dim"))
+            .padding(.leading, 15)
         }
         .padding(.leading, 12)
         .padding(.bottom, 10)

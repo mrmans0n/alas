@@ -9,11 +9,13 @@ enum SettingsRowLayout {
     }
 }
 
-struct SettingsRow<Control: View>: View {
+struct SettingsRow<Control: View, Detail: View>: View {
     let name: String
     var desc: String? = nil
     /// Makes the name/description text selectable (diagnostics, URLs, paths).
     var selectable: Bool = false
+    /// Extra content under the description, in the name column.
+    @ViewBuilder let detail: () -> Detail
     @ViewBuilder let control: () -> Control
     @Environment(\.theme) var theme
 
@@ -29,6 +31,7 @@ struct SettingsRow<Control: View>: View {
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                detail()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
@@ -40,6 +43,12 @@ struct SettingsRow<Control: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 10)
         .overlay(Divider().opacity(0.5), alignment: .top)
+    }
+}
+
+extension SettingsRow where Detail == EmptyView {
+    init(name: String, desc: String? = nil, selectable: Bool = false, @ViewBuilder control: @escaping () -> Control) {
+        self.init(name: name, desc: desc, selectable: selectable, detail: { EmptyView() }, control: control)
     }
 }
 
