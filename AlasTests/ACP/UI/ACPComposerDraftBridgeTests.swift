@@ -510,6 +510,22 @@ struct ACPComposerDraftBridgeTests {
         ]))
     }
 
+    @Test("a pasted-text chip round-trips through the draft and extracts its full content")
+    func pastedTextChipRoundTrip() {
+        let content = String(repeating: "log line\n", count: 30)
+        let draft = ACPComposerDraft(segments: [
+            .text("see "), .pastedText(ordinal: 1, content: content), .text(" why"),
+        ])
+
+        let attributed = ACPInputField.Coordinator.attributedString(from: draft)
+
+        #expect(attributed.length == "see ".utf16.count + 1 + " why".utf16.count)
+        #expect(ACPInputField.Coordinator.draft(from: attributed) == draft)
+        let (text, attachments) = ACPInputField.Coordinator.extract(attributed)
+        #expect(text == "see " + content + " why")
+        #expect(attachments.isEmpty)
+    }
+
     @Test("restores mention chips from draft")
     func restoresAttributedDraft() {
         let draft = ACPComposerDraft(segments: [

@@ -570,12 +570,13 @@ final class ACPSessionManager: ObservableObject {
     /// same loss. The draft is inspected BEFORE calling `takeForEditing`,
     /// which removes-and-returns atomically — refusing after removal would
     /// strand the prompt outside the queue instead of just leaving it be.
+    /// A pasted-text segment is plain text, so it stays editable there; the web composer just shows its full content instead of a badge.
     func queueEdit(for id: ACPSession.ID, itemId: UUID) async -> String? {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return nil }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
         let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
             switch segment {
-            case .text, .upstreamReference: return false
+            case .text, .upstreamReference, .pastedText: return false
             case .mention, .image: return true
             }
         }

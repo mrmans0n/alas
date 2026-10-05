@@ -10,7 +10,7 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segment {
             case .text(let value):
                 value.isEmpty
-            case .mention, .image, .upstreamReference:
+            case .mention, .image, .upstreamReference, .pastedText:
                 false
             }
         }
@@ -24,7 +24,7 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segment {
             case .text(let value):
                 return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .mention, .image, .upstreamReference:
+            case .mention, .image, .upstreamReference, .pastedText:
                 return true
             }
         }
@@ -43,6 +43,8 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                 result += value
             case .upstreamReference(let reference):
                 result += reference.spelling
+            case .pastedText(_, let content):
+                result += content
             case .mention(let displayName, _):
                 result += "@" + displayName
                 if !nextSegmentStartsWithWhitespace(after: index) {
@@ -65,6 +67,8 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segments[next] {
             case .text(let value):
                 return value.first?.isWhitespace ?? false
+            case .pastedText(_, let content):
+                return content.first?.isWhitespace ?? false
             case .mention, .upstreamReference:
                 return false
             case .image:
@@ -75,11 +79,15 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
     }
 
     /// Character offset, into the flattened message text, of each `.image`
-    /// segment in order. `.text` contributes literal characters, `.mention`
-    /// contributes `"@displayName "`, `.upstreamReference` contributes its
-    /// spelling, and `.image` contributes nothing. Used to attach `textOffset`
-    /// to each recorded image attachment so the transcript marks its position.
+    /// segment in order. `.text` and `.pastedText` contribute their literal
+    /// characters, `.mention` contributes `"@displayName "`,
+    /// `.upstreamReference` contributes its spelling, and `.image`
+    /// contributes nothing. Used to attach `textOffset` to each recorded
+    /// image attachment so the transcript marks its position. Returns early
+    /// without images, so a large paste is never walked by grapheme for
+    /// nothing.
     func imageTextOffsets() -> [Int] {
+        guard segments.contains(where: { if case .image = $0 { true } else { false } }) else { return [] }
         var offset = 0
         var offsets: [Int] = []
         for segment in segments {
@@ -90,11 +98,69 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                 offset += ("@" + displayName + " ").count
             case .upstreamReference(let reference):
                 offset += reference.spelling.count
+            case .pastedText(_, let content):
+                offset += content.count
             case .image:
                 offsets.append(offset)
             }
         }
         return offsets
+    }
+
+    /// UTF-16 span of each `.pastedText` segment inside `text`, the message
+    /// text `ACPInputField.Coordinator.extract` produced from this draft.
+    /// Each segment advances the offset by what `extract` writes for it.
+    /// Returns `[]` unless every span's slice of `text` equals its segment's
+    /// content, so a send path that changed the text records no badges
+    /// instead of wrong ones.
+    func pastedTextSpans(matching text: String) -> [ACPPastedTextSpan] {
+        var offset = 0
+        var spans: [ACPPastedTextSpan] = []
+        var contents: [String] = []
+        for segment in segments {
+            switch segment {
+            case .text(let value):
+                offset += value.utf16.count
+            case .mention(let displayName, _):
+                offset += ("@" + displayName + " ").utf16.count
+            case .upstreamReference(let reference):
+                offset += reference.spelling.utf16.count
+            case .image:
+                break
+            case .pastedText(let ordinal, let content):
+                let length = content.utf16.count
+                spans.append(ACPPastedTextSpan(ordinal: ordinal, utf16Offset: offset, utf16Length: length))
+                contents.append(content)
+                offset += length
+            }
+        }
+        guard !spans.isEmpty else { return [] }
+        let source = text as NSString
+        for (span, content) in zip(spans, contents) {
+            guard NSMaxRange(span.utf16Range) <= source.length,
+                  source.compare(content, options: .literal, range: span.utf16Range) == .orderedSame
+            else { return [] }
+        }
+        return spans
+    }
+
+    /// This draft with every `.pastedText` ordinal found in `taken` moved to
+    /// a fresh number above all ordinals in use, so a pasted copy never
+    /// shows the same "#N" as a badge already in the composer.
+    func renumberingPastedText(avoiding taken: Set<Int>) -> ACPComposerDraft {
+        let own = segments.compactMap { segment -> Int? in
+            if case .pastedText(let ordinal, _) = segment { return ordinal }
+            return nil
+        }
+        guard own.contains(where: taken.contains) else { return self }
+        var next = (taken.union(own).max() ?? 0) + 1
+        var used = taken
+        return ACPComposerDraft(segments: segments.map { segment in
+            guard case .pastedText(let ordinal, let content) = segment else { return segment }
+            if used.insert(ordinal).inserted { return segment }
+            defer { next += 1 }
+            return .pastedText(ordinal: next, content: content)
+        })
     }
 
     enum Segment: Codable, Equatable, Sendable {
@@ -104,6 +170,9 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         /// A reference already represented by a composer chip. Plain
         /// references remain `.text` so restoration can retain the caret guard.
         case upstreamReference(CodeHostReference)
+        /// A paste collapsed into a badge. `content` is sent verbatim in
+        /// place of the chip; `ordinal` is the "#N" the badge shows.
+        case pastedText(ordinal: Int, content: String)
 
         private enum CodingKeys: String, CodingKey {
             case type
@@ -112,6 +181,7 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             case uri
             case mimeType
             case spelling
+            case ordinal
         }
 
         private enum SegmentType: String, Codable, Sendable {
@@ -119,6 +189,7 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             case mention
             case image
             case upstreamReference
+            case pastedText
         }
 
         init(from decoder: Decoder) throws {
@@ -146,6 +217,10 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                     )
                 }
                 self = .upstreamReference(reference)
+            case .pastedText:
+                self = .pastedText(
+                    ordinal: try container.decode(Int.self, forKey: .ordinal),
+                    content: try container.decode(String.self, forKey: .text))
             }
         }
 
@@ -166,6 +241,10 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             case .upstreamReference(let reference):
                 try container.encode(SegmentType.upstreamReference, forKey: .type)
                 try container.encode(reference.spelling, forKey: .spelling)
+            case .pastedText(let ordinal, let content):
+                try container.encode(SegmentType.pastedText, forKey: .type)
+                try container.encode(ordinal, forKey: .ordinal)
+                try container.encode(content, forKey: .text)
             }
         }
     }
@@ -194,6 +273,8 @@ extension ACPComposerDraft {
                 text += value
             case .upstreamReference(let reference):
                 text += reference.spelling
+            case .pastedText(_, let content):
+                text += content
             case .mention(let displayName, let uri):
                 text += "@\(displayName) "
                 attachments.append(.init(uri: uri, name: displayName))

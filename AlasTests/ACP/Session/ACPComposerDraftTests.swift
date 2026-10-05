@@ -11,6 +11,7 @@ struct ACPComposerDraftTests {
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
             .text(" and "),
             .upstreamReference(CodeHostReference(sigil: .hash, number: 12)),
+            .pastedText(ordinal: 2, content: "line\nline\n"),
             .text("\nThen explain the bug.")
         ])
 
@@ -26,9 +27,10 @@ struct ACPComposerDraftTests {
             .text("/review "),
             .upstreamReference(CodeHostReference(sigil: .bang, number: 8)),
             .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .pastedText(ordinal: 1, content: " LOG"),
             .text(" tail")
         ])
-        #expect(draft.plainText == "/review !8 tail")
+        #expect(draft.plainText == "/review !8 LOG tail")
         #expect(!draft.plainText.contains("\u{FFFC}"))
     }
 
@@ -163,5 +165,44 @@ struct ACPComposerDraftTests {
             .image(uri: "file:///tmp/2.png", mimeType: "image/png")
         ])
         #expect(draft.imageTextOffsets() == [2, 4])
+    }
+
+    @Test("imageTextOffsets counts a pasted segment's characters")
+    func imageTextOffsetsAfterPastedText() {
+        let draft = ACPComposerDraft(segments: [
+            .pastedText(ordinal: 1, content: "😀ab"),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png")
+        ])
+        #expect(draft.imageTextOffsets() == [3])
+    }
+
+    @Test("pastedTextSpans offsets count what extract writes before the paste", arguments: [
+        ([ACPComposerDraft.Segment.text("see ")], "see "),
+        ([ACPComposerDraft.Segment.mention(displayName: "File.swift", uri: "file:///tmp/File.swift")], "@File.swift "),
+        ([ACPComposerDraft.Segment.upstreamReference(CodeHostReference(sigil: .hash, number: 12)), .text(" ")], "#12 "),
+        ([ACPComposerDraft.Segment.text("a "), .image(uri: "file:///tmp/shot.png", mimeType: "image/png")], "a "),
+        ([ACPComposerDraft.Segment.text("😀 ")], "😀 "),
+    ])
+    func pastedTextSpanOffsets(prefix: [ACPComposerDraft.Segment], wirePrefix: String) {
+        let draft = ACPComposerDraft(segments: prefix + [.pastedText(ordinal: 1, content: "LOG"), .text(" end")])
+        #expect(draft.pastedTextSpans(matching: wirePrefix + "LOG end")
+            == [ACPPastedTextSpan(ordinal: 1, utf16Offset: wirePrefix.utf16.count, utf16Length: 3)])
+    }
+
+    @Test("pastedTextSpans records nothing when the sent text no longer matches the draft")
+    func pastedTextSpansMismatch() {
+        let draft = ACPComposerDraft(segments: [.text("see "), .pastedText(ordinal: 1, content: "LOG")])
+        #expect(draft.pastedTextSpans(matching: "see LOX").isEmpty)
+        #expect(draft.pastedTextSpans(matching: "see").isEmpty)
+    }
+
+    @Test("renumbering moves only colliding pasted ordinals above every ordinal in use")
+    func renumberingPastedText() {
+        let draft = ACPComposerDraft(segments: [
+            .pastedText(ordinal: 1, content: "a"), .text(" "), .pastedText(ordinal: 4, content: "b"),
+        ])
+        #expect(draft.renumberingPastedText(avoiding: [1, 2]) == ACPComposerDraft(segments: [
+            .pastedText(ordinal: 5, content: "a"), .text(" "), .pastedText(ordinal: 4, content: "b"),
+        ]))
     }
 }

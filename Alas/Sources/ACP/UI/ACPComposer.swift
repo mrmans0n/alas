@@ -800,7 +800,9 @@ struct ACPInputField: NSViewRepresentable {
                 }
             }
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let path = keys[.pathReference] as? String {
+                if let chip = keys[.attachment] as? ACPPastedTextChipAttachment {
+                    segments.append(.pastedText(ordinal: chip.ordinal, content: chip.content))
+                } else if let path = keys[.pathReference] as? String {
                     appendText(String(repeating: path, count: range.length))
                 } else if let command = keys[.commandChipName] as? String {
                     appendText(command)
@@ -851,6 +853,10 @@ struct ACPInputField: NSViewRepresentable {
                         .attachmentURI: uri,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
+                case .pastedText(let ordinal, let content):
+                    result.append(ACPPastedTextChip.attributedChip(
+                        ordinal: ordinal, content: content, label: nil, attributes: baseAttributes
+                    ))
                 case .upstreamReference(let reference):
                     let marker = NSMutableAttributedString(
                         string: reference.spelling, attributes: baseAttributes
@@ -886,12 +892,16 @@ struct ACPInputField: NSViewRepresentable {
         /// Upstream references emit their spelling; edited pending markers
         /// fall back to the visible text. Other text, including Markdown
         /// markers, is concatenated verbatim for the receiving agent.
+        /// Pasted-text chips emit their full content.
         static func extract(_ attributed: NSAttributedString) -> (String, [ACPMessage.Attachment]) {
             var text = ""
             var atts: [ACPMessage.Attachment] = []
             let full = NSRange(location: 0, length: attributed.length)
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let path = keys[.pathReference] as? String {
+                if let chip = keys[.attachment] as? ACPPastedTextChipAttachment {
+                    // The agent gets the paste verbatim where the chip sat.
+                    text += chip.content
+                } else if let path = keys[.pathReference] as? String {
                     text += String(repeating: path, count: range.length)
                 } else if let command = keys[.commandChipName] as? String {
                     text += command
@@ -928,13 +938,13 @@ struct ACPInputField: NSViewRepresentable {
 }
 
 extension Dictionary where Key == NSAttributedString.Key, Value == Any {
-    /// A composer chip run (mention, image, command, or upstream reference)
+    /// A composer chip run (mention, image, command, upstream reference, path, or pasted text)
     /// that restyling must leave alone: resetting its attributes strips the
     /// attachment.
     var isComposerChip: Bool {
         self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil
             || self[.commandChipName] != nil || self[.upstreamReference] != nil
-            || self[.pathReference] != nil
+            || self[.pathReference] != nil || self[.pastedTextOrdinal] != nil
     }
 }
 
