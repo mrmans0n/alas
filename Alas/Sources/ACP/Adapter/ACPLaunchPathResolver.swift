@@ -54,15 +54,21 @@ struct ACPLaunchPathResolver {
         let candidate = "\(binDir)/\(spec.command)"
         guard FileManager.default.isExecutableFile(atPath: candidate) else { return nil }
         guard let package else { return candidate }
+        return Self.isPackageOwnedExecutable(atPath: candidate, package: package) ? candidate : nil
+    }
+
+    static func isPackageOwnedExecutable(atPath candidate: String, package: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: candidate) else { return false }
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
-            return nil
+            return false
         }
+        let binDir = URL(fileURLWithPath: candidate).deletingLastPathComponent()
         let target = destination.hasPrefix("/")
             ? URL(fileURLWithPath: destination).standardizedFileURL.path
-            : URL(fileURLWithPath: binDir, isDirectory: true)
+            : binDir
                 .appendingPathComponent(destination)
                 .standardizedFileURL.path
-        return target.contains("/node_modules/\(package)/") ? candidate : nil
+        return target.contains("/node_modules/\(package)/")
     }
 
     /// The PATH-resolved absolute path of `command`, if any.

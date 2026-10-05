@@ -70,7 +70,17 @@ struct ACPSetupChecker {
               let relativePath = manifest.path(for: descriptor.binaryName) else { return false }
         let executable = packageDirectory.appendingPathComponent(relativePath).standardizedFileURL
         guard executable.path.hasPrefix(packageDirectory.standardizedFileURL.path + "/") else { return false }
-        return FileManager.default.isExecutableFile(atPath: executable.path)
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
+        guard let prefixResult = try? await Process.run(
+            npm,
+            args: ["prefix", "-g"],
+            env: env
+        ) else { return false }
+        let prefix = prefixResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return false }
+        let globalBinary = URL(fileURLWithPath: prefix, isDirectory: true)
+            .appendingPathComponent("bin/\(descriptor.binaryName)").path
+        return ACPLaunchPathResolver.isPackageOwnedExecutable(atPath: globalBinary, package: name)
     }
 }
 

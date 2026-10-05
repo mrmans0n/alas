@@ -21,7 +21,13 @@ struct ACPLaunchPathResolverTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let npm = dir.appendingPathComponent("npm")
-        try "#!/bin/sh\nprintf '%s\\n' '\(root.path)'\n".write(to: npm, atomically: true, encoding: .utf8)
+        let prefix = root.deletingLastPathComponent()
+        try """
+        #!/bin/sh
+        if [ "$1 $2" = "root -g" ]; then printf '%s\\n' '\(root.path)'; exit 0; fi
+        if [ "$1 $2" = "prefix -g" ]; then printf '%s\\n' '\(prefix.path)'; exit 0; fi
+        exit 1
+        """.write(to: npm, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npm.path)
         return npm
     }
@@ -159,6 +165,12 @@ struct ACPLaunchPathResolverTests {
         _ = try makeExecutable(
             named: "index.js",
             inDir: downstreamPackage.appendingPathComponent("dist", isDirectory: true))
+        #expect(await checker.evaluate(claude.setupCheck) == .missing(
+            reason: "npm package `@alas-ide/claude-agent-acp` is not installed globally"))
+        try FileManager.default.removeItem(at: claudeBinary)
+        try FileManager.default.createSymbolicLink(
+            at: claudeBinary,
+            withDestinationURL: downstreamPackage.appendingPathComponent("dist/index.js"))
         #expect(await checker.evaluate(claude.setupCheck) == .ready)
     }
 
