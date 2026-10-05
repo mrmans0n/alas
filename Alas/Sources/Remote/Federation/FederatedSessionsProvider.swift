@@ -110,6 +110,43 @@ final class FederatedSessionsProvider {
         let message: RemoteClientMessage
     }
 
+    /// The unscoped requests a client can aim at one peer. Their replies carry
+    /// no request id, so each kind is answered in the order it was asked.
+    private enum PeerRequestKind: Hashable {
+        case agents, worktrees, create
+
+        init?(request: RemoteClientMessage) {
+            switch request {
+            case .listAgents: self = .agents
+            case .listWorktrees: self = .worktrees
+            case .createSession: self = .create
+            default: return nil
+            }
+        }
+
+        init?(reply: RemoteServerMessage) {
+            switch reply {
+            case .agentList: self = .agents
+            case .worktreeList: self = .worktrees
+            case .sessionCreated, .createSessionFailed: self = .create
+            default: return nil
+            }
+        }
+    }
+
+    private struct PeerRequestKey: Hashable {
+        let serverId: String
+        let kind: PeerRequestKind
+    }
+
+    private struct PendingPeerRequest {
+        let downstreamId: UUID
+        let message: RemoteClientMessage
+        /// Nil once the requester detached; the reply is still consumed so
+        /// the next requester gets its own answer.
+        var reply: (@MainActor (RemoteServerMessage) -> Void)?
+    }
+
     private let links: FederatedPeerLinks
     private var downstreams: [UUID: WeakDownstream] = [:]
     /// Peers that carry sessions right now, by `serverId`.
@@ -125,6 +162,8 @@ final class FederatedSessionsProvider {
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
+    /// One queue per peer and kind; only the head is outstanding upstream.
+    private var peerRequests: [PeerRequestKey: [PendingPeerRequest]] = [:]
     private var pollTimer: Task<Void, Never>?
     private var lastListRequestAt: Date?
     private let now: () -> Date
@@ -165,6 +204,7 @@ final class FederatedSessionsProvider {
             removeSubscriber(id, from: namespaced)
         }
         removeComparisonRequests(for: id)
+        removePeerRequests(for: id)
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -228,6 +268,21 @@ final class FederatedSessionsProvider {
         return true
     }
 
+    /// Sends an unscoped request to one peer and hands its reply to `reply`
+    /// only. Returns false when the message is not one of `listAgents`,
+    /// `listWorktrees`, `createSession`, or the peer does not carry sessions.
+    func request(_ message: RemoteClientMessage, toPeer serverId: String,
+                 from downstream: FederatedDownstream,
+                 reply: @escaping @MainActor (RemoteServerMessage) -> Void) -> Bool {
+        guard activePeers[serverId] != nil, let kind = PeerRequestKind(request: message) else { return false }
+        let key = PeerRequestKey(serverId: serverId, kind: kind)
+        var queue = peerRequests[key, default: []]
+        queue.append(PendingPeerRequest(downstreamId: downstream.id, message: message, reply: reply))
+        peerRequests[key] = queue
+        if queue.count == 1 { links.sendToPeer(message, serverId: serverId) }
+        return true
+    }
+
     // MARK: - Upstream
 
     private func handle(_ event: FederatedPeerLinkEvent) {
@@ -253,6 +308,10 @@ final class FederatedSessionsProvider {
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
             default:
+                if let kind = PeerRequestKind(reply: message) {
+                    deliverPeerReply(message, kind: kind, from: peer)
+                    return
+                }
                 guard let sessionId = message.sessionId else { return }
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
                 switch message {
@@ -297,6 +356,13 @@ final class FederatedSessionsProvider {
                 pendingRequests[namespaced] = nil
             }
             comparisonRequests = comparisonRequests.filter { !$0.key.sessionId.hasPrefix(prefix) }
+            for key in Array(peerRequests.keys) where key.serverId == serverId {
+                let pending = peerRequests.removeValue(forKey: key) ?? []
+                guard key.kind == .create else { continue }
+                for request in pending {
+                    request.reply?(.createSessionFailed(message: "Peer is unavailable."))
+                }
+            }
         }
         for serverId in current.keys where previous[serverId] == nil {
             links.sendToPeer(.listSessions, serverId: serverId)
@@ -401,6 +467,32 @@ final class FederatedSessionsProvider {
         }
         completed.downstreamId.flatMap { downstreams[$0]?.value }?.send(message)
         return true
+    }
+
+    private func deliverPeerReply(_ message: RemoteServerMessage, kind: PeerRequestKind, from peer: FederatedPeerInfo) {
+        let key = PeerRequestKey(serverId: peer.serverId, kind: kind)
+        guard var queue = peerRequests[key], !queue.isEmpty else { return }
+        let completed = queue.removeFirst()
+        if let next = queue.first {
+            peerRequests[key] = queue
+            links.sendToPeer(next.message, serverId: peer.serverId)
+        } else {
+            peerRequests[key] = nil
+        }
+        if case .sessionCreated(let summary) = message {
+            completed.reply?(.sessionCreated(session: summary.namespaced(under: peer)))
+        } else {
+            completed.reply?(message)
+        }
+    }
+
+    private func removePeerRequests(for downstreamId: UUID) {
+        for key in Array(peerRequests.keys) {
+            guard var queue = peerRequests[key], !queue.isEmpty else { continue }
+            if queue[0].downstreamId == downstreamId { queue[0].reply = nil }
+            queue = [queue[0]] + queue.dropFirst().filter { $0.downstreamId != downstreamId }
+            peerRequests[key] = queue
+        }
     }
 
     private func removeComparisonRequests(for downstreamId: UUID) {
