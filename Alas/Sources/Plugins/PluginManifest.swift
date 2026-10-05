@@ -18,6 +18,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case filesRead = "files.read"
     case filesWrite = "files.write"
     case sessionContext = "session.context"
+    case usageRead = "usage.read"
 
     /// The plugin API that introduced the capability; a manifest for an older API cannot ask for it.
     var api: Int {
@@ -25,6 +26,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .notify, .network, .timers: 5
         case .sessionWrite, .runsRead, .runsStart, .reviewRead, .reviewWrite, .processExec, .filesRead, .filesWrite: 6
         case .sessionContext: 7
+        case .usageRead: 12
         default: 4
         }
     }
@@ -49,6 +51,7 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
         case .filesRead: "Read files in this project's worktrees"
         case .filesWrite: "Create and change files in this project's worktrees"
         case .sessionContext: "Add text to every prompt sent to agents in this project"
+        case .usageRead: "Read your agents' token usage, cost and usage-limit history across all projects"
         }
     }
 
@@ -82,6 +85,8 @@ enum PluginEvent: String, Sendable, Hashable {
     case runStarted = "run.started"
     case runFinished = "run.finished"
     case reviewChanged = "review.changed"
+    // API 12.
+    case turnFinished = "turn.finished"
 
     var capability: PluginCapability {
         switch self {
@@ -89,17 +94,28 @@ enum PluginEvent: String, Sendable, Hashable {
         case .gitChanged, .worktreeCreated, .worktreeRemoved, .focusChanged: .workspaceRead
         case .runStarted, .runFinished: .runsRead
         case .reviewChanged: .reviewRead
+        case .turnFinished: .usageRead
         }
     }
 
-    var api: Int { capability == .sessionRead ? 5 : 6 }
+    var api: Int {
+        switch capability {
+        case .sessionRead: 5
+        case .usageRead: 12
+        default: 6
+        }
+    }
     /// `session.state` is sent as `session/state`.
     var method: String { rawValue.replacingOccurrences(of: ".", with: "/") }
 }
 
 /// A tab the plugin draws with `alas.present` (canvas) or describes with `view/render` (view).
 struct PluginTabContribution: Equatable, Sendable {
-    enum Kind: String, Sendable { case canvas, view }
+    enum Kind: String, Sendable {
+        case canvas, view
+        /// A page from the manifest's `web` script, in a sandboxed web view (API 12).
+        case web
+    }
 
     let id: String
     let title: String
@@ -189,6 +205,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case invalidProcess(String)
     case invalidPrompt(String)
     case invalidRemote
+    case invalidWeb(String)
 
     var description: String {
         switch self {
@@ -228,13 +245,15 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "invalid prompt contribution: \(reason)"
         case .invalidRemote:
             "\"remote\" needs capability \"files.read\", \"files.write\" or \"process.exec\""
+        case .invalidWeb(let reason):
+            "invalid web page: \(reason)"
         }
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...11
+    static let supportedAPIVersions = 4...12
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -267,6 +286,8 @@ struct PluginManifest: Equatable, Sendable {
     var prompts: [PluginPromptContribution] = []
     /// `process.*` and `file/*` also work on worktrees of SSH projects, run on that host (API 11).
     var remote = false
+    /// The script a `web` tab's page runs, relative to the plugin folder like `entry` (API 12).
+    var web: String?
 
     /// The panel Settings → Plugins opens with Configure… (API 9).
     var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
@@ -308,11 +329,28 @@ struct PluginManifest: Equatable, Sendable {
             guard capabilities.contains(event.capability) else { throw .eventNeedsCapability(name) }
             events.append(event)
         }
-        guard !entry.hasPrefix("/"), !entry.split(separator: "/").contains("..") else {
-            throw .invalidEntry(entry)
-        }
+        guard isRelativePath(entry) else { throw .invalidEntry(entry) }
         if raw.contributesMalformed { throw .malformed }
         let tabs = try parseTabs(raw.contributes?.tabs ?? [])
+        if let web = raw.web {
+            guard api >= 12 else { throw .needsNewerAPI("\"web\"", api: 12) }
+            guard isRelativePath(web), !web.isEmpty else { throw .invalidWeb("\"\(web)\" must be a relative path inside the plugin folder") }
+            // A file name, not the folder a trailing `/` or `.` would name.
+            guard !web.hasSuffix("/"), (web as NSString).lastPathComponent != "." else {
+                throw .invalidWeb("\"\(web)\" must name a file")
+            }
+            // Installing writes each file in turn, so none may be another, or a folder holding another.
+            guard !pathsCollide(web, entry) else {
+                throw .invalidWeb("\"web\" and \"entry\" must be different files, neither inside the other")
+            }
+            guard !pathsCollide(web, "plugin.json") else { throw .invalidWeb("\"web\" can't use the name plugin.json") }
+        }
+        if let tab = tabs.first(where: { $0.kind == .web }) {
+            guard api >= 12 else { throw .needsNewerAPI("tab \"\(tab.id)\" kind \"web\"", api: 12) }
+            guard raw.web != nil else { throw .invalidWeb("tab \"\(tab.id)\" has kind \"web\", so the manifest needs \"web\"") }
+        } else if raw.web != nil {
+            throw .invalidWeb("\"web\" needs a tab with kind \"web\"")
+        }
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
         let commands = try parseCommands(raw.contributes?.commands ?? [], tabs: tabs, api: api)
         if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
@@ -349,7 +387,21 @@ struct PluginManifest: Equatable, Sendable {
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote)
+            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web)
+    }
+
+    /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
+    /// after `./` and `//` are removed, ignoring case and Unicode normalization, as the default macOS volume does.
+    static func pathsCollide(_ a: String, _ b: String) -> Bool {
+        func normalized(_ path: String) -> String {
+            (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping.lowercased()
+        }
+        let (a, b) = (normalized(a), normalized(b))
+        return a == b || a.hasPrefix(b + "/") || b.hasPrefix(a + "/")
+    }
+
+    private static func isRelativePath(_ path: String) -> Bool {
+        !path.hasPrefix("/") && !path.split(separator: "/").contains("..")
     }
 
     static func isValidHost(_ host: String) -> Bool {
@@ -585,10 +637,11 @@ private struct Raw: Decodable {
     let network: [String]?
     let processes: [RawProcess]?
     let remote: Bool?
+    let web: String?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, contributes }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -605,6 +658,7 @@ private struct Raw: Decodable {
         network = container.contains(.network) ? try container.decode([String].self, forKey: .network) : nil
         processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
         remote = container.contains(.remote) ? try container.decode(Bool.self, forKey: .remote) : nil
+        web = container.contains(.web) ? try container.decode(String.self, forKey: .web) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)

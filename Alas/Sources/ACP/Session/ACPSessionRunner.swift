@@ -130,11 +130,28 @@ final class ACPSessionRunner {
     /// while it was still the active prompt. Recovery-context prompts and
     /// superseded prompts do not fire.
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    /// Every turn that reached the agent, for usage history: each completed one, and one a steer superseded once its
+    /// result arrives, which `onTurnCompleted` never reports.
+    private let onTurnUsage: ((ACPTurnCompletion) -> Void)?
     /// Fires when this session's permission policy parks for a human. Only
     /// meaningful for a delegated child, whose parent is told; the manager
     /// decides that, not the runner.
     private let onPermissionBlocked: ((ACPChildBlocker) -> Void)?
     private var activePromptStartedAt: Int64?
+    /// The client's `yieldedUpdateCount` when the active prompt started: updates past it belong to the turn.
+    private var activePromptStreamStart = 0
+    /// See `nextSentAt`.
+    private var lastSentAt: Int64 = 0
+    /// Where each recent prompt went out on the stream, by prompt id. Kept apart from `unreportedPrompts`, so a later
+    /// prompt still bounds an earlier one's cost after it was reported or dropped.
+    private var sentStreamStarts: [Int: Int] = [:]
+    /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
+    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
+    /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
+    private var dequeuedUpdateCount = 0
+    /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
+    /// between its prompt and its result.
+    private var costLog: [(index: Int, cost: ACPUsageInfo.Cost)] = []
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -237,6 +254,8 @@ final class ACPSessionRunner {
     private var pendingCompletedOutputBoundary: (updateCount: Int, successfulTurn: NextPromptCompletedTurn?)?
     private var turnPublicationGeneration = 0
 #if DEBUG
+    /// Awaited before `updatesTask` takes each update off the stream.
+    var beforeDequeueForTesting: (@MainActor () async -> Void)?
     var onPromptResponseProcessedForTesting: ((Int) -> Void)?
     // Tests opt in with an empty dictionary; ordinary Debug runners retain no handles.
     var turnPublicationTasksForTesting: [Int: Task<Void, Never>]?
@@ -274,6 +293,9 @@ final class ACPSessionRunner {
     private var pendingIncomingUpdates: [PendingIncomingUpdate] = []
     private var incomingUpdateFlushTask: Task<Void, Never>?
     private let incomingUpdateCoalesceNanos: UInt64
+    /// How long a cancelled turn's usage waits for its prompt's result, which carries its tokens.
+    static let cancelledUsageWait: Duration = .seconds(10)
+    private let usageWaitSleep: @Sendable (Duration) async -> Void
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     private var observedUpdateCount = 0
@@ -328,6 +350,7 @@ final class ACPSessionRunner {
          onPromptWorkChanged: (() -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
          onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
@@ -342,6 +365,7 @@ final class ACPSessionRunner {
          isConnectionCurrent: @escaping () -> Bool = { true },
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
+         usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
          ownerInstanceId: String? = nil,
          persistence: ACPSessionPersistence? = nil,
          persistedMessageCount: Int? = nil,
@@ -366,6 +390,7 @@ final class ACPSessionRunner {
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onTurnCompleted = onTurnCompleted
+        self.onTurnUsage = onTurnUsage
         self.onPermissionBlocked = onPermissionBlocked
         self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
@@ -376,6 +401,7 @@ final class ACPSessionRunner {
         self.onPersistedConfigOptionValues = onPersistedConfigOptionValues
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
+        self.usageWaitSleep = usageWaitSleep
         self.suppressingLoadReplay = suppressingLoadReplay
         if suppressingLoadReplay {
             session.beginSuppressedReplaySideEffects()
@@ -498,7 +524,15 @@ final class ACPSessionRunner {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
+#if DEBUG
+                await self.beforeDequeueForTesting?()
+#endif
+                self.dequeuedUpdateCount += 1
                 guard self.isConnectionCurrent() else { continue }
+                if case .usageUpdate(let info) = u.update, let cost = info.cost {
+                    self.costLog.append((self.dequeuedUpdateCount, cost))
+                    if self.costLog.count > 32 { self.compactCostLog() }
+                }
                 self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
@@ -1635,6 +1669,8 @@ final class ACPSessionRunner {
     }
 
     #if DEBUG
+    var pendingIncomingUpdateCountForTesting: Int { pendingIncomingUpdates.count }
+
     func applyIncomingUpdateForTesting(_ params: ACPSessionUpdateParams) {
         applyIncomingUpdate(params)
     }
@@ -1869,13 +1905,21 @@ final class ACPSessionRunner {
     /// Snapshot the finished turn, record whether it failed, and hand it to
     /// `onTurnCompleted`. Must be called on the main actor inside the
     /// `isActivePrompt` branch so a superseded prompt never reports.
-    private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
+    /// `usageAwaitsResult`: the prompt's result has not arrived yet (a user cancel), so a sent prompt's usage waits
+    /// for it, which carries its tokens, for at most `cancelledUsageWait`; `onTurnCompleted` does not.
+    private func emitTurnCompleted(
+        _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
+    ) {
         if case .failed(let message) = result {
             session.turnFailure = message
         } else {
             session.turnFailure = nil
         }
-        guard let startedAt = activePromptStartedAt else { return }
+        guard let startedAt = activePromptStartedAt else {
+            // A recovery prompt is no turn, but a stopped one's usage still waits for its result only so long.
+            if usageAwaitsResult { reportUsageWithoutResult(promptID) }
+            return
+        }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever
         // this turn's final `agentMessageChunk` is still sitting in the
@@ -1901,12 +1945,96 @@ final class ACPSessionRunner {
             startedAt: startedAt,
             result: result,
             delegatedSource: activePromptDelegatedSource,
-            lastAgentText: lastAgentText
+            lastAgentText: lastAgentText,
+            quota: quota,
+            cost: turnCost(streamStart: activePromptStreamStart),
+            sentAt: unreportedPrompts[promptID]?.sentAt,
+            model: unreportedPrompts[promptID]?.model
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
         onTurnCompleted?(completion)
+        // A prompt stopped or failed before it reached the agent is no turn: there is no usage to record.
+        guard unreportedPrompts[promptID] != nil else { return }
+        guard usageAwaitsResult else {
+            unreportedPrompts[promptID] = nil
+            onTurnUsage?(completion)
+            return
+        }
+        reportUsageWithoutResult(promptID)
+    }
+
+    /// When a prompt goes out, in epoch milliseconds, later than any before it: usage history orders turns by it, so
+    /// two prompts sent within one millisecond still get their order.
+    private func nextSentAt() -> Int64 {
+        lastSentAt = max(Int64(Date().timeIntervalSince1970 * 1000), lastSentAt + 1)
+        return lastSentAt
+    }
+
+    /// A turn's cost is the newest entry before the next prompt went out, so of the entries between two sends only
+    /// the newest is ever read: the rest go, which keeps the log as short as the sends tracked.
+    private func compactCostLog() {
+        let sends = sentStreamStarts.values
+        costLog = costLog.indices.filter { i in
+            i == costLog.count - 1 || sends.contains { costLog[i].index <= $0 && $0 < costLog[i + 1].index }
+        }.map { costLog[$0] }
+    }
+
+    private func noteSent(_ promptID: Int, streamStart: Int) {
+        sentStreamStarts[promptID] = streamStart
+        // ponytail: only the newest bound anything, the few prompts still waiting being older than them.
+        if sentStreamStarts.count > 16, let oldest = sentStreamStarts.keys.min() { sentStreamStarts[oldest] = nil }
+    }
+
+    /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
+    /// (a closed transport) or a turn lost with the connection, and is not recorded.
+    private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
+        if case ACPClientError.jsonrpc = error { return }
+        unreportedPrompts[promptID] = nil
+    }
+
+    /// Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or after
+    /// `cancelledUsageWait` without tokens.
+    private func reportUsageWithoutResult(_ promptID: Int) {
+        let sleep = usageWaitSleep
+        Task { @MainActor [weak self] in
+            await sleep(Self.cancelledUsageWait)
+            self?.reportSupersededTurnUsage(promptID, quota: nil)
+        }
+    }
+
+    /// A prompt a steer superseded, or the user stopped, got its result: its usage is reported as a cancelled turn,
+    /// with its own tokens and the cost sent before the next prompt started. A steered one is not a turn completion:
+    /// `onTurnCompleted` never hears of it.
+    private func reportSupersededTurnUsage(
+        _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result = .cancelled
+    ) {
+        guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return }
+        onTurnUsage?(ACPTurnCompletion(
+            sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
+            quota: quota,
+            // Capped where the first later prompt was sent; one still preparing has not started its usage.
+            cost: turnCost(
+                streamStart: prompt.streamStart, end: sentStreamStarts.filter { $0.key > promptID }.map(\.value).min()),
+            sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
+    }
+
+    /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
+    /// and before its result, applied or still buffered alike. The last may not be off the stream yet, so it is read
+    /// again once it is. Only reads; never flushes the coalescing buffer (see above).
+    /// `end` caps the stream position, for a turn whose successor already started.
+    private func turnCost(streamStart start: Int, end: Int? = nil) -> ACPTurnCost {
+        let watermark = min(connection.client.yieldedUpdateCount, end ?? .max)
+        let logged: @MainActor (ACPSessionRunner?) -> ACPUsageInfo.Cost? = { runner in
+            runner?.costLog.last { $0.index > start && $0.index <= watermark }?.cost
+        }
+        let known = logged(self)
+        guard dequeuedUpdateCount < watermark else { return ACPTurnCost(known: known) }
+        return ACPTurnCost(known: known, later: .init(
+            settled: { [weak self] in (self?.dequeuedUpdateCount ?? 0) >= watermark },
+            live: { [weak self] in self.map { $0.updatesTask?.isCancelled == false && $0.isConnectionCurrent() } ?? false },
+            sentBeforeResult: { [weak self] in logged(self) }))
     }
 
     /// Tail of the last agent message this turn produced, or nil. Only rows at
@@ -2377,7 +2505,7 @@ final class ACPSessionRunner {
                     // promptID by the same invariant `sendNow` relies on
                     // (nothing overwrites it without first changing
                     // `activePromptID` away from `promptID`).
-                    emitTurnCompleted(.cancelled)
+                    emitTurnCompleted(.cancelled, promptID: promptID, usageAwaitsResult: true)
                 }
             }
             policy.userCancelled()
@@ -3957,6 +4085,7 @@ extension ACPSessionRunner {
                     self.session.queue.first(where: { $0.id == qid && $0.transcriptRecorded })?.turnStartedAt
                 }
                 self.activePromptStartedAt = queuedTurnStartedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
+                self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                 self.activePromptDelegatedSource = delegatedSource
                 // Captured before the user prompt is recorded below, so the
                 // floor points at this turn's own first transcript entry.
@@ -4072,7 +4201,22 @@ extension ACPSessionRunner {
                 // Hydration suspends for file I/O. A steer can invalidate this
                 // prompt while that work is in progress, so verify ownership
                 // again before sending a stale RPC.
-                guard await MainActor.run(body: { self.activePromptID == promptID }) else {
+                guard await MainActor.run(body: {
+                    guard self.activePromptID == promptID else { return false }
+                    // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
+                    let sentAt = self.nextSentAt()
+                    // Updates sent during that work belong to what came before.
+                    self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
+                    self.unreportedPrompts[promptID] = (
+                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
+                    self.noteSent(promptID, streamStart: self.activePromptStreamStart)
+                    // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
+                    // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
+                    if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
+                        self.reportSupersededTurnUsage(oldest, quota: nil)
+                    }
+                    return true
+                }) else {
                     onDispatchRegistered?()
                     throw CancellationError()
                 }
@@ -4112,6 +4256,7 @@ extension ACPSessionRunner {
                     // prompt — otherwise it would show stale usage as
                     // current, or clear a newer prompt's just-recorded one.
                     self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
+                    if !isActivePrompt { self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota) }
                     let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
@@ -4166,7 +4311,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed)
+                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed, promptID: promptID, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard normalUserTurn,
@@ -4196,9 +4341,11 @@ extension ACPSessionRunner {
             } catch {
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
+                    self.forgetUsageUnlessAgentAnswered(promptID, error)
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    if !isActivePrompt { self.reportSupersededTurnUsage(promptID, quota: nil) }
                     // A prompt stopped by a usage limit reached the agent and a
                     // continue is scheduled, so the composer must not restore it.
                     var deliveredBeforeUsageLimit = false
@@ -4218,7 +4365,7 @@ extension ACPSessionRunner {
                             deliveredBeforeUsageLimit = true
                             self.applyUsageLimit(usageLimit, failedQueuedItemId: queuedItemId)
                             self.activePromptID = nil
-                            self.emitTurnCompleted(.limited)
+                            self.emitTurnCompleted(.limited, promptID: promptID)
                             self.deferCompletedOutputBoundaryUntilUpdatesDrain()
                             self.onPromptWorkChanged?()
                         } else {
@@ -4258,7 +4405,7 @@ extension ACPSessionRunner {
                                 }
                             }
                             self.activePromptID = nil
-                            self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage))
+                            self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage), promptID: promptID)
                             self.deferCompletedOutputBoundaryUntilUpdatesDrain()
                             self.onPromptWorkChanged?()
                         }
@@ -4308,6 +4455,11 @@ extension ACPSessionRunner {
                 self.session.allowsStreamingBoundaryCrossing = true
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
+                // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
+                let sentAt = self.nextSentAt()
+                self.unreportedPrompts[promptID] = (
+                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
+                self.noteSent(promptID, streamStart: self.connection.client.yieldedUpdateCount)
                 return true
             }
             guard proceeded else {
@@ -4342,6 +4494,8 @@ extension ACPSessionRunner {
                     // hands UI state to its successor turn, this callback is the
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
+                    self.reportSupersededTurnUsage(
+                        promptID, quota: promptOutcome.quota, result: wasCancelled ? .cancelled : .completed)
                     onCompleted?(isActivePrompt && !wasCancelled)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
@@ -4350,6 +4504,7 @@ extension ACPSessionRunner {
             } catch {
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
+                    self.forgetUsageUnlessAgentAnswered(promptID, error)
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {
@@ -4358,6 +4513,8 @@ extension ACPSessionRunner {
                         self.session.transcript.streamingState = .idle
                         self.onPromptWorkChanged?()
                     }
+                    self.reportSupersededTurnUsage(
+                        promptID, quota: nil, result: .failed(error.localizedDescription))
                     // See the success path above: the recovery status must
                     // resolve regardless of supersession or the spinner strands.
                     onCompleted?(false)

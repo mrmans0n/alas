@@ -19,6 +19,8 @@ private func network(_ hosts: String) -> String { #","capabilities":["network"],
 
 private func processes(_ list: String) -> String { #","capabilities":["process.exec"],"processes":[\#(list)]"# }
 
+private let webTab = #","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"#
+
 private func settings(_ list: String) -> String { network(#""a.com""#) + #","settings":[\#(list)]"# }
 
 struct PluginManifestTests {
@@ -36,7 +38,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 12), .unsupportedAPI(12)),
+        (manifest(api: 13), .unsupportedAPI(13)),
         (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
         (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
          .invalidPanel(#"at most one panel with location "configure""#)),
@@ -127,6 +129,64 @@ struct PluginManifestTests {
         }
     }
 
+    /// `usage.read` and `turn.finished` are API 12, which this Alas does not advertise yet, so the test widens the range.
+    @Test(arguments: [
+        (manifest(api: 11, #","capabilities":["usage.read"]"#), PluginManifestError?.some(.needsNewerAPI(#"capability "usage.read""#, api: 12))),
+        (manifest(api: 11, #","capabilities":["session.read"],"events":["turn.finished"]"#), .needsNewerAPI(#"event "turn.finished""#, api: 12)),
+        (manifest(api: 12, #","capabilities":["session.read"],"events":["turn.finished"]"#), .eventNeedsCapability("turn.finished")),
+        (manifest(api: 12, #","capabilities":["usage.read"],"events":["turn.finished"]"#), nil),
+    ])
+    func usageNeedsAPI12(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8))
+            #expect(expected == nil)
+            #expect(parsed.events == [.turnFinished])
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
+    @Test(arguments: [
+        (manifest(api: 11, webTab + #","web":"ui.js""#), PluginManifestError?.some(.needsNewerAPI(#""web""#, api: 12))),
+        (manifest(api: 11, webTab), .needsNewerAPI(#"tab "w" kind "web""#, api: 12)),
+        (manifest(api: 12, webTab), .invalidWeb(#"tab "w" has kind "web", so the manifest needs "web""#)),
+        (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab with kind "web""#)),
+        (manifest(api: 12, webTab + #","web":"../ui.js""#), .invalidWeb(#""../ui.js" must be a relative path inside the plugin folder"#)),
+        (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
+        (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
+        (manifest(api: 12, webTab + #","web":"./Plugin.JSON""#), .invalidWeb(#""web" can't use the name plugin.json"#)),
+        (manifest(api: 12, webTab + #","web":".""#), .invalidWeb(#""." must name a file"#)),
+        (manifest(api: 12, webTab + #","web":"dist/.""#), .invalidWeb(#""dist/." must name a file"#)),
+        (manifest(api: 12, webTab + #","web":"dist/""#), .invalidWeb(#""dist/" must name a file"#)),
+        (manifest(api: 12, webTab + #","web":"dist/ui.js""#), nil),
+    ])
+    func webTabsNeedAPI12AndTheirOwnPageScript(json: String, expected: PluginManifestError?) throws {
+        do {
+            let parsed = try PluginManifest.parse(Data(json.utf8))
+            #expect(expected == nil)
+            #expect(parsed.web == "dist/ui.js" && parsed.tabs.map(\.kind) == [.web])
+        } catch {
+            #expect(error == expected)
+        }
+    }
+
+    /// The default macOS volume ignores case and Unicode normalization, so these name one file; and a file can't
+    /// also be the folder another is in.
+    @Test(arguments: [
+        ("ui.js", "UI.JS", true),
+        ("./dist//ui.js", "dist/ui.js", true),
+        ("caf\u{E9}.js", "cafe\u{301}.js", true),
+        ("CAF\u{C9}.js", "cafe\u{301}.js", true),
+        ("ui.js", "ui2.js", false),
+        ("dist/ui.js", "ui.js", false),
+        ("Assets", "assets/ui.js", true),
+        ("assets/ui.js", "./ASSETS", true),
+        ("asset", "assets/ui.js", false),
+    ])
+    func webAndEntryNamesCompareAsTheVolumeDoes(a: String, b: String, same: Bool) {
+        #expect(PluginManifest.pathsCollide(a, b) == same)
+    }
+
     @Test func tabsDeclareTheirKindAndDefaultToCanvas() throws {
         let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":4,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"a","title":"A","kind":"view"},{"id":"b","title":"B"}]}}"#.utf8))
         #expect(manifest.tabs.map(\.kind) == [.view, .canvas])
@@ -189,8 +249,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 11"),
-        (12, "requires plugin API 12; this Alas supports up to 11"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 12"),
+        (13, "requires plugin API 13; this Alas supports up to 12"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)

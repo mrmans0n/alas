@@ -85,11 +85,13 @@ struct PluginHostTests {
         launcher: FakeLauncher = FakeLauncher(),
         worktreeRoot: URL? = nil,
         projectHost: String? = nil,
+        usageHistory: UsageHistoryStore? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
     ) throws -> PluginHost {
         // Nothing is written unless a test stores something, and those tests pass their own storage.
         let storage = storage ?? PluginStorage(
             file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
+        // Wider than Alas advertises, for API 12 requests and events.
         let manifest = try PluginManifest.parse(Data(manifest.utf8))
         return PluginHost(
             manifest: manifest,
@@ -150,7 +152,8 @@ struct PluginHostTests {
                     case "far": .remote(host: "devbox", root: "/srv/wt")
                     default: nil
                     }
-                }),
+                },
+                usageHistory: usageHistory),
             storage: storage,
             pluginStorage: pluginStorage ?? PluginStorage(
                 file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString)")),
@@ -807,6 +810,57 @@ struct PluginHostTests {
             .map(\.text)
         #expect(sent.map { $0.firstMatch(of: /"method":"([^"]+)"/).map { String($0.1) } ?? "" } == methods)
         #expect(sent.allSatisfy { !$0.contains("state") })
+    }
+
+    struct UsageCase: Sendable {
+        var api = 12
+        var grants: Set<PluginCapability> = [.usageRead]
+        let request: String
+        let reply: String
+        var sessions: [String] = []
+    }
+
+    /// `usage/*` needs API 12 and the grant, reads this project's history unless asked for all, and is bounded.
+    @Test(arguments: [
+        UsageCase(api: 11, grants: [], request: request(1, "usage/turns", #"{"since":0}"#), reply: #""code":-32601"#),
+        UsageCase(grants: [], request: request(1, "usage/turns", #"{"since":0}"#), reply: #""code":-32001"#),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0}"#), reply: #""truncated":false"#, sessions: ["mine"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"scope":"all"}"#), reply: #""truncated":false"#, sessions: ["theirs", "mine"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"scope":"all","limit":1}"#), reply: #""truncated":true"#, sessions: ["theirs"]),
+        UsageCase(request: request(1, "usage/turns", #"{"since":0,"limit":0}"#), reply: #""code":-32602"#),
+        UsageCase(request: request(1, "usage/limits", #"{"since":0,"scope":"mine"}"#), reply: #""code":-32602"#),
+        UsageCase(request: request(1, "usage/limits", #"{"since":0}"#), reply: #""resetSource":"parsed""#, sessions: ["mine"]),
+    ])
+    func usageRequestsAreGatedAndScopedToTheProject(_ c: UsageCase) async throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "usage-\(UUID().uuidString).sqlite").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try UsageHistoryStore(path: path)
+        for (session, project, end) in [("mine", "proj", Int64(1_000)), ("theirs", "other", 2_000)] {
+            _ = try await store.record(UsageTurnInput(
+                session: session, project: project, agent: "claude", startedAt: end, endedAt: end, result: "completed"))
+        }
+        try await store.record(UsageLimitEpisode(
+            session: "mine", project: "proj", worktree: nil, agent: "claude", detectedAt: 1, resetsAt: nil, resetSource: "parsed"))
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":\#(c.api),"entry":"p.js"\#(c.api >= 12 ? #","capabilities":["usage.read"]"# : "")}"#
+        let host = try makeHost([[.send(activateOK), .send(c.request)]], grants: c.grants, manifest: manifest, usageHistory: store)
+        await host.activate()
+        #expect(await awaitCondition { replies(host).count == 2 })
+        let reply = try #require(lastReply(host))
+        #expect(reply.contains(c.reply))
+        #expect(reply.matches(of: /"session":"(\w+)"/).map { String($0.1) } == c.sessions)
+    }
+
+    /// `turn.finished` reaches a plugin that subscribed to it only with the grant.
+    @Test(arguments: [(Set<PluginCapability>(), 0), (Set<PluginCapability>([.usageRead]), 1)])
+    func turnFinishedNeedsTheUsageGrant(grants: Set<PluginCapability>, deliveries: Int) async throws {
+        let manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","capabilities":["usage.read"],"events":["turn.finished"]}"#
+        let host = try makeHost([[.send(activateOK)]], grants: grants, manifest: manifest)
+        await host.activate()
+        let turn = UsageTurn(
+            id: 1, session: "s1", project: "proj", worktree: "wt", agent: "claude", model: nil, startedAt: 1, endedAt: 2,
+            result: "completed", tokens: nil, cost: nil)
+        await host.events([PluginEventMessage(event: .turnFinished, params: PluginEventParams(session: "s1", turn: turn))])
+        #expect(host.trace.filter { $0.text.contains(#""method":"turn/finished""#) && $0.text.contains(#""endedAt":2"#) }.count == deliveries)
     }
 
     // MARK: - API 5: settings, network, timers
@@ -1802,5 +1856,135 @@ struct PluginHostTests {
         await host.deactivate()
         await host.activate()
         #expect(sent() == (api >= 9 ? ["c+"] : []))
+    }
+
+    static let webManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"},{"id":"c","title":"C"}]}}"#
+
+    private static func webPost(tab: Int, id: Int? = nil, _ message: String) -> PluginFixtureStep {
+        .send(#"{"jsonrpc":"2.0",\#(id.map { #""id":\#($0),"# } ?? "")"method":"web/post","params":{"tab":\#(tab),"message":\#(message)}}"#)
+    }
+
+    /// `web/post`, as a notification or a request, reaches every live page of the tab as JSON text; one to a tab
+    /// that is not a web tab stops the plugin.
+    @Test func webPostReachesTheTabsPagesAndOnlyWebTabs() async throws {
+        let host = try makeHost(
+            [[.send(activateOK)], [Self.webPost(tab: 0, #"{"n":1}"#), Self.webPost(tab: 0, id: 7, #""two""#)], [], [Self.webPost(tab: 1, "1")]],
+            manifest: Self.webManifest)
+        await host.activate()
+        var first: [String] = [], second: [String] = []
+        #expect(host.attachWebPage(tab: 1) { _ in } == nil)
+        let page = try #require(host.attachWebPage(tab: 0) { first.append($0) })
+        let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
+        #expect(await host.webMessage(tab: 0, page: page, json: #"{"ready":true}"#) == nil)
+        #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
+        // Decoded, not matched as text: the encoder does not promise a key order.
+        #expect(host.trace.contains { entry in
+            guard entry.direction == .toPlugin,
+                  let reply = try? JSONSerialization.jsonObject(with: Data(entry.text.utf8)) as? [String: Any]
+            else { return false }
+            return reply["id"] as? Int == 7 && (reply["result"] as? [String: Any])?.isEmpty == true
+        })
+
+        host.detachWebPage(tab: 0, detached)
+        #expect(await host.webMessage(tab: 0, page: detached, json: "0") == "the page is closed")
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == nil)
+        #expect(host.state == .failed("plugin sent a malformed web/post: tab 1 is not a web tab"))
+        #expect(second.count == 2)
+    }
+
+    /// The limit is on the whole `web/message` envelope; the page's JSON is spliced in, so its size is what counts.
+    @Test func webMessagesAreBoundedByTheirEnvelopeAndMustBeJSON() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let limit = host.webMessageLimit(tab: 0)
+        let fits = "\"" + String(repeating: "a", count: limit - 2) + "\""
+        #expect(PluginHost.webMessage(tab: 0, json: fits).count == Self.limits.maxMessageBytes)
+        #expect(await host.webMessage(tab: 0, page: page, json: fits) == nil)
+        #expect(await host.webMessage(tab: 0, page: page, json: fits + " ") == "message too large")
+        #expect(await host.webMessage(tab: 0, page: page, json: "{") == "message is not JSON")
+        #expect(await host.webMessage(tab: 1, page: page, json: "1") == "tab 1 is not a web tab")
+    }
+
+    /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per page, the
+    /// same count the page's bridge keeps, so another page of the same tab is never refused because of it.
+    @Test func aPageCanQueueOnlySoManyMessages() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let busy = try #require(host.attachWebPage(tab: 0) { _ in })
+        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        // Every task starts on the main actor before the first delivery returns to it.
+        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: busy, json: "\(index)") } }
+        let fromOther = Task { await host.webMessage(tab: 0, page: other, json: "0") }
+        var results: [String?] = []
+        for post in posts { results.append(await post.value) }
+        #expect(results.filter { $0 == nil }.count == PluginHost.maxWebQueue)
+        #expect(results.last == "busy")
+        #expect(await fromOther.value == nil)
+        #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
+    }
+
+    /// A page may post twice `maxWebBytesPerSecond` at once, then that rate as time passes, so a page posting in a
+    /// loop cannot hold the main thread, even by reloading; another page has its own budget.
+    @Test func aPageCanPostOnlySoMuchPerSecond() async throws {
+        var time = ContinuousClock.now
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 20
+        let host = try makeHost([[.send(activateOK)]], limits: limits, manifest: Self.webManifest, now: { time })
+        await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let eighth = "\"" + String(repeating: "a", count: PluginHost.maxWebBytesPerSecond / 8 - 2) + "\""
+        for _ in 0..<16 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        #expect(await host.webMessage(tab: 0, page: other, json: "0") == nil)
+        time += .milliseconds(500)
+        for _ in 0..<4 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        // Reloading does not refill it.
+        let reloaded = try #require(host.attachWebPage(tab: 0, replacing: page) { _ in })
+        #expect(await host.webMessage(tab: 0, page: reloaded, json: "0") == "busy")
+    }
+
+    /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's
+    /// token is refused even while its messages are still queued.
+    @Test func aReloadedPageGetsAFreshQueueAndTheOldOneIsClosed() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let old = try #require(host.attachWebPage(tab: 0) { _ in })
+        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: old, json: "\(index)") } }
+        // Runs after every old post took its place in the queue, before any delivery returns to the main actor.
+        let renewed = Task {
+            host.detachWebPage(tab: 0, old)
+            return host.attachWebPage(tab: 0) { _ in }
+        }
+        let page = try #require(await renewed.value)
+        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: page, json: "\(index)") } }
+        #expect(await host.webMessage(tab: 0, page: old, json: "0") == "the page is closed")
+        for post in newPosts { #expect(await post.value == nil) }
+        // The old document's messages still waiting behind the one being delivered are stale, so they are dropped.
+        for post in oldPosts { #expect([nil, "the page is closed"].contains(await post.value)) }
+    }
+
+    /// A burst of posts from one page reaches the plugin in the order the page made them.
+    @Test func aPagesPostsReachThePluginInOrder() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
+        await host.activate()
+        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let count = 8
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var left = count
+            for index in 0..<count {
+                host.webMessage(tab: 0, page: page, json: "\(index)") { failure in
+                    #expect(failure == nil)
+                    left -= 1
+                    if left == 0 { continuation.resume() }
+                }
+            }
+        }
+        let delivered = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("web/message") }
+            .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any])?["params"] as? [String: Any] }
+            .compactMap { $0["message"] as? Int }
+        #expect(delivered == Array(0..<count))
     }
 }

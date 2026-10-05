@@ -272,6 +272,10 @@ final class AppState {
     /// Immutable completed-run history. A missing store keeps the live Run
     /// tab functional when Application Support cannot be opened.
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
+    /// Token, cost and usage-limit history of every agent turn; nil when Application Support cannot be opened.
+    @ObservationIgnored let usageHistory: UsageHistoryStore?
+    /// Records each session's turns in completion order.
+    @ObservationIgnored let usageRecording = KeyedSerialQueue()
     var runHistoryRevision = 0
     var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
     var runHistoryError: String?
@@ -1422,6 +1426,7 @@ final class AppState {
         runScriptLocalMonitorGrace: Duration = .seconds(2),
         runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
+        usageHistory: UsageHistoryStore? = try? UsageHistoryStore(),
         runScheduler: RunScheduler? = nil,
         acpModelCatalog: ACPAgentModelCatalog? = nil,
         tabsManager: TabsManager? = nil,
@@ -1500,6 +1505,7 @@ final class AppState {
         self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
         self.runScriptMonitorGrace = runScriptMonitorGrace
         self.runHistoryStore = runHistoryStore
+        self.usageHistory = usageHistory
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -12784,6 +12790,9 @@ final class AppState {
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },
+            onTurnUsage: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
+            },
             onChildBlocked: { [weak self] blocker in
                 self?.notifyACPPermissionBlocked(blocker)
                 Task { @MainActor [weak self] in
@@ -13244,6 +13253,9 @@ final class AppState {
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
+            },
+            onTurnUsage: { [weak self] completion in
+                self?.recordTurnUsage(completion, owner: owner)
             },
             onChildBlocked: { [weak self] blocker in
                 self?.notifyACPPermissionBlocked(blocker)

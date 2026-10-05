@@ -94,6 +94,414 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
+    enum TurnCostUpdate: CaseIterable, Sendable {
+        case none
+        /// Taken off the stream during the turn and still in the coalescing buffer at its result.
+        case duringTurn
+        /// Then a newer one without a cost.
+        case duringTurnThenWithoutCost
+        /// Still on the stream at the result.
+        case notYetDequeued
+        /// Still on the stream when the connection is replaced.
+        case replacedBeforeDequeued
+        /// Still on the stream when a later update with another cost is sent.
+        case laterCostBeforeResolve
+        /// Sent before the prompt started and still buffered during it.
+        case bufferedBeforePrompt
+    }
+
+    /// A turn's cost is the newest cost-bearing `usage_update` sent after its prompt started and before its result,
+    /// whether applied, buffered or still on the stream then; a newer one without a cost does not hide it, and one
+    /// sent before the prompt or after the result never counts. The completion is delivered at once either way, and
+    /// a connection replaced meanwhile leaves the cost unknown rather than losing the turn.
+    @Test(arguments: TurnCostUpdate.allCases)
+    func aTurnReportsOnlyACostSentDuringIt(update: TurnCostUpdate) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var current = true
+        let held = [.notYetDequeued, .replacedBeforeDequeued, .laterCostBeforeResolve].contains(update)
+        // Long enough that a buffered update is still waiting when the turn ends.
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { current }, onTurnCompleted: { completions.append($0) },
+            incomingUpdateCoalesceNanos: 30_000_000_000)
+        let dequeue = AsyncGate()
+        if held { runner.beforeDequeueForTesting = { await dequeue.wait() } }
+        runner.start()
+        defer { runner.stop() }
+        func usage(_ cost: Double?) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: cost.map { .init(amount: $0, currency: "USD") })))
+        }
+        if update == .bufferedBeforePrompt {
+            mock.emit(usage(0.3))
+            #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 })
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let sent: [Double?] = switch update {
+            case .none, .bufferedBeforePrompt: []
+            case .duringTurn, .notYetDequeued, .replacedBeforeDequeued, .laterCostBeforeResolve: [0.3]
+            case .duringTurnThenWithoutCost: [0.3, nil]
+            }
+            for cost in sent { mock.emit(usage(cost)) }
+            if !held, !sent.isEmpty {
+                _ = await Task { @MainActor in
+                    await awaitCondition { runner.pendingIncomingUpdateCountForTesting == sent.count }
+                }.value
+            }
+            return Data("{}".utf8)
+        }
+        // Delivered with the prompt result, before the send's own completion, even while an update is held.
+        var completedFirst: Bool?
+        runner.send(text: "hello", attachments: []) { _ in completedFirst = !completions.isEmpty }
+        #expect(await awaitCondition { completedFirst != nil })
+        #expect(completedFirst == true)
+        if update == .replacedBeforeDequeued { current = false }
+        if update == .laterCostBeforeResolve { mock.emit(usage(0.9)) }
+        if update == .notYetDequeued || update == .laterCostBeforeResolve {
+            await dequeue.open()
+            #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == (update == .notYetDequeued ? 1 : 2) })
+        }
+        let cost = await completions.first?.cost?.resolve()
+        await dequeue.open()
+        let expected: ACPUsageInfo.Cost? = [.none, .replacedBeforeDequeued, .bufferedBeforePrompt].contains(update)
+            ? nil : .init(amount: 0.3, currency: "USD")
+        #expect(completions.count == 1)
+        #expect(cost == expected)
+    }
+
+    /// A steered prompt's result is still usage: it is reported as a cancelled turn with its own tokens, before the
+    /// steer's turn, while turn completions only ever hear of the steer's.
+    @Test func aSteeredPromptsResultIsReportedAsCancelledUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        runner.session.agentState = .ready
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : second).wait()
+            let quota = #"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120,"outputTokens":40}}}}"#
+            return Data((call == 1 ? quota : "{}").utf8)
+        }
+        runner.send(text: "first", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        runner.steer(blocks: [.text("instead")])
+        // The steer sends its prompt once the cancelled one's result is in.
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 && entered == 2 })
+        await second.open()
+        #expect(await awaitCondition { usage.count == 2 })
+        #expect(usage.map(\.result) == [.cancelled, .completed])
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == 120)
+        #expect(usage.allSatisfy { $0.sentAt != nil })
+        #expect(completions.map(\.result) == [.completed])
+    }
+
+    /// A turn's usage starts when its prompt goes to the agent, after the work before sending (here a slow context
+    /// provider), not when it was submitted, in time and on the stream: a cost sent meanwhile is not the turn's.
+    @Test func usageStartsWhenThePromptIsSent() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let context = AsyncGate()
+        var contextEnteredAt: Int64?
+        func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+        // Long enough that the cost update is still buffered when the turn ends.
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) },
+            pluginContext: { _ in
+                contextEnteredAt = now()
+                await context.wait()
+                return []
+            },
+            incomingUpdateCoalesceNanos: 30_000_000_000)
+        runner.start()
+        defer { runner.stop() }
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { contextEnteredAt != nil })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.5, currency: "USD")))))
+        #expect(await awaitCondition { runner.pendingIncomingUpdateCountForTesting == 1 })
+        // Released in a later millisecond than the turn's start, so the two can be told apart.
+        let entered = try #require(contextEnteredAt)
+        while now() <= entered { await Task.yield() }
+        let released = now()
+        await context.open()
+        #expect(await awaitCondition { !completions.isEmpty })
+        let completion = try #require(completions.first)
+        #expect(completion.startedAt <= entered)
+        let input = UsageTurnInput(
+            completion: completion, agent: "claude", model: nil, cumulativeCost: nil, project: nil, worktree: nil,
+            endedAt: now())
+        #expect(input.startedAt >= released)
+        #expect(await completion.cost?.resolve() == nil)
+    }
+
+    /// Stopped while still preparing (here, the lease is lost), the prompt never reached the agent: the turn ends,
+    /// but no usage is recorded for it.
+    @Test func aPromptStoppedBeforeItIsSentRecordsNoUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        var contextGathered = false
+        var sent = false
+        // The lease is lost while context providers run, so the prompt stops just before it would go out.
+        let (runner, mock) = try makeRunner(
+            validateLease: { !contextGathered },
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            pluginContext: { _ in
+                contextGathered = true
+                return []
+            })
+        mock.script(method: "session/prompt") { _ in
+            sent = true
+            return Data("{}".utf8)
+        }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { !completions.isEmpty })
+        #expect(!sent)
+        #expect(usage.isEmpty)
+    }
+
+    /// A prompt that fails is recorded only when the agent answered with the error: one the client could not send
+    /// (the agent is not running) never reached it.
+    @Test(arguments: [true, false])
+    func aFailedPromptIsRecordedOnlyWhenTheAgentAnswered(agentAnswered: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        mock.script(method: "session/prompt") { _ in
+            throw agentAnswered ? ACPClientError.jsonrpc(JSONRPCError(code: -32603, message: "boom", data: nil)) : ACPClientError.notRunning
+        }
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { !completions.isEmpty })
+        #expect(await awaitCondition(within: .milliseconds(200)) { !usage.isEmpty } == agentAnswered)
+    }
+
+    /// A context-recovery prompt's spend is usage of its own, flagged as recovery, and never a turn completion.
+    @Test func aRecoveryPromptIsReportedAsRecoveryUsage() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) })
+        mock.script(method: "session/prompt") { _ in
+            Data(#"{"stopReason":"end_turn","_meta":{"quota":{"token_count":{"totalTokens":120}}}}"#.utf8)
+        }
+        #expect(runner.sendRecoveryContext("Here is the transcript."))
+        #expect(await awaitCondition { !usage.isEmpty })
+        #expect(usage.map(\.result) == [.completed])
+        #expect(usage.first?.recovery == true)
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == 120)
+        #expect(usage.first?.sentAt != nil)
+        #expect(completions.isEmpty)
+    }
+
+    /// A stopped recovery prompt whose result never comes is still recorded, without tokens, once the wait is over.
+    @Test func aStoppedRecoveryPromptIsRecordedWithoutItsResult() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in })
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await never.wait()
+            return Data("{}".utf8)
+        }
+        #expect(runner.sendRecoveryContext("Here is the transcript."))
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        #expect(await awaitCondition { !usage.isEmpty })
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.recovery == true && usage.first?.quota == nil)
+        #expect(completions.isEmpty)
+        await never.open()
+    }
+
+    /// Stopping a turn reports its completion at once, but its usage waits for the prompt's result, which carries its
+    /// tokens; if none comes within the bound it is recorded without them. Either way, once, with the model it was
+    /// sent with.
+    @Test(arguments: [true, false])
+    func aStoppedTurnsUsageWaitsForItsResult(settles: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let waited = AsyncGate()
+        var timedOut = false
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in
+                await waited.wait()
+                await MainActor.run { timedOut = true }
+            })
+        var responded = false
+        runner.onPromptResponseProcessedForTesting = { _ in responded = true }
+        let result = AsyncGate()
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await result.wait()
+            return Data(#"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120}}}}"#.utf8)
+        }
+        runner.session.currentModel = "opus"
+        runner.send(text: "hello", attachments: []) { _ in }
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        // A model picked before the result comes is the next turn's.
+        runner.session.currentModel = "sonnet"
+        #expect(completions.map(\.result) == [.cancelled])
+        #expect(usage.isEmpty)
+        await (settles ? result : waited).open()
+        #expect(await awaitCondition { usage.count == 1 })
+        // The other path then finds it reported.
+        await result.open()
+        await waited.open()
+        #expect(await awaitCondition { timedOut && responded })
+        await Task.yield()
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.quota?.tokenCount?.totalTokens == (settles ? 120 : nil))
+        #expect(usage.first?.model == "opus")
+    }
+
+    /// A stopped turn's result that comes while its successor is still preparing keeps the cost sent meanwhile:
+    /// the successor's usage starts only when it is sent.
+    @Test func aStoppedTurnKeepsTheCostSentWhileItsSuccessorPrepares() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let context = AsyncGate()
+        var contexts = 0
+        let (runner, mock) = try makeRunner(
+            onTurnUsage: { usage.append($0) },
+            pluginContext: { _ in
+                contexts += 1
+                if contexts == 2 { await context.wait() }
+                return []
+            },
+            usageWaitSleep: { _ in await never.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let result = AsyncGate()
+        var entered = false
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered = true }
+            await result.wait()
+            return Data("{}".utf8)
+        }
+        runner.send(text: "first", attachments: []) { _ in }
+        #expect(await awaitCondition { entered })
+        await runner.userCancel()
+        runner.send(text: "second", attachments: []) { _ in }
+        #expect(await awaitCondition { contexts == 2 })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.5, currency: "USD")))))
+        await result.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        await context.open()
+        await never.open()
+    }
+
+    /// A stopped turn whose result comes after later prompts were sent ends where the first of them was sent, even
+    /// when that one has since failed without reaching the agent: a cost sent after it is not the stopped turn's.
+    @Test(arguments: [false, true])
+    func aStoppedTurnsCostEndsWhereTheNextPromptWasSent(nextFails: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in await never.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            if call == 2, nextFails { throw ACPClientError.notRunning }
+            await (call == 1 ? first : never).wait()
+            return Data("{}".utf8)
+        }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 && completions.count == (nextFails ? 2 : 1) })
+        mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.3, currency: "USD")))))
+        if !nextFails {
+            await runner.userCancel()
+            runner.send(text: "C", attachments: []) { _ in }
+            #expect(await awaitCondition { entered == 3 })
+        }
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve() == nil)
+        await never.open()
+    }
+
+    /// A stopped turn keeps its own cost however many the next turn sends before its result arrives.
+    @Test func aStoppedTurnKeepsItsCostThroughManyOfTheNextTurns() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        var dequeued = 0
+        runner.beforeDequeueForTesting = { dequeued += 1 }
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : never).wait()
+            return Data("{}".utf8)
+        }
+        func cost(_ amount: Double?) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: amount.map { .init(amount: $0, currency: "USD") })))
+        }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        mock.emit(cost(0.5))
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 })
+        for step in 1...40 { mock.emit(cost(0.5 + Double(step) / 100)) }
+        // Reaching the one after them means all of them were taken off the stream.
+        mock.emit(cost(nil))
+        #expect(await awaitCondition { dequeued == 42 })
+        await first.open()
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        await never.open()
+    }
+
+    /// More stopped turns waiting on their results than the runner keeps: the oldest is still recorded, without
+    /// tokens, when it makes room.
+    @Test func aStoppedTurnPastTheKeptOnesIsStillRecorded() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let never = AsyncGate()
+        let (runner, mock) = try makeRunner(onTurnUsage: { usage.append($0) }, usageWaitSleep: { _ in await never.wait() })
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { entered += 1 }
+            await never.wait()
+            return Data("{}".utf8)
+        }
+        for sent in 1...9 {
+            runner.send(text: "hello \(sent)", attachments: []) { _ in }
+            #expect(await awaitCondition { entered == sent })
+            await runner.userCancel()
+        }
+        #expect(await awaitCondition { usage.count == 1 })
+        #expect(usage.first?.result == .cancelled && usage.first?.quota == nil)
+        await never.open()
+    }
+
     @Test("send attaches its checkpoint before dispatch", arguments: [false, true])
     func sendAttachesCheckpointBeforePrompt(nativeSteering: Bool) async throws {
         let checkpointID = UUID()
@@ -4015,7 +4423,11 @@ struct ACPSessionRunnerTests {
         canWrite: (() -> Bool)? = nil,
         validateLease: (() async -> Bool)? = nil,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
-        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
+        usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -4035,8 +4447,12 @@ struct ACPSessionRunnerTests {
             onUserCancel: onUserCancel,
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
+            onTurnUsage: onTurnUsage,
             onCheckpointCapture: onCheckpointCapture,
+            pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent,
+            incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
+            usageWaitSleep: usageWaitSleep,
             canWrite: canWrite,
             validateLease: validateLease
         )

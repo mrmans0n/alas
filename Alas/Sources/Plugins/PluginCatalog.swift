@@ -10,7 +10,10 @@ struct PluginCatalogIndex: Decodable, Sendable, Equatable {
         let manifest: URL
         /// Missing for versions published for the WebAssembly runtime, which Alas can no longer load.
         let entry: URL?
-        /// `PluginTrust.hash` of the two files, so a download is verified before it is written.
+        /// The `web` page script, for releases that ship one (API 12).
+        var web: URL?
+        /// `PluginTrust.hash` of the release's files, so a download is verified before it is written: v2 when the
+        /// release has `web`, v1 otherwise.
         let hash: String
     }
 

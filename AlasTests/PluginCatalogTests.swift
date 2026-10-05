@@ -110,16 +110,20 @@ struct PluginCatalogTests {
         #expect(!f.manager.catalogPathIsTaken(id: "io.x.p"))
     }
 
-    /// An entry written as `./plugin.js` or in a subfolder is still exactly the release.
-    @Test(arguments: ["plugin.js", "./plugin.js", "dist/plugin.js"])
-    func aReleaseFolderIsCatalogOwnedWhateverTheEntryPath(entry: String) throws {
+    /// An entry written as `./plugin.js` or in a subfolder, and a web page beside it (API 12), are still exactly the release.
+    @Test(arguments: [("plugin.js", nil as String?), ("./plugin.js", nil), ("dist/plugin.js", nil), ("plugin.js", "web/ui.js")])
+    func aReleaseFolderIsCatalogOwnedWhateverTheEntryPath(entry: String, web: String?) throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "PluginCatalog-\(UUID().uuidString)/io.x.p")
         defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
-        let file = folder.appending(path: entry)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: file)
+        for path in [entry] + (web.map { [$0] } ?? []) {
+            let file = folder.appending(path: path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: file)
+        }
         try Data().write(to: folder.appending(path: "plugin.json"))
-        let manifest = try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"1","api":4,"entry":"\#(entry)"}"#.utf8))
+        let page = web.map { #","web":"\#($0)","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"# } ?? ""
+        let manifest = try PluginManifest.parse(
+            Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(web == nil ? 4 : 12),"entry":"\#(entry)"\#(page)}"#.utf8))
         let plugin = PluginManager.Plugin(folder: folder, manifest: manifest, source: Data(), hash: "h")
         #expect(PluginManager.isCatalogOwned(plugin))
         try Data().write(to: folder.appending(path: "extra.txt"))

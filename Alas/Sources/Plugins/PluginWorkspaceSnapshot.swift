@@ -109,6 +109,8 @@ struct PluginEventParams: Codable, Equatable, Sendable {
     var exitCode: Int?
     var number: Int?
     var checks: PluginReviewChecks?
+    /// `turn/finished` (API 12).
+    var turn: UsageTurn?
 }
 
 struct PluginEventMessage: Equatable, Sendable {
