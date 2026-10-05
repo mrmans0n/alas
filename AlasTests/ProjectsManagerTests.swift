@@ -52,7 +52,7 @@ struct ProjectsManagerTests {
         #expect(project.name == "alpha")
     }
 
-    @Test func addProjectPersistsDraftAgentAndAutomationSettings() async throws {
+    @Test func addProjectPersistsDraftSettings() async throws {
         let repo = try await makeRepo(name: "agent-default")
         defer { try? FileManager.default.removeItem(at: repo) }
         let manager = ProjectsManager(persistedProjects: [])
@@ -66,13 +66,16 @@ struct ProjectsManagerTests {
             displayName: "Agent default",
             icon: .default(color: "#5fb7c4"),
             startupScripts: scripts,
-            mcpServers: servers
+            mcpServers: servers,
+            worktreeBranchTemplate: "team/{name}"
         )
         #expect(project.startupScripts == scripts)
         #expect(manager.projects.first?.startupScripts == scripts)
         #expect(manager.projects.first?.mcpServers == servers)
+        #expect(manager.projects.first?.worktreeBranchTemplate == "team/{name}")
         let data = try JSONEncoder().encode(project)
         #expect(try JSONDecoder().decode(ProjectConfig.self, from: data).startupScripts == scripts)
+        #expect(try JSONDecoder().decode(ProjectConfig.self, from: data).worktreeBranchTemplate == "team/{name}")
     }
 
     @Test func addProjectUsesProvidedIconAndMirrorsColor() async throws {
@@ -288,6 +291,21 @@ struct ProjectsManagerTests {
         #expect(mgr.projects[0].name == "After")
         #expect(mgr.projects[0].icon == icon)
         #expect(mgr.projects[1] == other)
+    }
+
+    @Test(arguments: [(nil, "before/{name}"), (" \n ", nil), ("team/{name}", "team/{name}")] as [(String?, String?)])
+    func projectUpdatesPreserveReplaceOrResetTheBranchTemplate(update: String?, expected: String?) {
+        let project = ProjectConfig(
+            id: "p", name: "Repo", path: "/tmp/repo", color: "#fff", addedAt: .distantPast,
+            worktreeBranchTemplate: "before/{name}"
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.updateProject(id: project.id, update: ProjectUpdate(
+            name: project.name, icon: project.icon, worktreeBranchTemplate: update
+        ))
+        var expectedProject = project
+        expectedProject.worktreeBranchTemplate = expected
+        #expect(manager.projects == [expectedProject])
     }
 
     @Test func updateProjectReplacesMCPServersWhenExplicitlyProvided() {

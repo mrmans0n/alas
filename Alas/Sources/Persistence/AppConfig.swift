@@ -143,6 +143,8 @@ struct AppConfig: Codable, Equatable {
         var rootPath: String
         var pathTemplate: String
         var branchPrefix: String
+        /// Nil preserves the legacy branch prefix behavior.
+        var branchTemplate: String?
         var baseBranch: String
         var trackUpstream: Bool
         var deleteBranchOnRemove: Bool
@@ -155,7 +157,7 @@ struct AppConfig: Codable, Equatable {
         var cleanupIdleDays: Int
 
         enum CodingKeys: String, CodingKey {
-            case rootPath, pathTemplate, branchPrefix, baseBranch,
+            case rootPath, pathTemplate, branchPrefix, branchTemplate, baseBranch,
                  trackUpstream, deleteBranchOnRemove, autoFetch,
                  fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate,
                  defaultOrdering, cleanupIdleDays
@@ -173,11 +175,13 @@ struct AppConfig: Codable, Equatable {
             pruneStale: Bool,
             fetchRemoteBeforeCreate: Bool = false,
             defaultOrdering: WorktreeSortMode = .lastUpdateDesc,
-            cleanupIdleDays: Int = 14
+            cleanupIdleDays: Int = 14,
+            branchTemplate: String? = nil
         ) {
             self.rootPath = rootPath
             self.pathTemplate = pathTemplate
             self.branchPrefix = branchPrefix
+            self.branchTemplate = branchTemplate
             self.baseBranch = baseBranch
             self.trackUpstream = trackUpstream
             self.deleteBranchOnRemove = deleteBranchOnRemove
@@ -194,6 +198,7 @@ struct AppConfig: Codable, Equatable {
             rootPath = try c.decode(String.self, forKey: .rootPath)
             pathTemplate = try c.decode(String.self, forKey: .pathTemplate)
             branchPrefix = try c.decode(String.self, forKey: .branchPrefix)
+            branchTemplate = try? c.decode(String.self, forKey: .branchTemplate)
             baseBranch = try c.decode(String.self, forKey: .baseBranch)
             trackUpstream = try c.decode(Bool.self, forKey: .trackUpstream)
             deleteBranchOnRemove = try c.decode(Bool.self, forKey: .deleteBranchOnRemove)

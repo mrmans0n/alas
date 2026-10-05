@@ -38,8 +38,12 @@ struct WorktreesPane: View {
                     }
                 }
                 SettingsGroup(title: "Branch defaults") {
+                    SettingsRow(name: "Branch template",
+                                desc: "Variables: {name}, {date} (yyyyMMdd), {time} (HHmm). Projects can override it. Leave blank to use the prefix.") {
+                        AlasField(text: branchTemplateBinding, monospaced: true, disablesAutomaticTextSubstitutions: true)
+                    }
                     SettingsRow(name: "Branch prefix",
-                                desc: "Prepended to the name you type when creating a worktree.") {
+                                desc: "Prepended to the name when no branch template is set.") {
                         VStack(alignment: .leading, spacing: 2) {
                             AlasField(text: branchPrefixBinding, monospaced: true, disablesAutomaticTextSubstitutions: true)
                             if let prefixError = branchPrefixError {
@@ -138,6 +142,16 @@ struct WorktreesPane: View {
                     // value to the typed name without showing it in the field.
                     branchPrefixDraft = newValue
                 }
+            }
+        )
+    }
+
+    private var branchTemplateBinding: Binding<String> {
+        Binding(
+            get: { state.config.worktrees.branchTemplate ?? "" },
+            set: {
+                state.config.worktrees.branchTemplate = $0.isEmpty ? nil : $0
+                state.saveConfig()
             }
         )
     }

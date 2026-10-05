@@ -9,10 +9,12 @@ var totalMembers: Int }
 /// received; selection begins only after coordinator persistence succeeds.
 struct WorkspaceCheckoutCreationModel: Equatable {
     let workspace: Workspace
-    /// Configured worktree branch prefix. Never part of `branch`: the field
-    /// holds the bare name and `composedBranch` is the ref git is asked for.
+    /// Naming defaults are separate from the bare name in `branch`.
+    /// `composedBranch` is the ref git is asked for.
     let branchPrefix: String
-    /// The typed branch name, without `branchPrefix`.
+    let branchTemplate: String?
+    let branchTemplateDate: Date
+    /// The typed name, before applying a template or prefix.
     var branch: String
     var rootPath: String
     var baseReference: String
@@ -27,19 +29,25 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         branchPrefix: String = "",
         branch: String = "",
         rootPath: String = "",
-        baseReference: String = "main"
+        baseReference: String = "main",
+        branchTemplate: String? = nil,
+        branchTemplateDate: Date = Date()
     ) {
         self.workspace = workspace
         self.branchPrefix = branchPrefix
+        self.branchTemplate = branchTemplate
+        self.branchTemplateDate = branchTemplateDate
         self.branch = branch
         self.rootPath = rootPath
         self.baseReference = baseReference
     }
 
-    /// The shared branch actually created: prefix + typed name.
+    /// Workspace checkouts share one branch, so only the global template applies.
     var composedBranch: String {
         let name = branch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "" : branchPrefix + name
+        return WorktreeBranchName.compose(
+            name: name, prefix: branchPrefix, globalTemplate: branchTemplate, now: branchTemplateDate
+        )
     }
 
     static func checkoutRoot(parentPath: String, branch: String) -> String {
