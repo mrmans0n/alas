@@ -333,6 +333,8 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
     @Published var backgroundTasks: [ACPBackgroundTask] = []
     @Published var backgroundTaskStopSupported = false
+    /// The user's explicit collapse choice for the background task tray; nil follows the default.
+    @Published var backgroundTrayExpanded: Bool?
     private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
