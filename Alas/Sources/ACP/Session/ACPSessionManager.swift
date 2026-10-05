@@ -1317,6 +1317,7 @@ final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffs: [ACPSession.ID: DraftFlushHandoff] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let setupEvaluator: ACPSetupEvaluator
+    private let resolvesManagedLaunchPath: Bool
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
     private let injectedConnectionFactory: ACPConnectionFactory?
@@ -1695,6 +1696,7 @@ final class ACPSessionManager: ObservableObject {
         self.delegatedMessageNotifier = delegatedMessageNotifier
             ?? DarwinChangeNotifier(worktreeId: resolvedOwner.storageKey, channel: "delegated-inbox")
         _ = hydratorPath
+        self.resolvesManagedLaunchPath = setupEvaluator == nil
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             return await checker.evaluate(spec.setupCheck)
@@ -8834,6 +8836,10 @@ extension ACPSessionManager {
             let path = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             return path.isEmpty ? spec : spec.overridingCommand(path)
         } else {
+            // A custom setup evaluator owns adapter readiness. This also lets
+            // injected transports use virtual commands without consulting the
+            // host filesystem a second time.
+            guard resolvesManagedLaunchPath else { return spec }
             let env = ProcessInfo.processInfo.environment
             let resolver = ACPLaunchPathResolver(
                 env: env,
