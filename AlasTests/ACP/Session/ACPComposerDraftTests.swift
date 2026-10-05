@@ -98,6 +98,14 @@ struct ACPComposerDraftTests {
         #expect(draft.hasContent)
     }
 
+    @Test("a whitespace-only paste is not content, but a pasted log is")
+    func whitespaceOnlyPasteIsNotContent() {
+        let blank = ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: String(repeating: "\n", count: 21))])
+        let log = ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: String(repeating: "x\n", count: 21))])
+        #expect(!blank.hasContent)
+        #expect(log.hasContent)
+    }
+
     @Test("persisted prompt matching normalizes image chips")
     func persistedPromptMatchingNormalizesImageChips() {
         let draft = ACPComposerDraft(segments: [

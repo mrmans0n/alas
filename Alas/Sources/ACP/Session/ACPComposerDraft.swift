@@ -16,15 +16,17 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         }
     }
 
-    /// True when the draft has non-whitespace text or any chip.
-    /// Distinct from `isEmpty` (which is strictly structural) — use this
-    /// when deciding whether the user has typed something meaningful.
+    /// True when the draft has non-whitespace text or pasted text, or any
+    /// other chip. Distinct from `isEmpty` (which is strictly structural) —
+    /// use this when deciding whether the user has typed something
+    /// meaningful. A whitespace-only paste is not content: submit trims it
+    /// away and would silently refuse.
     var hasContent: Bool {
         segments.contains { segment in
             switch segment {
-            case .text(let value):
+            case .text(let value), .pastedText(_, let value):
                 return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .mention, .image, .upstreamReference, .pastedText:
+            case .mention, .image, .upstreamReference:
                 return true
             }
         }
