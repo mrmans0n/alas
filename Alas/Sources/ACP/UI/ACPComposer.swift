@@ -1560,6 +1560,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func mouseDown(with event: NSEvent) {
         if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
+        if let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            window?.makeFirstResponder(self)
+            if event.clickCount >= 2 {
+                expandPastedTextChip(at: hit.range)
+            } else {
+                pastedTextHover.pin(hit.attachment, range: hit.range, in: self)
+            }
+            return
+        }
         if nextPromptInputState.hasComposerFocus {
             invalidateNextPromptSuggestion()
         }
@@ -1687,6 +1696,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private let fileMentionHover = ACPFileMentionHoverController()
     private let commandChipHover = ACPCommandChipHoverController()
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
+    private let pastedTextHover = ACPPastedTextHoverController()
 
     /// Character range + file URL when `point` sits on an image chip
     /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
@@ -1811,6 +1821,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             commandChipHover.hide()
         }
         upstreamReferenceHover.update(at: point, in: self, store: coordinator?.upstreamReferences)
+        pastedTextHover.update(at: point, in: self)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -1819,6 +1830,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         fileMentionHover.hide()
         commandChipHover.hide()
         upstreamReferenceHover.hide()
+        pastedTextHover.hideUnlessPinned()
     }
 
     /// Observes the enclosing scroll view's clip view while the composer is
@@ -2159,7 +2171,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
-            insertPlainText(text)
+            if ACPPastedTextPolicy.shouldCollapse(text) {
+                insertPastedTextChip(text)
+            } else {
+                insertPlainText(text)
+            }
             return
         }
         super.paste(sender)
@@ -2419,6 +2435,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         else { return false }
         let replacementRange = boundedSelectedRange(in: textStorage)
         let draft = capImages(in: decoded, replacementRange: replacementRange)
+            .renumberingPastedText(avoiding: pastedTextOrdinals(excluding: replacementRange))
         // The whole draft was one or more images already at the cap: the
         // error was reported, and there's nothing left to insert, but the
         // paste itself was still handled — falling through would let
@@ -2492,6 +2509,68 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         typingAttributes = attrs
         return true
+    }
+
+    /// Inserts `content` as one pasted-text chip over the selection, as a
+    /// single undoable edit. The agent still receives `content` verbatim:
+    /// `Coordinator.extract` writes it where the chip sits.
+    @discardableResult
+    func insertPastedTextChip(_ content: String) -> Bool {
+        guard let textStorage else { return false }
+        let range = boundedSelectedRange(in: textStorage)
+        let attrs = baseTypingAttributes
+        let ordinal = (pastedTextOrdinals(excluding: range).max() ?? 0) + 1
+        let chip = ACPPastedTextChip.attributedChip(ordinal: ordinal, content: content, label: nil, attributes: attrs)
+        typingAttributes = attrs
+        performNativeTextInsertion {
+            insertText(chip, replacementRange: range)
+        }
+        typingAttributes = attrs
+        return true
+    }
+
+    /// Ordinals of the pasted-text chips in storage outside `range`, so a
+    /// paste that replaces a selection can reuse the numbers it removes.
+    private func pastedTextOrdinals(excluding range: NSRange) -> Set<Int> {
+        guard let textStorage, textStorage.length > 0 else { return [] }
+        var ordinals = Set<Int>()
+        textStorage.enumerateAttribute(.pastedTextOrdinal, in: NSRange(location: 0, length: textStorage.length)) { value, chipRange, _ in
+            guard let ordinal = value as? Int, NSIntersectionRange(chipRange, range).length == 0 else { return }
+            ordinals.insert(ordinal)
+        }
+        return ordinals
+    }
+
+    /// Replaces the pasted-text chip at `range` with its content as plain,
+    /// editable text in one undoable edit. No chipification runs: the user
+    /// asked for the raw text.
+    func expandPastedTextChip(at range: NSRange) {
+        guard let textStorage, range.length == 1, NSMaxRange(range) <= textStorage.length,
+              let chip = textStorage.attribute(.attachment, at: range.location, effectiveRange: nil)
+                as? ACPPastedTextChipAttachment
+        else { return }
+        pastedTextHover.hide()
+        replaceUndoably(range: range, with: NSAttributedString(string: chip.content, attributes: baseTypingAttributes))
+        setSelectedRange(NSRange(location: range.location + (chip.content as NSString).length, length: 0))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        guard let hit = ACPPastedTextChip.hit(at: convert(event.locationInWindow, from: nil), in: self) else {
+            return menu
+        }
+        let item = NSMenuItem(title: "Expand Pasted Text", action: #selector(expandPastedTextFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = NSValue(range: hit.range)
+        let result = menu ?? NSMenu()
+        if result.numberOfItems > 0 { result.insertItem(.separator(), at: 0) }
+        result.insertItem(item, at: 0)
+        return result
+    }
+
+    @objc private func expandPastedTextFromMenu(_ sender: NSMenuItem) {
+        guard let range = (sender.representedObject as? NSValue)?.rangeValue else { return }
+        expandPastedTextChip(at: range)
     }
 
     /// Tracks the not-yet-finalized dictation span so each subsequent

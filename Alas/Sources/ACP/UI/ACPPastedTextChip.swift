@@ -57,6 +57,25 @@ enum ACPPastedTextChip {
         return chip
     }
 
+    /// The chip under `point` (view coordinates) in `textView`. Uses each
+    /// chip's `firstRect`, which works under TextKit 1 and 2, like
+    /// `ACPPathChip.hit`.
+    @MainActor
+    static func hit(at point: NSPoint, in textView: NSTextView) -> (range: NSRange, attachment: ACPPastedTextChipAttachment)? {
+        guard let storage = textView.textStorage, storage.length > 0 else { return nil }
+        var found: (range: NSRange, attachment: ACPPastedTextChipAttachment)?
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard let attachment = value as? ACPPastedTextChipAttachment else { return }
+            let chipRange = NSRange(location: range.location, length: 1)
+            guard let rect = textView.upstreamReferenceAnchorRect(for: chipRange),
+                  rect.insetBy(dx: -1, dy: -1).contains(point)
+            else { return }
+            found = (chipRange, attachment)
+            stop.pointee = true
+        }
+        return found
+    }
+
     /// Draws into a flipped (y-down) context, matching the @-mention pill.
     @MainActor
     static func draw(label: String, in frame: NSRect) {
