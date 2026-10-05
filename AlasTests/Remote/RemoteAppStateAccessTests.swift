@@ -798,6 +798,50 @@ struct RemoteAppStateAccessTests {
         #expect(agents.map(\.isDefault) == [true, false])
     }
 
+    @Test func remoteAgentsAdvertiseRememberedModels() async throws {
+        let state = makeRemoteRenameState()
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: false, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["codex", "gemini"]
+        )
+        state.acpModelCatalog.record(agentID: "codex", models: [.init(id: "gpt-5", name: "GPT-5")])
+
+        let agents = state.remoteAgents()
+
+        #expect(agents.first { $0.id == "codex" }?.models == [RemoteModelOption(id: "gpt-5", name: "GPT-5")])
+        #expect(agents.first { $0.id == "gemini" }?.models == nil)
+    }
+
+    @Test func createRemoteSessionQueuesTheRequestedModelForTheFirstTurn() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteRenameState()
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        state.remoteSessionAttachScheduler = { _, _ in }
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+
+        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude", modelId: "opus")
+
+        guard case .success(let summary) = result else {
+            Issue.record("expected success, got \(result)")
+            return
+        }
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        #expect(manager.pendingModel[summary.id] == "opus")
+    }
+
     @Test func createRemoteSessionSelectsWorktreeAppendsTabAndReturnsSummary() async throws {
         var cleanupWorktreeId: String?
         defer {
