@@ -75,7 +75,9 @@ struct PluginViewNodeView: View {
             VStack(alignment: .leading, spacing: spacing) { children }
                 .frame(width: width, alignment: .leading)
         case .hstack:
-            HStack(alignment: .top, spacing: spacing) { children }
+            // Baseline, not top: a caption beside a button sits level with its label, and a row's
+            // leading text lines up with the first line of a stacked title.
+            HStack(alignment: .firstTextBaseline, spacing: spacing) { children }
         case .scroll:
             ScrollView(node.horizontal ? .horizontal : .vertical) { children }
         case .text:
@@ -118,16 +120,18 @@ struct PluginViewNodeView: View {
             Spacer(minLength: 0).accessibilityHidden(true)
         case .progress:
             HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
                 if let text = node.text {
                     Text(text).font(.caption).foregroundColor(color(.dim))
                 }
             }
         case .link:
             // Opened by Alas, not the plugin: no event, and always the default browser.
-            Button(node.label ?? "") { if let url = node.url { NSWorkspace.shared.open(url) } }
-                .buttonStyle(.link)
-                .help(node.url?.absoluteString ?? "")
+            AlasButton(title: node.label ?? "", icon: "arrow.up.right", style: .subtle) {
+                if let url = node.url { NSWorkspace.shared.open(url) }
+            }
+            .accessibilityLabel(node.label ?? "")
+            .help(node.url?.absoluteString ?? "")
         case .markdown:
             PluginMarkdownView(text: node.text ?? "")
         }
@@ -317,9 +321,7 @@ private struct PluginTextFieldView: View {
                     }
                 }
         } else {
-            TextField(node.placeholder ?? "", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { submit(text) }
+            AlasField(text: $text, placeholder: node.placeholder ?? "", onSubmit: { submit(text) })
         }
     }
 }

@@ -144,7 +144,7 @@ struct PluginsPane: View {
     private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
         SettingsRow(name: entry.name, desc: Self.catalogDescription(entry, row, failure: installFailures[entry.id]), selectable: true) {
             if busy.contains(entry.id) {
-                ProgressView().controlSize(.small)
+                Spinner().frame(width: 14, height: 14)
             } else {
                 switch row {
                 case .install(let version):
@@ -304,7 +304,7 @@ private struct PluginConfigureSheet: View {
                 } else if host.state == .active, host.panelTree(for: target.place) != nil {
                     PluginViewTabView(host: host, panel: target.place.panel)
                 } else {
-                    ProgressView().controlSize(.small)
+                    Spinner().frame(width: 14, height: 14)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
