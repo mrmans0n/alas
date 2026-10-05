@@ -412,12 +412,16 @@ struct ACPSessionQueueAPITests {
             dispatchedBrokerGeneration: generation)
         let unsent = QueuedPrompt(
             blocks: [.text("second")], status: .sending, dispatchedBrokerGeneration: generation)
+        s.continuesInterruptedTurns = { true }
         s.deliveredQueuedPromptIDs = [delivered.id]
         s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
         if origin == .brokerGenerationChange {
             s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
         }
 
+        // Queued at the drop, so a persist before (or without) a successful
+        // attach still carries the continuation.
+        #expect(s.queue.map(\.blocks).first == [.text(ACPSession.interruptedTurnContinueText)])
         #expect(s.consumeInterruptedTurns(resume: true))
 
         #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)], [.text("second")]])

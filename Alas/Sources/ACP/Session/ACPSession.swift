@@ -2747,12 +2747,11 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
-        return queue.count != count
+        return dropped
     }
 
     /// Restore a persisted queue and Limited state as one snapshot. The queue
@@ -2781,9 +2780,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// follow-up steered into a running turn has no provenance and records
     /// its row before steering is confirmed, so output after it is no proof.
     /// A turn that failed after partial output keeps its error and Retry.
-    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
+    ///
+    /// With auto-continue on, the dropped prompt's continuation is queued here
+    /// rather than held in memory until an attach succeeds: the shortened queue
+    /// can be persisted before then, and a failed attach would otherwise lose
+    /// the only record that the turn needs continuing. Returns whether the
+    /// queue changed.
+    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) -> Bool {
         interruptedQueueItemIDs.formUnion(newlyUncertain)
-        guard !deliveredQueuedPromptIDs.isEmpty else { return }
+        guard !deliveredQueuedPromptIDs.isEmpty else { return false }
         let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
@@ -2791,7 +2796,17 @@ final class ACPSession: ObservableObject, Identifiable {
                 && deliveredQueuedPromptIDs.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
-        if queue.count != count { interruptedAnsweredTurn = true }
+        guard queue.count != count else { return false }
+        if continuesInterruptedTurns() { enqueueInterruptedTurnContinuation() }
+        return true
+    }
+
+    /// Whether the "Continue interrupted sessions after restart" setting is on.
+    var continuesInterruptedTurns: @MainActor () -> Bool = { false }
+
+    private func enqueueInterruptedTurnContinuation() {
+        let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+        queue.insert(QueuedPrompt(blocks: [.text(Self.interruptedTurnContinueText)]), at: insertAt)
     }
 
     /// Prompts whose delivery became uncertain because the connection that
@@ -2799,17 +2814,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// uncertain when restored are not included: they were interrupted
     /// before this launch and stay held for the user.
     private var interruptedQueueItemIDs: Set<UUID> = []
-    /// Whether an interrupted turn was dropped from the queue because the
-    /// transcript shows the agent had already started answering it.
-    private var interruptedAnsweredTurn = false
-
     static let interruptedTurnContinueText =
         "Your previous turn was interrupted because Alas restarted. Continue where you left off."
 
     /// Consumes the interruptions recorded since the last attach. With
     /// `resume`, uncertain prompts are released for resending and a turn the
-    /// agent had started answering gets a continue prompt at the head of the
-    /// queue. Without it they stay held for an explicit Retry.
+    /// agent had started answering after hydration gets a continue prompt at
+    /// the head of the queue. Without it they stay held for an explicit Retry.
+    /// A turn the stored transcript already showed answered was handled when
+    /// it was dropped.
     ///
     /// Returns whether the queue needs persisting: true whenever an
     /// interruption was recorded, even when held, because restoring rewrote
@@ -2819,10 +2832,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func consumeInterruptedTurns(resume: Bool) -> Bool {
         let itemIDs = interruptedQueueItemIDs
-        var answeredTurn = interruptedAnsweredTurn
+        var answeredTurn = false
         interruptedQueueItemIDs = []
-        interruptedAnsweredTurn = false
-        guard resume else { return !itemIDs.isEmpty || answeredTurn }
+        guard resume else { return !itemIDs.isEmpty }
         var changed = !itemIDs.isEmpty
         // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent
         // and answered after hydration is only visible in the live
@@ -2840,8 +2852,7 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         if answeredTurn {
-            let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
-            queue.insert(QueuedPrompt(blocks: [.text(Self.interruptedTurnContinueText)]), at: insertAt)
+            enqueueInterruptedTurnContinuation()
             changed = true
         }
         return changed
@@ -2860,9 +2871,8 @@ final class ACPSession: ObservableObject, Identifiable {
             queue[index].markDeliveryUncertain()
             newlyUncertain.insert(queue[index].id)
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
-        return !newlyUncertain.isEmpty || queue.count != count
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        return !newlyUncertain.isEmpty || dropped
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

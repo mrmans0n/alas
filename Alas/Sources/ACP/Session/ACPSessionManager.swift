@@ -2347,6 +2347,7 @@ final class ACPSessionManager: ObservableObject {
             hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
+        session.continuesInterruptedTurns = { [weak self] in self?.continueInterruptedSessions() ?? false }
         if let memory = transcriptScrollMemory[id] {
             session.followsTranscriptTail = memory.followsTail
         }
