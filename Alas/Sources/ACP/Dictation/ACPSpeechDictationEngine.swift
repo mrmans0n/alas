@@ -14,7 +14,7 @@ import os
 /// it these would be real data races (the compiler's `@unchecked Sendable`
 /// only suppresses the warning; it doesn't provide synchronization), and
 /// the watchdog could read stale values and report silence over live audio.
-private final class ACPDictationTapStats: @unchecked Sendable {
+final class ACPDictationTapStats: @unchecked Sendable {
     var lastConvertedFrames: AVAudioFrameCount = 0
 
     private var lock = os_unfair_lock_s()
@@ -38,6 +38,103 @@ private final class ACPDictationTapStats: @unchecked Sendable {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         return _peak
+    }
+}
+
+/// Owns the CoreAudio tap callback so its executor contract can be exercised
+/// independently from microphone authorization and speech-model setup.
+@available(macOS 26.0, *)
+@MainActor
+struct ACPDictationAudioTap {
+    let stats = ACPDictationTapStats()
+
+    private let converter: AVAudioConverter
+    private let outputFormat: AVAudioFormat
+    private let continuation: AsyncStream<AnalyzerInput>.Continuation
+
+    nonisolated private static let logger = Logger(subsystem: "io.nlopez.alas", category: "dictation")
+
+    init(
+        converter: AVAudioConverter,
+        outputFormat: AVAudioFormat,
+        continuation: AsyncStream<AnalyzerInput>.Continuation
+    ) {
+        self.converter = converter
+        self.outputFormat = outputFormat
+        self.continuation = continuation
+    }
+
+    func install(
+        on node: AVAudioNode,
+        bus: AVAudioNodeBus,
+        bufferSize: AVAudioFrameCount,
+        format: AVAudioFormat?
+    ) {
+        let converter = converter
+        let outputFormat = outputFormat
+        let continuation = continuation
+        let stats = stats
+
+        // CoreAudio invokes this block on its realtime queue. Explicit
+        // `@Sendable` prevents MainActor inheritance and its runtime trap.
+        node.installTap(onBus: bus, bufferSize: bufferSize, format: format) { @Sendable buffer, _ in
+            // A multichannel USB/aggregate input may carry the active
+            // microphone on any channel, not just 0 — checking only
+            // channel 0 would report silence (and eventually the false
+            // "no audio" warning) while a working mic was plugged into
+            // a different channel.
+            var bufferPeak: Float = 0
+            if let channelData = buffer.floatChannelData {
+                let frameCount = Int(buffer.frameLength)
+                for c in 0..<Int(buffer.format.channelCount) {
+                    let channel = channelData[c]
+                    for i in 0..<frameCount { bufferPeak = max(bufferPeak, abs(channel[i])) }
+                }
+            }
+            // One lock acquisition per buffer, not per sample or per
+            // field — this runs on a realtime thread every ~85ms.
+            stats.recordBuffer(peak: bufferPeak)
+            guard let converted = Self.convert(buffer, using: converter, to: outputFormat) else {
+                Self.logger.error("convert returned nil for buffer \(stats.buffers)")
+                return
+            }
+            stats.lastConvertedFrames = converted.frameLength
+            if stats.buffers % 50 == 0 {
+                Self.logger.info("tap: buffers=\(stats.buffers) peak=\(stats.peak) convertedFrames=\(stats.lastConvertedFrames)")
+            }
+            continuation.yield(AnalyzerInput(buffer: converted))
+        }
+    }
+
+    /// Converts one buffer through `converter` to `format`. Not
+    /// actor-isolated: called directly from the audio tap's realtime
+    /// thread, which cannot `await` a hop to the main actor.
+    nonisolated private static func convert(
+        _ buffer: AVAudioPCMBuffer,
+        using converter: AVAudioConverter?,
+        to format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        guard let converter else { return nil }
+        let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 16
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+        // The input block below runs synchronously, once, inline within
+        // this call to `convert` (never concurrently) — `AVAudioConverter`
+        // just types the block `@Sendable` because it COULD in principle
+        // call back on another thread for other conversion shapes.
+        nonisolated(unsafe) var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            if suppliedInput {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, conversionError == nil else { return nil }
+        return output
     }
 }
 
@@ -291,37 +388,17 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let (stream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
             inputContinuation = continuation
 
-            // CoreAudio invokes the tap on its realtime queue. Explicit
-            // `@Sendable` prevents the closure from inheriting MainActor
-            // isolation, whose runtime check would otherwise trap.
-            let stats = ACPDictationTapStats()
-            audioEngine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable buffer, _ in
-                // A multichannel USB/aggregate input may carry the active
-                // microphone on any channel, not just 0 — checking only
-                // channel 0 would report silence (and eventually the false
-                // "no audio" warning) while a working mic was plugged into
-                // a different channel.
-                var bufferPeak: Float = 0
-                if let channelData = buffer.floatChannelData {
-                    let frameCount = Int(buffer.frameLength)
-                    for c in 0..<Int(buffer.format.channelCount) {
-                        let channel = channelData[c]
-                        for i in 0..<frameCount { bufferPeak = max(bufferPeak, abs(channel[i])) }
-                    }
-                }
-                // One lock acquisition per buffer, not per sample or per
-                // field — this runs on a realtime thread every ~85ms.
-                stats.recordBuffer(peak: bufferPeak)
-                guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else {
-                    Self.logger.error("convert returned nil for buffer \(stats.buffers)")
-                    return
-                }
-                stats.lastConvertedFrames = converted.frameLength
-                if stats.buffers % 50 == 0 {
-                    Self.logger.info("tap: buffers=\(stats.buffers) peak=\(stats.peak) convertedFrames=\(stats.lastConvertedFrames)")
-                }
-                continuation.yield(AnalyzerInput(buffer: converted))
-            }
+            let tap = ACPDictationAudioTap(
+                converter: converter,
+                outputFormat: analyzerFormat,
+                continuation: continuation
+            )
+            tap.install(
+                on: audioEngine.inputNode,
+                bus: 0,
+                bufferSize: 4096,
+                format: inputFormat
+            )
             tapInstalled = true
 
             audioEngine.prepare()
@@ -350,7 +427,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
 
             try await analyzer.start(inputSequence: stream)
             Self.logger.info("analyzer started; engine running=\(audioEngine.isRunning)")
-            startSilenceWatchdog(stats: stats, onSilence: callbacks.onSilence)
+            startSilenceWatchdog(stats: tap.stats, onSilence: callbacks.onSilence)
             onReady()
         }
 
@@ -412,37 +489,6 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let analyzer = analyzer
             self.analyzer = nil
             Task { await analyzer?.cancelAndFinishNow() }
-        }
-
-        /// Converts one buffer through `converter` to `format`. Not
-        /// actor-isolated: called directly from the audio tap's realtime
-        /// thread, which cannot `await` a hop to the main actor.
-        nonisolated private static func convert(
-            _ buffer: AVAudioPCMBuffer,
-            using converter: AVAudioConverter?,
-            to format: AVAudioFormat
-        ) -> AVAudioPCMBuffer? {
-            guard let converter else { return nil }
-            let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
-            let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 16
-            guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-            // The input block below runs synchronously, once, inline within
-            // this call to `convert` (never concurrently) — `AVAudioConverter`
-            // just types the block `@Sendable` because it COULD in principle
-            // call back on another thread for other conversion shapes.
-            nonisolated(unsafe) var suppliedInput = false
-            var conversionError: NSError?
-            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-                if suppliedInput {
-                    inputStatus.pointee = .noDataNow
-                    return nil
-                }
-                suppliedInput = true
-                inputStatus.pointee = .haveData
-                return buffer
-            }
-            guard status != .error, conversionError == nil else { return nil }
-            return output
         }
 
         /// First candidate from `localeCandidates` that the transcriber
