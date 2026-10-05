@@ -40,7 +40,6 @@ struct AttachIssueDialog: View {
             autocomplete.cancelInFlightLoad()
         }
         .onDisappear {
-            model.cancelKindDetection()
             autocomplete.dismiss()
             autocomplete.cancelInFlightLoad()
         }
@@ -156,9 +155,6 @@ struct AttachIssueDialog: View {
                         .pickerStyle(.menu)
                         .labelsHidden()
                         .fixedSize()
-                        if model.isDetectingKind {
-                            ProgressView().controlSize(.small)
-                        }
                         if let caption = model.kindCaption {
                             Text(caption)
                                 .font(.system(size: 11))

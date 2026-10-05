@@ -20,7 +20,6 @@ final class AttachIssueDialogModel {
         /// worktree while the user reviews the confirmation step, and with nil
         /// when the user backs out of that step.
         let resolvedIssueChanged: (IssueSnapshot?) -> Void
-        let classifyKind: (@MainActor (IssueSnapshot) async -> IssueKind?)?
 
         init(
             resolve: @escaping (String) async throws -> ResolvedIssue,
@@ -28,8 +27,7 @@ final class AttachIssueDialogModel {
             selectedProjectID: String,
             projects: @escaping () -> [ProjectConfig],
             clipboardText: @escaping () -> String? = { Clipboard.read() },
-            resolvedIssueChanged: @escaping (IssueSnapshot?) -> Void = { _ in },
-            classifyKind: (@MainActor (IssueSnapshot) async -> IssueKind?)? = nil
+            resolvedIssueChanged: @escaping (IssueSnapshot?) -> Void = { _ in }
         ) {
             self.resolve = resolve
             self.loadSuggestions = loadSuggestions
@@ -37,7 +35,6 @@ final class AttachIssueDialogModel {
             self.projects = projects
             self.clipboardText = clipboardText
             self.resolvedIssueChanged = resolvedIssueChanged
-            self.classifyKind = classifyKind
         }
     }
 
@@ -78,9 +75,6 @@ final class AttachIssueDialogModel {
     private var promptIsUserOwned = false
     private(set) var kind: IssueKind?
     private(set) var kindOrigin: IssueKindOrigin?
-    private(set) var isDetectingKind = false
-    private var kindTask: Task<Void, Never>?
-    private var kindGeneration = 0
     private var fallback: ResolvedIssue?
 
     private let environment: Environment
@@ -224,10 +218,8 @@ final class AttachIssueDialogModel {
     }
 
     var kindCaption: String? {
-        if isDetectingKind { return "Detecting…" }
         switch kindOrigin {
         case .rule(let reason): return reason
-        case .suggested: return "suggested"
         case .user, nil: return nil
         }
     }
@@ -236,9 +228,8 @@ final class AttachIssueDialogModel {
         promptIsUserOwned && phase == .confirmation
     }
 
-    /// A user pick always wins: it cancels detection and is never overwritten.
+    /// A user pick always wins and is never overwritten.
     func setKind(_ kind: IssueKind?) {
-        cancelKindDetection()
         self.kind = kind
         kindOrigin = .user
         refreshGeneratedPromptIfNeeded()
@@ -249,45 +240,21 @@ final class AttachIssueDialogModel {
         refreshGeneratedPromptIfNeeded()
     }
 
-    func cancelKindDetection() {
-        kindGeneration += 1
-        kindTask?.cancel()
-        kindTask = nil
-        isDetectingKind = false
-    }
-
     private func resetKind() {
-        cancelKindDetection()
         kind = nil
         kindOrigin = nil
     }
 
-    /// Rules decide synchronously. Otherwise the model is asked in the
-    /// background, and its answer applies only if nothing the user did has
-    /// superseded it.
+    /// Rules decide from provider metadata. A user pick is never overwritten;
+    /// without a rule decision the ticket stays unclassified.
     private func applyInitialKind(for source: IssueSnapshot) {
         guard kindOrigin != .user else { return }
-        cancelKindDetection()
         if let decision = IssueKindRules.classify(source) {
             kind = decision.kind
             kindOrigin = .rule(reason: decision.reason)
-            return
-        }
-        kind = nil
-        kindOrigin = nil
-        guard let classify = environment.classifyKind else { return }
-        kindGeneration += 1
-        let generation = kindGeneration
-        isDetectingKind = true
-        kindTask = Task { [weak self] in
-            let suggested = await classify(source)
-            guard let self, !Task.isCancelled, generation == self.kindGeneration else { return }
-            self.isDetectingKind = false
-            self.kindTask = nil
-            guard let suggested, self.kindOrigin != .user, !self.promptIsUserOwned else { return }
-            self.kind = suggested
-            self.kindOrigin = .suggested
-            self.refreshGeneratedPromptIfNeeded()
+        } else {
+            kind = nil
+            kindOrigin = nil
         }
     }
 

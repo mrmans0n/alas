@@ -18,27 +18,31 @@ struct IssueKindRulesTests {
         .init(name: "GitHub Feature type", provider: .github, nativeType: "Feature",
               labels: [], expected: .init(kind: .enhancement, reason: "from GitHub issue type Feature")),
         .init(name: "GitHub Task type defers to labels", provider: .github, nativeType: "Task",
-              labels: ["bug"], expected: .init(kind: .bug, reason: "from label `bug`")),
+              labels: ["bug"], expected: .init(kind: .bug, reason: "from label \"bug\"")),
+        .init(name: "GitHub Enhancement type", provider: .github, nativeType: "Enhancement",
+              labels: [], expected: .init(kind: .enhancement, reason: "from GitHub issue type Enhancement")),
+        .init(name: "type/ prefix", provider: .github, nativeType: nil,
+              labels: ["type/bug"], expected: .init(kind: .bug, reason: "from label \"type/bug\"")),
         .init(name: "GitLab incident is a bug", provider: .gitlab, nativeType: "incident",
               labels: [], expected: .init(kind: .bug, reason: "from GitLab incident")),
         .init(name: "GitLab test case is a chore", provider: .gitlab, nativeType: "test_case",
               labels: [], expected: .init(kind: .chore, reason: "from GitLab test case")),
         .init(name: "GitLab plain issue type defers to scoped label", provider: .gitlab, nativeType: "issue",
-              labels: ["type::feature"], expected: .init(kind: .enhancement, reason: "from label `type::feature`")),
+              labels: ["type::feature"], expected: .init(kind: .enhancement, reason: "from label \"type::feature\"")),
         .init(name: "scope that is itself a kind", provider: .gitlab, nativeType: nil,
-              labels: ["bug::vulnerability"], expected: .init(kind: .bug, reason: "from label `bug::vulnerability`")),
+              labels: ["bug::vulnerability"], expected: .init(kind: .bug, reason: "from label \"bug::vulnerability\"")),
         .init(name: "non-type scopes do not classify", provider: .gitlab, nativeType: nil,
               labels: ["priority::1", "workflow::in dev"], expected: nil),
         .init(name: "kind/ prefix", provider: .github, nativeType: nil,
-              labels: ["kind/docs"], expected: .init(kind: .docs, reason: "from label `kind/docs`")),
+              labels: ["kind/docs"], expected: .init(kind: .docs, reason: "from label \"kind/docs\"")),
         .init(name: "hyphen and case normalization", provider: .github, nativeType: nil,
-              labels: ["Feature-Request"], expected: .init(kind: .enhancement, reason: "from label `Feature-Request`")),
+              labels: ["Feature-Request"], expected: .init(kind: .enhancement, reason: "from label \"Feature-Request\"")),
         .init(name: "underscore normalization", provider: .github, nativeType: nil,
-              labels: ["tech_debt"], expected: .init(kind: .chore, reason: "from label `tech_debt`")),
+              labels: ["tech_debt"], expected: .init(kind: .chore, reason: "from label \"tech_debt\"")),
         .init(name: "unrelated labels are ignored", provider: .github, nativeType: nil,
-              labels: ["help wanted", "spike"], expected: .init(kind: .research, reason: "from label `spike`")),
+              labels: ["help wanted", "spike"], expected: .init(kind: .research, reason: "from label \"spike\"")),
         .init(name: "same kind twice still decides", provider: .github, nativeType: nil,
-              labels: ["bug", "regression"], expected: .init(kind: .bug, reason: "from label `bug`")),
+              labels: ["bug", "regression"], expected: .init(kind: .bug, reason: "from label \"bug\"")),
         .init(name: "conflicting labels do not decide", provider: .github, nativeType: nil,
               labels: ["bug", "enhancement"], expected: nil),
         .init(name: "manual source without labels", provider: .manual, nativeType: nil,
@@ -70,30 +74,5 @@ struct IssueKindRulesTests {
             isRefreshable: testCase.provider != .manual,
             nativeType: testCase.nativeType
         )
-    }
-}
-
-struct IssueKindPolicyTests {
-    @Test(arguments: [
-        (#"{"kind": "bug"}"#, IssueKindPolicy.Answer.kind(.bug)),
-        (#" {"kind":"Research"} "#, .kind(.research)),
-        (#"{"kind": "chore"}"#, .kind(.chore)),
-        (#"{"kind": "unknown"}"#, .unknown),
-    ])
-    func acceptsExactlyOneKind(output: String, expected: IssueKindPolicy.Answer) {
-        #expect(IssueKindPolicy.parse(output) == expected)
-    }
-
-    @Test(arguments: [
-        "bug",
-        #"{"kind": "feature"}"#,
-        #"{"kind": "bug", "why": "crash"}"#,
-        #"{"kind": null}"#,
-        #"{"type": "bug"}"#,
-        #"```json {"kind": "bug"} ```"#,
-        "",
-    ])
-    func rejectsAnythingElse(output: String) {
-        #expect(IssueKindPolicy.parse(output) == nil)
     }
 }

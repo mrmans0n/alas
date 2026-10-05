@@ -17,10 +17,9 @@ enum IssueKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// Where the current kind came from. Only `.user` is never overwritten.
+/// Where the current kind came from. `.user` is never overwritten by the rules.
 enum IssueKindOrigin: Equatable, Codable, Sendable {
     case rule(reason: String)
-    case suggested
     case user
 }
 
@@ -31,7 +30,7 @@ struct IssueKindDecision: Equatable, Sendable {
 
 /// Deterministic classification from provider metadata. Native issue types
 /// win over labels. Labels that point at more than one kind decide nothing,
-/// so the ticket falls through to the model or the generic prompt.
+/// so the ticket keeps the generic prompt.
 enum IssueKindRules {
     static func classify(_ source: IssueSnapshot) -> IssueKindDecision? {
         nativeDecision(source) ?? labelDecision(source.labels)
@@ -74,7 +73,7 @@ enum IssueKindRules {
         let matches = labels.compactMap { label in synonyms[normalize(label)].map { (kind: $0, label: label) } }
         guard let first = matches.first,
               matches.allSatisfy({ $0.kind == first.kind }) else { return nil }
-        return .init(kind: first.kind, reason: "from label `\(first.label)`")
+        return .init(kind: first.kind, reason: "from label \"\(first.label)\"")
     }
 
     /// Reduces `type::bug`, `bug::vulnerability`, `kind/docs`,

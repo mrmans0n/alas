@@ -318,85 +318,17 @@ struct AttachIssueDialogModelTests {
         #expect(first.makeDraft() == second.makeDraft())
     }
 
-    @Test("a label decides the kind and generates its prompt without the model")
+    @Test("a label decides the kind and generates its prompt")
     func labelDecidesKind() async {
-        let gate = KindGate()
-        let fixture = Fixture(resolution: Fixture.resolvedIssue(labels: ["bug"]), kindGate: gate)
+        let fixture = Fixture(resolution: Fixture.resolvedIssue(labels: ["bug"]))
         let model = AttachIssueDialogModel(environment: fixture.environment)
         model.reference = "#42"
 
         await model.resolve()
 
         #expect(model.kind == .bug)
-        #expect(model.kindCaption == "from label `bug`")
+        #expect(model.kindCaption == "from label \"bug\"")
         #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source, kind: .bug))
-        #expect(gate.requestCount == 0)
-    }
-
-    @Test("a model answer becomes the suggested kind while the prompt is generated")
-    func modelSuggestsKind() async {
-        let gate = KindGate()
-        let fixture = Fixture(kindGate: gate)
-        let model = AttachIssueDialogModel(environment: fixture.environment)
-        model.reference = "#42"
-
-        await model.resolve()
-        await gate.waitForRequest()
-        #expect(model.kindCaption == "Detecting…")
-        gate.answer(.research)
-        await fixture.waitUntilKindSettles(model)
-
-        #expect(model.kind == .research)
-        #expect(model.kindCaption == "suggested")
-        #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source, kind: .research))
-    }
-
-    @Test("an unknown model answer keeps the generic prompt")
-    func unknownAnswerKeepsGenericPrompt() async {
-        let gate = KindGate()
-        let fixture = Fixture(kindGate: gate)
-        let model = AttachIssueDialogModel(environment: fixture.environment)
-        model.reference = "#42"
-
-        await model.resolve()
-        await gate.waitForRequest()
-        gate.answer(nil)
-        await fixture.waitUntilKindSettles(model)
-
-        #expect(model.kind == nil)
-        #expect(model.kindCaption == nil)
-        #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source))
-    }
-
-    enum LateAnswerInterruption: CaseIterable, Sendable { case userPick, promptEdit, backOut }
-
-    @Test("a late model answer never overrides the user", arguments: LateAnswerInterruption.allCases)
-    func lateAnswerIsDiscarded(_ interruption: LateAnswerInterruption) async {
-        let gate = KindGate()
-        let fixture = Fixture(kindGate: gate)
-        let model = AttachIssueDialogModel(environment: fixture.environment)
-        model.reference = "#42"
-        await model.resolve()
-        await gate.waitForRequest()
-
-        switch interruption {
-        case .userPick: model.setKind(.chore)
-        case .promptEdit: model.setPrompt("My own prompt.")
-        case .backOut: model.cancelResolution()
-        }
-        gate.answer(.bug)
-        await gate.waitUntilAnswered()
-
-        #expect(model.kind != .bug)
-        switch interruption {
-        case .userPick:
-            #expect(model.kind == .chore)
-            #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source, kind: .chore))
-        case .promptEdit:
-            #expect(model.prompt == "My own prompt.")
-        case .backOut:
-            #expect(model.kind == nil)
-        }
     }
 
     @Test("changing the kind leaves an edited prompt alone until reset")
@@ -433,38 +365,8 @@ struct AttachIssueDialogModelTests {
         #expect(!model.canResetPrompt)
         model.title = "Renamed"
         #expect(model.prompt.contains("**Title:** Renamed"))
+        #expect(model.prompt.hasPrefix("Fix GitHub issue #42."))
         #expect(model.makeDraft()?.kind == .bug)
-    }
-}
-
-@MainActor
-private final class KindGate {
-    private(set) var requestCount = 0
-    private(set) var answeredCount = 0
-    private var continuation: CheckedContinuation<IssueKind?, Never>?
-
-    func classify(_ source: IssueSnapshot) async -> IssueKind? {
-        requestCount += 1
-        let kind = await withCheckedContinuation { continuation = $0 }
-        // The model's detection task continues on the main actor in this same
-        // job, so once this is counted its guard-and-apply has already run.
-        answeredCount += 1
-        return kind
-    }
-
-    func waitForRequest() async {
-        while continuation == nil { await Task.yield() }
-    }
-
-    /// Waits until every answer has been delivered to the model, so a test
-    /// asserting that a late answer was *discarded* does not pass vacuously.
-    func waitUntilAnswered() async {
-        while answeredCount < requestCount { await Task.yield() }
-    }
-
-    func answer(_ kind: IssueKind?) {
-        continuation?.resume(returning: kind)
-        continuation = nil
     }
 }
 
@@ -476,7 +378,6 @@ private final class Fixture {
     let suspendResolution: Bool
     let selectedProjectID: String
     let clipboardText: String?
-    let kindGate: KindGate?
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(
@@ -485,8 +386,7 @@ private final class Fixture {
         candidateProjectIDs: [String] = ["alas"],
         suspendResolution: Bool = false,
         selectedProjectID: String = "alas",
-        clipboardText: String? = nil,
-        kindGate: KindGate? = nil
+        clipboardText: String? = nil
     ) {
         projects = [ProjectConfig(
             id: "alas",
@@ -500,14 +400,9 @@ private final class Fixture {
         self.suspendResolution = suspendResolution
         self.selectedProjectID = selectedProjectID
         self.clipboardText = clipboardText
-        self.kindGate = kindGate
     }
 
     var environment: AttachIssueDialogModel.Environment {
-        var classifyKind: (@MainActor (IssueSnapshot) async -> IssueKind?)?
-        if let gate = kindGate {
-            classifyKind = { source in await gate.classify(source) }
-        }
         return .init(
             resolve: { [self] _ in
                 if suspendResolution {
@@ -521,13 +416,8 @@ private final class Fixture {
             loadSuggestions: { _, _ in [] },
             selectedProjectID: selectedProjectID,
             projects: { [self] in projects },
-            clipboardText: { [self] in clipboardText },
-            classifyKind: classifyKind
+            clipboardText: { [self] in clipboardText }
         )
-    }
-
-    func waitUntilKindSettles(_ model: AttachIssueDialogModel) async {
-        while model.isDetectingKind { await Task.yield() }
     }
 
     func waitUntilResolutionStarts() async {

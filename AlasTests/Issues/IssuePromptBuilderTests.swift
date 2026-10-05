@@ -109,7 +109,6 @@ struct IssuePromptBuilderTests {
     @Test func genericPromptIsUnchanged() {
         let prompt = IssuePromptBuilder.build(source: Self.githubSource, kind: nil)
 
-        #expect(prompt == IssuePromptBuilder.build(source: Self.githubSource))
         #expect(prompt.hasPrefix("""
         Implement GitHub issue #1842.
         Inspect the attached issue context, keep the change focused, add regression coverage, and verify the result.
