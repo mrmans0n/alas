@@ -5,7 +5,7 @@ import Testing
 struct AgentBuiltinsTests {
     @Test func catalogHasExactlyEightEntriesInDeterministicOrder() {
         let ids = AgentBuiltins.catalog.map(\.id)
-        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "omp", "opencode", "gemini", "copilot"])
+        #expect(ids == ["claude", "codex", "cursor-agent", "pi", "omp", "opencode", "gemini", "antigravity", "copilot"])
     }
 
     @Test func everyEntryIsMarkedBuiltin() {

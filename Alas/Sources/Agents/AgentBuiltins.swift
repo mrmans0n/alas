@@ -114,6 +114,22 @@ enum AgentBuiltins {
             isEnabled: true,
             builtinLogoAssetName: "agent-gemini"
         ),
+        // Antigravity CLI (`agy`) succeeds Gemini CLI for non-Enterprise
+        // users. Verified against antigravity.google/docs/cli (2026-10-05):
+        // -p / --print is the non-interactive flag; there is no --yolo, and
+        // --dangerously-skip-permissions auto-approves every action.
+        AgentDefinition(
+            id: "antigravity",
+            displayName: "Antigravity",
+            binary: "agy",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--dangerously-skip-permissions",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-antigravity"
+        ),
         // Recorded from the Task 5 built-in catalog requirements (2026-05-20).
         // -i is the prompt-mode arg; --allow-tool=write scopes write access.
         AgentDefinition(

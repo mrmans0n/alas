@@ -167,6 +167,7 @@ final class ACPHarnessBridge {
         case "codex":        return .codex
         case "cursor-agent": return .cursor
         case "gemini":       return .gemini
+        case "antigravity":  return .antigravity
         case "opencode":     return .opencode
         case "pi":           return .pi
         case "omp":          return .omp

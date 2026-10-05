@@ -32,8 +32,8 @@ respond when it needs you.
 - **Run agents two ways.** A long-lived Ghostty terminal or a native chat pane
   over [ACP](https://agentclientprotocol.com). Tool
   calls, plans, and permission prompts render inline, and past sessions can be
-  browsed and resumed. Works with Claude Code, Codex, Cursor, Gemini, OpenCode,
-  Pi, OMP, and Copilot.
+  browsed and resumed. Works with Claude Code, Codex, Cursor, Gemini, Antigravity,
+  OpenCode, Pi, OMP, and Copilot.
 
 - **Prepare the next turn.** Queue, edit, reorder, or schedule prompts while an
   agent works. Attach issue context, dictate prompts, and configure external MCP

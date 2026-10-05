@@ -82,7 +82,7 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case ACPOpenCodeTaskPolicy.agentID: .toolOmission(.openCodeConfigContent)
         case ACPManagedAdapterDescriptor.pi.agentID: .toolOmission(.piCommandWrapper)
         case "omp": .toolOmission(.ompConfigOverlay)
-        case "cursor-agent", "gemini", "copilot": .unverified
+        case "cursor-agent", "gemini", "antigravity", "copilot": .unverified
         default: .unsupported
         }
     }

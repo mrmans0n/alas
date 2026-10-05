@@ -87,6 +87,7 @@ const AGENT_LOGO_PATHS = Object.freeze({
   omp: "/agent-icons/agent-omp.svg",
   opencode: "/agent-icons/agent-opencode.png",
   gemini: "/agent-icons/agent-gemini.png",
+  antigravity: "/agent-icons/agent-antigravity.svg",
   copilot: "/agent-icons/agent-copilot.png"
 });
 

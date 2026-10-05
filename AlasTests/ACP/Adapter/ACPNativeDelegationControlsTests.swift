@@ -12,6 +12,7 @@ struct ACPNativeDelegationControlsTests {
             ("pi", .toolOmission(.piCommandWrapper)),
             ("cursor-agent", .unverified),
             ("gemini", .unverified),
+            ("antigravity", .unverified),
             ("copilot", .unverified),
             ("opencode", .toolOmission(.openCodeConfigContent)),
             ("omp", .toolOmission(.ompConfigOverlay)),

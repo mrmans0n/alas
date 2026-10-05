@@ -28,6 +28,19 @@ enum ACPLaunchCatalog {
             supportsModelSelection: true,
             supportsModeSelection: false),
 
+        // Antigravity has no ACP mode in `agy` itself; Google ships a separate
+        // `agy_acp_server` binary (ACP registry id `antigravity-acp`, archive
+        // from dl.google.com). The archive names it `agy_acp_server.par`, so
+        // users put it on PATH as `agy_acp_server`.
+        ACPLaunchSpec(
+            agentID: "antigravity",
+            command: "agy_acp_server",
+            arguments: [],
+            extraEnv: [:],
+            setupCheck: .binaryOnPath(name: "agy_acp_server"),
+            supportsModelSelection: true,
+            supportsModeSelection: true),
+
         ACPLaunchSpec(
             agentID: "opencode",
             command: "opencode",
