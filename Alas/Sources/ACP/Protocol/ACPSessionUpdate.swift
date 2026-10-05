@@ -205,7 +205,7 @@ enum ACPMessagePhase: String, Codable, Equatable, Sendable {
     static func codexPhase(in metadata: AnyCodable?) -> ACPMessagePhase? {
         let root = metadata?.value as? [String: AnyCodable]
         let codex = root?["codex"]?.value as? [String: AnyCodable]
-        guard let value = (codex?["phase"] ?? metadata?.airFields["phase"])?.value as? String else { return nil }
+        guard let value = codex?["phase"]?.value as? String else { return nil }
         return ACPMessagePhase(rawValue: value)
     }
 }

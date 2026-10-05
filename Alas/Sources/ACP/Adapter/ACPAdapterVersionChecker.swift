@@ -174,16 +174,48 @@ struct ACPAdapterVersionChecker: Sendable {
         guard let latest = entry["latest"] as? String
         else { return .unknown }
 
-        if isPrerelease(latest) { return .upToDate }
+        if isIgnoredPrerelease(packageName: packageName, version: latest) { return .upToDate }
         if current == latest    { return .upToDate }
-        if compareSemver(current, latest) == .orderedDescending { return .upToDate }
+        let currentRelease = downstreamRelease(packageName: packageName, version: current)
+        let latestRelease = downstreamRelease(packageName: packageName, version: latest)
+        if let currentRelease, let latestRelease {
+            switch compareSemver(currentRelease.base, latestRelease.base) {
+            case .orderedDescending:
+                return .upToDate
+            case .orderedSame where currentRelease.revision >= latestRelease.revision:
+                return .upToDate
+            default:
+                break
+            }
+        } else {
+            let currentBase = currentRelease?.base ?? current
+            let latestBase = latestRelease?.base ?? latest
+            if compareSemver(currentBase, latestBase) == .orderedDescending { return .upToDate }
+        }
         return .available(current: current, latest: latest)
     }
 
-    /// Treat any version containing a `-` segment as a prerelease (covers
-    /// `1.2.0-beta.1`, `1.0.0-rc.0`, `2.0.0-next.5`, etc.).
-    private static func isPrerelease(_ version: String) -> Bool {
-        version.contains("-")
+    private static func isIgnoredPrerelease(packageName: String, version: String) -> Bool {
+        version.contains("-") && downstreamRelease(packageName: packageName, version: version) == nil
+    }
+
+    private static func downstreamRelease(packageName: String, version: String) -> (base: String, revision: Int)? {
+        guard packageName.hasPrefix("@alas-ide/"),
+              let suffixRange = version.range(of: "-alas.", options: .backwards)
+        else { return nil }
+
+        let base = String(version[..<suffixRange.lowerBound])
+        let suffix = version[suffixRange.upperBound...]
+        guard !base.isEmpty,
+              !suffix.isEmpty,
+              suffix.first != "0",
+              suffix.allSatisfy(\.isNumber),
+              let revision = Int(suffix),
+              base.split(separator: ".", omittingEmptySubsequences: false)
+                .allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+        else { return nil }
+
+        return (base, revision)
     }
 
     /// Lexicographic per-component numeric compare. Good enough for

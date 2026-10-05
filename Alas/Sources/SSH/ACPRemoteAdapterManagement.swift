@@ -326,6 +326,11 @@ struct ACPRemoteAdapterManagement {
             \(emit(status: "corrupt"))
             exit \(corruptExitCode)
         fi
+        package=\(SSHCommand.shellQuote(descriptor.packageName))
+        if [ ! -d "$prefix/lib/node_modules/$package" ]; then
+            \(emit(status: "missing"))
+            exit \(missingExitCode)
+        fi
         \(nodeLookup)
         [ -x "$node" ] && [ ! -d "$node" ] || {
             \(emit(status: "prerequisite"))
@@ -371,8 +376,21 @@ struct ACPRemoteAdapterManagement {
         binary=\(binary)
         if [ -n "$root" ] && [ -d "$root/$package" ] && [ -n "$prefix" ]; then
             global_adapter="$prefix/bin/$binary"
-            if [ -x "$global_adapter" ] && [ ! -d "$global_adapter" ]; then
-                \(emitReady(adapterExpression: "$global_adapter", nodeBinExpression: "$node_bin"))
+            if [ -L "$global_adapter" ] && [ -x "$global_adapter" ]; then
+                link_target=$(readlink "$global_adapter" 2>/dev/null || :)
+                case "$link_target" in
+                    /*) target="$link_target" ;;
+                    *) target="$prefix/bin/$link_target" ;;
+                esac
+                package_root=$(cd "$root/$package" 2>/dev/null && pwd -P || :)
+                target_dir=$(dirname "$target")
+                target_name=$(basename "$target")
+                resolved_dir=$(cd "$target_dir" 2>/dev/null && pwd -P || :)
+                case "$resolved_dir/$target_name" in
+                    "$package_root"/*) [ -n "$package_root" ] && {
+                        \(emitReady(adapterExpression: "$global_adapter", nodeBinExpression: "$node_bin"))
+                    } ;;
+                esac
             fi
             \(emit(status: "corrupt"))
             exit \(corruptExitCode)
@@ -449,6 +467,10 @@ struct ACPRemoteAdapterManagement {
             case Self.absentExitCode:
                 return hasStatus("absent", output: result.stdout)
                     ? nil
+                    : .error(message: malformedMessage(descriptor, host: host))
+            case Self.missingExitCode:
+                return hasStatus("missing", output: result.stdout)
+                    ? .missing(reason: "\(descriptor.packageName) is not installed on \(host).")
                     : .error(message: malformedMessage(descriptor, host: host))
             case Self.prerequisiteExitCode:
                 return hasStatus("prerequisite", output: result.stdout)

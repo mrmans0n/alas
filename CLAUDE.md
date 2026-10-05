@@ -102,6 +102,23 @@ code they cover should be able to justify it.
 
 - Use the repo-scoped `lassie` skill when asked to babysit, shepherd, finish, or land a pull request.
 
+## Downstream ACP adapter forks
+
+Alas temporarily installs `@alas-ide/codex-acp` and
+`@alas-ide/claude-agent-acp` from the `alas` branches of
+`mrmans0n/codex-acp` and `mrmans0n/claude-agent-acp`.
+
+- When fixing `agentclientprotocol/codex-acp` or
+  `agentclientprotocol/claude-agent-acp`, check whether Alas needs the fix before
+  it ships upstream. If it does, carry the reviewed patch in the corresponding
+  fork and publish the next immutable `-alas.N` version.
+- Verify the patch is actually present in the fork; an open upstream pull
+  request or a matching branch name is not evidence that it is included.
+- Update Alas to a downstream version only after its package, source commit,
+  tests, and live ACP initialization behavior have been verified.
+- When an upstream stable release contains a carried patch, remove the
+  redundant downstream commit during sync after the contract tests pass.
+
 ## Shared GhosttyKit cache
 
 `scripts/build-ghostty.sh` caches the built `GhosttyKit.xcframework` and

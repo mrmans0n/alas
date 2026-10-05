@@ -6,14 +6,18 @@ struct ACPManagedAdapterDescriptorTests {
     @Test("catalog contains the adapters Alas manages")
     func catalogContainsManagedAdapters() throws {
         let claude = try #require(ACPManagedAdapterDescriptor.descriptor(for: "claude"))
-        #expect(claude.packageName == "@agentclientprotocol/claude-agent-acp")
+        #expect(claude.packageName == "@alas-ide/claude-agent-acp")
         #expect(claude.binaryName == "claude-agent-acp")
-        #expect(claude.legacyPackageNames == ["@zed-industries/claude-code-acp"])
+        #expect(claude.legacyPackageNames == [
+            "@agentclientprotocol/claude-agent-acp", "@zed-industries/claude-code-acp",
+        ])
 
         let codex = try #require(ACPManagedAdapterDescriptor.descriptor(for: "codex"))
-        #expect(codex.packageName == "@agentclientprotocol/codex-acp")
+        #expect(codex.packageName == "@alas-ide/codex-acp")
         #expect(codex.binaryName == "codex-acp")
-        #expect(codex.legacyPackageNames == ["@zed-industries/codex-acp"])
+        #expect(codex.legacyPackageNames == [
+            "@agentclientprotocol/codex-acp", "@zed-industries/codex-acp",
+        ])
 
         let pi = try #require(ACPManagedAdapterDescriptor.descriptor(for: "pi"))
         #expect(pi.packageName == "pi-acp")

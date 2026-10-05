@@ -37,6 +37,14 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         }
     }
 
+    var verifiedAdapterNames: [String] {
+        switch self {
+        case .claudeDisallowedTools: ACPManagedAdapterDescriptor.claude.verifiedPackageNames
+        case .codexConfigEnvironment: ACPManagedAdapterDescriptor.codex.verifiedPackageNames
+        default: [verifiedAdapterName]
+        }
+    }
+
     /// Lowest adapter version whose model-facing request was verified to
     /// omit the native tool. Older or unidentified adapters fail the launch
     /// instead of running as if enforced.
@@ -379,11 +387,11 @@ enum ACPNativeDelegationControls {
         guard nativeSubagentsDisabled,
               let mechanism = ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism
         else { return }
-        guard agentInfo?.name == mechanism.verifiedAdapterName else {
+        guard let name = agentInfo?.name, mechanism.verifiedAdapterNames.contains(name) else {
             throw ACPNativeDelegationError.adapterUnverified(
                 agentID: agentID,
                 found: agentInfo?.name,
-                expected: mechanism.verifiedAdapterName
+                expected: mechanism.verifiedAdapterNames.joined(separator: ", ")
             )
         }
         try checkAdapterVersion(agentInfo?.version, mechanism: mechanism, agentID: agentID)

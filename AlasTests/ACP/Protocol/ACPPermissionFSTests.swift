@@ -26,21 +26,11 @@ struct ACPPermissionFSTests {
         #expect(p.toolCall.mcpServerName == nil)
     }
 
-    @Test("decodes permission hints", arguments: [false, true])
-    func decodesPermissionPresentation(air: Bool) throws {
+    @Test("decodes permission hints")
+    func decodesPermissionPresentation() throws {
         let data = try fixture("permission-request-meta")
         let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data)
-        let raw = try #require(env.params)
-        func airMetadata(_ metadata: AnyCodable?) -> AnyCodable? {
-            guard var root = metadata?.value as? [String: AnyCodable],
-                  let permission = root.removeValue(forKey: "permission") else { return metadata }
-            root["jetbrains"] = AnyCodable(["air": AnyCodable(["permission": permission])])
-            return AnyCodable(root)
-        }
-        let p = air ? ACPPermissionRequestParams(sessionId: raw.sessionId, toolCall: raw.toolCall,
-            options: raw.options.map { .init(optionId: $0.optionId, name: $0.name, kind: $0.kind,
-                metadata: airMetadata($0.metadata)) }, metadata: airMetadata(raw.metadata)) : raw
-
+        let p = try #require(env.params)
         let presentation = try #require(ACPPermissionPresentation(metadata: p.metadata))
         #expect(presentation.title == "Run command?")
         #expect(presentation.description == "Reason: needs shell access to build the project")

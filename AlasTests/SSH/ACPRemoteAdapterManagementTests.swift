@@ -9,6 +9,37 @@ struct ACPRemoteAdapterManagementTests {
         binDirectory: "/opt/node/bin"
     )
 
+    @Test(arguments: [ACPManagedAdapterDescriptor.claude, .codex])
+    func legacyOnlyManagedPrefixRequiresSetup(_ descriptor: ACPManagedAdapterDescriptor) async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let prefix = home.appendingPathComponent(".alas/acp/\(descriptor.agentID)")
+        let bin = prefix.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: prefix.appendingPathComponent("lib/node_modules/\(descriptor.legacyPackageNames[0])"),
+            withIntermediateDirectories: true)
+        for name in [descriptor.binaryName, "node"] {
+            let file = bin.appendingPathComponent(name)
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let management = ACPRemoteAdapterManagement(
+            runner: { _, _, command, _, _ in
+                try await Process.run("/bin/sh", args: ["-c", command], env: ["HOME": home.path, "PATH": bin.path])
+            },
+            nodeResolver: { _ in .init(npmPath: bin.appendingPathComponent("npm").path,
+                                     nodePath: bin.appendingPathComponent("node").path,
+                                     binDirectory: bin.path) }
+        )
+        let resolution = await management.resolve(
+            host: "devbox", descriptor: descriptor, setupCheck: .npxPackage(name: descriptor.packageName))
+        guard case .missing = resolution else {
+            Issue.record("A legacy-only managed prefix must require adapter setup, found \(resolution)")
+            return
+        }
+    }
+
     @Test func managedAdapterWinsWithoutNpm() async {
         let runner = AdapterProbeRunner(results: [
             .init(exitCode: 0, stdout: taggedReady(
@@ -88,6 +119,67 @@ struct ACPRemoteAdapterManagementTests {
         #expect(globalCommand?.contains("command -v 'pi-acp'") == true)
     }
 
+    @Test(arguments: [ACPManagedAdapterDescriptor.claude, .codex])
+    func scopedGlobalPackageIsQuotedAndResolvedFromNpmRoot(_ descriptor: ACPManagedAdapterDescriptor) async {
+        let runner = AdapterProbeRunner(results: [
+            absentResult(),
+            .init(exitCode: 0, stdout: taggedReady(
+                adapter: "/opt/node/bin/\(descriptor.binaryName)",
+                nodeBin: "/opt/node/bin"
+            ), stderr: ""),
+        ])
+
+        _ = await makeManagement(runner: runner).resolve(
+            host: "devbox",
+            descriptor: descriptor,
+            setupCheck: managedCheck(descriptor)
+        )
+
+        let command = await runner.commands.last
+        #expect(command?.contains("package='\(descriptor.packageName)'") == true)
+        #expect(command?.contains("[ -d \"$root/$package\" ]") == true)
+        #expect(command?.contains("global_adapter=\"$prefix/bin/$binary\"") == true)
+    }
+
+    @Test func globalProbeRejectsBinaryOwnedByLegacyPackage() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let prefix = temp.appendingPathComponent("prefix")
+        let root = prefix.appendingPathComponent("lib/node_modules")
+        let bin = prefix.appendingPathComponent("bin")
+        let downstream = root.appendingPathComponent("@alas-ide/codex-acp")
+        let legacyExecutable = root.appendingPathComponent("@agentclientprotocol/codex-acp/dist/index.js")
+        try FileManager.default.createDirectory(at: downstream, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: legacyExecutable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: legacyExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: legacyExecutable.path)
+        try FileManager.default.createSymbolicLink(
+            at: bin.appendingPathComponent("codex-acp"), withDestinationURL: legacyExecutable)
+
+        let npm = bin.appendingPathComponent("npm")
+        try """
+        #!/bin/sh
+        if [ "$1 $2" = "root -g" ]; then printf '%s\\n' '\(root.path)'; exit 0; fi
+        if [ "$1 $2" = "prefix -g" ]; then printf '%s\\n' '\(prefix.path)'; exit 0; fi
+        exit 1
+        """.write(to: npm, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: npm.path)
+
+        let command = ACPRemoteAdapterManagement.globalProbeCommand(
+            descriptor: .codex,
+            setupCheck: managedCheck(.codex),
+            environment: .init(npmPath: npm.path, nodePath: bin.appendingPathComponent("node").path,
+                               binDirectory: bin.path)
+        )
+        let result = try await Process.run("/bin/sh", args: ["-c", command])
+
+        #expect(result.exitCode == ACPRemoteAdapterManagement.corruptExitCode)
+        #expect(result.stdout.contains("status=corrupt"))
+    }
+
     @Test func allowedPathFallbackComesAfterMatchingPackageCheck() async throws {
         let runner = AdapterProbeRunner(results: [absentResult(), missingResult()])
         let management = makeManagement(runner: runner)
@@ -138,7 +230,7 @@ struct ACPRemoteAdapterManagementTests {
         }
         let command = try #require(await runner.commands.last)
         #expect(!command.contains("command -v 'codex-acp'"))
-        #expect(command.contains("'@agentclientprotocol/codex-acp'"))
+        #expect(command.contains("'@alas-ide/codex-acp'"))
     }
 
     @Test func confirmedAbsenceWithUsablePrerequisitesIsMissing() async {

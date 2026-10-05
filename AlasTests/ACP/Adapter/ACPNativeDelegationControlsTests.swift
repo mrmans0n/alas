@@ -613,12 +613,29 @@ struct ACPNativeDelegationControlsTests {
         }
     }
 
+    @Test(arguments: [
+        ("claude", "@agentclientprotocol/claude-agent-acp", "0.90.0"),
+        ("claude", "@alas-ide/claude-agent-acp", "0.90.0-alas.1"),
+        ("codex", "@agentclientprotocol/codex-acp", "1.14.0"),
+        ("codex", "@alas-ide/codex-acp", "1.14.0-alas.1"),
+    ])
+    func trustedAdapterIdentitiesKeepVersionGate(agentID: String, name: String, version: String) {
+        #expect(throws: Never.self) {
+            try ACPNativeDelegationControls.verifyAdapter(
+                agentID: agentID, nativeSubagentsDisabled: true, agentInfo: .init(name: name, version: version))
+        }
+        #expect(throws: ACPNativeDelegationError.self) {
+            try ACPNativeDelegationControls.verifyAdapter(
+                agentID: agentID, nativeSubagentsDisabled: true, agentInfo: .init(name: name, version: "0.0.1"))
+        }
+    }
+
     @Test("a same-named ACP server that is not the verified package is rejected")
     func foreignAdapterIsRejected() {
         #expect(throws: ACPNativeDelegationError.adapterUnverified(
             agentID: "claude",
             found: "some-fork-acp",
-            expected: "@agentclientprotocol/claude-agent-acp"
+            expected: "@alas-ide/claude-agent-acp, @agentclientprotocol/claude-agent-acp"
         )) {
             try ACPNativeDelegationControls.verifyAdapter(
                 agentID: "claude",

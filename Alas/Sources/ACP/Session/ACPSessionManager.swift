@@ -1317,6 +1317,7 @@ final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffs: [ACPSession.ID: DraftFlushHandoff] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let setupEvaluator: ACPSetupEvaluator
+    private let resolvesManagedLaunchPath: Bool
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
     private let injectedConnectionFactory: ACPConnectionFactory?
@@ -1695,6 +1696,7 @@ final class ACPSessionManager: ObservableObject {
         self.delegatedMessageNotifier = delegatedMessageNotifier
             ?? DarwinChangeNotifier(worktreeId: resolvedOwner.storageKey, channel: "delegated-inbox")
         _ = hydratorPath
+        self.resolvesManagedLaunchPath = setupEvaluator == nil
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             return await checker.evaluate(spec.setupCheck)
@@ -3636,7 +3638,7 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
+        let launchSpec = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
@@ -3698,7 +3700,7 @@ final class ACPSessionManager: ObservableObject {
             guard let spec = ACPLaunchCatalog.spec(for: discovered.agentId) else { throw ACPSessionDiscoveryError.noLaunchSpec(discovered.agentId) }
             let setup = await evaluateSetup(for: launchSpecTransformer(spec, true))
             guard case .ready = setup else { throw ACPSessionDiscoveryError.setupRequired(setup.reasonText) }
-            let launch = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
+            let launch = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
@@ -6006,7 +6008,7 @@ extension ACPSessionManager {
         let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
-            let resolvedSpec = await resolvedLaunchSpec(for: spec, host: host)
+            let resolvedSpec = try await resolvedLaunchSpec(for: spec, host: host)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             var launchSpec = launchSpecTransformer(resolvedSpec, !session.readOnlyRestricted)
             if host == nil {
@@ -6214,7 +6216,6 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
-            connection.backgroundTaskLifecycleEnabled = ["claude", "codex"].contains(session.agentId)
             let initialized = try await connection.initialize(
                 brokerOperationKey: Self.brokerStartupOperationKey(
                     sessionId: sessionId,
@@ -6242,8 +6243,8 @@ extension ACPSessionManager {
             }
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
-            session.supportsCodexSteeringCompletion = ["@agentclientprotocol/codex-acp", "codex-acp"].contains(initialized.agentInfo?.name ?? "")
-            session.backgroundTaskStopSupported = connection.supportsBackgroundTasks
+            session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
+            session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
@@ -8812,9 +8813,9 @@ extension ACPSessionManager {
     }
 
     /// Swap `spec.command` for the verified absolute launch path when one can
-    /// be resolved (npm-backed adapters); otherwise return `spec` unchanged so
-    /// launch falls back to PATH-based `/usr/bin/env <command>`.
-    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async -> ACPLaunchSpec {
+    /// be resolved. Managed package adapters fail closed when their package
+    /// does not own the resolved executable.
+    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async throws -> ACPLaunchSpec {
         if let host {
             if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) != nil {
                 let key = remoteAdapterKey(host: host, agentID: spec.agentID)
@@ -8835,12 +8836,22 @@ extension ACPSessionManager {
             let path = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             return path.isEmpty ? spec : spec.overridingCommand(path)
         } else {
+            // A custom setup evaluator owns adapter readiness. This also lets
+            // injected transports use virtual commands without consulting the
+            // host filesystem a second time.
+            guard resolvesManagedLaunchPath else { return spec }
             let env = ProcessInfo.processInfo.environment
             let resolver = ACPLaunchPathResolver(
                 env: env,
                 additionalPathDirectories: AgentPath.wellKnownDirectories,
-                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
-            guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
+                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env),
+                npmGlobalRootDirectory: ACPLaunchPathResolver.defaultNpmGlobalRootDirectory(env: env))
+            guard let path = await resolver.resolvedLaunchPath(for: spec) else {
+                if case .npxPackage(let package) = spec.setupCheck {
+                    throw ACPLaunchPathError.packageExecutableUnavailable(package)
+                }
+                return spec
+            }
             return spec.overridingCommand(path)
         }
     }

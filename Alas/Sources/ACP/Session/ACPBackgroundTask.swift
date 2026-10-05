@@ -1,24 +1,6 @@
 import Foundation
 
-extension AnyCodable {
-    var airFields: [String: AnyCodable] {
-        func object(_ value: AnyCodable?) -> [String: AnyCodable] {
-            if let fields = value?.value as? [String: AnyCodable] { return fields }
-            return (value?.value as? [String: Any])?.mapValues { $0 as? AnyCodable ?? AnyCodable($0) } ?? [:]
-        }
-        return object(object(object(self)["jetbrains"])["air"])
-    }
-
-    var advertisesAsyncTasks: Bool {
-        guard let version = airFields["version"]?.value as? Int, version >= 1 else { return false }
-        if let capabilities = airFields["capabilities"]?.value as? [AnyCodable] {
-            return capabilities.contains { $0.value as? String == "asyncTasks" }
-        }
-        return (airFields["capabilities"]?.value as? [String])?.contains("asyncTasks") == true
-    }
-}
-
-/// AIR's sparse task notifications. Output remains on the original tool call.
+/// Sparse task notifications. Output remains on the original tool call.
 struct ACPAsyncTaskUpdate: Codable, Equatable, Sendable {
     let sessionUpdate: String
     let asyncTaskId: String

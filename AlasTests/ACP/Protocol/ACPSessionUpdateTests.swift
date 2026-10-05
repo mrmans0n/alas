@@ -14,16 +14,6 @@ struct ACPSessionUpdateTests {
         #expect(try JSONDecoder().decode(ACPSessionUpdate.self, from: JSONEncoder().encode(update)) == update)
     }
 
-    @Test("AIR message phases survive async-task negotiation")
-    func airMessagePhase() throws {
-        let data = Data(#"{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"},"_meta":{"jetbrains":{"air":{"phase":"final_answer"}}}}"#.utf8)
-        guard case .agentMessageChunk(let chunk) = try JSONDecoder().decode(ACPSessionUpdate.self, from: data) else {
-            Issue.record("expected message chunk")
-            return
-        }
-        #expect(chunk.phase == .finalAnswer)
-    }
-
     @Test("decodes agent message chunk")
     func agentChunk() throws {
         let env = try decode("session-update-agent-chunk")
