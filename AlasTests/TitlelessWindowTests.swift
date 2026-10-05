@@ -66,6 +66,9 @@ struct TitlelessWindowTests {
         configurationView.prepareForSystemWindowMove()
         #expect(window.isMovable == true)
 
+        configurationView.configureWindowIfNeeded()
+        #expect(window.isMovable == true)
+
         configurationView.restoreDragPolicy()
         #expect(window.isMovable == false)
     }

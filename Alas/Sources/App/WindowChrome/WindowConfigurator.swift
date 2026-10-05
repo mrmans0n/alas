@@ -20,17 +20,26 @@ struct WindowConfigurator: NSViewRepresentable {
 /// the window directly and continue to work while `isMovable` is false.
 ///
 /// AppKit needs the window movable while displays sleep or reconfigure so it
-/// can relocate and later restore the frame. A Core Graphics callback opens
-/// that window before display reconfiguration begins; the AppKit notification
-/// closes it after the new screen geometry has settled.
+/// can relocate and later restore the frame. A process-lifetime Core Graphics
+/// callback announces reconfiguration before it begins; the AppKit notification
+/// closes that window after the new screen geometry has settled.
 final class WindowConfigurationView: NSView {
     var blocksSystemTitlebarDrag: Bool {
         didSet {
             guard oldValue != blocksSystemTitlebarDrag else { return }
-            restoreDragPolicy()
+            applyDragPolicy()
         }
     }
 
+    private struct SystemWindowMoveReasons: OptionSet {
+        let rawValue: Int
+
+        static let displayReconfiguration = Self(rawValue: 1 << 0)
+        static let screenSleep = Self(rawValue: 1 << 1)
+    }
+
+    private var systemWindowMoveReasons: SystemWindowMoveReasons = []
+    private var displayWillReconfigureObserver: NSObjectProtocol?
     private var screensDidSleepObserver: NSObjectProtocol?
     private var screensDidWakeObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
@@ -39,6 +48,17 @@ final class WindowConfigurationView: NSView {
         self.blocksSystemTitlebarDrag = blocksSystemTitlebarDrag
         super.init(frame: .zero)
 
+        displayWillReconfigureObserver = NotificationCenter.default.addObserver(
+            forName: .windowDisplayWillReconfigure,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.beginSystemWindowMove(.displayReconfiguration)
+            }
+        }
+        _ = installWindowDisplayReconfigurationCallback
+
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         screensDidSleepObserver = workspaceCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
@@ -46,7 +66,7 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.prepareForSystemWindowMove()
+                self?.beginSystemWindowMove(.screenSleep)
             }
         }
         screensDidWakeObserver = workspaceCenter.addObserver(
@@ -55,7 +75,7 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.restoreDragPolicy()
+                self?.endSystemWindowMove(.screenSleep)
             }
         }
         screenParametersObserver = NotificationCenter.default.addObserver(
@@ -64,18 +84,14 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.prepareForSystemWindowMove()
+                self?.beginSystemWindowMove(.displayReconfiguration)
                 RunLoop.main.perform { [weak self] in
                     MainActor.assumeIsolated {
-                        self?.restoreDragPolicy()
+                        self?.endSystemWindowMove(.displayReconfiguration)
                     }
                 }
             }
         }
-        CGDisplayRegisterReconfigurationCallback(
-            windowDisplayReconfigurationCallback,
-            Unmanaged.passUnretained(self).toOpaque()
-        )
     }
 
     @available(*, unavailable)
@@ -84,11 +100,10 @@ final class WindowConfigurationView: NSView {
     }
 
     isolated deinit {
-        CGDisplayRemoveReconfigurationCallback(
-            windowDisplayReconfigurationCallback,
-            Unmanaged.passUnretained(self).toOpaque()
-        )
         let workspaceCenter = NSWorkspace.shared.notificationCenter
+        if let displayWillReconfigureObserver {
+            NotificationCenter.default.removeObserver(displayWillReconfigureObserver)
+        }
         if let screensDidSleepObserver {
             workspaceCenter.removeObserver(screensDidSleepObserver)
         }
@@ -108,38 +123,60 @@ final class WindowConfigurationView: NSView {
     func configureWindowIfNeeded() {
         guard let window else { return }
         TitlelessWindow.configure(window)
-        restoreDragPolicy()
+        applyDragPolicy()
     }
 
     func prepareForSystemWindowMove() {
-        guard blocksSystemTitlebarDrag else { return }
-        window?.isMovable = true
+        beginSystemWindowMove(.displayReconfiguration)
     }
 
     func restoreDragPolicy() {
-        window?.isMovable = !blocksSystemTitlebarDrag
+        systemWindowMoveReasons = []
+        applyDragPolicy()
+    }
+
+    private func beginSystemWindowMove(_ reason: SystemWindowMoveReasons) {
+        systemWindowMoveReasons.insert(reason)
+        applyDragPolicy()
+    }
+
+    private func endSystemWindowMove(_ reason: SystemWindowMoveReasons) {
+        systemWindowMoveReasons.remove(reason)
+        applyDragPolicy()
+    }
+
+    private func applyDragPolicy() {
+        window?.isMovable = !blocksSystemTitlebarDrag || !systemWindowMoveReasons.isEmpty
     }
 }
+
+private extension Notification.Name {
+    static let windowDisplayWillReconfigure =
+        Notification.Name("Alas.windowDisplayWillReconfigure")
+}
+
+private let installWindowDisplayReconfigurationCallback: Void = {
+    CGDisplayRegisterReconfigurationCallback(
+        windowDisplayReconfigurationCallback,
+        nil
+    )
+}()
 
 private func windowDisplayReconfigurationCallback(
     _ display: CGDirectDisplayID,
     _ flags: CGDisplayChangeSummaryFlags,
     _ userInfo: UnsafeMutableRawPointer?
 ) {
-    guard flags.contains(.beginConfigurationFlag), let userInfo else { return }
-    let address = UInt(bitPattern: userInfo)
-    let prepare = {
-        MainActor.assumeIsolated {
-            guard let pointer = UnsafeMutableRawPointer(bitPattern: address) else { return }
-            Unmanaged<WindowConfigurationView>
-                .fromOpaque(pointer)
-                .takeUnretainedValue()
-                .prepareForSystemWindowMove()
-        }
+    guard flags.contains(.beginConfigurationFlag) else { return }
+    let notify = {
+        NotificationCenter.default.post(
+            name: .windowDisplayWillReconfigure,
+            object: nil
+        )
     }
     if Thread.isMainThread {
-        prepare()
+        notify()
     } else {
-        DispatchQueue.main.sync(execute: prepare)
+        DispatchQueue.main.sync(execute: notify)
     }
 }
