@@ -311,6 +311,9 @@ struct AppConfig: Codable, Equatable {
         var acpLocalTitlesEnabled: Bool
         /// Schedule a resume when a provider usage limit stops a session.
         var acpAutoResumeAfterUsageLimit: Bool
+        /// After a restart, resend prompts whose delivery the dead connection
+        /// left uncertain and ask an interrupted turn to continue. Default: false.
+        var acpContinueInterruptedSessions: Bool
         var acpShowMinimap: Bool
         /// When true, the chat transcript groups consecutive thinking and
         /// finished tool calls into an expandable activity row.
@@ -330,7 +333,7 @@ struct AppConfig: Codable, Equatable {
             case notifyOnFinish, notifyOnAwaiting, acpDelegatedBlockerEscalationSeconds,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
-                 acpAutoResumeAfterUsageLimit, acpCollapseFinishedToolCalls,
+                 acpAutoResumeAfterUsageLimit, acpContinueInterruptedSessions, acpCollapseFinishedToolCalls,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
 
@@ -343,6 +346,7 @@ struct AppConfig: Codable, Equatable {
              acpAutoRunByDefault: Bool = false,
              acpLocalTitlesEnabled: Bool = true,
              acpAutoResumeAfterUsageLimit: Bool = true,
+             acpContinueInterruptedSessions: Bool = false,
              acpShowMinimap: Bool = false,
              acpCollapseFinishedToolCalls: Bool = true,
              exposeAlasMCP: Bool = true,
@@ -359,6 +363,7 @@ struct AppConfig: Codable, Equatable {
             self.acpAutoRunByDefault = acpAutoRunByDefault
             self.acpLocalTitlesEnabled = acpLocalTitlesEnabled
             self.acpAutoResumeAfterUsageLimit = acpAutoResumeAfterUsageLimit
+            self.acpContinueInterruptedSessions = acpContinueInterruptedSessions
             self.acpShowMinimap = acpShowMinimap
             self.acpCollapseFinishedToolCalls = acpCollapseFinishedToolCalls
             self.exposeAlasMCP = exposeAlasMCP
@@ -379,6 +384,8 @@ struct AppConfig: Codable, Equatable {
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             acpLocalTitlesEnabled = (try? c.decode(Bool.self, forKey: .acpLocalTitlesEnabled)) ?? true
             acpAutoResumeAfterUsageLimit = (try? c.decode(Bool.self, forKey: .acpAutoResumeAfterUsageLimit)) ?? true
+            acpContinueInterruptedSessions =
+                (try? c.decode(Bool.self, forKey: .acpContinueInterruptedSessions)) ?? false
             acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
             acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? true
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true

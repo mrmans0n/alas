@@ -402,6 +402,45 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].deliveryUncertain)
     }
 
+    @Test("resuming interrupted turns continues the answered turn and resends the unconfirmed prompt",
+          arguments: [UncertainOrigin.legacyRestore, .brokerGenerationChange])
+    func resumeInterruptedTurns(origin: UncertainOrigin) {
+        let s = mkSession()
+        let generation: ACPBrokerGeneration? = origin == .legacyRestore ? nil : ACPBrokerGeneration(rawValue: 7)
+        let delivered = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: generation)
+        let unsent = QueuedPrompt(
+            blocks: [.text("second")], status: .sending, dispatchedBrokerGeneration: generation)
+        s.deliveredQueuedPromptIDs = [delivered.id]
+        s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+        if origin == .brokerGenerationChange {
+            s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        }
+
+        #expect(s.consumeInterruptedTurns(resume: true))
+
+        #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)], [.text("second")]])
+        #expect(s.queue.allSatisfy { $0.status == .pending && $0.lastError == nil && !$0.deliveryUncertain })
+        #expect(s.queue[1].brokerOperationAttempt == 1)
+        #expect(!s.consumeInterruptedTurns(resume: true))
+    }
+
+    @Test("interrupted prompts stay held without the setting or when interrupted before this launch",
+          arguments: [(resume: false, interruptedEarlier: false), (resume: true, interruptedEarlier: true)])
+    func interruptedPromptsStayHeld(resume: Bool, interruptedEarlier: Bool) {
+        let s = mkSession()
+        var item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
+        if interruptedEarlier { item.markDeliveryUncertain() }
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+
+        #expect(!s.consumeInterruptedTurns(resume: resume))
+        #expect(!s.consumeInterruptedTurns(resume: true))
+
+        #expect(s.queue.map(\.id) == [item.id])
+        #expect(s.queue[0].deliveryUncertain)
+    }
+
     enum RetainedUncertainPrompt: CaseIterable {
         /// Steering records the row first and persists the item as uncertain;
         /// the running turn's output after that row does not prove delivery.

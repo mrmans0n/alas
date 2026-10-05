@@ -2779,13 +2779,55 @@ final class ACPSession: ObservableObject, Identifiable {
     /// its row before steering is confirmed, so output after it is no proof.
     /// A turn that failed after partial output keeps its error and Retry.
     private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
+        interruptedQueueItemIDs.formUnion(newlyUncertain)
         guard !deliveredQueuedPromptIDs.isEmpty else { return }
+        let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
                 && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
                 && deliveredQueuedPromptIDs.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
+        if queue.count != count { interruptedAnsweredTurn = true }
+    }
+
+    /// Prompts whose delivery became uncertain because the connection that
+    /// carried them ended, recorded since the last attach. Prompts already
+    /// uncertain when restored are not included: they were interrupted
+    /// before this launch and stay held for the user.
+    private var interruptedQueueItemIDs: Set<UUID> = []
+    /// Whether an interrupted turn was dropped from the queue because the
+    /// transcript shows the agent had already started answering it.
+    private var interruptedAnsweredTurn = false
+
+    static let interruptedTurnContinueText =
+        "Your previous turn was interrupted because Alas restarted. Continue where you left off."
+
+    /// Consumes the interruptions recorded since the last attach. With
+    /// `resume`, uncertain prompts are released for resending and a turn the
+    /// agent had started answering gets a continue prompt at the head of the
+    /// queue. Without it they stay held for an explicit Retry.
+    ///
+    /// Returns whether the queue changed.
+    @discardableResult
+    func consumeInterruptedTurns(resume: Bool) -> Bool {
+        let itemIDs = interruptedQueueItemIDs
+        let answeredTurn = interruptedAnsweredTurn
+        interruptedQueueItemIDs = []
+        interruptedAnsweredTurn = false
+        guard resume else { return false }
+        var changed = false
+        for item in queue where itemIDs.contains(item.id)
+            && item.deliveryUncertain
+            && item.lastError == QueuedPrompt.deliveryUncertaintyMessage {
+            changed = retryQueueItem(id: item.id) || changed
+        }
+        if answeredTurn {
+            let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+            queue.insert(QueuedPrompt(blocks: [.text(Self.interruptedTurnContinueText)]), at: insertAt)
+            changed = true
+        }
+        return changed
     }
 
     /// Holds prompts dispatched on a broker generation that this connection

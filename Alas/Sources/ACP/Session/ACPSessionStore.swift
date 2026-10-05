@@ -1316,6 +1316,20 @@ extension ACPSessionStore {
     }
 
     func scheduledQueueSessionIds() throws -> [String] {
+        try queueSessionIds {
+            ($0.status == .pending || $0.status == .sending)
+                && $0.lastError == nil
+                && $0.scheduledAt != nil
+        }
+    }
+
+    /// Sessions whose queue still holds a prompt that was in flight when the
+    /// app last exited, so its turn may need to be continued.
+    func interruptedQueueSessionIds() throws -> [String] {
+        try queueSessionIds { $0.status == .sending }
+    }
+
+    private func queueSessionIds(where matches: (QueuedPrompt) -> Bool) throws -> [String] {
         let rows = try db.query("""
         SELECT q.session_id, q.payload
         FROM session_queue q
@@ -1326,11 +1340,7 @@ extension ACPSessionStore {
             guard let sessionId = row["session_id"] as? String,
                   let payload = row["payload"] as? Data,
                   let items = try? JSONDecoder().decode([QueuedPrompt].self, from: payload),
-                  items.contains(where: {
-                      ($0.status == .pending || $0.status == .sending)
-                          && $0.lastError == nil
-                          && $0.scheduledAt != nil
-                  })
+                  items.contains(where: matches)
             else { return nil }
             return sessionId
         }
