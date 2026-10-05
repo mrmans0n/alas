@@ -66,6 +66,20 @@ struct ACPSessionStoreQueueTests {
         #expect(try store.scheduledQueueSessionIds() == [sid])
     }
 
+    @Test("interruptedQueueSessionIds finds a sending prompt or a queued continuation, not other pending items",
+          arguments: [
+              (QueuedPrompt(blocks: [.text("half sent")], status: .sending), true),
+              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), true),
+              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], lastError: "failed"), false),
+              (QueuedPrompt(blocks: [.text("ordinary")]), false),
+          ])
+    func interruptedQueueSessionIds(item: QueuedPrompt, expected: Bool) throws {
+        let (store, sid) = try mkStore()
+        try store.upsertQueue(sessionId: sid, items: [item])
+
+        #expect(try store.interruptedQueueSessionIds() == (expected ? [sid] : []))
+    }
+
     @Test("schema target version includes session_queue (v3+)")
     func schemaIncludesQueue() throws {
         let (store, _) = try mkStore()

@@ -1324,9 +1324,10 @@ extension ACPSessionStore {
     }
 
     /// Sessions whose queue still holds a prompt that was in flight when the
-    /// app last exited, so its turn may need to be continued.
+    /// app last exited, or the continuation queued for one, so the turn may
+    /// need to be continued.
     func interruptedQueueSessionIds() throws -> [String] {
-        try queueSessionIds { $0.status == .sending }
+        try queueSessionIds { $0.status == .sending || $0.isInterruptedTurnContinuation }
     }
 
     private func queueSessionIds(where matches: (QueuedPrompt) -> Bool) throws -> [String] {

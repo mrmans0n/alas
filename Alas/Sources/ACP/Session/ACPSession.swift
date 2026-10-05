@@ -2806,7 +2806,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func enqueueInterruptedTurnContinuation() {
         let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
-        queue.insert(QueuedPrompt(blocks: [.text(Self.interruptedTurnContinueText)]), at: insertAt)
+        queue.insert(QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), at: insertAt)
     }
 
     /// Prompts whose delivery became uncertain because the connection that
@@ -2814,8 +2814,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// uncertain when restored are not included: they were interrupted
     /// before this launch and stay held for the user.
     private var interruptedQueueItemIDs: Set<UUID> = []
-    static let interruptedTurnContinueText =
-        "Your previous turn was interrupted because Alas restarted. Continue where you left off."
+    static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText
 
     /// Consumes the interruptions recorded since the last attach. With
     /// `resume`, uncertain prompts are released for resending and a turn the

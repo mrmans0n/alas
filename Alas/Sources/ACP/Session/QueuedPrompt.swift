@@ -63,6 +63,15 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Failed ones offer Retry/Send now, rather than dropping only the queue half.
     var canRemoveFromQueue: Bool { status == .pending && backgroundTaskWake == nil }
 
+    static let interruptedTurnContinueText =
+        "Your previous turn was interrupted because Alas restarted. Continue where you left off."
+
+    /// The continuation queued for a turn an app restart interrupted. It is an
+    /// ordinary pending row, so launch recovery recognizes it by its content.
+    var isInterruptedTurnContinuation: Bool {
+        status == .pending && lastError == nil && blocks == [.text(Self.interruptedTurnContinueText)]
+    }
+
     static let deliveryUncertaintyMessage =
         "Delivery is uncertain because the previous connection ended before confirming this prompt. Retry to send it again."
 
