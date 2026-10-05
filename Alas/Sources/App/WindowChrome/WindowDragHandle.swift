@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A concrete hit-tested region that moves the main window where the system
-/// titlebar drag is disabled (see `WindowConfigurator.disablesTitlebarDrag`).
+/// A concrete hit-tested region that moves the main window while
+/// `WindowConfigurator` blocks native titlebar dragging.
 ///
 /// This must participate in layout rather than sit in a SwiftUI background:
 /// `NSHostingView` owns background hit testing, so a representable installed

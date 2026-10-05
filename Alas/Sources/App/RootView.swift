@@ -64,7 +64,7 @@ struct RootView: View {
             .onChange(of: state.themeStore.current, initial: true) { _, theme in
                 MermaidDiagramViewerController.shared.updateTheme(theme)
             }
-            .background(WindowConfigurator(disablesTitlebarDrag: true))
+            .background(WindowConfigurator(blocksSystemTitlebarDrag: true))
             .frame(minWidth: 700, minHeight: 600)
             .ignoresSafeArea()
             .modifier(RootCommandHandlers(
