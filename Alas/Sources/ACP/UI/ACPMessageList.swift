@@ -140,7 +140,7 @@ struct ACPMessageList: View {
         .help("Go to newest message")
         .padding(.trailing, 20)
         .padding(.bottom, Self.goToNewestAffordanceBottomPadding(
-            composerSpacerHeight: composerSpacerHeight,
+            composerSpacerHeight: composerSpacerHeight + session.backgroundTrayHeight,
             gap: goToNewestButtonComposerGap
         ))
         .transition(.opacity.combined(with: .scale(scale: 0.94)))
