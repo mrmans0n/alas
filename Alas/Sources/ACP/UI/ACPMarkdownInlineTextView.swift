@@ -310,7 +310,8 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                     object: clipView,
                     queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide(); self?.pastedTextHover.hide() }
+                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide()
+                    self?.pastedTextHover.hide() }
                 })
             }
             ancestor = view.superview
@@ -366,7 +367,8 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// orphaned over whatever now occupies this row.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { upstreamReferenceHover.hide(); pastedTextHover.hide() }
+        if window == nil { upstreamReferenceHover.hide()
+        pastedTextHover.hide() }
         updateScrollObservation()
     }
 
