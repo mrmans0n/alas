@@ -142,6 +142,7 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
     private let autoResumeAfterUsageLimit: @MainActor () -> Bool
+    private let continueInterruptedSessions: @MainActor () -> Bool
     private let qwenTitleFallback: ACPQwenTitleFallback?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
@@ -1618,6 +1619,7 @@ final class ACPSessionManager: ObservableObject {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
+         continueInterruptedSessions: @escaping @MainActor () -> Bool = { false },
          qwenTitleFallback: ACPQwenTitleFallback? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
@@ -1670,6 +1672,7 @@ final class ACPSessionManager: ObservableObject {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
         self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
+        self.continueInterruptedSessions = continueInterruptedSessions
         self.qwenTitleFallback = qwenTitleFallback
         self.onInputAwaiting = onInputAwaiting
         self.onPlanAwaiting = onPlanAwaiting
@@ -2344,6 +2347,7 @@ final class ACPSessionManager: ObservableObject {
             hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
+        session.continuesInterruptedTurns = { [weak self] in self?.continueInterruptedSessions() ?? false }
         if let memory = transcriptScrollMemory[id] {
             session.followsTranscriptTail = memory.followsTail
         }
@@ -2481,11 +2485,12 @@ final class ACPSessionManager: ObservableObject {
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
         session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
-        if session.restoreQueue(
+        let queueChangedAtRestore = session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
-        ) {
+        )
+        if queueChangedAtRestore {
             persistQueue(for: session)
         }
         // The composer is rendered (and focused) the moment the placeholder
@@ -2545,6 +2550,16 @@ final class ACPSessionManager: ObservableObject {
         // toolbar during the hydration window should win against the value
         // we captured before the user typed it.
         session.hydrationState = .ready
+        // Save what restoring changed. The restore-time save above is skipped
+        // while loading, and a scheduled session may never attach, so nothing
+        // else would write it. With the setting off this launch's interruption
+        // is also held now. Left stored as `.sending`, enabling the setting
+        // before the next launch would resend a prompt that may already have
+        // been delivered.
+        let heldInterruption = !continueInterruptedSessions() && session.consumeInterruptedTurns(resume: false)
+        if queueChangedAtRestore || heldInterruption {
+            persistQueue(for: session)
+        }
         self.recent = result.recent
         scheduleBackfillIfNeeded(olderMessages: Array(messages.prefix(tailStart)),
                                  sessionId: session.id, session: session)
@@ -7565,6 +7580,9 @@ extension ACPSessionManager {
             if session.queue.contains(where: { $0.status == .sending }) {
                 session.restoreQueue(session.queue, markLegacySendingUncertain: true)
             }
+            if session.consumeInterruptedTurns(resume: continueInterruptedSessions()) {
+                persistQueue(for: session)
+            }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
@@ -7903,6 +7921,40 @@ extension ACPSessionManager {
                     await reattach(to: id)
                 }
                 scheduleScheduledQueueReconnect(sessionId: id)
+                onBootstrapped?(id)
+                return id
+            }
+        }
+        var bootstrapped: [ACPSession.ID] = []
+        for task in tasks {
+            if let id = await task.value { bootstrapped.append(id) }
+        }
+        return bootstrapped
+    }
+
+    /// Attaches sessions whose turn was in flight when the app last exited,
+    /// so attach completion can continue them without the user opening the
+    /// tab. Only runs with "Continue interrupted sessions after restart".
+    func bootstrapInterruptedQueueSessions(
+        onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
+    ) async -> [ACPSession.ID] {
+        guard continueInterruptedSessions() else { return [] }
+        let ids: [ACPSession.ID]
+        do {
+            ids = try await persistence.interruptedQueueSessionIds()
+        } catch {
+            persistenceError = error.localizedDescription
+            return []
+        }
+        let tasks: [Task<ACPSession.ID?, Never>] = ids.map { id in
+            Task<ACPSession.ID?, Never> { @MainActor in
+                guard await persistedSessionRow(id: id) != nil,
+                      placeholderSession(id: id) != nil
+                else { return nil }
+                await hydrateIfNeeded(id: id)
+                guard let session = sessions[id], session.agentState != .ready else { return nil }
+                if case .needsAuth = session.setupState { return nil }
+                await reattach(to: id)
                 onBootstrapped?(id)
                 return id
             }

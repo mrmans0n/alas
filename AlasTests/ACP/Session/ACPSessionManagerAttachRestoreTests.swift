@@ -1547,6 +1547,42 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
     }
 
+    @Test("an interrupted scheduled prompt is persisted as held when auto-continue is off")
+    func interruptedScheduledPromptIsPersistedHeldWhenAutoContinueIsOff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("half sent")], scheduledAt: Date().addingTimeInterval(3600), status: .sending),
+        ])
+        let manager = manager(store: store, client: ACPMockClient())
+
+        _ = await manager.bootstrapScheduledQueueSessions()
+        await manager.flushAllPersistence()
+
+        let stored = try #require(try store.loadQueue(sessionId: "local").first)
+        #expect(stored.status == .pending && stored.deliveryUncertain)
+        #expect(!stored.awaitingInterruptionResume)
+        #expect(try store.interruptedQueueSessionIds().isEmpty)
+    }
+
+    @Test("an answered interrupted scheduled prompt is persisted as dropped when auto-continue is off")
+    func answeredInterruptedScheduledPromptIsPersistedDroppedWhenAutoContinueIsOff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try appendMessage(.user(id: UUID(), text: "first", attachments: []), to: store, seq: 0)
+        try appendMessage(.agent(id: UUID(), StreamingText("started the migration")), to: store, seq: 1)
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("first")], scheduledAt: Date().addingTimeInterval(3600),
+                         status: .sending, transcriptRecorded: true),
+        ])
+        let manager = manager(store: store, client: ACPMockClient())
+
+        _ = await manager.bootstrapScheduledQueueSessions()
+        await manager.flushAllPersistence()
+
+        #expect(try store.loadQueue(sessionId: "local").isEmpty)
+    }
+
     @Test("bootstrap defers future scheduled queues until deadline")
     func bootstrapDefersFutureScheduledQueuesUntilDeadline() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

@@ -2607,6 +2607,7 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         guard queue[idx].canRemoveFromQueue else { return }
         queue[idx].blocks = blocks
+        queue[idx].interruptedTurnContinuation = false
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
         queue[idx].dispatchedBrokerGeneration = nil
@@ -2747,12 +2748,11 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
-        return queue.count != count
+        return dropped
     }
 
     /// Restore a persisted queue and Limited state as one snapshot. The queue
@@ -2781,14 +2781,86 @@ final class ACPSession: ObservableObject, Identifiable {
     /// follow-up steered into a running turn has no provenance and records
     /// its row before steering is confirmed, so output after it is no proof.
     /// A turn that failed after partial output keeps its error and Retry.
-    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
-        guard !deliveredQueuedPromptIDs.isEmpty else { return }
+    ///
+    /// With auto-continue on, the dropped prompt's continuation is queued here
+    /// rather than held in memory until an attach succeeds: the shortened queue
+    /// can be persisted before then, and a failed attach would otherwise lose
+    /// the only record that the turn needs continuing. Returns whether the
+    /// queue changed.
+    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) -> Bool {
+        for index in queue.indices where newlyUncertain.contains(queue[index].id) {
+            queue[index].awaitingInterruptionResume = true
+        }
+        guard !deliveredQueuedPromptIDs.isEmpty else { return false }
+        let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
                 && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
                 && deliveredQueuedPromptIDs.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
+        guard queue.count != count else { return false }
+        if continuesInterruptedTurns() { enqueueInterruptedTurnContinuation() }
+        return true
+    }
+
+    /// Whether the "Continue interrupted sessions after restart" setting is on.
+    var continuesInterruptedTurns: @MainActor () -> Bool = { false }
+
+    private func enqueueInterruptedTurnContinuation() {
+        let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+        queue.insert(
+            QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true),
+            at: insertAt)
+    }
+
+    static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText
+
+    /// Consumes the interruptions recorded since the last attach. With
+    /// `resume`, uncertain prompts are released for resending and a turn the
+    /// agent had started answering after hydration gets a continue prompt at
+    /// the head of the queue. Without it they stay held for an explicit Retry.
+    /// A turn the stored transcript already showed answered was handled when
+    /// it was dropped.
+    ///
+    /// Returns whether the queue needs persisting: true whenever an
+    /// interruption was recorded, even when held, because restoring rewrote
+    /// the stored `.sending` item as `.pending` and uncertain. Left stored as
+    /// `.sending`, a later launch with the setting on would treat the same
+    /// prompt as newly interrupted and resend it.
+    @discardableResult
+    func consumeInterruptedTurns(resume: Bool) -> Bool {
+        let itemIDs = Set(queue.filter(\.awaitingInterruptionResume).map(\.id))
+        var answeredTurn = false
+        for index in queue.indices { queue[index].awaitingInterruptionResume = false }
+        guard resume else {
+            // A continuation queued while the setting was on is Alas's own, not
+            // the user's: with it off now, it must not be sent.
+            let count = queue.count
+            queue.removeAll { $0.isInterruptedTurnContinuation }
+            return !itemIDs.isEmpty || queue.count != count
+        }
+        var changed = !itemIDs.isEmpty
+        // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent
+        // and answered after hydration is only visible in the live
+        // transcript, and resending it would repeat the agent's side effects.
+        let liveDelivered = QueuedPrompt.deliveredRecordedPromptIDs(
+            in: queue, liveTranscript: transcript.messages)
+        for item in queue where itemIDs.contains(item.id)
+            && item.deliveryUncertain
+            && item.lastError == QueuedPrompt.deliveryUncertaintyMessage {
+            if liveDelivered.contains(item.id) {
+                queue.removeAll { $0.id == item.id }
+                answeredTurn = true
+            } else {
+                changed = retryQueueItem(id: item.id) || changed
+            }
+        }
+        if answeredTurn {
+            enqueueInterruptedTurnContinuation()
+            changed = true
+        }
+        return changed
     }
 
     /// Holds prompts dispatched on a broker generation that this connection
@@ -2804,9 +2876,8 @@ final class ACPSession: ObservableObject, Identifiable {
             queue[index].markDeliveryUncertain()
             newlyUncertain.insert(queue[index].id)
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
-        return !newlyUncertain.isEmpty || queue.count != count
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        return !newlyUncertain.isEmpty || dropped
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
