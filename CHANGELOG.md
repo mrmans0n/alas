@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🏗️ Internal
+
+- Temporarily use the public [Codex ACP fork](https://github.com/mrmans0n/codex-acp) and [Claude Agent ACP fork](https://github.com/mrmans0n/claude-agent-acp) while upstream goal and async-task releases are pending. The minimum candidate versions are `@alas-ide/codex-acp@2.1.1-alas.1` and `@alas-ide/claude-agent-acp@0.85.1-alas.1`.
+
 ## [0.20.1] - 2026-10-03
 
 ### ✨ Features
