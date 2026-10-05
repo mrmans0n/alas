@@ -1161,13 +1161,16 @@ struct NativePeerSessionsTests {
         #expect(client.newSession?.phase == .editing)
     }
 
-    @Test func aCreatedSessionDoesNotStealSelectionFromAnotherSessionTheUserPicked() {
+    /// `nil` leaves the peer selection entirely, the way picking a local
+    /// worktree does.
+    @Test(arguments: ["B:s", nil] as [String?])
+    func aCreatedSessionDoesNotStealSelectionAfterTheUserNavigates(to destination: String?) {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)
         client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
         links.receive(.sessionCreated(session: projectRow("new")), from: "B")
-        client.select("B:s")
+        if let destination { client.select(destination) } else { client.clearSelection() }
         links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")
-        #expect(client.selectedSessionId == "B:s")
+        #expect(client.selectedSessionId == destination)
     }
 }

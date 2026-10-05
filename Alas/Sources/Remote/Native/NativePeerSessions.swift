@@ -183,7 +183,6 @@ final class NativePeerSessions {
             refresh()
             return
         }
-        if sessionId != pendingCreatedSessionId { pendingCreatedSessionId = nil }
         clearSelection()
         selectedSessionId = sessionId
         transcript = NativePeerTranscript(sessionId: sessionId)
@@ -196,6 +195,9 @@ final class NativePeerSessions {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
         }
         selectedSessionId = nil
+        // Any explicit navigation away (another peer session, a local
+        // worktree) outranks auto-selecting a session created earlier.
+        pendingCreatedSessionId = nil
         transcript = nil
         draft = ""
         pendingPrompt = nil
@@ -235,6 +237,7 @@ final class NativePeerSessions {
 
     func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup) {
         guard downstream != nil, peer.state.carriesSessions else { return }
+        pendingCreatedSessionId = nil
         newSession = NativePeerNewSession(
             serverId: peer.serverId, peerName: peer.name, projectId: repo.projectId, repoName: repo.name
         )
