@@ -154,6 +154,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         context.coordinator.parent = self
         nsView.isEnabled = isEnabled
         nsView.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
+        if nsView.placeholderString != placeholder { nsView.placeholderString = placeholder }
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string
             if editingValue != text {

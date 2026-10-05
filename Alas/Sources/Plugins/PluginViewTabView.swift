@@ -121,10 +121,12 @@ struct PluginViewNodeView: View {
         case .progress:
             HStack(spacing: 6) {
                 Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
+                    .accessibilityLabel(node.text ?? "Loading")
                 if let text = node.text {
-                    Text(text).font(.caption).foregroundColor(color(.dim))
+                    Text(text).font(.caption).foregroundColor(color(.dim)).accessibilityHidden(true)
                 }
             }
+            .accessibilityElement(children: .combine)
         case .link:
             // Opened by Alas, not the plugin: no event, and always the default browser.
             AlasButton(title: node.label ?? "", icon: "arrow.up.right", style: .subtle) {
