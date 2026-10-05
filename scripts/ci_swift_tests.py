@@ -462,7 +462,7 @@ def main():
     parser.add_argument("--directory", type=Path, default=RESULTS)
     parser.add_argument("--enumeration", type=Path)
     parser.add_argument("--policy", type=Path, default=ROOT / "scripts/ci-swift-test-policy.tsv")
-    parser.add_argument("--batch-count", type=int, default=8)
+    parser.add_argument("--batch-count", type=int, default=10)
     parser.add_argument("--shard-count", type=int, default=2)
     parser.add_argument("--batch", type=int, default=0)
     parser.add_argument("--shard", type=int, default=1)

@@ -71,3 +71,14 @@ did not reproduce the CI collision. The collision diagnosis comes from the CI
 No local whole-plan run substitutes for configured CI. A green historical run,
 a canceled run, or a build-only pass does not establish that the current Swift
 shards passed.
+
+## Batch capacity follow-up
+
+Two newer PR runs reached the ordinary batch 8 watchdog:
+[37310782730](https://github.com/mrmans0n/alas/actions/runs/37310782730) and
+[37312299457](https://github.com/mrmans0n/alas/actions/runs/37312299457).
+The latter passed all 1,708 definitions in 320.530 seconds, then was interrupted
+before Xcode finished its result bundle. Ten batches reduce per-invocation work
+while keeping the 360-second watchdog. A replay of the compiled inventory keeps
+all 12,807 scheduled definitions and 22 exclusions; its largest ordinary batch
+falls from 1,933 to 1,559 definitions. No test or suite is quarantined.
