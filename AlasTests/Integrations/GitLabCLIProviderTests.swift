@@ -60,6 +60,25 @@ struct GitLabCLIProviderTests {
         ])
     }
 
+    @Test(arguments: [
+        (#""issue_type": "incident","#, Optional("incident")),
+        (#""issue_type": null,"#, nil),
+        ("", nil),
+        (#""issue_type": 7,"#, nil),
+    ])
+    func issueMapsNativeIssueType(typeField: String, expected: String?) async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "\"state\": \"closed\",",
+            with: "\"state\": \"closed\", \(typeField)"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitLabCLIProvider(runner: runner).issue(remote: Self.remote, number: 77, cwd: Self.cwd)
+
+        #expect(issue.nativeType == expected)
+        #expect(IssueSnapshot(codeHostIssue: issue).nativeType == expected)
+    }
+
     @Test func issueMapsGitLabOpenedStateToOpen() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(

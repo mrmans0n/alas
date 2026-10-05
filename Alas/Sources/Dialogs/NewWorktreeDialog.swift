@@ -928,7 +928,7 @@ struct NewWorktreeDialog: View {
                     Text("Issue")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
-                    Text(draft.attachment.displayTitle)
+                    Text([draft.attachment.displayTitle, draft.kind?.displayName].compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 12))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)

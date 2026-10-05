@@ -31,6 +31,7 @@ struct CodeHostIssueSnapshot: Codable, Equatable, Sendable {
     let providerUpdatedAt: Date?
     let capturedAt: Date
     var refreshError: String?
+    let nativeType: String?
 
     init(
         identity: CodeHostIssueIdentity,
@@ -42,7 +43,8 @@ struct CodeHostIssueSnapshot: Codable, Equatable, Sendable {
         assignees: [String],
         providerUpdatedAt: Date?,
         capturedAt: Date,
-        refreshError: String?
+        refreshError: String?,
+        nativeType: String? = nil
     ) {
         self.identity = identity
         self.canonicalURL = canonicalURL
@@ -54,6 +56,7 @@ struct CodeHostIssueSnapshot: Codable, Equatable, Sendable {
         self.providerUpdatedAt = providerUpdatedAt
         self.capturedAt = capturedAt
         self.refreshError = refreshError
+        self.nativeType = nativeType
     }
 
     init?(source: IssueSnapshot) {
@@ -80,7 +83,8 @@ struct CodeHostIssueSnapshot: Codable, Equatable, Sendable {
             assignees: source.assignees,
             providerUpdatedAt: source.providerUpdatedAt,
             capturedAt: source.capturedAt,
-            refreshError: source.refreshError
+            refreshError: source.refreshError,
+            nativeType: source.nativeType
         )
     }
 }
@@ -132,6 +136,7 @@ struct IssueSnapshot: Codable, Equatable, Sendable {
     let contentOrigin: IssueContentOrigin
     let isEditable: Bool
     let isRefreshable: Bool
+    let nativeType: String?
 
     init(
         identity: IssueIdentity,
@@ -149,7 +154,8 @@ struct IssueSnapshot: Codable, Equatable, Sendable {
         refreshError: String?,
         contentOrigin: IssueContentOrigin,
         isEditable: Bool,
-        isRefreshable: Bool
+        isRefreshable: Bool,
+        nativeType: String? = nil
     ) {
         self.identity = identity
         self.canonicalURL = canonicalURL
@@ -167,6 +173,7 @@ struct IssueSnapshot: Codable, Equatable, Sendable {
         self.contentOrigin = contentOrigin
         self.isEditable = isEditable
         self.isRefreshable = isRefreshable
+        self.nativeType = nativeType
     }
 
     init(codeHostIssue issue: CodeHostIssueSnapshot) {
@@ -197,7 +204,8 @@ struct IssueSnapshot: Codable, Equatable, Sendable {
             refreshError: issue.refreshError,
             contentOrigin: .provider,
             isEditable: false,
-            isRefreshable: true
+            isRefreshable: true,
+            nativeType: issue.nativeType
         )
     }
 }

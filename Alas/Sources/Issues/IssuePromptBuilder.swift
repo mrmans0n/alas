@@ -33,10 +33,10 @@ enum IssueBranchName {
 }
 
 enum IssuePromptBuilder {
-    static func build(source: IssueSnapshot) -> String {
+    static func build(source: IssueSnapshot, kind: IssueKind? = nil) -> String {
         var lines = [
-            openingLine(for: source),
-            "Inspect the attached issue context, keep the change focused, add regression coverage, and verify the result.",
+            openingLine(for: source, kind: kind),
+            instructions(for: kind),
             "",
             "## Issue context",
             "**Source:** \(source.providerLabel)",
@@ -63,10 +63,38 @@ enum IssuePromptBuilder {
         return lines.joined(separator: "\n")
     }
 
-    static func openingLine(for source: IssueSnapshot) -> String {
+    static func openingLine(for source: IssueSnapshot, kind: IssueKind? = nil) -> String {
+        let verb = verb(for: kind)
         guard source.contentOrigin == .provider,
               let reference = source.displayReference,
-              !reference.isEmpty else { return "Implement the linked issue." }
-        return "Implement \(source.providerLabel) issue \(reference)."
+              !reference.isEmpty else { return "\(verb) the linked issue." }
+        return "\(verb) \(source.providerLabel) issue \(reference)."
+    }
+
+    private static func verb(for kind: IssueKind?) -> String {
+        switch kind {
+        case .bug: "Fix"
+        case .research: "Investigate"
+        case .docs: "Update documentation for"
+        case .chore: "Handle"
+        case .enhancement, nil: "Implement"
+        }
+    }
+
+    private static func instructions(for kind: IssueKind?) -> String {
+        switch kind {
+        case nil:
+            "Inspect the attached issue context, keep the change focused, add regression coverage, and verify the result."
+        case .bug:
+            "Reproduce the problem first and add a regression test that fails before the fix. Find the root cause instead of patching the symptom, fix it, and verify the test passes."
+        case .enhancement:
+            "Confirm the scope and acceptance criteria from the issue and call out ambiguities before building. Plan briefly, implement with focused tests, and verify the result."
+        case .research:
+            "Investigate using the code and other available sources. Report findings, options with trade-offs, and a recommendation. Do not change code unless asked."
+        case .docs:
+            "Keep the change to documentation and make it accurate against the current code. No build or test run is needed."
+        case .chore:
+            "No behavior change is intended. Keep the diff minimal and the existing tests green."
+        }
     }
 }

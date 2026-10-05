@@ -50,6 +50,7 @@ final class AttachIssueDialogModel {
             canContinueManually = false
             errorMessage = nil
             promptIsUserOwned = false
+            resetKind()
         }
     }
     private(set) var phase: Phase = .entry
@@ -72,6 +73,8 @@ final class AttachIssueDialogModel {
     private(set) var canContinueManually = false
     private var generation = 0
     private var promptIsUserOwned = false
+    private(set) var kind: IssueKind?
+    private(set) var kindOrigin: IssueKindOrigin?
     private var fallback: ResolvedIssue?
 
     private let environment: Environment
@@ -90,7 +93,10 @@ final class AttachIssueDialogModel {
             title = initialDraft.source.title
             context = initialDraft.source.body
             prompt = initialDraft.prompt
-            promptIsUserOwned = initialDraft.prompt != IssuePromptBuilder.build(source: initialDraft.source)
+            kind = initialDraft.kind
+            kindOrigin = initialDraft.kindOrigin
+            promptIsUserOwned = initialDraft.prompt
+                != IssuePromptBuilder.build(source: initialDraft.source, kind: initialDraft.kind)
             phase = .confirmation
         } else {
             reference = IssueClipboardPrefill.candidate(from: environment.clipboardText()) ?? ""
@@ -149,6 +155,7 @@ final class AttachIssueDialogModel {
         fallback = nil
         canContinueManually = false
         errorMessage = nil
+        resetKind()
         environment.resolvedIssueChanged(nil)
     }
 
@@ -174,7 +181,9 @@ final class AttachIssueDialogModel {
                 displayReference: source.displayReference,
                 title: source.title
             ),
-            prompt: prompt
+            prompt: prompt,
+            kind: kind,
+            kindOrigin: kindOrigin
         )
     }
 
@@ -192,8 +201,9 @@ final class AttachIssueDialogModel {
         projectID = selectedProjectID(for: resolution)
         title = resolution.source.title
         context = resolution.source.body
+        applyInitialKind(for: resolution.source)
         if !promptIsUserOwned {
-            prompt = IssuePromptBuilder.build(source: resolution.source)
+            prompt = IssuePromptBuilder.build(source: resolution.source, kind: kind)
         }
         fallback = nil
         canContinueManually = false
@@ -204,7 +214,48 @@ final class AttachIssueDialogModel {
 
     private func refreshGeneratedPromptIfNeeded() {
         guard !promptIsUserOwned, phase == .confirmation, let source = draftSource else { return }
-        prompt = IssuePromptBuilder.build(source: source)
+        prompt = IssuePromptBuilder.build(source: source, kind: kind)
+    }
+
+    var kindCaption: String? {
+        switch kindOrigin {
+        case .rule(let reason): return reason
+        case .user, nil: return nil
+        }
+    }
+
+    var canResetPrompt: Bool {
+        promptIsUserOwned && phase == .confirmation
+    }
+
+    /// A user pick always wins and is never overwritten.
+    func setKind(_ kind: IssueKind?) {
+        self.kind = kind
+        kindOrigin = .user
+        refreshGeneratedPromptIfNeeded()
+    }
+
+    func resetPromptToTemplate() {
+        promptIsUserOwned = false
+        refreshGeneratedPromptIfNeeded()
+    }
+
+    private func resetKind() {
+        kind = nil
+        kindOrigin = nil
+    }
+
+    /// Rules decide from provider metadata. A user pick is never overwritten;
+    /// without a rule decision the ticket stays unclassified.
+    private func applyInitialKind(for source: IssueSnapshot) {
+        guard kindOrigin != .user else { return }
+        if let decision = IssueKindRules.classify(source) {
+            kind = decision.kind
+            kindOrigin = .rule(reason: decision.reason)
+        } else {
+            kind = nil
+            kindOrigin = nil
+        }
     }
 
     private func selectedProjectID(for resolution: ResolvedIssue) -> String? {
@@ -235,7 +286,8 @@ final class AttachIssueDialogModel {
             refreshError: source.refreshError,
             contentOrigin: source.contentOrigin,
             isEditable: source.isEditable,
-            isRefreshable: source.isRefreshable
+            isRefreshable: source.isRefreshable,
+            nativeType: source.nativeType
         )
     }
 }
