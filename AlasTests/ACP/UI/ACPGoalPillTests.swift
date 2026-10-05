@@ -46,43 +46,61 @@ struct ACPGoalPillTests {
         #expect(ACPGoalControl.formattedDuration(1e20) == "100000000000000000000s")
     }
 
-    @Test("summary includes objective, normalized status, and rounded token budget")
-    func summaryWithStatusAndBudget() {
-        let goal = ACPGoalState(
-            objective: "Surface richer events",
-            status: "in_progress",
-            tokenBudget: 12_000
-        )
+    @Test(
+        "summary carries the full objective, normalized status, and token usage",
+        arguments: [
+            (Optional("in_progress"), Optional(12_000), Optional<Int>.none,
+             "Goal: Ship transcript UI · in progress · 12k budget"),
+            (nil, 8_000, 2_400, "Goal: Ship transcript UI · 2.4k / 8k"),
+            ("done", nil, 999, "Goal: Ship transcript UI · done · 999 used"),
+            ("done", 12_500, nil, "Goal: Ship transcript UI · done · 12.5k budget"),
+            ("", nil, nil, "Goal: Ship transcript UI"),
+        ]
+    )
+    func summaryFormatsStatusAndTokens(status: String?, budget: Int?, used: Int?, expected: String) {
+        let goal = ACPGoalState(objective: "Ship transcript UI", status: status, tokenBudget: budget, tokensUsed: used)
 
-        #expect(ACPGoalPill.summary(goal) == "Goal: Surface richer events · in progress · 12k")
+        #expect(ACPGoalPill.summary(goal) == expected)
     }
 
-    @Test("summary truncates long objectives")
-    func summaryTruncatesLongObjective() {
-        let objective = String(repeating: "a", count: 61)
-        let goal = ACPGoalState(objective: objective, status: "in_progress", tokenBudget: nil)
+    @Test("pill title truncates long objectives while the summary keeps them whole")
+    func pillTitleTruncatesLongObjective() {
+        let objective = String(repeating: "a", count: 41)
+        let goal = ACPGoalState(objective: objective, status: nil, tokenBudget: nil)
 
-        #expect(ACPGoalPill.summary(goal) == "Goal: \(String(repeating: "a", count: 60))… · in progress")
+        #expect(ACPGoalPill.pillTitle(goal) == "\(String(repeating: "a", count: 40))…")
+        #expect(ACPGoalPill.summary(goal) == "Goal: \(objective)")
     }
 
-    @Test("summary omits nil status")
-    func summaryOmitsNilStatus() {
-        let goal = ACPGoalState(objective: "Ship transcript UI", status: nil, tokenBudget: 8_000)
+    @Test(
+        "only running goals animate, and never under Reduce Motion",
+        arguments: [
+            ("active", false, true),
+            ("in_progress", false, true),
+            ("in_progress", true, false),
+            ("paused", false, false),
+            ("complete", false, false),
+        ]
+    )
+    func sheenFollowsPhaseAndReduceMotion(status: String, reduceMotion: Bool, expected: Bool) {
+        let goal = ACPGoalState(objective: "Ship it", status: status, tokenBudget: nil)
 
-        #expect(ACPGoalPill.summary(goal) == "Goal: Ship transcript UI · 8k")
+        #expect(ACPGoalPill.showsSheen(for: goal, reduceMotion: reduceMotion) == expected)
     }
 
-    @Test("summary keeps one decimal for non-round token budgets")
-    func summaryFormatsNonRoundTokenBudget() {
-        let goal = ACPGoalState(objective: "Ship transcript UI", status: "done", tokenBudget: 12_500)
+    @Test(
+        "token progress needs both used and a positive budget, clamped to full",
+        arguments: [
+            (Optional(2_500), Optional(10_000), Optional(0.25)),
+            (12_000, 10_000, 1.0),
+            (2_500, nil, nil),
+            (nil, 10_000, nil),
+            (0, 0, nil),
+        ]
+    )
+    func tokenProgress(used: Int?, budget: Int?, expected: Double?) {
+        let goal = ACPGoalState(objective: "Ship it", status: "active", tokenBudget: budget, tokensUsed: used)
 
-        #expect(ACPGoalPill.summary(goal) == "Goal: Ship transcript UI · done · 12.5k")
-    }
-
-    @Test("summary keeps sub-thousand token budgets numeric")
-    func summaryFormatsSmallTokenBudget() {
-        let goal = ACPGoalState(objective: "Ship transcript UI", status: "done", tokenBudget: 999)
-
-        #expect(ACPGoalPill.summary(goal) == "Goal: Ship transcript UI · done · 999")
+        #expect(ACPGoalPill.tokenProgress(goal) == expected)
     }
 }

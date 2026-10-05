@@ -66,7 +66,9 @@ enum ACPAlasPrismStyle {
     }
 }
 
-struct ACPAlasPrismBackground: View {
+/// The prism gradient sweeping across its frame, without the dark base, so
+/// a tinted surface can carry the same motion as the Alas badges.
+struct ACPAlasPrismSweep: View {
     @Environment(\.accessibilityReduceMotion) private var reducedMotion
 
     var body: some View {
@@ -75,19 +77,25 @@ struct ACPAlasPrismBackground: View {
                 let position = ACPAlasPrismStyle.position(
                     at: context.date.timeIntervalSinceReferenceDate, reducedMotion: reducedMotion
                 )
-                Color(nsColor: ACPAlasPrismStyle.base)
-                    .overlay {
-                        LinearGradient(
-                            gradient: ACPAlasPrismStyle.swiftUIGradient,
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .offset(x: geometry.size.width * (-1.15 + 2.3 * position))
-                    }
+                LinearGradient(
+                    gradient: ACPAlasPrismStyle.swiftUIGradient,
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .offset(x: geometry.size.width * (-1.15 + 2.3 * position))
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+struct ACPAlasPrismBackground: View {
+    var body: some View {
+        Color(nsColor: ACPAlasPrismStyle.base)
+            .overlay { ACPAlasPrismSweep() }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

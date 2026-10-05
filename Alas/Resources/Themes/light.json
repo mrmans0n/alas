@@ -22,6 +22,7 @@
     "mod": "oklch(0.51 0.14 85)",
     "info": "oklch(0.49 0.13 230)",
     "submodule": "oklch(0.51 0.12 295)",
+    "goal": "oklch(0.51 0.12 295)",
     "warn": "oklch(0.51 0.14 65)",
     "caution": "oklch(0.50 0.14 95)",
     "syntax-keyword": "oklch(0.50 0.13 295)",
