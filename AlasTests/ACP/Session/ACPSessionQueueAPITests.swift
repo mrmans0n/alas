@@ -426,19 +426,24 @@ struct ACPSessionQueueAPITests {
         #expect(!s.consumeInterruptedTurns(resume: true))
     }
 
-    @Test("interrupted prompts stay held without the setting or when interrupted before this launch",
-          arguments: [(resume: false, interruptedEarlier: false), (resume: true, interruptedEarlier: true)])
-    func interruptedPromptsStayHeld(resume: Bool, interruptedEarlier: Bool) {
+    @Test("interrupted prompts stay held without the setting and are persisted as held",
+          arguments: [false, true])
+    func interruptedPromptsStayHeld(settingOnNextLaunch: Bool) throws {
         let s = mkSession()
-        var item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
-        if interruptedEarlier { item.markDeliveryUncertain() }
+        let item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
         s.restoreQueue([item], markLegacySendingUncertain: true)
 
-        #expect(!s.consumeInterruptedTurns(resume: resume))
-        #expect(!s.consumeInterruptedTurns(resume: true))
+        // Launch 1, setting off: the held state must reach the store.
+        #expect(s.consumeInterruptedTurns(resume: false))
+        let stored = try JSONDecoder().decode([QueuedPrompt].self, from: JSONEncoder().encode(s.queue))
+        #expect(stored.map(\.status) == [.pending])
 
-        #expect(s.queue.map(\.id) == [item.id])
-        #expect(s.queue[0].deliveryUncertain)
+        // Launch 2 restores what launch 1 stored; it is no longer newly interrupted.
+        let next = mkSession()
+        next.restoreQueue(stored, markLegacySendingUncertain: true)
+        #expect(!next.consumeInterruptedTurns(resume: settingOnNextLaunch))
+        #expect(next.queue.map(\.id) == [item.id])
+        #expect(next.queue[0].deliveryUncertain)
     }
 
     enum RetainedUncertainPrompt: CaseIterable {

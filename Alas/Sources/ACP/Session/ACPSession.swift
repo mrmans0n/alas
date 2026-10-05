@@ -2808,15 +2808,19 @@ final class ACPSession: ObservableObject, Identifiable {
     /// agent had started answering gets a continue prompt at the head of the
     /// queue. Without it they stay held for an explicit Retry.
     ///
-    /// Returns whether the queue changed.
+    /// Returns whether the queue needs persisting: true whenever an
+    /// interruption was recorded, even when held, because restoring rewrote
+    /// the stored `.sending` item as `.pending` and uncertain. Left stored as
+    /// `.sending`, a later launch with the setting on would treat the same
+    /// prompt as newly interrupted and resend it.
     @discardableResult
     func consumeInterruptedTurns(resume: Bool) -> Bool {
         let itemIDs = interruptedQueueItemIDs
         let answeredTurn = interruptedAnsweredTurn
         interruptedQueueItemIDs = []
         interruptedAnsweredTurn = false
-        guard resume else { return false }
-        var changed = false
+        guard resume else { return !itemIDs.isEmpty || answeredTurn }
+        var changed = !itemIDs.isEmpty
         for item in queue where itemIDs.contains(item.id)
             && item.deliveryUncertain
             && item.lastError == QueuedPrompt.deliveryUncertaintyMessage {
