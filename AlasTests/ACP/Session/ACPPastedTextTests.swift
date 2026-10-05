@@ -44,7 +44,7 @@ struct ACPPastedTextTests {
         #expect(ACPPastedTextContents(text: "abcdef", spans: spans) == nil)
     }
 
-    @Test("typed text drops pasted spans, and content slices by ordinal")
+    @Test("typed text replaces pasted spans with a space, and content slices by ordinal")
     func typedTextAndContent() throws {
         // "see 😀" is 6 UTF-16 units.
         let contents = try #require(ACPPastedTextContents(text: "see 😀LOG1 and LOG2!", spans: [
@@ -53,7 +53,15 @@ struct ACPPastedTextTests {
         ]))
         #expect(contents.content(ordinal: 1) == "LOG1")
         #expect(contents.content(ordinal: 2) == "LOG2")
-        #expect(contents.typedText == "see 😀 and !")
+        #expect(contents.typedText == "see 😀  and  !")
+    }
+
+    @Test("typed text keeps fragments around a paste from forming a reference")
+    func typedTextSeparatesSplitReference() throws {
+        let contents = try #require(ACPPastedTextContents(text: "#LOG12", spans: [
+            ACPPastedTextSpan(ordinal: 1, utf16Offset: 1, utf16Length: 3),
+        ]))
+        #expect(contents.typedText == "# 12")
     }
 
     @Test("a paste at the very start of the message is not a typed slash command")

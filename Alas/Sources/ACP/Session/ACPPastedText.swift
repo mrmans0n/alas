@@ -92,13 +92,16 @@ struct ACPPastedTextContents: Equatable, Sendable {
         return (text as NSString).substring(with: span.utf16Range)
     }
 
-    /// The message with every pasted span removed: what the user typed.
+    /// The message with every pasted span replaced by a space: what the user
+    /// typed. The space keeps typed fragments on either side of a paste apart,
+    /// so `#` + paste + `12` is never scanned as the reference `#12`.
     var typedText: String {
         let source = text as NSString
         var result = ""
         var cursor = 0
         for span in spans {
             result += source.substring(with: NSRange(location: cursor, length: span.utf16Offset - cursor))
+            result += " "
             cursor = span.utf16Offset + span.utf16Length
         }
         result += source.substring(from: cursor)
