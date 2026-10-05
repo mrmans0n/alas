@@ -2060,12 +2060,26 @@ final class ACPSessionRunner {
     /// collides with queued-successor dispatch (see `emitTurnCompleted`).
     private func bufferedAgentText() -> String? {
         let text = pendingIncomingUpdates.compactMap { pending -> String? in
-            guard case .agentMessageChunk(let chunk) = pending.params.update,
+            guard !isSubagentUpdate(pending.params),
+                  case .agentMessageChunk(let chunk) = pending.params.update,
                   case .text(let value) = chunk.content
             else { return nil }
             return value
         }.joined()
         return text.isEmpty ? nil : text
+    }
+
+    private func waitForPromptUpdateDelivery(promptID: Int) async {
+        // RPC responses and updates arrive on separate streams. Capture only
+        // updates already yielded when the response arrived, without flushing
+        // the coalescer or dispatching a queued successor during completion.
+        let watermark = connection.client.yieldedUpdateCount
+        while dequeuedUpdateCount < watermark {
+            guard activePromptID == promptID, !stopped, !Task.isCancelled,
+                  updatesTask?.isCancelled == false, isConnectionCurrent(), holdsLeaseForWrite()
+            else { return }
+            await Task.yield()
+        }
     }
 
     /// A usage limit stopped the active prompt. The prompt itself reached the
@@ -4356,6 +4370,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
+                await self.waitForPromptUpdateDelivery(promptID: promptID)
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
                     self.forgetUsageUnlessAgentAnswered(promptID, error)
@@ -4369,15 +4384,25 @@ extension ACPSessionRunner {
                     if isActivePrompt {
                         self.session.clearRetryStatus()
                         self.flushStreamingPersist()
-                        let usageLimit: ACPUsageLimit? = wasCancelled || ACPAuthFailure.message(from: error) != nil
-                            ? nil
-                            : ACPUsageLimitDetector.detect(
-                                error: error,
-                                // The limit message may still be buffered.
-                                turnAgentText: self.bufferedAgentText() ?? self.currentTurnLastAgentText(),
-                                claudeRateLimit: self.session.latestClaudeRateLimit,
-                                now: Date()
-                            )
+                        let usageLimit: ACPUsageLimit? = {
+                            guard !wasCancelled, ACPAuthFailure.message(from: error) == nil else { return nil }
+                            let bufferedText = self.bufferedAgentText()
+                            // Join a flushed prefix with its buffered suffix, but also
+                            // recognize a complete buffered limit after ordinary output.
+                            let candidates = [
+                                [self.currentTurnLastAgentText(), bufferedText].compactMap { $0 }.joined(),
+                                bufferedText,
+                            ].compactMap { $0 }
+                            let now = Date()
+                            return candidates.lazy.compactMap { text in
+                                ACPUsageLimitDetector.detect(
+                                    error: error,
+                                    turnAgentText: text,
+                                    claudeRateLimit: self.session.latestClaudeRateLimit,
+                                    now: now
+                                )
+                            }.first
+                        }()
                         if let usageLimit {
                             deliveredBeforeUsageLimit = true
                             self.applyUsageLimit(usageLimit, failedQueuedItemId: queuedItemId)

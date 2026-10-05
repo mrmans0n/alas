@@ -50,7 +50,7 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
 private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<String, Error>.Continuation?
-    private(set) var cancelled = false
+    private let termination = AsyncStream<Void>.makeStream()
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected buffered run")
@@ -68,9 +68,8 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
             self.lock.unlock()
             continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#)
             continuation.onTermination = { [weak self] _ in
-                self?.lock.lock()
-                self?.cancelled = true
-                self?.lock.unlock()
+                self?.termination.continuation.yield()
+                self?.termination.continuation.finish()
             }
             interruption?.install {
                 continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"pr_number":5,"action":"merged"}"#)
@@ -80,11 +79,7 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
     }
 
     func cancellationObserved() async -> Bool {
-        for _ in 0..<1_000 {
-            let didCancel = lock.withLock { cancelled }
-            if didCancel { return true }
-            await Task.yield()
-        }
+        for await _ in termination.stream { return true }
         return false
     }
 }
@@ -233,12 +228,14 @@ struct GGServiceActionsTests {
 
     @Test func landJSONLPropagatesConsumerCancellation() async throws {
         let runner = CancellableLandGGRunner()
+        let started = AsyncStream<Void>.makeStream()
         let task = Task {
             for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {
+                started.continuation.yield()
                 try Task.checkCancellation()
             }
         }
-        await Task.yield()
+        for await _ in started.stream { break }
         task.cancel()
         _ = try? await task.value
         #expect(await runner.cancellationObserved())

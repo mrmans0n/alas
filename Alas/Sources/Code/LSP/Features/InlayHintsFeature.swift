@@ -34,6 +34,7 @@ final class InlayHintsFeature {
     /// forward as if it were still in flight.
     private let apply: ([LSPInlayHint], [NSRange]) -> Void
     private let clear: () -> Void
+    private let presentationExpirySleep: @Sendable () async throws -> Void
     private var generation = 0
     private var pending: [NSRange] = []
     private var deadline: ContinuousClock.Instant = .now
@@ -49,10 +50,16 @@ final class InlayHintsFeature {
     private var retiredWorkersForTesting: [Task<Void, Never>] = []
     private var presentationExpiry: Task<Void, Never>?
 
-    init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint], [NSRange]) -> Void, clear: @escaping () -> Void) {
+    init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint], [NSRange]) -> Void, clear: @escaping () -> Void,
+         presentationExpirySleep: @escaping @Sendable () async throws -> Void = InlayHintsFeature.waitForPresentationExpiry) {
         self.request = request
         self.apply = apply
         self.clear = clear
+        self.presentationExpirySleep = presentationExpirySleep
+    }
+
+    nonisolated static func waitForPresentationExpiry() async throws {
+        try await Task.sleep(for: .seconds(2))
     }
 
     nonisolated static func isVisible(kind: Int?, settings: InlayHintSettings) -> Bool {
@@ -125,8 +132,8 @@ final class InlayHintsFeature {
             // synchronization or the server stalls. Fresh results cancel this
             // (see refresh()'s cancelPresentationExpiry() call) once every
             // outstanding chunk has resolved.
-            presentationExpiry = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            presentationExpiry = Task { [weak self, presentationExpirySleep] in
+                do { try await presentationExpirySleep() } catch { return }
                 guard !Task.isCancelled, let self else { return }
                 presentationExpiry = nil
                 // A chunk that already answered is confirmed, current data —
@@ -169,6 +176,10 @@ final class InlayHintsFeature {
             await active?.value
             for task in retired { await task.value }
         }
+    }
+
+    func awaitPresentationExpiryForTesting() async {
+        await presentationExpiry?.value
     }
 
     /// Request the visible 256-line chunks first, then their neighbors. Source

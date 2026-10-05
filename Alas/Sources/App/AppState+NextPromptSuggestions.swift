@@ -250,8 +250,11 @@ extension AppState {
         var environment = environment
         environment.isEnabled = nextPromptRuntimeEnabled && config.nextPromptSuggestionsEnabled
         environment.hasVerifiedModel = localTextModelState == .ready
-        environment.isRuntimeAvailable = nextPromptInferenceState == .ready ||
-            nextPromptInferenceState == .running || nextPromptInferenceState == .failed
+        // Requests can queue behind a native drain. The async state observer
+        // may still carry .unloading after enable/retry has established readiness;
+        // consuming a completed turn here would permanently lose its suggestion.
+        environment.isRuntimeAvailable = nextPromptInferenceState != .unavailable &&
+            nextPromptInferenceState != .retryRequired
         environment.hasForkOrDelegationWork = environment.hasForkOrDelegationWork || nextPromptHasDelegatedWork(parentID: session.id)
         environment.composerEpoch = nextPromptComposerEpochs[session.incarnation, default: 0]
         environment.settingsGeneration = nextPromptSettingsGeneration

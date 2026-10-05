@@ -49,6 +49,7 @@ struct ACPSessionRunnerQueueTests {
         onPromptWorkChanged: (() -> Void)? = nil,
         onPersist: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
         pluginContext: (@MainActor (String) async -> [String])? = nil,
@@ -77,6 +78,7 @@ struct ACPSessionRunnerQueueTests {
             onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent ?? { true },
+            incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
             validateLease: validateLease)
         return (runner, mock, session, store)
     }
@@ -259,17 +261,27 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
-    @Test("a Claude limit announced only in agent text still in the coalescing buffer is detected")
-    func bufferedClaudeLimitTextIsDetected() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+    @Test("a Claude limit is detected across flushed and buffered agent text", arguments: [nil, "You've hit your ", "An ordinary answer. "] as [String?])
+    func bufferedClaudeLimitTextIsDetected(flushedText: String?) async throws {
+        let (runner, mock, session, _) = try mkRunner(incomingUpdateCoalesceNanos: 30_000_000_000)
         runner.start()
         defer { runner.stop() }
-        mock.script(method: "session/prompt") { _ in
+        mock.scriptAsync(method: "session/prompt") { _ in
             // Claude's error_during_execution path builds the error from
             // `errors`, so the limit text arrives only as an agent chunk.
-            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.init(
-                content: .text("You've hit your limit · resets 3pm (Europe/Madrid)")
+            if let flushedText {
+                await MainActor.run {
+                    _ = session.apply(.agentMessageChunk(.text(flushedText)))
+                }
+            }
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text(
+                flushedText == "You've hit your " ? "limit · resets 3pm (Europe/Madrid)" : "You've hit your limit · resets 3pm (Europe/Madrid)"
             ))))
+            // Keep this chunk buffered so the split-message case cannot pass
+            // merely because the coalescer happened to flush before the RPC failed.
+            if flushedText != nil {
+                try await waitUntil { runner.pendingIncomingUpdateCountForTesting == 1 }
+            }
             throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: error_during_execution", data: nil))
         }
         session.enqueue(blocks: [.text("first")])

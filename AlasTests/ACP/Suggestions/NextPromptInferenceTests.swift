@@ -289,6 +289,7 @@ struct NextPromptInferenceTests {
         let starts = [Gate(), Gate()]
         let finishes = [Gate(), Gate()]
         let calls = Mutex(0)
+        let preempted = Mutex(false)
         let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
             return { _ in
                 let index = calls.withLock {
@@ -297,13 +298,26 @@ struct NextPromptInferenceTests {
                     return index
                 }
                 await starts[index].open()
-                await finishes[index].wait()
+                await withTaskCancellationHandler {
+                    await finishes[index].wait()
+                } onCancel: {
+                    preempted.withLock { $0 = true }
+                }
                 return #"{"suggestion":"Show an example."}"#
             }
         })
         let first = Task { try await inference.generate(request) }
         await starts[0].wait()
         let replacement = Task { try await inference.generate(request) }
+        // The replacement must preempt the first evaluation before it finishes.
+        do {
+            try await eventually { preempted.withLock { $0 } }
+        } catch {
+            for finish in finishes { await finish.open() }
+            _ = try? await first.value
+            _ = try? await replacement.value
+            throw error
+        }
         await finishes[0].open()
         await starts[1].wait()
 
