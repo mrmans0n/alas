@@ -291,11 +291,11 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let (stream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
             inputContinuation = continuation
 
-            // Runs on CoreAudio's realtime render thread, not the main
-            // actor — `convert` is a `nonisolated` pure function and
-            // `continuation.yield` is safe to call from any thread.
+            // CoreAudio invokes the tap on its realtime queue. Explicit
+            // `@Sendable` prevents the closure from inheriting MainActor
+            // isolation, whose runtime check would otherwise trap.
             let stats = ACPDictationTapStats()
-            audioEngine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+            audioEngine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable buffer, _ in
                 // A multichannel USB/aggregate input may carry the active
                 // microphone on any channel, not just 0 — checking only
                 // channel 0 would report silence (and eventually the false
