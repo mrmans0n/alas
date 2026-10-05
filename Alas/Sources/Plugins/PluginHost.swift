@@ -1520,6 +1520,13 @@ final class PluginHost {
         limits.maxMessageBytes - Self.webMessage(tab: tab, json: "").count
     }
 
+    /// Something kept a page of web tab `tab` from working (a script error, a failed load): logged as an error, so
+    /// it shows in Settings → Plugins instead of only as a blank tab.
+    func webPageProblem(tab: Int, _ text: String) {
+        let title = tab < manifest.tabs.count ? manifest.tabs[tab].title : "web tab"
+        appendLog("error", "\(title) page: \(text)")
+    }
+
     /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured.
     static func webMessage(tab: Int, json: String) -> Data {
         Data(#"{"jsonrpc":"2.0","method":"web/message","params":{"tab":\#(tab),"message":\#(json)}}"#.utf8)
