@@ -441,6 +441,8 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             report(text)
             replyHandler(nil, nil)
         } else if let json = body["post"] as? String, let token {
+            // A page that posts is running: only crashes in a row count towards giving up.
+            crashes = 0
             // Queued synchronously, so posts reach the plugin in the order the page made them.
             host.webMessage(tab: tab, page: token, json: json) { replyHandler(nil, $0) }
         } else {
@@ -478,7 +480,8 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         attach()
     }
 
-    /// Reloaded a few times; a page whose web process keeps stopping is left stopped, and says so.
+    /// Reloaded a few times; a page whose web process keeps stopping before it posts anything is left stopped, and
+    /// says so.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !isClosed else { return }
         crashes += 1
