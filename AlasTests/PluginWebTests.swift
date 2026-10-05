@@ -108,15 +108,7 @@ struct PluginWebTests {
         #expect(await server.nextRequest() == "/control.png")
         control.stopLoading()
         let ping = "</script><img src=x onerror=alert(1)>\"'`${x}\u{2028}"
-        let manifest = try PluginManifest.parse(
-            Data(#"{"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8))
-        let host = PluginHost(
-            manifest: manifest, source: Data(Self.plugin(ping: ping).utf8),
-            project: PluginProjectRef(id: "proj", name: "Project", host: nil), grants: [], actions: .inert,
-            storage: PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-web-\(UUID().uuidString).json")),
-            pluginStorage: PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-web-\(UUID().uuidString).json")),
-            settings: PluginSettings.make(pluginID: manifest.id, declared: []))
-        await host.activate()
+        let host = try await Self.webHost(source: Self.plugin(ping: ping))
         var opened: [URL] = []
         var page: PluginWebPage?
         let done = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
@@ -138,6 +130,33 @@ struct PluginWebTests {
         #expect(opened.isEmpty)
         // Only the control's request; a sandbox leak, even a bare preconnect that sends nothing, adds another entry.
         #expect(server.requests.allSatisfy { $0 == "/control.png" })
+    }
+
+    /// A page whose script fails says why in its plugin's log and on the tab, instead of leaving only a blank tab.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func aFailingPageReportsWhyInThePluginLog() async throws {
+        let host = try await Self.webHost(source: Self.plugin(ping: ""))
+        let page = try #require(PluginWebPage.open(host: host, tab: 0, script: Data(#"throw new Error("boom");"#.utf8), theme: .fallback))
+        defer { page.close() }
+        var shown: [String] = []
+        page.onProblem = { shown.append($0) }
+        #expect(await awaitCondition { host.log.contains { $0.level == "error" && $0.message.contains("boom") } })
+        #expect(shown.contains { $0.contains("boom") })
+    }
+
+    @MainActor
+    static func webHost(source: String) async throws -> PluginHost {
+        let manifest = try PluginManifest.parse(
+            Data(#"{"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8))
+        let host = PluginHost(
+            manifest: manifest, source: Data(source.utf8),
+            project: PluginProjectRef(id: "proj", name: "Project", host: nil), grants: [], actions: .inert,
+            storage: PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-web-\(UUID().uuidString).json")),
+            pluginStorage: PluginStorage(file: FileManager.default.temporaryDirectory.appending(path: "plugin-web-\(UUID().uuidString).json")),
+            settings: PluginSettings.make(pluginID: manifest.id, declared: []))
+        await host.activate()
+        return host
     }
 
     /// Echoes the page: its report and the echo of a tricky string come back in one final `web/post`.

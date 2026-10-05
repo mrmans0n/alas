@@ -571,12 +571,13 @@ final class ACPSessionManager: ObservableObject {
     /// same loss. The draft is inspected BEFORE calling `takeForEditing`,
     /// which removes-and-returns atomically — refusing after removal would
     /// strand the prompt outside the queue instead of just leaving it be.
+    /// A pasted-text segment is plain text, so it stays editable there; the web composer just shows its full content instead of a badge.
     func queueEdit(for id: ACPSession.ID, itemId: UUID) async -> String? {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return nil }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
         let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
             switch segment {
-            case .text, .upstreamReference: return false
+            case .text, .upstreamReference, .pastedText: return false
             case .mention, .image: return true
             }
         }
@@ -2622,7 +2623,7 @@ final class ACPSessionManager: ObservableObject {
     private static func wireMessagesHaveConversation(_ wires: [ACPMessageWire]) -> Bool {
         wires.contains { wire in
             switch wire {
-            case let .user(_, text, _, _):
+            case let .user(_, text, _, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case let .agent(_, text, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -8253,7 +8254,7 @@ extension ACPSessionManager {
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId] else { return false }
         var seen = session.queue.compactMap(\.delegatedSource)
         seen += session.transcript.messages.compactMap { message in
-            guard case .user(_, _, _, _, let source) = message else { return nil }
+            guard case .user(_, _, _, _, let source, _) = message else { return nil }
             return source
         }
         let pending = prompts.filter { prompt in
@@ -8614,7 +8615,7 @@ extension ACPSessionManager {
             $0.id == id || $0.delegatedSource?.messageId == source.messageId
         }) else { return true }
         guard !session.transcript.messages.contains(where: { message in
-            guard case .user(_, _, _, _, let recordedSource) = message else { return false }
+            guard case .user(_, _, _, _, let recordedSource, _) = message else { return false }
             return recordedSource == source
         }) else { return true }
 

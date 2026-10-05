@@ -12,7 +12,7 @@ struct ACPMessageTests {
         let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [attachment])
 
         let payload = try ACPMessageCodec.encode(message)
-        guard case .user(_, _, _, let attachments, _) = try ACPMessageCodec.decode(kind: "user", payload: payload) else {
+        guard case .user(_, _, _, let attachments, _, _) = try ACPMessageCodec.decode(kind: "user", payload: payload) else {
             Issue.record("expected user message")
             return
         }
@@ -26,7 +26,7 @@ struct ACPMessageTests {
         let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        guard case .user(_, _, let text, let atts, _) = back else {
+        guard case .user(_, _, let text, let atts, _, _) = back else {
             Issue.record("expected user message")
             return
         }
@@ -374,5 +374,28 @@ struct ACPMessageTests {
         let path: String
         let added: Int
         let removed: Int
+    }
+
+    @Test("user pasted spans round-trip through the codec and wire decoder; old payloads load without them")
+    func userPastedSpansPersist() throws {
+        let spans = [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 3)]
+        let message = ACPMessage.user(id: UUID(), messageId: nil, text: "see LOG", attachments: [], pastedSpans: spans)
+        let payload = try ACPMessageCodec.encode(message)
+
+        guard case .user(_, _, _, _, _, let decoded) = try ACPMessageCodec.decode(kind: "user", payload: payload),
+              case .user(_, _, _, _, let wireSpans) = try ACPMessageWire.decode(kind: "user", payload: payload)
+        else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(decoded == spans)
+        #expect(wireSpans == spans)
+
+        let legacy = Data(#"{"text":"old","attachments":[]}"#.utf8)
+        guard case .user(_, _, _, _, _, let legacySpans) = try ACPMessageCodec.decode(kind: "user", payload: legacy) else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(legacySpans.isEmpty)
     }
 }

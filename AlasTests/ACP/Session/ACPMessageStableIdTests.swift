@@ -57,7 +57,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(" world"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1", "acp-agent:agent-1"])
-        if case .user(_, _, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
         } else {
@@ -73,7 +73,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("a"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, _, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(text == "aaa")
             #expect(attachments.isEmpty)
         } else {
@@ -90,7 +90,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
@@ -108,7 +108,7 @@ struct ACPMessageStableIdTests {
             content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "")
             #expect(attachments == [
@@ -140,7 +140,7 @@ struct ACPMessageStableIdTests {
         s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("please"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see please")
             #expect(attachments == [
@@ -163,7 +163,7 @@ struct ACPMessageStableIdTests {
             content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
 
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see this")
             #expect(attachments == [attachment])
@@ -187,7 +187,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "")
             #expect(attachments == [attachment])
@@ -215,7 +215,7 @@ struct ACPMessageStableIdTests {
         #expect(attachmentChanged == [0])
         #expect(textChanged == [0])
         #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "see this")
             #expect(attachments == [attachment])
@@ -245,7 +245,7 @@ struct ACPMessageStableIdTests {
         #expect(changed == [0])
         #expect(s.transcript.messages.count == 1)
         #expect(s.transcript.messages[0].stableId == "acp-user:user-1")
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello")
             #expect(attachments.isEmpty)
@@ -266,7 +266,7 @@ struct ACPMessageStableIdTests {
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
         #expect(s.transcript.messages[0].stableId == "acp-user:user-1")
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == "user-1")
             #expect(text == "hello world")
             #expect(attachments.isEmpty)
@@ -284,7 +284,7 @@ struct ACPMessageStableIdTests {
 
         #expect(changed == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, _, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, _, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "hello")
         } else {
@@ -303,7 +303,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, _, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, _, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "hello world")
         } else {
@@ -324,7 +324,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "see ")
             #expect(attachments == [attachment])
@@ -343,7 +343,7 @@ struct ACPMessageStableIdTests {
         #expect(firstChanged == [0])
         #expect(secondChanged == [0])
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let messageId, let text, let attachments, _) = s.transcript.messages[0] {
+        if case .user(_, let messageId, let text, let attachments, _, _) = s.transcript.messages[0] {
             #expect(messageId == nil)
             #expect(text == "haha")
             #expect(attachments.isEmpty)
@@ -359,5 +359,50 @@ struct ACPMessageStableIdTests {
         guard case .toolCall(let tc) = s.transcript.messages[0] else { Issue.record("expected tool call")
         return }
         #expect(s.transcript.messages[0].stableId == "tc-\(tc.toolCallId)")
+    }
+
+    @Test("an echoed local prompt keeps its pasted spans; a merge that changes the text drops them")
+    func echoKeepsPastedSpansOnlyForUnchangedText() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let spans = [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 5)]
+        s.recordUserPrompt(text: "see TRACE", attachments: [], pastedSpans: spans)
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see TRACE"))))
+
+        guard case .user(_, let messageId, _, _, _, let kept) = s.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(messageId == "user-1")
+        #expect(kept == spans)
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("more"))))
+
+        guard case .user(_, _, let text, _, _, let dropped) = s.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(text != "see TRACE")
+        #expect(dropped.isEmpty)
+    }
+
+    @Test("an attachment-only update to an echoed local prompt keeps its pasted spans")
+    func attachmentOnlyUpdateKeepsPastedSpans() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let spans = [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 5)]
+        s.recordUserPrompt(text: "see TRACE", attachments: [], pastedSpans: spans)
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see TRACE"))))
+        s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
+
+        guard case .user(_, _, let text, let attachments, _, let kept) = s.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(text == "see TRACE")
+        #expect(attachments.count == 1)
+        #expect(kept == spans)
     }
 }

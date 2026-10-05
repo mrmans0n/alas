@@ -4316,7 +4316,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.transcript.messages.count == 3)
         #expect(try store.loadMessages(sessionId: "local").count == 3)
-        guard case .user(_, _, let text, let attachments, _) = session.transcript.messages[0] else {
+        guard case .user(_, _, let text, let attachments, _, _) = session.transcript.messages[0] else {
             Issue.record("Expected hydrated user message to remain first")
             return
         }
@@ -4529,7 +4529,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.queue.isEmpty
         }
         #expect(session.transcript.messages.count == 2)
-        guard case .user(_, _, let text, _, _) = session.transcript.messages[1] else {
+        guard case .user(_, _, let text, _, _, _) = session.transcript.messages[1] else {
             Issue.record("Expected queued prompt to append after hydrated transcript")
             return
         }

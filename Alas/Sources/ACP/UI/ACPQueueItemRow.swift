@@ -37,12 +37,15 @@ struct ACPQueueItemRow: View {
 
     var body: some View {
         let preview = Self.textPreview(of: item.blocks)
+        // Only drafts captured at enqueue carry pasted segments; spans that
+        // don't line up with the blocks' text are dropped by validation.
+        let pastedSpans = item.draft?.pastedTextSpans(matching: preview) ?? []
 
         HStack(alignment: .top, spacing: ACPQueueItemRowMetrics.markerToContentSpacing) {
             positionMarker
             VStack(alignment: .leading, spacing: 4) {
                 statusRow
-                contentColumn(preview: preview)
+                contentColumn(preview: preview, pastedSpans: pastedSpans)
             }
             Spacer(minLength: ACPQueueItemRowMetrics.contentToToolbarSpacing)
             toolbar
@@ -135,12 +138,16 @@ struct ACPQueueItemRow: View {
     }
 
     @ViewBuilder
-    private func contentColumn(preview: String) -> some View {
+    private func contentColumn(preview: String, pastedSpans: [ACPPastedTextSpan]) -> some View {
         if !imageURLs.isEmpty {
             imageRow
         }
         if !preview.isEmpty {
-            ACPMarkdownText(raw: preview, typography: typography)
+            ACPMarkdownText(
+                raw: ACPUserMessageImageMarkers.displayText(text: preview, attachments: [], pastedSpans: pastedSpans),
+                typography: typography
+            )
+            .environment(\.acpPastedTextContents, ACPPastedTextContents(text: preview, spans: pastedSpans))
         } else if imageURLs.isEmpty {
             Text("(empty prompt)")
                 .font(.system(size: 13))

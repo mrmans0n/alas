@@ -183,8 +183,9 @@ enum ACPUpstreamReferenceChip {
         return matches.count
     }
 
-    /// `text` with each reference chip spelled out. `nil` when `text` has no
-    /// reference chips, so callers keep their default copy behaviour.
+    /// `text` with each reference, path, and pasted-text chip spelled out.
+    /// `nil` when `text` has none of them, so callers keep their default copy
+    /// behaviour.
     static func plainText(of text: NSAttributedString) -> String? {
         var found = false
         var result = ""
@@ -195,6 +196,9 @@ enum ACPUpstreamReferenceChip {
             } else if let path = attributes[.pathReference] as? String {
                 found = true
                 result += path
+            } else if let chip = attributes[.attachment] as? ACPPastedTextChipAttachment {
+                found = true
+                result += chip.content
             } else {
                 result += text.attributedSubstring(from: range).string
             }

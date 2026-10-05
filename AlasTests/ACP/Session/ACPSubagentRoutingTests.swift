@@ -492,9 +492,9 @@ struct ACPSubagentRoutingTests {
         // itself, advancing the cursor past BOTH rows — the recovered
         // spawn then landed after "second" instead of between the two.
         #expect(runner.session.transcript.messages.count == 3)
-        guard case .user(_, _, let first, _, _) = runner.session.transcript.messages[0],
+        guard case .user(_, _, let first, _, _, _) = runner.session.transcript.messages[0],
               case .toolCall = runner.session.transcript.messages[1],
-              case .user(_, _, let second, _, _) = runner.session.transcript.messages[2] else {
+              case .user(_, _, let second, _, _, _) = runner.session.transcript.messages[2] else {
             Issue.record("expected the recovered spawn BETWEEN the two already-matched id-less prompts")
             return
         }

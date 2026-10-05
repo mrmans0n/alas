@@ -182,7 +182,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     ) -> Set<UUID> {
         deliveredRecordedPromptIDs(in: queue, newestFirst: transcript.reversed().lazy.map {
             if $0.isAgentSideProgress { return .progress }
-            guard case .user(_, let text, let attachments, _) = $0 else { return .other }
+            guard case .user(_, let text, let attachments, _, _) = $0 else { return .other }
             return .user(text: text, attachments: attachments)
         })
     }
@@ -195,7 +195,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     ) -> Set<UUID> {
         deliveredRecordedPromptIDs(in: queue, newestFirst: liveTranscript.reversed().lazy.map {
             if $0.isAgentSideProgress { return .progress }
-            guard case .user(_, _, let text, let attachments, _) = $0 else { return .other }
+            guard case .user(_, _, let text, let attachments, _, _) = $0 else { return .other }
             return .user(text: text, attachments: attachments)
         })
     }

@@ -5,6 +5,7 @@ import SwiftUI
 struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
+    let pastedSpans: [ACPPastedTextSpan]
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let session: ACPSession
@@ -48,11 +49,17 @@ struct UserMessageRow: View {
                     }
                 }
                 if let upstreamReferences {
-                    ACPUserReferenceSummary(text: text, store: upstreamReferences)
+                    // Only typed text: references inside a paste, and the
+                    // "#N" in its badge, are not summarized.
+                    ACPUserReferenceSummary(
+                        text: ACPPastedTextContents(text: text, spans: pastedSpans)?.typedText ?? text,
+                        store: upstreamReferences
+                    )
                 }
                 ACPUserMessageText(
                     text: text,
                     attachments: attachments,
+                    pastedSpans: pastedSpans,
                     typography: typography,
                     session: session,
                     chipsAbsolutePaths: chipsAbsolutePaths

@@ -510,6 +510,22 @@ struct ACPComposerDraftBridgeTests {
         ]))
     }
 
+    @Test("a pasted-text chip round-trips through the draft and extracts its full content")
+    func pastedTextChipRoundTrip() {
+        let content = String(repeating: "log line\n", count: 30)
+        let draft = ACPComposerDraft(segments: [
+            .text("see "), .pastedText(ordinal: 1, content: content), .text(" why"),
+        ])
+
+        let attributed = ACPInputField.Coordinator.attributedString(from: draft)
+
+        #expect(attributed.length == "see ".utf16.count + 1 + " why".utf16.count)
+        #expect(ACPInputField.Coordinator.draft(from: attributed) == draft)
+        let (text, attachments) = ACPInputField.Coordinator.extract(attributed)
+        #expect(text == "see " + content + " why")
+        #expect(attachments.isEmpty)
+    }
+
     @Test("restores mention chips from draft")
     func restoresAttributedDraft() {
         let draft = ACPComposerDraft(segments: [
@@ -1088,6 +1104,62 @@ struct ACPComposerDraftBridgeTests {
         textView.undoManager?.redo()
         #expect(chipKinds(in: textView) == ["mention"])
         #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
+    }
+
+    @Test("a collapsed paste is one chip whose content goes out verbatim, and undo restores the prior text")
+    func pastedTextChipInsertAndUndo() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "see "))
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        textView.undoManager?.removeAllActions()
+        let content = String(repeating: "frame 0x1\n", count: 30)
+
+        #expect(textView.insertPastedTextChip(content))
+
+        #expect(textView.string.utf16.count == 5)
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "see " + content)
+        textView.undoManager?.undo()
+        #expect(textView.string == "see ")
+    }
+
+    @Test("expanding a pasted-text chip inlines its content, and undo brings the chip back")
+    func pastedTextChipExpandUndo() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let content = String(repeating: "row\n", count: 25)
+        let chipped = ACPComposerDraft(segments: [.text("a "), .pastedText(ordinal: 1, content: content)])
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: chipped))
+        textView.undoManager?.removeAllActions()
+
+        textView.expandPastedTextChip(at: NSRange(location: 2, length: 1))
+
+        #expect(textView.string == "a " + content)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString())
+            == ACPComposerDraft(segments: [.text("a " + content)]))
+        textView.undoManager?.undo()
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == chipped)
+    }
+
+    @Test("copying a pasted-text chip writes its full content, and pasting it back renumbers the colliding ordinal")
+    func pastedTextChipCopyPasteRenumbers() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let content = String(repeating: "x\n", count: 25)
+        #expect(textView.insertPastedTextChip(content))
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == content)
+
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
+            .pastedText(ordinal: 1, content: content),
+            .pastedText(ordinal: 2, content: content),
+        ]))
     }
 
     @Test("the image cap counts adjacent chips sharing the same URI as separate images")
