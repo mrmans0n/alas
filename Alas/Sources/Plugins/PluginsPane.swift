@@ -181,7 +181,7 @@ struct PluginsPane: View {
             capabilitiesLine(row)
         } control: {
             if busy.contains(entry.id) {
-                ProgressView().controlSize(.small)
+                Spinner().frame(width: 14, height: 14).accessibilityLabel("Loading")
             } else {
                 switch row {
                 case .install(let version):
@@ -369,7 +369,7 @@ private struct PluginConfigureSheet: View {
                 } else if host.state == .active, host.panelTree(for: target.place) != nil {
                     PluginViewTabView(host: host, panel: target.place.panel)
                 } else {
-                    ProgressView().controlSize(.small)
+                    Spinner().frame(width: 14, height: 14).accessibilityLabel("Loading")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

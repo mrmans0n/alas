@@ -74,7 +74,7 @@ struct PluginTabView: View {
                     }
                 }
             case .loading:
-                ProgressView().controlSize(.small)
+                Spinner().frame(width: 14, height: 14).accessibilityLabel("Loading")
             case .stopped(let reason):
                 placeholder("\(tab.title) stopped: \(reason)", button: "Restart") {
                     guard let manager else { return }
