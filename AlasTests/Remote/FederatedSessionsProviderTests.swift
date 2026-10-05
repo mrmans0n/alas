@@ -465,4 +465,90 @@ struct FederatedSessionsProviderTests {
         links.onFederationEvent?(.availabilityChanged(serverId: "srv-c"))
         #expect(fired == 4)
     }
+
+    @Test func unscopedRequestsAreAnsweredInOrderToTheirOwnRequester() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let a = Client(), b = Client()
+        provider.attach(a.downstream)
+        provider.attach(b.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        var aReplies: [RemoteServerMessage] = [], bReplies: [RemoteServerMessage] = []
+        #expect(provider.request(.listAgents, toPeer: "srv-b", from: a.downstream) { aReplies.append($0) })
+        #expect(provider.request(.listAgents, toPeer: "srv-b", from: b.downstream) { bReplies.append($0) })
+        #expect(links.sent(to: "srv-b") == [.listAgents])
+
+        let first = [RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)]
+        links.receive(.agentList(agents: first), from: "srv-b")
+        #expect(aReplies == [.agentList(agents: first)])
+        #expect(bReplies.isEmpty)
+        #expect(links.sent(to: "srv-b") == [.listAgents, .listAgents])
+
+        links.receive(.agentList(agents: []), from: "srv-b")
+        #expect(bReplies == [.agentList(agents: [])])
+        #expect(a.received.isEmpty && b.received.isEmpty)
+    }
+
+    @Test func aCreatedSessionComesBackNamespacedUnderItsPeer() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        var replies: [RemoteServerMessage] = []
+        #expect(provider.request(.createSession(worktreeId: "w1", agentId: "claude", modelId: "opus"),
+                                 toPeer: "srv-b", from: client.downstream) { replies.append($0) })
+        #expect(links.sent(to: "srv-b").last == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus"))
+
+        links.receive(.sessionCreated(session: row("s9")), from: "srv-b")
+
+        guard case .sessionCreated(let summary) = replies.first else {
+            Issue.record("expected sessionCreated, got \(replies)")
+            return
+        }
+        #expect(summary.id == "srv-b:s9")
+        #expect(summary.serverId == "srv-b")
+        #expect(summary.serverName == "Mac B")
+    }
+
+    @Test func aPeerGoingOfflineFailsPendingCreatesAndRefusesNewRequests() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        var created: [RemoteServerMessage] = [], listed: [RemoteServerMessage] = []
+        _ = provider.request(.createSession(worktreeId: "w1", agentId: "claude"),
+                             toPeer: "srv-b", from: client.downstream) { created.append($0) }
+        _ = provider.request(.listWorktrees, toPeer: "srv-b", from: client.downstream) { listed.append($0) }
+
+        links.goOffline("srv-b")
+
+        #expect(created == [.createSessionFailed(message: "Peer is unavailable.")])
+        #expect(listed.isEmpty)
+        #expect(!provider.request(.listAgents, toPeer: "srv-b", from: client.downstream) { _ in })
+        // A late reply after reconnecting has no requester left.
+        links.goOnline("srv-b", name: "Mac B")
+        links.receive(.worktreeList(worktrees: []), from: "srv-b")
+        #expect(listed.isEmpty)
+    }
+
+    @Test func aDetachedRequesterDoesNotStealTheNextReply() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let a = Client(), b = Client()
+        provider.attach(a.downstream)
+        provider.attach(b.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        var aReplies: [RemoteServerMessage] = [], bReplies: [RemoteServerMessage] = []
+        _ = provider.request(.listWorktrees, toPeer: "srv-b", from: a.downstream) { aReplies.append($0) }
+        _ = provider.request(.listWorktrees, toPeer: "srv-b", from: b.downstream) { bReplies.append($0) }
+
+        provider.detach(a.downstream)
+        links.receive(.worktreeList(worktrees: []), from: "srv-b")   // answers a's in-flight request
+        #expect(aReplies.isEmpty && bReplies.isEmpty)
+        links.receive(.worktreeList(worktrees: []), from: "srv-b")
+        #expect(bReplies == [.worktreeList(worktrees: [])])
+    }
 }

@@ -1014,4 +1014,163 @@ struct NativePeerSessionsTests {
         #expect(group.members.map(\.index) == [1, 2])
         #expect(group.kind == .completedTurn(duration: nil))
     }
+
+    private func projectRow(_ id: String, projectId: String = "p", worktreeId: String = "w1") -> RemoteSessionSummary {
+        .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+              projectId: projectId, worktreeId: worktreeId,
+              worktree: .init(projectName: "alas", worktreeName: "wt", branch: "feat", path: "/peer/\(worktreeId)",
+                              metricsAvailable: false, comparisonRef: nil, commitCount: 0,
+                              changedFileCount: 0, addedLines: 0, deletedLines: 0, conflictCount: 0))
+    }
+
+    private func worktreeOption(_ id: String, projectId: String?, projectName: String = "alas") -> RemoteWorktreeOption {
+        .init(id: id, projectName: projectName, worktreeName: id, branch: id, path: "/peer/\(id)",
+              metricsAvailable: false, comparisonRef: nil, commitCount: 0, changedFileCount: 0,
+              addedLines: 0, deletedLines: 0, conflictCount: 0, projectId: projectId)
+    }
+
+    private func startedClientWithPeerRepo() -> (FakeLinks, NativePeerSessions, NativePeerGroup, NativePeerRepoGroup) {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
+        let peer = client.snapshot.groups[0]
+        let repo = peer.repos(ordering: .lastUpdateDesc)[0]
+        return (links, client, peer, repo)
+    }
+
+    @Test func aCreatedPeerSessionIsSelectedOnceItsRowArrives() throws {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        #expect(links.sent(to: "B").contains(.listWorktrees))
+        #expect(links.sent(to: "B").contains(.listAgents))
+
+        links.receive(.worktreeList(worktrees: [worktreeOption("w1", projectId: "p"),
+                                                worktreeOption("w9", projectId: "other")]), from: "B")
+        links.receive(.agentList(agents: [.init(id: "claude", name: "Claude", isDefault: true)]), from: "B")
+        #expect(client.newSession?.worktrees?.map(\.id) == ["w1"])
+        #expect(client.newSession?.isLoading == false)
+
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: "opus")
+        #expect(client.newSession?.phase == .creating)
+        #expect(links.sent(to: "B").last == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus"))
+
+        links.receive(.sessionCreated(session: projectRow("new")), from: "B")
+        #expect(client.newSession == nil)
+        links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")
+        #expect(client.selectedSessionId == "B:new")
+    }
+
+    @Test func aRefusedCreateKeepsTheSheetWithTheReason() {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        links.receive(.createSessionFailed(message: "Agent is no longer available."), from: "B")
+        #expect(client.newSession?.phase == .failed("Agent is no longer available."))
+    }
+
+    @Test func repliesForACancelledSheetAreIgnored() {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        client.cancelNewSession()
+        client.beginNewSession(peer: peer, repo: repo)
+        // Answers the first sheet's request; the second's is sent next.
+        links.receive(.worktreeList(worktrees: [worktreeOption("w1", projectId: "p")]), from: "B")
+        #expect(client.newSession?.worktrees == nil)
+        links.receive(.worktreeList(worktrees: [worktreeOption("w1", projectId: "p")]), from: "B")
+        #expect(client.newSession?.worktrees?.map(\.id) == ["w1"])
+    }
+
+    @Test(arguments: [
+        (true, ["w1"]),          // matches on projectId
+        (false, ["w1", "w2"]),   // older peer without projectIds: falls back to project name
+    ] as [(Bool, [String])])
+    func newSessionWorktreesBelongToTheClickedRepo(optionsCarryProjectIds: Bool, expected: [String]) {
+        let options = [
+            worktreeOption("w1", projectId: optionsCarryProjectIds ? "p" : nil),
+            worktreeOption("w2", projectId: optionsCarryProjectIds ? "q" : nil),
+            worktreeOption("w3", projectId: optionsCarryProjectIds ? "r" : nil, projectName: "other"),
+        ]
+        #expect(NativePeerNewSession.worktrees(options, projectId: "p", repoName: "alas").map(\.id) == expected)
+    }
+
+    @Test func newSessionPreselectsTheSelectedWorktreeThenTheDefaultAgent() {
+        let options = [worktreeOption("w1", projectId: "p"), worktreeOption("w2", projectId: "p")]
+        #expect(NativePeerNewSession.preselectedWorktreeId(in: options, selectedWorktreeId: "w2") == "w2")
+        #expect(NativePeerNewSession.preselectedWorktreeId(in: options, selectedWorktreeId: "elsewhere") == "w1")
+        let agents: [RemoteAgentOption] = [.init(id: "codex", name: "Codex", isDefault: false),
+                                           .init(id: "claude", name: "Claude", isDefault: true)]
+        #expect(NativePeerNewSession.preselectedAgentId(in: agents) == "claude")
+        #expect(NativePeerNewSession.preselectedAgentId(in: Array(agents.prefix(1))) == "codex")
+    }
+
+    @Test func newSessionSheetRecoversWhenThePeerComesBack() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peerState = "online"
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: peerState)]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
+        let peer = client.snapshot.groups[0]
+        client.beginNewSession(peer: peer, repo: peer.repos(ordering: .lastUpdateDesc)[0])
+
+        peerState = "offline"
+        links.offline("B")
+        client.refresh()
+        #expect(client.newSession?.phase == .failed(NativePeerSessions.peerUnavailableMessage))
+
+        peerState = "online"
+        links.sent.removeAll()
+        links.online("B", name: "Mac B")
+        client.refresh()
+        #expect(client.newSession?.phase == .editing)
+        #expect(links.sent(to: "B").contains(.listWorktrees))
+        #expect(links.sent(to: "B").contains(.listAgents))
+    }
+
+    @Test func aCreateInterruptedByThePeerGoingOfflineCanBeRetried() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peerState = "online"
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: peerState)]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
+        let peer = client.snapshot.groups[0]
+        client.beginNewSession(peer: peer, repo: peer.repos(ordering: .lastUpdateDesc)[0])
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        #expect(client.newSession?.phase == .creating)
+
+        peerState = "offline"
+        links.offline("B")
+        client.refresh()
+        #expect(client.newSession?.phase == .failed(NativePeerSessions.peerUnavailableMessage))
+
+        peerState = "online"
+        links.online("B", name: "Mac B")
+        client.refresh()
+        #expect(client.newSession?.phase == .editing)
+    }
+
+    /// `nil` leaves the peer selection entirely, the way picking a local
+    /// worktree does.
+    @Test(arguments: ["B:s", nil] as [String?])
+    func aCreatedSessionDoesNotStealSelectionAfterTheUserNavigates(to destination: String?) {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        links.receive(.sessionCreated(session: projectRow("new")), from: "B")
+        if let destination { client.select(destination) } else { client.clearSelection() }
+        links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")
+        #expect(client.selectedSessionId == destination)
+    }
 }

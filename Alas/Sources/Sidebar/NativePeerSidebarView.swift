@@ -57,6 +57,12 @@ struct NativePeerSidebarView: View {
             }
             .onAppear { expandNewPeers() }
             .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
+            .sheet(item: Binding(
+                get: { client.newSession },
+                set: { if $0 == nil { client.cancelNewSession() } }
+            )) { _ in
+                NativePeerNewSessionSheet(client: client)
+            }
         }
     }
 
@@ -148,6 +154,10 @@ struct NativePeerSidebarView: View {
                 repo: repo,
                 icon: repo.name == NativePeerRepoGroup.unassignedName ? nil : icon(repo.name),
                 collapsed: collapsed,
+                peerName: peer.name,
+                onNewSession: peer.state.carriesSessions && repo.projectId != nil
+                    ? { client.beginNewSession(peer: peer, repo: repo) }
+                    : nil,
                 onToggle: {
                     if collapsed { collapsedRepoIDs.remove(key) }
                     else { collapsedRepoIDs.insert(key) }
@@ -296,38 +306,57 @@ private struct NativePeerRepoHeaderRow: View {
     let repo: NativePeerRepoGroup
     let icon: ProjectIcon?
     let collapsed: Bool
+    let peerName: String
+    /// Nil hides the "+": the "Other sessions" bucket and offline peers.
+    let onNewSession: (() -> Void)?
     let onToggle: () -> Void
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 7) {
-            Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
-                .frame(width: 12, height: 14)
-            if let icon {
-                ProjectIconView(icon: icon, fallbackName: repo.name, size: .repoHeader)
-            } else {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .frame(width: 19, height: 19)
-                    .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: 5))
-                    .accessibilityHidden(true)
+            HStack(spacing: 7) {
+                Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                    .frame(width: 12, height: 14)
+                if let icon {
+                    ProjectIconView(icon: icon, fallbackName: repo.name, size: .repoHeader)
+                } else {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .frame(width: 19, height: 19)
+                        .background(theme.color("bg-4"), in: RoundedRectangle(cornerRadius: 5))
+                        .accessibilityHidden(true)
+                }
+                Text(repo.name)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .tracking(-0.12)
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            Text(repo.name)
-                .font(.system(size: 12.5, weight: .semibold))
-                .tracking(-0.12)
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(1)
-            Spacer(minLength: 0)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onToggle)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(repo.name), \(repo.worktrees.count) worktrees")
+            .accessibilityAddTraits(.isButton)
             HStack(spacing: 6) {
                 if collapsed, repo.attentionCount > 0 {
                     NativePeerAttentionCount(count: repo.attentionCount)
                 }
-                Text("\(repo.worktrees.count)")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .monospacedDigit()
+                if let onNewSession {
+                    SidebarHeaderCountPlusButton(
+                        count: repo.worktrees.count,
+                        rowHovering: hovering,
+                        help: "New session in \(repo.name) on \(peerName)",
+                        action: onNewSession
+                    )
+                } else {
+                    Text("\(repo.worktrees.count)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .monospacedDigit()
+                }
             }
             .padding(.trailing, 3)
         }
@@ -340,10 +369,6 @@ private struct NativePeerRepoHeaderRow: View {
         .padding(.top, 1)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: onToggle)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(repo.name), \(repo.worktrees.count) worktrees")
-        .accessibilityAddTraits(.isButton)
     }
 }
 

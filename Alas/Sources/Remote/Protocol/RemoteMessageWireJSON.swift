@@ -114,12 +114,25 @@ struct RemoteWorktreeOption: Codable, Equatable, Sendable {
     let addedLines: Int
     let deletedLines: Int
     let conflictCount: Int
+    /// The peer's project id. Older peers omit it; clients then match by
+    /// `projectName`.
+    var projectId: String? = nil
+}
+
+/// A model an agent advertised on the sending Mac, remembered across
+/// sessions. A hint for pickers, not a contract.
+struct RemoteModelOption: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
 }
 
 struct RemoteAgentOption: Codable, Equatable, Sendable {
     let id: String
     let name: String
     let isDefault: Bool
+    /// Nil when the sending Mac has never seen this agent's models, or is
+    /// older than this field.
+    var models: [RemoteModelOption]? = nil
 }
 
 struct RemoteProjectOption: Codable, Equatable, Sendable {

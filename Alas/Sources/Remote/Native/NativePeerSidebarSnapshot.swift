@@ -70,6 +70,11 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
 
     var attentionCount: Int { worktrees.reduce(0) { $0 + $1.attentionCount } }
 
+    /// The peer's project id, or nil for the "Other sessions" bucket.
+    var projectId: String? {
+        id.hasPrefix("id:") ? String(id.dropFirst(3)) : nil
+    }
+
     /// The project identity to group on. `projectName` is a display label a
     /// peer could reuse across two distinct projects (or after a rename), so
     /// grouping on it merges unrelated repos — group on `projectId` instead,

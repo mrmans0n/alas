@@ -14980,7 +14980,8 @@ extension AppState: RemoteSessionsProvider {
             changedFileCount: summary.changedFileCount,
             addedLines: summary.addedLines,
             deletedLines: summary.deletedLines,
-            conflictCount: summary.conflictCount
+            conflictCount: summary.conflictCount,
+            projectId: project.id
         )
     }
 
@@ -15204,11 +15205,17 @@ extension AppState: RemoteSessionsProvider {
         let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
         let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
         return ordered.enumerated().map { index, agent in
-            RemoteAgentOption(id: agent.id, name: agent.displayName, isDefault: index == 0)
+            let models = acpModelCatalog.models(for: agent.id)
+            return RemoteAgentOption(
+                id: agent.id,
+                name: agent.displayName,
+                isDefault: index == 0,
+                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) }
+            )
         }
     }
 
-    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
+    func createRemoteSession(worktreeId: String, agentId: String, modelId: String? = nil) async -> RemoteCreateSessionResult {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
               projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
         else {
@@ -15234,6 +15241,12 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let session = manager.createSession(agentId: agent.id, autoRunDefault: config.harness.acpAutoRunByDefault)
+        // Picked up by `attach`, so the first turn already runs on the
+        // requested model. An id the agent no longer advertises is dropped
+        // there; creation never fails over the model.
+        if let modelId {
+            manager.pendingModel[session.id] = modelId
+        }
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
         let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
@@ -15319,7 +15332,7 @@ extension AppState: RemoteSessionsProvider {
             let sessionResult = if let remoteSessionCreator {
                 await remoteSessionCreator(worktree.id, agentId)
             } else {
-                await createRemoteSession(worktreeId: worktree.id, agentId: agentId)
+                await createRemoteSession(worktreeId: worktree.id, agentId: agentId, modelId: nil)
             }
             return Self.remoteWorktreeSessionResult(
                 worktree: worktree,
