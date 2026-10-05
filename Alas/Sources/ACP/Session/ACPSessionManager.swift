@@ -2549,6 +2549,14 @@ final class ACPSessionManager: ObservableObject {
         // toolbar during the hydration window should win against the value
         // we captured before the user typed it.
         session.hydrationState = .ready
+        // With the setting off nothing will consume this launch's interruption
+        // (a scheduled session may not attach at all), so hold it now and save
+        // it. Done after `.ready`: the restore-time save above is skipped while
+        // loading. Left stored as `.sending`, enabling the setting before the
+        // next launch would resend a prompt that may already have been delivered.
+        if !continueInterruptedSessions(), session.consumeInterruptedTurns(resume: false) {
+            persistQueue(for: session)
+        }
         self.recent = result.recent
         scheduleBackfillIfNeeded(olderMessages: Array(messages.prefix(tailStart)),
                                  sessionId: session.id, session: session)
