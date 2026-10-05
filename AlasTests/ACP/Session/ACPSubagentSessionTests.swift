@@ -266,8 +266,8 @@ struct ACPSubagentSessionTests {
         run.applyReplayed(.userMessageChunk(.init(messageId: "p2", content: .text("second"))))
 
         #expect(run.messages.count == 3)
-        guard case .user(_, _, let firstText, _, _) = run.messages[0],
-              case .user(_, _, let secondText, _, _) = run.messages[2] else {
+        guard case .user(_, _, let firstText, _, _, _) = run.messages[0],
+              case .user(_, _, let secondText, _, _, _) = run.messages[2] else {
             Issue.record("expected both prompts to be reconciled in place")
             return
         }
@@ -287,7 +287,7 @@ struct ACPSubagentSessionTests {
         run.applyReplayed(.userMessageChunk(.text("review this")))
 
         #expect(run.messages.count == 1)
-        guard case .user(_, nil, let text, _, _) = run.messages[0] else {
+        guard case .user(_, nil, let text, _, _, _) = run.messages[0] else {
             Issue.record("expected the single id-less prompt to be reconciled in place")
             return
         }
@@ -444,7 +444,7 @@ struct ACPSubagentSessionTests {
         run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("this file"))))
 
         #expect(run.messages.count == 1)
-        guard case .user(_, "p1", let text, let attachments, _) = run.messages[0] else {
+        guard case .user(_, "p1", let text, let attachments, _, _) = run.messages[0] else {
             Issue.record("expected one prompt bubble")
             return
         }
@@ -462,7 +462,7 @@ struct ACPSubagentSessionTests {
         run.apply(.userMessageChunk(.init(content: .text("this file"))))
 
         #expect(run.messages.count == 1)
-        guard case .user(_, nil, let text, let attachments, _) = run.messages[0] else {
+        guard case .user(_, nil, let text, let attachments, _, _) = run.messages[0] else {
             Issue.record("expected one prompt bubble")
             return
         }
@@ -479,9 +479,9 @@ struct ACPSubagentSessionTests {
         run.apply(.userMessageChunk(.init(content: .text("second"))))
 
         #expect(run.messages.count == 3)
-        guard case .user(_, nil, let first, _, _) = run.messages[0],
+        guard case .user(_, nil, let first, _, _, _) = run.messages[0],
               case .toolCall = run.messages[1],
-              case .user(_, nil, let second, _, _) = run.messages[2] else {
+              case .user(_, nil, let second, _, _, _) = run.messages[2] else {
             Issue.record("expected two separate prompt bubbles around the tool call")
             return
         }
@@ -524,7 +524,7 @@ struct ACPSubagentSessionTests {
         run.apply(.userMessageChunk(.init(content: .text("Running the pull tests."))))
 
         #expect(run.messages.count == 1)
-        guard case .user(_, nil, let text, _, _) = run.messages[0] else {
+        guard case .user(_, nil, let text, _, _, _) = run.messages[0] else {
             Issue.record("expected one prompt bubble")
             return
         }
@@ -571,8 +571,8 @@ struct ACPSubagentSessionTests {
         run.apply(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
 
         #expect(run.messages.count == 3)
-        guard case .user(_, "p1", let firstText, _, _) = run.messages[0],
-              case .user(_, "p1", let secondText, _, _) = run.messages[2] else {
+        guard case .user(_, "p1", let firstText, _, _, _) = run.messages[0],
+              case .user(_, "p1", let secondText, _, _, _) = run.messages[2] else {
             Issue.record("expected two separate prompt bubbles, not one concatenated row")
             return
         }
@@ -684,9 +684,9 @@ struct ACPSubagentSessionTests {
         // matched it as a continuation and appended to row 0 instead of
         // reconciling row 2 — losing "second task" as its own row.
         #expect(run.messages.count == 3)
-        guard case .user(_, _, let first, _, _) = run.messages[0],
+        guard case .user(_, _, let first, _, _, _) = run.messages[0],
               case .plan = run.messages[1],
-              case .user(_, _, let second, _, _) = run.messages[2] else {
+              case .user(_, _, let second, _, _, _) = run.messages[2] else {
             Issue.record("expected the plan to close the first prompt so the second stays separate")
             return
         }
@@ -710,9 +710,9 @@ struct ACPSubagentSessionTests {
         run.applyReplayed(.userMessageChunk(.init(content: .text("second task"))))
 
         #expect(run.messages.count == 3)
-        guard case .user(_, nil, let first, _, _) = run.messages[0],
+        guard case .user(_, nil, let first, _, _, _) = run.messages[0],
               case .plan = run.messages[1],
-              case .user(_, nil, let second, _, _) = run.messages[2] else {
+              case .user(_, nil, let second, _, _, _) = run.messages[2] else {
             Issue.record("expected the plan to close the first id-less prompt so the second stays separate")
             return
         }
@@ -748,8 +748,8 @@ struct ACPSubagentSessionTests {
         #expect(firstDirty == [0])
         #expect(secondDirty == [2])
         #expect(run.messages.count == 3)
-        guard case .user(_, _, let firstText, _, _) = run.messages[0],
-              case .user(_, _, let secondText, _, _) = run.messages[2] else {
+        guard case .user(_, _, let firstText, _, _, _) = run.messages[0],
+              case .user(_, _, let secondText, _, _, _) = run.messages[2] else {
             Issue.record("expected both reused-id prompts to stay in their own rows")
             return
         }
@@ -779,9 +779,9 @@ struct ACPSubagentSessionTests {
         #expect(firstDirty == [0])
         #expect(secondDirty == [2])
         #expect(run.messages.count == 3)
-        guard case .user(_, _, let recoveredText, _, _) = run.messages[0],
+        guard case .user(_, _, let recoveredText, _, _, _) = run.messages[0],
               case .agent = run.messages[1],
-              case .user(_, _, let persistedText, _, _) = run.messages[2] else {
+              case .user(_, _, let persistedText, _, _, _) = run.messages[2] else {
             Issue.record("expected the recovered prompt before the reply and the persisted prompt after it")
             return
         }
@@ -798,7 +798,7 @@ struct ACPSubagentSessionTests {
             content: .image(data: payload, uri: nil, mimeType: "image/png"))))
 
         #expect(run.messages.count == 1)
-        guard case .user(_, "p1", let text, let attachments, _) = run.messages[0] else {
+        guard case .user(_, "p1", let text, let attachments, _, _) = run.messages[0] else {
             Issue.record("expected one prompt bubble, not a dropped update")
             return
         }

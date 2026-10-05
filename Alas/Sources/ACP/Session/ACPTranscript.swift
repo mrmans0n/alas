@@ -392,7 +392,7 @@ final class ACPTranscript: ObservableObject {
 
     private func textMessageKey(for message: ACPMessage) -> TextMessageKey? {
         switch message {
-        case .user(_, let messageId?, _, _, _):
+        case .user(_, let messageId?, _, _, _, _):
             TextMessageKey(kind: .user, messageId: messageId)
         case .agent(_, let messageId?, _):
             TextMessageKey(kind: .agent, messageId: messageId)

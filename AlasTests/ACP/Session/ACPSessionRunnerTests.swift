@@ -518,7 +518,7 @@ struct ACPSessionRunnerTests {
             runner.session.transcript.streamingState = .streaming
         }
         mock.script(method: nativeSteering ? "_session/steering" : "session/prompt") { _ in
-            guard case .user(_, _, _, let attachments, _) = runner.session.transcript.messages.last,
+            guard case .user(_, _, _, let attachments, _, _) = runner.session.transcript.messages.last,
                   attachments.map(\.checkpointID) == [checkpointID] else {
                 throw JSONRPCError(code: -32000, message: "checkpoint missing", data: nil)
             }
@@ -592,7 +592,7 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil {
             session.transcript.messages.contains(where: {
-                if case .user(_, _, "hello", _, _) = $0 { return true }
+                if case .user(_, _, "hello", _, _, _) = $0 { return true }
                 return false
             })
         }
@@ -650,7 +650,7 @@ struct ACPSessionRunnerTests {
         }
         try await waitUntil { turns.count == 1 }
         #expect(observedQueueWasEmpty)
-        if case .user(let userID, _, _, _, _) = session.transcript.messages[0] {
+        if case .user(let userID, _, _, _, _, _) = session.transcript.messages[0] {
             #expect(turns[0].sessionID == "s")
             #expect(turns[0].incarnation == session.incarnation)
             #expect(turns[0].promptID == 0)
@@ -807,9 +807,9 @@ struct ACPSessionRunnerTests {
         }
         #expect(turns.isEmpty)
 
-        if case .user(_, _, let firstUser, _, _) = session.transcript.messages[0],
+        if case .user(_, _, let firstUser, _, _, _) = session.transcript.messages[0],
            case .agent(_, _, let firstAnswer) = session.transcript.messages[1],
-           case .user(_, _, let secondUser, _, _) = session.transcript.messages[2] {
+           case .user(_, _, let secondUser, _, _, _) = session.transcript.messages[2] {
             #expect(firstUser == "hello")
             #expect(firstAnswer.value == "first second")
             #expect(secondUser == "next")
@@ -2910,7 +2910,7 @@ struct ACPSessionRunnerTests {
             session.transcript.messages.count >= 2
         }
         guard case .agent(_, _, let text) = session.transcript.messages[0],
-              case .user(_, _, let prompt, _, _) = session.transcript.messages[1]
+              case .user(_, _, let prompt, _, _, _) = session.transcript.messages[1]
         else {
             Issue.record("expected buffered agent text before the next user prompt")
             return
@@ -5512,7 +5512,7 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.pendingMCPPreamble == nil)
         #expect(runner.session.mcpPreambleSent == true)
         #expect(runner.session.transcript.messages.contains {
-            if case .user(_, _, let text, _, _) = $0 {
+            if case .user(_, _, let text, _, _, _) = $0 {
                 return text.contains("alas-workspace-context")
             }
             return false

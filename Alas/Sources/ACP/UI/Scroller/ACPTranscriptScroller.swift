@@ -741,7 +741,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// The caption for a delegated prompt, resolved here because the
         /// sender's display name comes from the host, not the message.
         private static func delegatedLabel(host: ACPTranscriptScroller, message: ACPMessage) -> String? {
-            guard case .user(_, _, _, _, let source?) = message else { return nil }
+            guard case .user(_, _, _, _, let source?, _) = message else { return nil }
             return ACPDelegatedPromptSource.transcriptLabel(for: source, agentDisplayName: host.agentDisplayName)
         }
 

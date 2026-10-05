@@ -18,7 +18,7 @@ struct ACPSessionTests {
             messageId: "u-1", content: .resourceLink(uri: "file:///tmp/a.swift", name: "a.swift")
         )))
 
-        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.first else {
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages.first else {
             Issue.record("expected a user message")
             return
         }
@@ -1142,7 +1142,7 @@ struct ACPSessionTests {
 
         #expect(changed.isEmpty)
         #expect(session.transcript.messages.count == 2)
-        if case .user(_, _, let text, let attachments, _) = session.transcript.messages[0] {
+        if case .user(_, _, let text, let attachments, _, _) = session.transcript.messages[0] {
             #expect(text == "earlier prompt")
             #expect(attachments.isEmpty)
         } else {
@@ -1232,7 +1232,7 @@ struct ACPSessionTests {
         let checkpointID = UUID()
 
         #expect(session.attachCheckpoint(checkpointID, toUserMessage: promptID))
-        guard case .user(_, _, _, let attachments, _) = session.transcript.messages[0] else {
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages[0] else {
             Issue.record("expected user message")
             return
         }
@@ -1259,7 +1259,7 @@ struct ACPSessionTests {
 
         #expect(session.title == "Fix the session title inference")
         #expect(session.titleSource == .fallback)
-        if case .user(_, _, let text, _, _) = session.transcript.messages.first {
+        if case .user(_, _, let text, _, _, _) = session.transcript.messages.first {
             #expect(text == prompt)
         } else {
             Issue.record("expected the original prompt in the transcript")
@@ -3425,7 +3425,7 @@ extension ACPSessionTests {
         session.transcript.messages.compactMap { message -> String? in
             switch message {
             case .agent(_, _, let text): return "agent:\(text.value)"
-            case .user(_, _, let text, _, _): return "user:\(text)"
+            case .user(_, _, let text, _, _, _): return "user:\(text)"
             case .toolCall: return "toolCall"
             case .fileEdit: return "fileEdit"
             default: return nil

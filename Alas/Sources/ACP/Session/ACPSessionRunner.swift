@@ -3665,9 +3665,11 @@ extension ACPSessionRunner {
                         self.session.followsTranscriptTail = true
                         self.onResumeTranscriptTail?()
                     }
+                    let promptText = Self.textPreview(of: blocks)
                     let userMessageID = self.session.recordUserPrompt(
-                        text: Self.textPreview(of: blocks),
+                        text: promptText,
                         attachments: Self.attachments(of: blocks, draft: draft),
+                        pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                         delegatedSource: delegatedSource)
                     recordedMessageID = userMessageID
                     let recordedTitle = self.session.title
@@ -3687,7 +3689,7 @@ extension ACPSessionRunner {
                         // its own rows and remains fenced out here.
                         if self.isConnectionCurrent(),
                            let index = self.session.transcript.messages.firstIndex(where: {
-                               if case .user(let id, _, _, _, _) = $0 { return id == recordedMessageID }
+                               if case .user(let id, _, _, _, _, _) = $0 { return id == recordedMessageID }
                                return false
                            }) {
                             boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
@@ -3750,7 +3752,7 @@ extension ACPSessionRunner {
                     else { throw CancellationError() }
                     if self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
                        let index = self.session.transcript.messages.firstIndex(where: {
-                           if case .user(let id, _, _, _, _) = $0 { return id == messageID }
+                           if case .user(let id, _, _, _, _, _) = $0 { return id == messageID }
                            return false
                        }) {
                         self.persistIndices([index])
@@ -3901,7 +3903,7 @@ extension ACPSessionRunner {
     private func persistSteeringUserRow(from index: Int, userMessageID: UUID, boundaryDirty: Set<Int>, queueItemID: UUID) async -> Bool {
         guard holdsLeaseForWrite(),
               let userIndex = session.transcript.messages.firstIndex(where: {
-                  if case .user(let id, _, _, _, _) = $0 { return id == userMessageID }
+                  if case .user(let id, _, _, _, _, _) = $0 { return id == userMessageID }
                   return false
               }), userIndex >= index,
               let queueIndex = session.queue.firstIndex(where: { $0.id == queueItemID })
@@ -4149,8 +4151,10 @@ extension ACPSessionRunner {
                         self.session.followsTranscriptTail = true
                         self.onResumeTranscriptTail?()
                     }
-                    let messageID = self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
+                    let promptText = Self.textPreview(of: blocks)
+                    let messageID = self.session.recordUserPrompt(text: promptText,
                                                                   attachments: Self.attachments(of: blocks, draft: draft),
+                                                                  pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore {
@@ -4159,7 +4163,7 @@ extension ACPSessionRunner {
                     if !self.localTitleAttempted, delegatedSource == nil,
                        (!self.session.restoredFromPersistence || before == 0),
                        !self.session.transcript.messages.dropLast().contains(where: {
-                           if case .user(_, _, let text, _, let source) = $0, source == nil {
+                           if case .user(_, _, let text, _, let source, _) = $0, source == nil {
                                return ACPLocalTitleGenerator.candidate(from: text) != nil
                            }
                            return false
@@ -4189,7 +4193,7 @@ extension ACPSessionRunner {
                 await MainActor.run {
                     guard self.session.attachCheckpoint(checkpointID, toUserMessage: messageID),
                           let index = self.session.transcript.messages.firstIndex(where: { message in
-                              guard case .user(let id, _, _, _, _) = message else { return false }
+                              guard case .user(let id, _, _, _, _, _) = message else { return false }
                               return id == messageID
                           }) else { return }
                     self.persistIndices([index])

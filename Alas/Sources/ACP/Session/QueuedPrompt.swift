@@ -186,7 +186,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
                 answered = true
                 continue
             }
-            guard case .user(_, let text, let attachments, _) = message else { continue }
+            guard case .user(_, let text, let attachments, _, _) = message else { continue }
             guard answered else { return [] }
             return Set(queue.lazy.filter {
                 $0.transcriptRecorded
