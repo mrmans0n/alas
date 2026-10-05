@@ -5,6 +5,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case codex      = "codex-cli"
     case cursor     = "cursor-agent"
     case gemini     = "gemini"
+    case antigravity = "antigravity"
     case opencode   = "opencode"
     case pi         = "pi"
     case omp        = "omp"
@@ -18,6 +19,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .codex:      return "Codex"
         case .cursor:     return "Cursor"
         case .gemini:     return "Gemini CLI"
+        case .antigravity: return "Antigravity"
         case .opencode:   return "opencode"
         case .pi:         return "Pi"
         case .omp:        return "OMP"
@@ -31,6 +33,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .codex:      return ["codex"]
         case .cursor:     return ["cursor-agent"]
         case .gemini:     return ["gemini"]
+        case .antigravity: return ["agy"]
         case .opencode:   return ["opencode", "opencode2"]
         case .pi:         return ["pi"]
         case .omp:        return ["omp"]
@@ -47,6 +50,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .codex:      return .codex
         case .cursor:     return .cursor
         case .gemini:     return .gemini
+        case .antigravity: return .antigravity
         case .opencode:   return .opencode
         case .pi:         return .pi
         case .omp:        return .omp
@@ -94,6 +98,7 @@ extension AgentKind {
         case .codex:    return .codex
         case .cursor:   return .cursor
         case .gemini:   return .gemini
+        case .antigravity: return .antigravity
         case .opencode: return .opencode
         case .pi:       return .pi
         case .omp:      return .omp

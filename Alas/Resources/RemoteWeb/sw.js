@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v75";
+const CACHE_NAME = "alas-remote-shell-v76";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -25,6 +25,7 @@ const SHELL_ASSETS = [
   "/agent-icons/agent-omp.svg",
   "/agent-icons/agent-opencode.png",
   "/agent-icons/agent-gemini.png",
+  "/agent-icons/agent-antigravity.svg",
   "/agent-icons/agent-copilot.png",
 ];
 

@@ -6,6 +6,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
     case codex
     case cursor
     case gemini
+    case antigravity
     case opencode
     case pi
     case omp
@@ -19,6 +20,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         case .codex:  return "Codex"
         case .cursor: return "Cursor"
         case .gemini: return "Gemini CLI"
+        case .antigravity: return "Antigravity"
         case .opencode: return "opencode"
         case .pi: return "Pi"
         case .omp: return "OMP"
@@ -32,6 +34,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         case .codex:    return "agent-codex"
         case .cursor:   return "agent-cursor"
         case .gemini:   return "agent-gemini"
+        case .antigravity: return "agent-antigravity"
         case .opencode: return "agent-opencode"
         case .pi:       return "agent-pi"
         case .omp:      return "agent-omp"
