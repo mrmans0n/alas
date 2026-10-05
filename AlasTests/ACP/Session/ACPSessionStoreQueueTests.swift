@@ -72,6 +72,8 @@ struct ACPSessionStoreQueueTests {
               (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), true),
               (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], lastError: "failed"), false),
               (QueuedPrompt(blocks: [.text("ordinary")]), false),
+              (QueuedPrompt(blocks: [.text("held")], deliveryUncertain: true, awaitingInterruptionResume: true), true),
+              (QueuedPrompt(blocks: [.text("held earlier")], deliveryUncertain: true), false),
           ])
     func interruptedQueueSessionIds(item: QueuedPrompt, expected: Bool) throws {
         let (store, sid) = try mkStore()

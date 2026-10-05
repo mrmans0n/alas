@@ -1327,7 +1327,11 @@ extension ACPSessionStore {
     /// app last exited, or the continuation queued for one, so the turn may
     /// need to be continued.
     func interruptedQueueSessionIds() throws -> [String] {
-        try queueSessionIds { $0.status == .sending || $0.isInterruptedTurnContinuation }
+        try queueSessionIds {
+            $0.status == .sending
+                || $0.isInterruptedTurnContinuation
+                || ($0.awaitingInterruptionResume && $0.deliveryUncertain)
+        }
     }
 
     private func queueSessionIds(where matches: (QueuedPrompt) -> Bool) throws -> [String] {

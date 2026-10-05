@@ -2787,7 +2787,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// the only record that the turn needs continuing. Returns whether the
     /// queue changed.
     private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) -> Bool {
-        interruptedQueueItemIDs.formUnion(newlyUncertain)
+        for index in queue.indices where newlyUncertain.contains(queue[index].id) {
+            queue[index].awaitingInterruptionResume = true
+        }
         guard !deliveredQueuedPromptIDs.isEmpty else { return false }
         let count = queue.count
         queue.removeAll { item in
@@ -2809,11 +2811,6 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), at: insertAt)
     }
 
-    /// Prompts whose delivery became uncertain because the connection that
-    /// carried them ended, recorded since the last attach. Prompts already
-    /// uncertain when restored are not included: they were interrupted
-    /// before this launch and stay held for the user.
-    private var interruptedQueueItemIDs: Set<UUID> = []
     static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText
 
     /// Consumes the interruptions recorded since the last attach. With
@@ -2830,9 +2827,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// prompt as newly interrupted and resend it.
     @discardableResult
     func consumeInterruptedTurns(resume: Bool) -> Bool {
-        let itemIDs = interruptedQueueItemIDs
+        let itemIDs = Set(queue.filter(\.awaitingInterruptionResume).map(\.id))
         var answeredTurn = false
-        interruptedQueueItemIDs = []
+        for index in queue.indices { queue[index].awaitingInterruptionResume = false }
         guard resume else { return !itemIDs.isEmpty }
         var changed = !itemIDs.isEmpty
         // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent

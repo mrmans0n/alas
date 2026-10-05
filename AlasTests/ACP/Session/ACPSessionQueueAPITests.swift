@@ -451,6 +451,23 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)]])
     }
 
+    @Test("an interruption an attach never consumed is still resumed on the next launch")
+    func unconsumedInterruptionSurvivesRelaunch() throws {
+        let s = mkSession()
+        let item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+        #expect(s.queue[0].awaitingInterruptionResume)
+
+        // The attach failed before consuming it; what was persisted is restored.
+        let stored = try JSONDecoder().decode([QueuedPrompt].self, from: JSONEncoder().encode(s.queue))
+        let relaunched = mkSession()
+        relaunched.restoreQueue(stored, markLegacySendingUncertain: true)
+
+        #expect(relaunched.consumeInterruptedTurns(resume: true))
+        #expect(relaunched.queue.map(\.id) == [item.id])
+        #expect(!relaunched.queue[0].deliveryUncertain && !relaunched.queue[0].awaitingInterruptionResume)
+    }
+
     @Test("interrupted prompts stay held without the setting and are persisted as held",
           arguments: [false, true])
     func interruptedPromptsStayHeld(settingOnNextLaunch: Bool) throws {

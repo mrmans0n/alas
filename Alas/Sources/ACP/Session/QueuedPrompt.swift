@@ -46,6 +46,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// True when this prompt may have reached a broker but completion could
     /// not be confirmed. The queue flusher must not resend it automatically.
     var deliveryUncertain: Bool
+    /// Set when a connection ending left this prompt's delivery uncertain, and
+    /// cleared once an attach has consumed that interruption. Persisted so a
+    /// launch can find the session again when an earlier attach failed after
+    /// the held prompt was saved. A prompt that was already uncertain when
+    /// restored never gets it: that interruption predates this launch.
+    var awaitingInterruptionResume: Bool = false
     /// Set only on the resume item Alas schedules after a usage limit. It
     /// carries the limit so a relaunch restores the session's Limited state.
     var usageLimit: ACPUsageLimit?
@@ -90,6 +96,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          dispatchCount: Int = 0,
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
          deliveryUncertain: Bool = false,
+         awaitingInterruptionResume: Bool = false,
          usageLimit: ACPUsageLimit? = nil)
     {
         self.id = id
@@ -107,12 +114,14 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.dispatchCount = dispatchCount
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
+        self.awaitingInterruptionResume = awaitingInterruptionResume
         self.usageLimit = usageLimit
     }
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
+        case awaitingInterruptionResume
         case usageLimit
     }
 
@@ -133,6 +142,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         dispatchCount = (try? c.decode(Int.self, forKey: .dispatchCount)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
+        awaitingInterruptionResume = (try? c.decode(Bool.self, forKey: .awaitingInterruptionResume)) ?? false
         usageLimit = try? c.decode(ACPUsageLimit.self, forKey: .usageLimit)
         if deliveryUncertain, lastError == nil {
             lastError = Self.deliveryUncertaintyMessage
