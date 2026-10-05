@@ -22,28 +22,4 @@ final class TitlelessWindow: NSWindow {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
     }
-
-    /// Whether a mouse-down at `pointerInWindow` (window coordinates) should
-    /// be allowed to start a system window drag.
-    ///
-    /// The system titlebar drag tracker claims mouse-downs anywhere in the
-    /// titlebar band, which breaks tab reordering there, so a mouse-down
-    /// landing inside that band must not be allowed to move the window.
-    /// Everywhere else it must: when a display is removed, macOS only nudges
-    /// a non-movable window partly on screen, and never puts it back when
-    /// that display returns, so the window must default to movable and only
-    /// become non-movable for the span of a titlebar-band gesture.
-    static func allowsSystemMove(
-        pointerInWindow: NSPoint,
-        windowSize: NSSize,
-        contentLayoutRect: NSRect
-    ) -> Bool {
-        let titlebarBand = NSRect(
-            x: 0,
-            y: contentLayoutRect.maxY,
-            width: windowSize.width,
-            height: windowSize.height - contentLayoutRect.maxY
-        )
-        return !titlebarBand.contains(pointerInWindow)
-    }
 }

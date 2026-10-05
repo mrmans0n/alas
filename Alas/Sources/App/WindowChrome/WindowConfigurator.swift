@@ -2,76 +2,81 @@ import SwiftUI
 import AppKit
 
 struct WindowConfigurator: NSViewRepresentable {
-    /// When true, the system titlebar drag is blocked for gestures that start
-    /// in the titlebar band, so the main workspace window's top tab strip is
-    /// never hijacked. Explicit `WindowDragHandle` regions move the window
-    /// there instead. Secondary titleless windows keep the system behavior.
-    var disablesTitlebarDrag: Bool = false
+    var blocksSystemTitlebarDrag = false
 
     func makeNSView(context: Context) -> NSView {
-        WindowConfigurationView(disablesTitlebarDrag: disablesTitlebarDrag)
+        WindowConfigurationView(blocksSystemTitlebarDrag: blocksSystemTitlebarDrag)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let view = nsView as? WindowConfigurationView else { return }
-        view.disablesTitlebarDrag = disablesTitlebarDrag
+        view.blocksSystemTitlebarDrag = blocksSystemTitlebarDrag
         view.configureWindowIfNeeded()
     }
 }
 
-/// Configures the hosting window and, when `disablesTitlebarDrag` is set,
-/// blocks the system titlebar drag tracker from claiming clicks that land in
-/// the titlebar band (where the main workspace window's top tab strip sits).
+/// Keeps the main workspace window non-movable so AppKit's native titlebar
+/// tracker cannot steal tab drags. Explicit `WindowDragHandle` regions move
+/// the window directly and continue to work while `isMovable` is false.
 ///
-/// `window.isMovable` is the only lever AppKit exposes for this, and it's a
-/// window-wide flag, not one scoped to a screen region. The window stays
-/// movable at all times — which is what lets macOS relocate and restore it
-/// through display and sleep/wake changes — except for the exact span of a
-/// mouse-down-to-mouse-up gesture that starts in the titlebar band. The
-/// system's own drag-on-background behavior only ever triggers from a
-/// mouse-down, so a local event monitor re-derives the answer fresh from the
-/// real event at that moment, rather than from cached pointer-hover state
-/// that a fast drag crossing into the band without a `mouseMoved` could leave
-/// stale, and rather than a reapply step that could race a live display
-/// change landing between "force movable" and "restore the guard".
+/// AppKit needs the window movable while displays sleep or reconfigure so it
+/// can relocate and later restore the frame. A process-lifetime Core Graphics
+/// callback announces reconfiguration before it begins; the AppKit notification
+/// closes that window after the new screen geometry has settled.
 final class WindowConfigurationView: NSView {
-    var disablesTitlebarDrag: Bool {
+    var blocksSystemTitlebarDrag: Bool {
         didSet {
-            guard !disablesTitlebarDrag else { return }
-            window?.isMovable = true
+            guard oldValue != blocksSystemTitlebarDrag else { return }
+            applyDragPolicy()
         }
     }
 
-    private var mouseDownMonitor: Any?
-    private var mouseUpMonitor: Any?
+    private struct SystemWindowMoveReasons: OptionSet {
+        let rawValue: Int
+
+        static let displayReconfiguration = Self(rawValue: 1 << 0)
+        static let screenSleep = Self(rawValue: 1 << 1)
+    }
+
+    private var systemWindowMoveReasons: SystemWindowMoveReasons = []
+    private var displayReconfigurationGeneration: UInt = 0
+    private var displayWillReconfigureObserver: NSObjectProtocol?
     private var screensDidSleepObserver: NSObjectProtocol?
+    private var screensDidWakeObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
 
-    init(disablesTitlebarDrag: Bool) {
-        self.disablesTitlebarDrag = disablesTitlebarDrag
+    init(blocksSystemTitlebarDrag: Bool = false) {
+        self.blocksSystemTitlebarDrag = blocksSystemTitlebarDrag
         super.init(frame: .zero)
-        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            self?.refreshMovability(for: event)
-            return event
+
+        displayWillReconfigureObserver = NotificationCenter.default.addObserver(
+            forName: .windowDisplayWillReconfigure,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                _ = self?.prepareForSystemWindowMove()
+            }
         }
-        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-            self?.restoreMovability(for: event)
-            return event
-        }
-        // Displays that sleep (lock, idle) or a live disconnect/reconnect/
-        // resolution change could otherwise catch the window non-movable if
-        // its last mouse-down landed in the titlebar band and the matching
-        // mouse-up was somehow missed. Force movable back on as a safety net;
-        // there's nothing to "reapply" afterward, since the mouse-down
-        // monitor re-derives the correct value from scratch on the very next
-        // click.
-        screensDidSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        _ = installWindowDisplayReconfigurationCallback
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        screensDidSleepObserver = workspaceCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.window?.isMovable = true
+                self?.beginSystemWindowMove(.screenSleep)
+            }
+        }
+        screensDidWakeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.endSystemWindowMove(.screenSleep)
             }
         }
         screenParametersObserver = NotificationCenter.default.addObserver(
@@ -80,7 +85,13 @@ final class WindowConfigurationView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.window?.isMovable = true
+                guard let self else { return }
+                let generation = self.prepareForSystemWindowMove()
+                RunLoop.main.perform { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.finishDisplayReconfiguration(generation)
+                    }
+                }
             }
         }
     }
@@ -91,14 +102,15 @@ final class WindowConfigurationView: NSView {
     }
 
     isolated deinit {
-        if let mouseDownMonitor {
-            NSEvent.removeMonitor(mouseDownMonitor)
-        }
-        if let mouseUpMonitor {
-            NSEvent.removeMonitor(mouseUpMonitor)
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        if let displayWillReconfigureObserver {
+            NotificationCenter.default.removeObserver(displayWillReconfigureObserver)
         }
         if let screensDidSleepObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(screensDidSleepObserver)
+            workspaceCenter.removeObserver(screensDidSleepObserver)
+        }
+        if let screensDidWakeObserver {
+            workspaceCenter.removeObserver(screensDidWakeObserver)
         }
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
@@ -113,19 +125,63 @@ final class WindowConfigurationView: NSView {
     func configureWindowIfNeeded() {
         guard let window else { return }
         TitlelessWindow.configure(window)
+        applyDragPolicy()
     }
 
-    private func refreshMovability(for event: NSEvent) {
-        guard disablesTitlebarDrag, let window, event.window === window else { return }
-        window.isMovable = TitlelessWindow.allowsSystemMove(
-            pointerInWindow: event.locationInWindow,
-            windowSize: window.frame.size,
-            contentLayoutRect: window.contentLayoutRect
+    @discardableResult
+    func prepareForSystemWindowMove() -> UInt {
+        displayReconfigurationGeneration &+= 1
+        beginSystemWindowMove(.displayReconfiguration)
+        return displayReconfigurationGeneration
+    }
+
+    func finishDisplayReconfiguration(_ generation: UInt) {
+        guard generation == displayReconfigurationGeneration else { return }
+        endSystemWindowMove(.displayReconfiguration)
+    }
+
+    private func beginSystemWindowMove(_ reason: SystemWindowMoveReasons) {
+        systemWindowMoveReasons.insert(reason)
+        applyDragPolicy()
+    }
+
+    private func endSystemWindowMove(_ reason: SystemWindowMoveReasons) {
+        systemWindowMoveReasons.remove(reason)
+        applyDragPolicy()
+    }
+
+    private func applyDragPolicy() {
+        window?.isMovable = !blocksSystemTitlebarDrag || !systemWindowMoveReasons.isEmpty
+    }
+}
+
+private extension Notification.Name {
+    static let windowDisplayWillReconfigure =
+        Notification.Name("Alas.windowDisplayWillReconfigure")
+}
+
+private let installWindowDisplayReconfigurationCallback: Void = {
+    CGDisplayRegisterReconfigurationCallback(
+        windowDisplayReconfigurationCallback,
+        nil
+    )
+}()
+
+private func windowDisplayReconfigurationCallback(
+    _ display: CGDirectDisplayID,
+    _ flags: CGDisplayChangeSummaryFlags,
+    _ userInfo: UnsafeMutableRawPointer?
+) {
+    guard flags.contains(.beginConfigurationFlag) else { return }
+    let notify = {
+        NotificationCenter.default.post(
+            name: .windowDisplayWillReconfigure,
+            object: nil
         )
     }
-
-    private func restoreMovability(for event: NSEvent) {
-        guard let window, event.window === window else { return }
-        window.isMovable = true
+    if Thread.isMainThread {
+        notify()
+    } else {
+        DispatchQueue.main.sync(execute: notify)
     }
 }

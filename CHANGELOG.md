@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep center-pane tabs draggable without moving the window while preserving window dragging from empty tab-bar space.
+
 ## [0.20.2] - 2026-10-05
 
 ### ✨ Features
