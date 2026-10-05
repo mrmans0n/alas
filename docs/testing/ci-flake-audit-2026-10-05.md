@@ -62,6 +62,14 @@ passed in a selection of 251 tests across three suites.
 SwiftFormat lint and `git diff --check` passed. Configured CI remains a separate
 verification gate.
 
+The passing local selections covered these suites:
+`ACPSessionRunnerQueueTests`, `ACPSessionRunnerTests`, `NextPromptSettingsTests`,
+`ACPSessionForkManagerTests`, `ACPSessionManagerAttachRestoreTests`,
+`PairedComposerTextControlsTests`, `RemoteServerIntegrationTests`,
+`NextPromptInferenceTests`, `GGServiceActionsTests`, `NextPromptCoordinatorTests`,
+`MermaidRenderServiceTests`, `EditorInlayLayoutTests`,
+`WorkspaceOwnedWorktreeDeletionGuardTests`, and `InlayHintsFeatureTests`.
+
 The local Network framework probe ran 1,000 connections each with default,
 explicit loopback source, and address-reuse parameters. All passed; the probe
 did not reproduce the CI collision. The collision diagnosis comes from the CI
@@ -74,11 +82,37 @@ shards passed.
 
 ## Batch capacity follow-up
 
-Two newer PR runs reached the ordinary batch 8 watchdog:
+Three newer PR runs reached the ordinary batch 8 watchdog:
 [37310782730](https://github.com/mrmans0n/alas/actions/runs/37310782730) and
-[37312299457](https://github.com/mrmans0n/alas/actions/runs/37312299457).
-The latter passed all 1,708 definitions in 320.530 seconds, then was interrupted
-before Xcode finished its result bundle. Ten batches reduce per-invocation work
+[37312299457](https://github.com/mrmans0n/alas/actions/runs/37312299457), followed by
+[37318167234](https://github.com/mrmans0n/alas/actions/runs/37318167234).
+The second passed all 1,708 definitions in 320.530 seconds, then was interrupted
+before Xcode finished its result bundle. The third passed all 1,660 tests in
+330.862 seconds before interruption. Main
+[37322160890](https://github.com/mrmans0n/alas/actions/runs/37322160890) passed
+every check and executed all 12,816 eligible definitions, but batch 8 took
+355.61 seconds against its 360-second deadline.
+
+Ten batches reduce per-invocation work
 while keeping the 360-second watchdog. A replay of the compiled inventory keeps
 all 12,807 scheduled definitions and 22 exclusions; its largest ordinary batch
 falls from 1,933 to 1,559 definitions. No test or suite is quarantined.
+All 44 Swift inventory harness tests and the CI workflow contract passed.
+
+The first ten-batch [run 37327194542](https://github.com/mrmans0n/alas/actions/runs/37327194542)
+executed all 12,816 eligible definitions with no runtime skips or missing reports.
+Its largest batch took 262.73 seconds. It failed two `WorktreeTrashTests` cleaner
+fixtures that asserted deletion after five seconds while discarding the detached
+process's stderr and exit status. This result does not establish a permission or
+immutable-file deletion defect.
+
+The cleaner fixtures now execute the real command captured through the launcher,
+await its exit through the existing process runner and watchdog, and require
+successful exit with stderr before asserting deletion. The overlapping replacement
+test with a fixed sleep is removed; the retained replacement test still swaps
+after Swift identity validation and exercises the child's inode guard.
+The original `WorktreeTrashTests` suite passed 16 tests locally. Extending its
+deletion test with a six-second cleaner delay failed only that case's two deletion
+assertions before the repair. After awaiting exit, all 15 tests passed in
+8.240 seconds, including the delayed case. SwiftFormat lint and `git diff --check`
+also passed. This follow-up removes one test definition overall.
