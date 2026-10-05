@@ -652,6 +652,11 @@ struct NextPromptCoordinatorTests {
         await manager.flushPersistence()
         manager.markSessionVisible(id: session.id)
         try #require(await manager.acquireWriterLease(sessionId: session.id))
+        // This test drives lease observation explicitly. Drain the automatic
+        // heartbeat so it cannot race the takeover and consume our observation.
+        let heartbeat = manager._heartbeatTasks.removeValue(forKey: session.id)
+        heartbeat?.cancel()
+        await heartbeat?.value
         let generator = Generator()
         let coordinator = NextPromptCoordinator(engine: generator) { candidate in
             .live(session: session, turn: candidate, environment: environment)

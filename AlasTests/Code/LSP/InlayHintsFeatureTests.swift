@@ -148,13 +148,15 @@ struct InlayHintsFeatureTests {
         var applications: [[NSRange]] = []
         let hint = try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(#"{"position":{"line":0,"character":1},"label":": Int"}"#.utf8)))
         let succeeding = NSRange(location: 0, length: 10), failing = NSRange(location: 10, length: 10)
+        let expiry = AsyncStream<Void>.makeStream()
         let feature = InlayHintsFeature(request: { range in range == succeeding ? [hint] : nil },
                                         apply: { hints, outstanding in applications.append(outstanding)
-                                        #expect(hints.map(\.label) == [": Int"]) }, clear: { cleared += 1 })
+                                        #expect(hints.map(\.label) == [": Int"]) }, clear: { cleared += 1 },
+                                        presentationExpirySleep: { for await _ in expiry.stream { break } })
         defer { feature.stop() }
         feature.invalidate(preservingPresentation: true)
         feature.refresh(ranges: [succeeding, failing], debounce: .zero)
-        for _ in 0..<100 where applications.count < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        await feature.awaitRequestsForTesting()
         // The succeeding chunk already answered, so it is not outstanding —
         // only the still-failing sibling is, and only until the watchdog
         // gives up on it.
@@ -163,7 +165,8 @@ struct InlayHintsFeatureTests {
         // sibling's retry window has been open long enough with nothing else
         // to wait on, instead of clearing everything — and gives up on the
         // failing chunk for good rather than reporting it outstanding again.
-        for _ in 0..<300 where applications.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        expiry.continuation.yield()
+        await feature.awaitPresentationExpiryForTesting()
         #expect(applications.count == 2)
         #expect(applications.last == [])
         #expect(cleared == 0)
@@ -171,11 +174,14 @@ struct InlayHintsFeatureTests {
 
     @Test func retainedPresentationExpiresIfNoFreshResponseArrives() async throws {
         var cleared = 0
-        let feature = InlayHintsFeature(request: { _ in nil }, apply: { _, _ in }, clear: { cleared += 1 })
+        let expiry = AsyncStream<Void>.makeStream()
+        let feature = InlayHintsFeature(request: { _ in nil }, apply: { _, _ in }, clear: { cleared += 1 },
+                                        presentationExpirySleep: { for await _ in expiry.stream { break } })
         defer { feature.stop() }
         feature.invalidate(preservingPresentation: true)
         #expect(cleared == 0)
-        for _ in 0..<300 where cleared == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        expiry.continuation.yield()
+        await feature.awaitPresentationExpiryForTesting()
         #expect(cleared == 1)
     }
 

@@ -171,16 +171,15 @@ struct PairedComposerTextControlsTests {
         #expect(editor.undoManager?.canUndo == true)
 
         editor.undoManager?.undo()
-        await drain(controller.view)
-
-        // The binding catches up through `controlTextDidChange`, which AppKit only
-        // posts for a field editor inside a running app, so this harness can only
-        // assert that the paired edit is a single undoable step.
+        // Undo is synchronous. Assert before SwiftUI can reapply the binding;
+        // this harness does not receive AppKit's undo text-change notification.
         #expect(editor.string == "value")
 
         field.stringValue = editor.string
         field.sendAction(field.action, to: field.target)
         #expect(submitCount == 1)
+        #expect(model.text == "value")
+        await drain(controller.view)
 
         let sink = try #require(firstSubview(of: ComposerFocusSink.self, in: controller.view))
         #expect(window.makeFirstResponder(sink))

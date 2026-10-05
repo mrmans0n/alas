@@ -86,7 +86,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let restart = Task { await manager.restartConnection(to: session.id) }
         let duplicateRestart = Task { await manager.restartConnection(to: session.id) }
 
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             session.agentState == .ready && launchCount == 1
         }
         #expect(await setupGate.hasEntered)
@@ -230,11 +230,11 @@ struct ACPSessionManagerAttachRestoreTests {
                 await manager.restartConnection(to: session.id)
             }
         }
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             await staleInitializeGate.hasEntered
         }
         let currentRestart = Task { await manager.restartConnection(to: session.id) }
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             await currentInitializeGate.hasEntered && session.agentState == .spawning
         }
 
@@ -4579,9 +4579,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let attachTask = Task { @MainActor in
             await manager.attach(to: session.id, freshlyCreated: false)
         }
-        for _ in 0 ..< 50 where !(await newSessionGate.hasEntered) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try await waitUntilAsync { await newSessionGate.hasEntered }
         #expect(await newSessionGate.hasEntered)
         await manager.queueForceSend(for: session.id, itemId: forced.id)
         await newSessionGate.release()

@@ -8,6 +8,34 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NextPromptSettingsTests {
+    @Test(arguments: [
+        (NextPromptInferenceState.ready, true), (.running, true), (.unloading, true),
+        (.failed, true), (.unavailable, false), (.retryRequired, false)
+    ])
+    func enabledSuggestionsAcceptWorkWhileTheRuntimeDrains(phase: NextPromptInferenceState, available: Bool) async {
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let state = AppState(store: SettingsStore(), persistenceErrorHandler: { _, _ in }, localTextSupported: true)
+        state.config.nextPromptSuggestionsEnabled = true
+        state.nextPromptRuntimeEnabled = true
+        state.localTextModelState = .ready
+        state.nextPromptInferenceState = phase
+        let session = ACPSession(id: "s", agentId: "test", worktreeId: "w", title: "Test")
+        session.agentState = .ready
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
+            promptID: session.allocatePromptID(), userMessageID: userID,
+            transcriptRevision: session.transcript.messagesGeneration)
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+
+        #expect((state.nextPromptSnapshot(session: session, turn: turn, environment: environment) != nil) == available)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test(arguments: [false, true])
     func startupInspectsInstalledModelOnlyWhenSupported(_ supported: Bool) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()

@@ -61,6 +61,10 @@ actor MermaidRenderService {
 
     private var inFlight: [MermaidRenderKey: InFlightRender] = [:]
 
+#if DEBUG
+    var onConsumerCancellationForTesting: (@Sendable () -> Void)?
+#endif
+
     init(backend: any MermaidRenderingBackend) {
         self.backend = backend
     }
@@ -154,6 +158,9 @@ actor MermaidRenderService {
         renderID: UUID,
         consumerID: UUID
     ) {
+#if DEBUG
+        defer { onConsumerCancellationForTesting?() }
+#endif
         guard var render = inFlight[key], render.id == renderID,
               render.consumerIDs.remove(consumerID) != nil
         else { return }
