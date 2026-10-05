@@ -29,6 +29,9 @@ struct NativePeerRightPaneView: View {
                         tabContent
                             .scrollIndicators(.hidden)
                     }
+                    // Short content (a one-line message) must not let the
+                    // stack shrink and float to the vertical center.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { railBodyWidth = $0 }
                     .transition(PaneCollapseMotion.transition(
                         edge: .trailing,
