@@ -52,6 +52,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// the held prompt was saved. A prompt that was already uncertain when
     /// restored never gets it: that interruption predates this launch.
     var awaitingInterruptionResume: Bool = false
+    /// Marks the continuation Alas queues for a turn a restart interrupted, so
+    /// launch recovery never mistakes a user's own prompt for it.
+    var interruptedTurnContinuation: Bool = false
     /// Set only on the resume item Alas schedules after a usage limit. It
     /// carries the limit so a relaunch restores the session's Limited state.
     var usageLimit: ACPUsageLimit?
@@ -73,9 +76,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         "Your previous turn was interrupted because Alas restarted. Continue where you left off."
 
     /// The continuation queued for a turn an app restart interrupted. It is an
-    /// ordinary pending row, so launch recovery recognizes it by its content.
+    /// ordinary pending row, so launch recovery recognizes it by its flag.
     var isInterruptedTurnContinuation: Bool {
-        status == .pending && lastError == nil && blocks == [.text(Self.interruptedTurnContinueText)]
+        interruptedTurnContinuation && status == .pending && lastError == nil
     }
 
     static let deliveryUncertaintyMessage =
@@ -97,6 +100,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
          deliveryUncertain: Bool = false,
          awaitingInterruptionResume: Bool = false,
+         interruptedTurnContinuation: Bool = false,
          usageLimit: ACPUsageLimit? = nil)
     {
         self.id = id
@@ -115,13 +119,14 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
         self.awaitingInterruptionResume = awaitingInterruptionResume
+        self.interruptedTurnContinuation = interruptedTurnContinuation
         self.usageLimit = usageLimit
     }
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
-        case awaitingInterruptionResume
+        case awaitingInterruptionResume, interruptedTurnContinuation
         case usageLimit
     }
 
@@ -143,6 +148,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
         awaitingInterruptionResume = (try? c.decode(Bool.self, forKey: .awaitingInterruptionResume)) ?? false
+        interruptedTurnContinuation = (try? c.decode(Bool.self, forKey: .interruptedTurnContinuation)) ?? false
         usageLimit = try? c.decode(ACPUsageLimit.self, forKey: .usageLimit)
         if deliveryUncertain, lastError == nil {
             lastError = Self.deliveryUncertaintyMessage

@@ -2485,11 +2485,12 @@ final class ACPSessionManager: ObservableObject {
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
         session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
-        if session.restoreQueue(
+        let queueChangedAtRestore = session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
             persistedUsageLimit: result.row.usageLimit
-        ) {
+        )
+        if queueChangedAtRestore {
             persistQueue(for: session)
         }
         // The composer is rendered (and focused) the moment the placeholder
@@ -2549,12 +2550,14 @@ final class ACPSessionManager: ObservableObject {
         // toolbar during the hydration window should win against the value
         // we captured before the user typed it.
         session.hydrationState = .ready
-        // With the setting off nothing will consume this launch's interruption
-        // (a scheduled session may not attach at all), so hold it now and save
-        // it. Done after `.ready`: the restore-time save above is skipped while
-        // loading. Left stored as `.sending`, enabling the setting before the
-        // next launch would resend a prompt that may already have been delivered.
-        if !continueInterruptedSessions(), session.consumeInterruptedTurns(resume: false) {
+        // Save what restoring changed. The restore-time save above is skipped
+        // while loading, and a scheduled session may never attach, so nothing
+        // else would write it. With the setting off this launch's interruption
+        // is also held now. Left stored as `.sending`, enabling the setting
+        // before the next launch would resend a prompt that may already have
+        // been delivered.
+        let heldInterruption = !continueInterruptedSessions() && session.consumeInterruptedTurns(resume: false)
+        if queueChangedAtRestore || heldInterruption {
             persistQueue(for: session)
         }
         self.recent = result.recent

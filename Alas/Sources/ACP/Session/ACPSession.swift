@@ -2607,6 +2607,7 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         guard queue[idx].canRemoveFromQueue else { return }
         queue[idx].blocks = blocks
+        queue[idx].interruptedTurnContinuation = false
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
         queue[idx].dispatchedBrokerGeneration = nil
@@ -2808,7 +2809,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func enqueueInterruptedTurnContinuation() {
         let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
-        queue.insert(QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), at: insertAt)
+        queue.insert(
+            QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true),
+            at: insertAt)
     }
 
     static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText

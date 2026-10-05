@@ -69,8 +69,11 @@ struct ACPSessionStoreQueueTests {
     @Test("interruptedQueueSessionIds finds a sending prompt or a queued continuation, not other pending items",
           arguments: [
               (QueuedPrompt(blocks: [.text("half sent")], status: .sending), true),
-              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), true),
-              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], lastError: "failed"), false),
+              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true), true),
+              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], lastError: "failed",
+                            interruptedTurnContinuation: true), false),
+              // A user's own prompt that happens to match the text.
+              (QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)]), false),
               (QueuedPrompt(blocks: [.text("ordinary")]), false),
               (QueuedPrompt(blocks: [.text("held")], deliveryUncertain: true, awaitingInterruptionResume: true), true),
               (QueuedPrompt(blocks: [.text("held earlier")], deliveryUncertain: true), false),
