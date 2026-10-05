@@ -57,6 +57,12 @@ struct NativePeerSidebarView: View {
             }
             .onAppear { expandNewPeers() }
             .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
+            .sheet(item: Binding(
+                get: { client.newSession },
+                set: { if $0 == nil { client.cancelNewSession() } }
+            )) { _ in
+                NativePeerNewSessionSheet(client: client)
+            }
         }
     }
 
@@ -148,6 +154,10 @@ struct NativePeerSidebarView: View {
                 repo: repo,
                 icon: repo.name == NativePeerRepoGroup.unassignedName ? nil : icon(repo.name),
                 collapsed: collapsed,
+                peerName: peer.name,
+                onNewSession: peer.state.carriesSessions && repo.projectId != nil
+                    ? { client.beginNewSession(peer: peer, repo: repo) }
+                    : nil,
                 onToggle: {
                     if collapsed { collapsedRepoIDs.remove(key) }
                     else { collapsedRepoIDs.insert(key) }
@@ -296,6 +306,9 @@ private struct NativePeerRepoHeaderRow: View {
     let repo: NativePeerRepoGroup
     let icon: ProjectIcon?
     let collapsed: Bool
+    let peerName: String
+    /// Nil hides the "+": the "Other sessions" bucket and offline peers.
+    let onNewSession: (() -> Void)?
     let onToggle: () -> Void
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -324,10 +337,19 @@ private struct NativePeerRepoHeaderRow: View {
                 if collapsed, repo.attentionCount > 0 {
                     NativePeerAttentionCount(count: repo.attentionCount)
                 }
-                Text("\(repo.worktrees.count)")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.color("fg-faint"))
-                    .monospacedDigit()
+                if let onNewSession {
+                    SidebarHeaderCountPlusButton(
+                        count: repo.worktrees.count,
+                        rowHovering: hovering,
+                        help: "New session in \(repo.name) on \(peerName)",
+                        action: onNewSession
+                    )
+                } else {
+                    Text("\(repo.worktrees.count)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .monospacedDigit()
+                }
             }
             .padding(.trailing, 3)
         }
