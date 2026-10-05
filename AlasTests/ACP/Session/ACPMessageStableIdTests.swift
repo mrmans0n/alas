@@ -385,4 +385,24 @@ struct ACPMessageStableIdTests {
         #expect(text != "see TRACE")
         #expect(dropped.isEmpty)
     }
+
+    @Test("an attachment-only update to an echoed local prompt keeps its pasted spans")
+    func attachmentOnlyUpdateKeepsPastedSpans() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let spans = [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: 5)]
+        s.recordUserPrompt(text: "see TRACE", attachments: [], pastedSpans: spans)
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see TRACE"))))
+        s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
+
+        guard case .user(_, _, let text, let attachments, _, let kept) = s.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(text == "see TRACE")
+        #expect(attachments.count == 1)
+        #expect(kept == spans)
+    }
 }

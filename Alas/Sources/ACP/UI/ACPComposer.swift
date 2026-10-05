@@ -1856,6 +1856,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             self.commandChipHover.hide()
             self.fileMentionHover.hide()
             self.upstreamReferenceHover.hide()
+            self.pastedTextHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
             // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
@@ -1904,6 +1905,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         fileMentionHover.hide()
         commandChipHover.hide()
         upstreamReferenceHover.hide()
+        pastedTextHover.hide()
     }
 
     #if DEBUG
@@ -2171,7 +2173,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
         if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
-            if ACPPastedTextPolicy.shouldCollapse(text) {
+            // File URLs on the pasteboard carry a text rendition (the path);
+            // that is never a paste to collapse.
+            let hasFileURLs = NSPasteboard.general.canReadObject(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+            )
+            if !hasFileURLs, ACPPastedTextPolicy.shouldCollapse(text) {
                 insertPastedTextChip(text)
             } else {
                 insertPlainText(text)

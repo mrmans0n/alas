@@ -3606,7 +3606,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
         let located = messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
         if let i = located,
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, _) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
             if text == mergedText && attachments == mergedAttachments {
@@ -3636,7 +3636,10 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments,
-                delegatedSource: delegatedSource))
+                delegatedSource: delegatedSource,
+                // Spans index into `text`; an attachment-only update leaves
+                // the text untouched, but any text change invalidates them.
+                pastedSpans: mergedText == text ? pastedSpans : []))
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
             }

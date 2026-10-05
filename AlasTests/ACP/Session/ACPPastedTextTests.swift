@@ -22,6 +22,8 @@ struct ACPPastedTextTests {
         #expect(ACPPastedTextPolicy.label(ordinal: 3, content: "a\nb\nc\n") == "Pasted text #3 · 3 lines")
         #expect(ACPPastedTextPolicy.label(ordinal: 1, content: String(repeating: "x", count: 38_000))
             == "Pasted text #1 · 38 KB")
+        #expect(ACPPastedTextPolicy.label(ordinal: 1, content: String(repeating: "x", count: 2_001) + "\n")
+            == "Pasted text #1 · 1 line")
     }
 
     @Test("contents reject span sets that would badge the wrong text", arguments: [
@@ -31,6 +33,7 @@ struct ACPPastedTextTests {
          ACPPastedTextSpan(ordinal: 2, utf16Offset: 2, utf16Length: 2)],
         [ACPPastedTextSpan(ordinal: 1, utf16Offset: 0, utf16Length: 1),
          ACPPastedTextSpan(ordinal: 1, utf16Offset: 2, utf16Length: 1)],
+        [ACPPastedTextSpan(ordinal: 1, utf16Offset: Int.max, utf16Length: 2)],
     ])
     func rejectsInvalidSpans(spans: [ACPPastedTextSpan]) {
         #expect(ACPPastedTextContents(text: "abcdef", spans: spans) == nil)

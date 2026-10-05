@@ -29,12 +29,9 @@ enum ACPUserMessageImageMarkers {
         utf16OffsetAdjustment: Int = 0
     ) -> String {
         let images = attachments.enumerated().filter { $0.element.mimeType?.hasPrefix("image/") == true }
-        let spans = pastedSpans.isEmpty ? [] : ACPPastedTextContents(
-            text: text,
-            spans: pastedSpans.map {
-                ACPPastedTextSpan(ordinal: $0.ordinal, utf16Offset: $0.utf16Offset + utf16OffsetAdjustment, utf16Length: $0.utf16Length)
-            }
-        )?.spans ?? []
+        let spans = pastedSpans.isEmpty ? [] : reanchoredSpans(
+            text: text, pastedSpans: pastedSpans, utf16OffsetAdjustment: utf16OffsetAdjustment
+        )
         guard !images.isEmpty || !spans.isEmpty else { return text }
 
         struct Edit {
@@ -79,6 +76,24 @@ enum ACPUserMessageImageMarkers {
         }
         append(source.substring(from: cursor), to: &result)
         return result
+    }
+
+    /// Shifts each span by `utf16OffsetAdjustment` and validates the set
+    /// against `text`. An overflowing shift invalidates the whole set, the
+    /// same as any other invalid span.
+    private static func reanchoredSpans(
+        text: String,
+        pastedSpans: [ACPPastedTextSpan],
+        utf16OffsetAdjustment: Int
+    ) -> [ACPPastedTextSpan] {
+        var shifted: [ACPPastedTextSpan] = []
+        shifted.reserveCapacity(pastedSpans.count)
+        for span in pastedSpans {
+            let (offset, overflow) = span.utf16Offset.addingReportingOverflow(utf16OffsetAdjustment)
+            if overflow { return [] }
+            shifted.append(ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: offset, utf16Length: span.utf16Length))
+        }
+        return ACPPastedTextContents(text: text, spans: shifted)?.spans ?? []
     }
 
     /// Appends `piece` to `result`, inserting a single separating space

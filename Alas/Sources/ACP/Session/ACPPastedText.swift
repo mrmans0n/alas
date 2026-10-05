@@ -32,9 +32,12 @@ enum ACPPastedTextPolicy {
 
     static func label(ordinal: Int, content: String) -> String {
         let lines = lineCount(content)
-        let size = lines > 1
-            ? "\(lines) lines"
-            : ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file)
+        let size: String
+        if lines > 1 || content.utf8.contains(0x0A) {
+            size = lines == 1 ? "1 line" : "\(lines) lines"
+        } else {
+            size = ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file)
+        }
         return "Pasted text #\(ordinal) · \(size)"
     }
 }
@@ -57,9 +60,12 @@ struct ACPPastedTextContents: Equatable, Sendable {
         var end = 0
         var ordinals = Set<Int>()
         for span in sorted {
-            guard span.utf16Length > 0,
-                  span.utf16Offset >= end,
-                  span.utf16Offset + span.utf16Length <= length,
+            // Validate before summing: an untrusted offset near `Int.max`
+            // must not overflow `offset + length`.
+            guard span.utf16Offset >= end,
+                  span.utf16Length > 0,
+                  span.utf16Offset <= length,
+                  span.utf16Length <= length - span.utf16Offset,
                   ordinals.insert(span.ordinal).inserted
             else { return nil }
             end = span.utf16Offset + span.utf16Length
