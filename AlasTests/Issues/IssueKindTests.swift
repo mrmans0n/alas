@@ -72,3 +72,28 @@ struct IssueKindRulesTests {
         )
     }
 }
+
+struct IssueKindPolicyTests {
+    @Test(arguments: [
+        (#"{"kind": "bug"}"#, IssueKindPolicy.Answer.kind(.bug)),
+        (#" {"kind":"Research"} "#, .kind(.research)),
+        (#"{"kind": "chore"}"#, .kind(.chore)),
+        (#"{"kind": "unknown"}"#, .unknown),
+    ])
+    func acceptsExactlyOneKind(output: String, expected: IssueKindPolicy.Answer) {
+        #expect(IssueKindPolicy.parse(output) == expected)
+    }
+
+    @Test(arguments: [
+        "bug",
+        #"{"kind": "feature"}"#,
+        #"{"kind": "bug", "why": "crash"}"#,
+        #"{"kind": null}"#,
+        #"{"type": "bug"}"#,
+        #"```json {"kind": "bug"} ```"#,
+        "",
+    ])
+    func rejectsAnythingElse(output: String) {
+        #expect(IssueKindPolicy.parse(output) == nil)
+    }
+}

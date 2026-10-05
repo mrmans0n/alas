@@ -19,31 +19,9 @@ enum IssueWorktreeNamePolicy {
     static let maximumNameLength = 40
     static let maximumWords = 5
 
-    private static let bodyCharacterBudgets = [4_000, 1_000, 0]
-    private static let titleCharacterLimit = 300
-
-    /// Candidates from most to least context. The engine picks the first that
-    /// fits the token limit, so an oversized body degrades to title-only.
+    /// See `IssueTicketInput` for how the ticket is bounded.
     static func messageCandidates(title: String, body: String) -> [[LocalTextMessage]] {
-        struct Ticket: Encodable {
-            let title: String
-            let body: String?
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let boundedTitle = String(title.prefix(titleCharacterLimit))
-        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        return bodyCharacterBudgets.map { budget in
-            let ticket = Ticket(
-                title: boundedTitle,
-                body: budget == 0 || trimmedBody.isEmpty ? nil : String(trimmedBody.prefix(budget))
-            )
-            let data = (try? encoder.encode(ticket)) ?? Data()
-            return [
-                .init(role: .system, content: systemPrompt),
-                .init(role: .user, content: String(decoding: data, as: UTF8.self)),
-            ]
-        }
+        IssueTicketInput.messageCandidates(systemPrompt: systemPrompt, title: title, body: body)
     }
 
     /// Returns the bare semantic name, or nil when the output is not exactly
@@ -120,20 +98,7 @@ struct IssueWorktreeNameSuggester {
     }
 }
 
-/// Preference changes cancel owned requests synchronously, including those
-/// that have not reached the native engine yet. A later request stays untouched.
-@MainActor
-final class IssueWorktreeNameRequests {
-    private var tracked: Set<Task<String?, Never>> = []
-
-    func track(_ job: Task<String?, Never>) { tracked.insert(job) }
-    func finish(_ job: Task<String?, Never>) { tracked.remove(job) }
-
-    func cancelAll() {
-        tracked.forEach { $0.cancel() }
-        tracked.removeAll()
-    }
-}
+typealias IssueWorktreeNameRequests = LocalTextRequests<String?>
 
 /// Starts the semantic-name request as soon as the attach sheet resolves an
 /// issue, so the answer is usually ready by the time the user confirms the

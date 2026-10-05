@@ -10,6 +10,7 @@ enum LocalTextCaller: Hashable, Sendable {
     case nextPrompt
     case sessionSummary(UUID)
     case worktreeName
+    case issueKind
     case worktreeExplainer
     case sessionTitle
     case mergeConflictExplanation
