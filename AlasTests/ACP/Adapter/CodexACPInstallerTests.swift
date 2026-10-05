@@ -4,7 +4,7 @@ import Testing
 
 @Suite("CodexACPInstaller")
 struct CodexACPInstallerTests {
-    @Test("install uninstalls all legacy packages before installing the Alas package")
+    @Test("install preserves the working adapter until the Alas package is installed")
     func installMigratesLegacyPackages() async {
         var calls: [[String]] = []
         let installer = CodexACPInstaller(runner: { cmd, args in
@@ -13,9 +13,10 @@ struct CodexACPInstallerTests {
         })
         try? await installer.install()
         #expect(calls == [
+            ["npm", "install", "-g", "--force", "@alas-ide/codex-acp"],
             ["npm", "uninstall", "-g", "@agentclientprotocol/codex-acp"],
             ["npm", "uninstall", "-g", "@zed-industries/codex-acp"],
-            ["npm", "install", "-g", "@alas-ide/codex-acp"],
+            ["npm", "rebuild", "-g", "@alas-ide/codex-acp"],
         ])
     }
 
@@ -24,17 +25,23 @@ struct CodexACPInstallerTests {
         var calls: [[String]] = []
         let installer = CodexACPInstaller(runner: { cmd, args in
             calls.append([cmd] + args)
-            return calls.count == 1 ? (status: 1, stderr: "missing") : (status: 0, stderr: "")
+            return args == ["uninstall", "-g", "@agentclientprotocol/codex-acp"]
+                ? (status: 1, stderr: "missing")
+                : (status: 0, stderr: "")
         })
 
         try await installer.install()
 
-        #expect(calls.last == ["npm", "install", "-g", "@alas-ide/codex-acp"])
+        #expect(calls.last == ["npm", "rebuild", "-g", "@alas-ide/codex-acp"])
     }
 
     @Test("install reports a failed package installation")
     func installSurfacesFinalFailure() async {
-        let installer = CodexACPInstaller(runner: { _, _ in (status: 1, stderr: "install failed") })
+        var calls: [[String]] = []
+        let installer = CodexACPInstaller(runner: { cmd, args in
+            calls.append([cmd] + args)
+            return (status: 1, stderr: "install failed")
+        })
 
         do {
             try await installer.install()
@@ -45,5 +52,6 @@ struct CodexACPInstallerTests {
         } catch {
             Issue.record("unexpected error: \(error)")
         }
+        #expect(calls == [["npm", "install", "-g", "--force", "@alas-ide/codex-acp"]])
     }
 }

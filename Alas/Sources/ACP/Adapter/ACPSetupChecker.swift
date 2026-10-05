@@ -52,7 +52,49 @@ struct ACPSetupChecker {
         guard let result else { return false }
         let root = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !root.isEmpty else { return false }
+        let packageDirectory = URL(fileURLWithPath: root).appendingPathComponent(name, isDirectory: true)
         var isDir: ObjCBool = false
-        return FileManager.default.fileExists(atPath: "\(root)/\(name)", isDirectory: &isDir) && isDir.boolValue
+        guard FileManager.default.fileExists(atPath: packageDirectory.path, isDirectory: &isDir),
+              isDir.boolValue else { return false }
+
+        let descriptors = [
+            ACPManagedAdapterDescriptor.claude,
+            ACPManagedAdapterDescriptor.codex,
+            ACPManagedAdapterDescriptor.pi,
+        ]
+        guard let descriptor = descriptors.first(where: { $0.packageName == name }) else {
+            return true
+        }
+        guard let data = try? Data(contentsOf: packageDirectory.appendingPathComponent("package.json")),
+              let manifest = try? JSONDecoder().decode(NpmPackageManifest.self, from: data),
+              let relativePath = manifest.path(for: descriptor.binaryName) else { return false }
+        let executable = packageDirectory.appendingPathComponent(relativePath).standardizedFileURL
+        guard executable.path.hasPrefix(packageDirectory.standardizedFileURL.path + "/") else { return false }
+        return FileManager.default.isExecutableFile(atPath: executable.path)
+    }
+}
+
+private struct NpmPackageManifest: Decodable {
+    let bin: Bin
+
+    enum Bin: Decodable {
+        case path(String)
+        case paths([String: String])
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let path = try? container.decode(String.self) {
+                self = .path(path)
+            } else {
+                self = .paths(try container.decode([String: String].self))
+            }
+        }
+    }
+
+    func path(for binary: String) -> String? {
+        switch bin {
+        case .path(let path): path
+        case .paths(let paths): paths[binary]
+        }
     }
 }

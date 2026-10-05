@@ -14,15 +14,19 @@ struct CodexACPInstaller: ACPAdapterInstaller {
     }
 
     func install() async throws {
-        // Legacy packages declare the same global `codex-acp` bin; npm (v7+)
-        // refuses to clobber another package's bin and fails with EEXIST.
-        // Remove them first — best-effort, since they may not be present —
-        // then install the Alas package.
+        // Install first so a registry or authentication failure leaves the
+        // existing adapter usable. `--force` permits replacing the shared bin.
+        let (status, stderr) = try await runner(
+            "npm", ["install", "-g", "--force", ACPManagedAdapterDescriptor.codex.packageName])
+        if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
+
         for packageName in ACPManagedAdapterDescriptor.codex.legacyPackageNames {
             _ = try? await runner("npm", ["uninstall", "-g", packageName])
         }
-        let (status, stderr) = try await runner(
-            "npm", ["install", "-g", ACPManagedAdapterDescriptor.codex.packageName])
-        if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
+        let (rebuildStatus, rebuildStderr) = try await runner(
+            "npm", ["rebuild", "-g", ACPManagedAdapterDescriptor.codex.packageName])
+        if rebuildStatus != 0 {
+            throw ACPInstallError.nonZeroExit(rebuildStatus, stderr: rebuildStderr)
+        }
     }
 }

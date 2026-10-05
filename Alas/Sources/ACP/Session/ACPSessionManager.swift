@@ -3636,7 +3636,7 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
+        let launchSpec = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
@@ -3698,7 +3698,7 @@ final class ACPSessionManager: ObservableObject {
             guard let spec = ACPLaunchCatalog.spec(for: discovered.agentId) else { throw ACPSessionDiscoveryError.noLaunchSpec(discovered.agentId) }
             let setup = await evaluateSetup(for: launchSpecTransformer(spec, true))
             guard case .ready = setup else { throw ACPSessionDiscoveryError.setupRequired(setup.reasonText) }
-            let launch = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host), true)
+            let launch = launchSpecTransformer(try await resolvedLaunchSpec(for: spec, host: host), true)
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard await coordinator.flush(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
             guard coordinator.fence(sessionId: sessionId) == fence, coordinator.hasAuthority(sessionId: sessionId) else { throw RemoteSessionUnavailable.ownershipLost }
@@ -6006,7 +6006,7 @@ extension ACPSessionManager {
         let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
-            let resolvedSpec = await resolvedLaunchSpec(for: spec, host: host)
+            let resolvedSpec = try await resolvedLaunchSpec(for: spec, host: host)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             var launchSpec = launchSpecTransformer(resolvedSpec, !session.readOnlyRestricted)
             if host == nil {
@@ -8811,9 +8811,9 @@ extension ACPSessionManager {
     }
 
     /// Swap `spec.command` for the verified absolute launch path when one can
-    /// be resolved (npm-backed adapters); otherwise return `spec` unchanged so
-    /// launch falls back to PATH-based `/usr/bin/env <command>`.
-    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async -> ACPLaunchSpec {
+    /// be resolved. Managed package adapters fail closed when their package
+    /// does not own the resolved executable.
+    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async throws -> ACPLaunchSpec {
         if let host {
             if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) != nil {
                 let key = remoteAdapterKey(host: host, agentID: spec.agentID)
@@ -8839,7 +8839,12 @@ extension ACPSessionManager {
                 env: env,
                 additionalPathDirectories: AgentPath.wellKnownDirectories,
                 npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
-            guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
+            guard let path = await resolver.resolvedLaunchPath(for: spec) else {
+                if case .npxPackage(let package) = spec.setupCheck {
+                    throw ACPLaunchPathError.packageExecutableUnavailable(package)
+                }
+                return spec
+            }
             return spec.overridingCommand(path)
         }
     }

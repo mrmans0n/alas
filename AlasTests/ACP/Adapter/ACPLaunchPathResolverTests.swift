@@ -26,6 +26,22 @@ struct ACPLaunchPathResolverTests {
         return npm
     }
 
+    private func makeOwnedExecutable(
+        named name: String,
+        package: String,
+        inBinDirectory binDirectory: URL
+    ) throws -> URL {
+        let packageExecutable = binDirectory.deletingLastPathComponent()
+            .appendingPathComponent("lib/node_modules/\(package)/dist/index.js")
+        _ = try makeExecutable(
+            named: packageExecutable.lastPathComponent,
+            inDir: packageExecutable.deletingLastPathComponent())
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let link = binDirectory.appendingPathComponent(name)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: packageExecutable)
+        return link
+    }
+
     @Test("non-npm adapter resolves to nil (PATH launch unchanged)")
     func nonNpmReturnsNil() async throws {
         let gemini = try #require(ACPLaunchCatalog.spec(for: "gemini"))   // .binaryOnPath, npmPackageName == nil
@@ -43,7 +59,10 @@ struct ACPLaunchPathResolverTests {
         let pathDir = tmp()
         let npmBinDir = tmp()
         let shadow = try makeExecutable(named: "codex-acp", inDir: pathDir)
-        let owned = try makeExecutable(named: "codex-acp", inDir: npmBinDir)
+        let owned = try makeOwnedExecutable(
+            named: "codex-acp",
+            package: "@alas-ide/codex-acp",
+            inBinDirectory: npmBinDir)
         defer {
             try? FileManager.default.removeItem(at: pathDir)
             try? FileManager.default.removeItem(at: npmBinDir)
@@ -57,8 +76,8 @@ struct ACPLaunchPathResolverTests {
         #expect(path != shadow.path)
     }
 
-    @Test("falls back to PATH when no npm-global binary")
-    func pathFallback() async throws {
+    @Test("npxPackage does not fall back to a same-named PATH binary")
+    func packageOnlyRejectsPathFallback() async throws {
         let pathDir = tmp()
         let onPath = try makeExecutable(named: "codex-acp", inDir: pathDir)
         defer { try? FileManager.default.removeItem(at: pathDir) }
@@ -67,7 +86,8 @@ struct ACPLaunchPathResolverTests {
             env: ["PATH": pathDir.path], additionalPathDirectories: [],
             npmGlobalBinDirectory: { nil })   // npm-global unavailable
         let path = await resolver.resolvedLaunchPath(for: codex)
-        #expect(path == onPath.path)
+        #expect(path == nil)
+        #expect(FileManager.default.isExecutableFile(atPath: onPath.path))
     }
 
     // Pi uses `.binaryOnPathOrNpmPackage`: the check resolves PATH first, so
@@ -134,7 +154,32 @@ struct ACPLaunchPathResolverTests {
 
         let downstreamPackage = modules.appendingPathComponent("@alas-ide/claude-agent-acp", isDirectory: true)
         try FileManager.default.createDirectory(at: downstreamPackage, withIntermediateDirectories: true)
+        try #"{"bin":{"claude-agent-acp":"dist/index.js"}}"#
+            .write(to: downstreamPackage.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        _ = try makeExecutable(
+            named: "index.js",
+            inDir: downstreamPackage.appendingPathComponent("dist", isDirectory: true))
         #expect(await checker.evaluate(claude.setupCheck) == .ready)
+    }
+
+    @Test("managed package requires its declared executable")
+    func packageRequiresDeclaredExecutable() async throws {
+        let tempDir = tmp()
+        let pathDir = tempDir.appendingPathComponent("bin", isDirectory: true)
+        let modules = tempDir.appendingPathComponent("node_modules", isDirectory: true)
+        let package = modules.appendingPathComponent("@alas-ide/codex-acp", isDirectory: true)
+        _ = try makeExecutable(named: "codex-acp", inDir: pathDir)
+        _ = try makeNpmReturning(modules, inDir: pathDir)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try #"{"bin":{"codex-acp":"dist/index.js"}}"#
+            .write(to: package.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let codex = try #require(ACPLaunchCatalog.spec(for: "codex"))
+        let checker = ACPSetupChecker(env: ["PATH": pathDir.path], additionalPathDirectories: [])
+
+        #expect(await checker.evaluate(codex.setupCheck) == .missing(
+            reason: "npm package `@alas-ide/codex-acp` is not installed globally"))
     }
 
     @Test("explicit Claude executable override checks its configured binary")

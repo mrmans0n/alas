@@ -1,5 +1,16 @@
 import Foundation
 
+enum ACPLaunchPathError: LocalizedError, Equatable {
+    case packageExecutableUnavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .packageExecutableUnavailable(let package):
+            "The installed npm package `\(package)` does not provide its expected executable."
+        }
+    }
+}
+
 /// Resolves the absolute path Alas should launch for an ACP adapter, so the
 /// binary that actually runs is the one the setup check verified — not a
 /// same-named binary shadowing it earlier on PATH.
@@ -17,17 +28,15 @@ struct ACPLaunchPathResolver {
         // Mirror the setup check's verification precedence so launch runs
         // exactly the binary that made setup pass:
         //  - `.npxPackage`: the package is the only thing verified, so prefer
-        //    the package-owned binary (this is what beats a PATH shadow);
-        //    PATH only as a graceful fallback.
+        //    the package-owned binary (this is what beats a PATH shadow).
         //  - `.binaryOnPathOrNpmPackage`: the check resolves the PATH binary
         //    first, so launch that same binary; the npm-global binary is the
         //    fallback for when the check passed on the package instead.
         //  - `.binaryOnPath`: no managed package to anchor to — return nil so
         //    the caller launches via PATH (`/usr/bin/env <command>`) as today.
         switch spec.setupCheck {
-        case .npxPackage:
-            if let owned = await npmGlobalCandidate(for: spec) { return owned }
-            return pathCandidate(for: spec)
+        case .npxPackage(let package):
+            return await npmGlobalCandidate(for: spec, ownedBy: package)
         case .binaryOnPathOrNpmPackage:
             if let onPath = pathCandidate(for: spec) { return onPath }
             return await npmGlobalCandidate(for: spec)
@@ -37,10 +46,23 @@ struct ACPLaunchPathResolver {
     }
 
     /// The package-owned binary at `<npm global bin>/<command>`, if executable.
-    private func npmGlobalCandidate(for spec: ACPLaunchSpec) async -> String? {
+    private func npmGlobalCandidate(
+        for spec: ACPLaunchSpec,
+        ownedBy package: String? = nil
+    ) async -> String? {
         guard let binDir = await npmGlobalBinDirectory() else { return nil }
         let candidate = "\(binDir)/\(spec.command)"
-        return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+        guard FileManager.default.isExecutableFile(atPath: candidate) else { return nil }
+        guard let package else { return candidate }
+        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
+            return nil
+        }
+        let target = destination.hasPrefix("/")
+            ? URL(fileURLWithPath: destination).standardizedFileURL.path
+            : URL(fileURLWithPath: binDir, isDirectory: true)
+                .appendingPathComponent(destination)
+                .standardizedFileURL.path
+        return target.contains("/node_modules/\(package)/") ? candidate : nil
     }
 
     /// The PATH-resolved absolute path of `command`, if any.
