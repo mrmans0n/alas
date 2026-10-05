@@ -40,6 +40,7 @@ struct AttachIssueDialog: View {
             autocomplete.cancelInFlightLoad()
         }
         .onDisappear {
+            model.cancelKindDetection()
             autocomplete.dismiss()
             autocomplete.cancelInFlightLoad()
         }
@@ -144,6 +145,31 @@ struct AttachIssueDialog: View {
                 DialogField(label: "Issue context") {
                     textEditor(text: Bindable(model).context, minHeight: 90, maxHeight: 150)
                 }
+                DialogField(label: "Type") {
+                    HStack(spacing: 8) {
+                        Picker("", selection: kindBinding) {
+                            Text("Generic").tag(IssueKind?.none)
+                            ForEach(IssueKind.allCases, id: \.self) { kind in
+                                Text(kind.displayName).tag(IssueKind?.some(kind))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                        if model.isDetectingKind {
+                            ProgressView().controlSize(.small)
+                        }
+                        if let caption = model.kindCaption {
+                            Text(caption)
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("fg-dim"))
+                        }
+                        Spacer(minLength: 0)
+                        if model.canResetPrompt {
+                            AlasButton(title: "Reset to template", style: .subtle, action: model.resetPromptToTemplate)
+                        }
+                    }
+                }
                 DialogField(label: "Initial prompt") {
                     textEditor(text: promptBinding, minHeight: 130, maxHeight: 190)
                 }
@@ -154,6 +180,13 @@ struct AttachIssueDialog: View {
             onCancel: model.cancelResolution,
             onConfirm: attach,
             confirmEnabled: model.makeDraft() != nil
+        )
+    }
+
+    private var kindBinding: Binding<IssueKind?> {
+        Binding(
+            get: { model.kind },
+            set: { model.setKind($0) }
         )
     }
 
