@@ -4,22 +4,75 @@ import Testing
 
 @Suite("ACPConnection")
 struct ACPConnectionTests {
-    @Test("async tasks require both opt-in and the adapter capability", arguments: [false, true])
-    func backgroundTaskNegotiation(optIn: Bool) async throws {
+    @Test("initialize advertises neutral goal and task metadata")
+    func neutralInitializationMetadata() async throws {
         let mock = ACPMockClient()
         mock.script(method: "initialize") { request in
             let params = try #require(request.params as? ACPInitializeParams)
-            #expect(params.clientCapabilities.meta.jetbrains?.air.capabilities == (optIn ? ["asyncTasks"] : nil))
-            #expect(params.clientCapabilities.meta.terminalOutputDelta == (optIn ? true : nil))
-            return Data(#"{"protocolVersion":1,"_meta":{"jetbrains":{"air":{"version":1,"capabilities":["asyncTasks"]}}}}"#.utf8)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+            let capabilities = try #require(json["clientCapabilities"] as? [String: Any])
+            let meta = try #require(capabilities["_meta"] as? [String: Any])
+            #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
+            #expect(meta["async-tasks"] as? Bool == true)
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates"])
+            #expect(meta["jetbrains"] == nil)
+            #expect(meta["terminal_output_delta"] == nil)
+            #expect(meta["terminal-auth"] as? Bool == true)
+            #expect(meta["parameterizedModelPicker"] as? Bool == true)
+            #expect(meta["opencode/child-session-updates"] as? Bool == true)
+            #expect(capabilities["terminal"] as? Bool == true)
+            #expect((capabilities["auth"] as? [String: Bool]) == ["terminal": true])
+            #expect((capabilities["fs"] as? [String: Bool]) == ["readTextFile": true, "writeTextFile": true])
+            return Data(#"{"protocolVersion":1}"#.utf8)
+        }
+        _ = try await ACPConnection(client: mock).initialize()
+    }
+
+    @Test("task controls require the exact advertised contract", arguments: [
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, true),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["future","stop"]}}"#, true),
+        (#"{"goal":true,"steering":{"supported":"true"},"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, true),
+        (#"{}"#, false),
+        (#"true"#, false),
+        (#"{"async-tasks":{"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, false),
+        (#"{"async-tasks":{"version":"1","controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, false),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop"}}"#, false),
+        (#"{"async-tasks":{"version":2,"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, false),
+        (#"{"async-tasks":{"version":0,"controlMethod":"_session/async_task/stop","actions":["stop"]}}"#, false),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/cancel","actions":["stop"]}}"#, false),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":[]}}"#, false),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":["cancel"]}}"#, false),
+        (#"{"async-tasks":true}"#, false),
+        (#"{"async-tasks":{"version":1,"controlMethod":"_session/async_task/stop","actions":"stop"}}"#, false),
+        (#"{"async-tasks":{"version":1,"actions":["stop"]}}"#, false),
+        (#"{"async-tasks":null}"#, false),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["asyncTasks"]}}}"#, false),
+    ])
+    func backgroundTaskNegotiation(metadata: String, supported: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
         }
         let connection = ACPConnection(client: mock)
-        connection.backgroundTaskLifecycleEnabled = optIn
-        _ = try await connection.initialize()
-        #expect(connection.supportsBackgroundTasks == optIn)
-        mock.script(method: "initialize") { _ in Data(#"{"protocolVersion":1}"#.utf8) }
-        _ = try await connection.initialize()
-        #expect(!connection.supportsBackgroundTasks)
+        let initialized = try await connection.initialize()
+        #expect(initialized.supportsAsyncTasks == supported)
+    }
+
+    @Test("top-level goal negotiation preserves valid sibling capabilities", arguments: [false, true])
+    func topLevelGoalCapability(malformedTasks: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("""
+            {"protocolVersion":1,
+             "_meta":{"goal":{"version":1,"controlMethod":"_session/goal","actions":["set","clear"]},
+                      "async-tasks":\(malformedTasks ? "true" : "null"),"steering":{"supported":true}},
+             "agentCapabilities":{"_meta":{"goal":{"version":1,"controlMethod":"_legacy/goal","actions":["set"]}}}}
+            """.utf8)
+        }
+        let initialized = try await ACPConnection(client: mock).initialize()
+        #expect(initialized.goalCapability?.controlMethod == "_session/goal")
+        #expect(initialized.goalCapability?.actions == [.set, .clear])
+        #expect(initialized.supportsSteering)
     }
 
     @Test("deleteSession sends session/delete with the wire id and accepts an empty result")

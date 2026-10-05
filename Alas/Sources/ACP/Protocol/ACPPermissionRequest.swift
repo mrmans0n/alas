@@ -160,7 +160,7 @@ struct ACPPermissionPresentation: Equatable {
 
     init?(metadata: AnyCodable?) {
         let permission = ACPPermissionMeta.object(
-            ACPPermissionMeta.object(metadata)?["permission"] ?? metadata?.airFields["permission"])
+            ACPPermissionMeta.object(metadata)?["permission"])
         guard ACPPermissionMeta.int(permission, "version") == 1 else { return nil }
         title = ACPPermissionMeta.string(permission, "title")
         description = ACPPermissionMeta.string(permission, "description")
@@ -172,7 +172,7 @@ extension ACPPermissionOption {
     /// Per-option reason from `_meta.permission.description`.
     var presentationDescription: String? {
         let permission = ACPPermissionMeta.object(
-            ACPPermissionMeta.object(metadata)?["permission"] ?? metadata?.airFields["permission"])
+            ACPPermissionMeta.object(metadata)?["permission"])
         guard ACPPermissionMeta.int(permission, "version") == 1 else { return nil }
         return ACPPermissionMeta.string(permission, "description")
     }

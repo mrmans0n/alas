@@ -26,6 +26,17 @@ struct ACPSessionTests {
         #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
     }
 
+    @Test("task Stop remains subject to each task's authority", arguments: [false, true])
+    func backgroundTaskStopAuthority(canStop: Bool) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.agentState = .ready
+        session.backgroundTaskStopSupported = true
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "build",
+            name: "Build", canStop: canStop), ownerSessionId: "s")
+        #expect(session.hasCancellableBackgroundWork == canStop)
+        #expect(session.backgroundTasks.first?.canStop == canStop)
+    }
+
     @Test("a task can notify again after a loss report", arguments: [("completed", true), ("completed", false), ("lost", true), ("lost", false)])
     func backgroundTaskCanNotifyAfterReobservation(state: String, delivered: Bool) {
         var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "watch", name: "Watch")

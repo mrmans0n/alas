@@ -6214,7 +6214,6 @@ extension ACPSessionManager {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
             }
-            connection.backgroundTaskLifecycleEnabled = ["claude", "codex"].contains(session.agentId)
             let initialized = try await connection.initialize(
                 brokerOperationKey: Self.brokerStartupOperationKey(
                     sessionId: sessionId,
@@ -6243,7 +6242,7 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
             session.supportsCodexSteeringCompletion = ["@agentclientprotocol/codex-acp", "codex-acp"].contains(initialized.agentInfo?.name ?? "")
-            session.backgroundTaskStopSupported = connection.supportsBackgroundTasks
+            session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {

@@ -159,7 +159,7 @@ enum ACPGoalAction: String, Codable, CaseIterable, Hashable, Sendable {
     case clear
 }
 
-struct ACPGoalCapability: Decodable, Equatable, Sendable {
+struct ACPGoalCapability: Codable, Equatable, Sendable {
     let version: Int
     let controlMethod: String
     let actions: Set<ACPGoalAction>
@@ -235,14 +235,22 @@ struct ACPAuthCapabilities: Codable, Equatable {
     }
 }
 
+struct ACPAsyncTaskCapability: Codable, Equatable, Sendable {
+    let version: Int
+    let controlMethod: String
+    let actions: [String]
+
+    var supportsStop: Bool {
+        version == 1 && controlMethod == "_session/async_task/stop" && actions.contains("stop")
+    }
+}
+
 struct ACPClientCapabilitiesMeta: Codable, Equatable {
-    static let backgroundTasks = ACPClientCapabilitiesMeta(
-        terminalAuth: true, parameterizedModelPicker: true,
-        openCodeChildSessionUpdates: true, jetbrains: .init(), terminalOutputDelta: true)
     static let terminalAuth = ACPClientCapabilitiesMeta(
         terminalAuth: true,
         parameterizedModelPicker: true,
-        openCodeChildSessionUpdates: true)
+        openCodeChildSessionUpdates: true,
+        asyncTasks: true)
 
     let terminalAuth: Bool
     let parameterizedModelPicker: Bool
@@ -250,38 +258,29 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
     /// projects a child's updates into the parent session instead of sending
     /// `opencode/session/child_update`.
     let openCodeChildSessionUpdates: Bool
-    let jetbrains: JetBrains?
-    /// AIR suppresses fallback terminal output unless the client opts in.
-    let terminalOutputDelta: Bool?
-
-    struct JetBrains: Codable, Equatable {
-        var air = Air()
-        struct Air: Codable, Equatable {
-            var version = 1
-            var capabilities = ["asyncTasks"]
-        }
-    }
+    let goal: EmptyObject
+    let asyncTasks: Bool
 
     init(
         terminalAuth: Bool,
         parameterizedModelPicker: Bool = false,
         openCodeChildSessionUpdates: Bool = false,
-        jetbrains: JetBrains? = nil,
-        terminalOutputDelta: Bool? = nil
+        goal: EmptyObject = .init(),
+        asyncTasks: Bool = false
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
         self.openCodeChildSessionUpdates = openCodeChildSessionUpdates
-        self.jetbrains = jetbrains
-        self.terminalOutputDelta = terminalOutputDelta
+        self.goal = goal
+        self.asyncTasks = asyncTasks
     }
 
     enum CodingKeys: String, CodingKey {
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
-        case jetbrains
-        case terminalOutputDelta = "terminal_output_delta"
+        case goal
+        case asyncTasks = "async-tasks"
     }
 
     init(from decoder: Decoder) throws {
@@ -290,8 +289,8 @@ struct ACPClientCapabilitiesMeta: Codable, Equatable {
         parameterizedModelPicker = try c.decodeIfPresent(Bool.self, forKey: .parameterizedModelPicker) ?? false
         openCodeChildSessionUpdates = try c.decodeIfPresent(
             Bool.self, forKey: .openCodeChildSessionUpdates) ?? false
-        jetbrains = try? c.decodeIfPresent(JetBrains.self, forKey: .jetbrains)
-        terminalOutputDelta = try? c.decodeIfPresent(Bool.self, forKey: .terminalOutputDelta)
+        goal = try c.decodeIfPresent(EmptyObject.self, forKey: .goal) ?? .init()
+        asyncTasks = try c.decodeIfPresent(Bool.self, forKey: .asyncTasks) ?? false
     }
 }
 
@@ -309,13 +308,10 @@ struct ACPInitializeResult: Codable, Equatable {
     /// Optional on the wire; a malformed value is dropped, not fatal.
     let agentInfo: ACPImplementationInfo?
     /// Extension capabilities live beside `agentCapabilities` on the wire.
-    let meta: AnyCodable?
+    let meta: Meta?
 
     var supportsSteering: Bool {
-        guard let root = meta?.value as? [String: AnyCodable],
-              let steering = root["steering"]?.value as? [String: AnyCodable]
-        else { return false }
-        return steering["supported"]?.value as? Bool == true
+        meta?.steering?.supported == true
     }
 
     init(
@@ -323,7 +319,7 @@ struct ACPInitializeResult: Codable, Equatable {
         agentCapabilities: ACPAgentCapabilities?,
         authMethods: [ACPAuthMethod],
         agentInfo: ACPImplementationInfo? = nil,
-        meta: AnyCodable? = nil
+        meta: Meta? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.agentCapabilities = agentCapabilities
@@ -343,7 +339,29 @@ struct ACPInitializeResult: Codable, Equatable {
         agentCapabilities = try c.decodeIfPresent(ACPAgentCapabilities.self, forKey: .agentCapabilities)
         authMethods = try c.decodeIfPresent([ACPAuthMethod].self, forKey: .authMethods) ?? []
         agentInfo = (try? c.decodeIfPresent(ACPImplementationInfo.self, forKey: .agentInfo)) ?? nil
-        meta = try? c.decodeIfPresent(AnyCodable.self, forKey: .meta)
+        meta = try? c.decodeIfPresent(Meta.self, forKey: .meta)
+    }
+
+    struct Meta: Codable, Equatable {
+        let goal: ACPGoalCapability?
+        let asyncTasks: ACPAsyncTaskCapability?
+        let steering: Steering?
+
+        enum CodingKeys: String, CodingKey {
+            case goal, steering
+            case asyncTasks = "async-tasks"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            goal = try? c.decodeIfPresent(ACPGoalCapability.self, forKey: .goal)
+            asyncTasks = try? c.decodeIfPresent(ACPAsyncTaskCapability.self, forKey: .asyncTasks)
+            steering = try? c.decodeIfPresent(Steering.self, forKey: .steering)
+        }
+
+        struct Steering: Codable, Equatable {
+            let supported: Bool
+        }
     }
 
     struct ACPAgentCapabilities: Codable, Equatable {

@@ -57,6 +57,7 @@ struct ACPInitializeOutcome: Equatable {
     /// Whether the agent advertised the `_auth/status_update` extension marker.
     let advertisesAuthStatus: Bool
     let supportsSteering: Bool
+    let supportsAsyncTasks: Bool
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     let agentInfo: ACPImplementationInfo?
 
@@ -71,7 +72,8 @@ struct ACPInitializeOutcome: Equatable {
         supportsSubagents: Bool = false,
         advertisesAuthStatus: Bool = false,
         agentInfo: ACPImplementationInfo? = nil,
-        supportsSteering: Bool = false
+        supportsSteering: Bool = false,
+        supportsAsyncTasks: Bool = false
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -84,6 +86,7 @@ struct ACPInitializeOutcome: Equatable {
         self.advertisesAuthStatus = advertisesAuthStatus
         self.agentInfo = agentInfo
         self.supportsSteering = supportsSteering
+        self.supportsAsyncTasks = supportsAsyncTasks
     }
 }
 
@@ -118,9 +121,6 @@ struct ACPSteeringParams: Encodable {
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
 /// methods for the messages we send.
 final class ACPConnection: @unchecked Sendable {
-    /// AIR changes ordinary rendering too; opt in only for the probed adapters.
-    var backgroundTaskLifecycleEnabled = false
-    private(set) var supportsBackgroundTasks = false
     let client: ACPClient
     private let durableResponseLock = NSLock()
     private var pendingDurableSessionResponses: [ACPDurableConsumptionAcknowledgement] = []
@@ -147,16 +147,12 @@ final class ACPConnection: @unchecked Sendable {
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: client.advertisesTerminalCapability,
-                                    meta: backgroundTaskLifecycleEnabled ? .backgroundTasks : .terminalAuth)),
+                                    meta: .terminalAuth)),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         let capabilities = result.agentCapabilities
-        supportsBackgroundTasks = backgroundTaskLifecycleEnabled && result.meta?.advertisesAsyncTasks == true
-        let airGoal = result.meta?.airFields["goal"]
-            .flatMap { try? JSONEncoder().encode($0) }
-            .flatMap { try? JSONDecoder().decode(ACPGoalCapability.self, from: $0) }
         return ACPInitializeOutcome(
             promptCapabilities: capabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
@@ -164,12 +160,13 @@ final class ACPConnection: @unchecked Sendable {
             sessionCapabilities: capabilities?.sessionCapabilities ?? .init(),
             mcpCapabilities: capabilities?.mcpCapabilities ?? .init(),
             providerCapabilities: capabilities?.providerCapabilities,
-            goalCapability: capabilities?.meta.goal ?? airGoal,
+            goalCapability: result.meta?.goal ?? capabilities?.meta.goal,
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
             advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
             agentInfo: result.agentInfo,
-            supportsSteering: result.supportsSteering
+            supportsSteering: result.supportsSteering,
+            supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true
         )
     }
 

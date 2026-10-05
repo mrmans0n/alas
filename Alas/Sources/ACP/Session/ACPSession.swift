@@ -3435,8 +3435,6 @@ final class ACPSession: ObservableObject, Identifiable {
         } else if let codex = Self.metadataObject(root["codex"]),
                   let goal = codex["goal"] {
             applyGoalValue(goal)
-        } else if let goal = metadata.airFields["goal"] {
-            applyGoalValue(goal)
         }
     }
 
