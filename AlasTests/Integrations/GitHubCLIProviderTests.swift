@@ -92,6 +92,30 @@ struct GitHubCLIProviderTests {
         }
     }
 
+    @Test(arguments: [
+        (#""type": {"id": 7, "name": "Bug"},"#, Optional("Bug")),
+        (#""type": null,"#, nil),
+        ("", nil),
+        // An unexpected shape must not break issue loading.
+        (#""type": "Bug","#, nil),
+    ])
+    func issueMapsNativeIssueType(typeField: String, expected: String?) async throws {
+        let output = Self.issueOutput.replacingOccurrences(
+            of: "\"state\": \"open\",",
+            with: "\"state\": \"open\", \(typeField)"
+        )
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: output, stderr: "")])
+
+        let issue = try await GitHubCLIProvider(runner: runner).issue(
+            remote: Self.enterpriseRemote,
+            number: 1842,
+            cwd: Self.cwd
+        )
+
+        #expect(issue.nativeType == expected)
+        #expect(IssueSnapshot(codeHostIssue: issue).nativeType == expected)
+    }
+
     @Test func issueRejectsURLWithoutHost() async {
         let output = Self.issueOutput.replacingOccurrences(
             of: "https://github.example.com/mrmans0n/alas/issues/1842",

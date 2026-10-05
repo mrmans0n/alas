@@ -205,6 +205,19 @@ struct AttachIssueDialogModelTests {
         #expect(!model.prompt.contains("Keep this only for the first issue."))
     }
 
+    @Test("editing title or context keeps the issue's native type")
+    func editsKeepNativeType() async {
+        let fixture = Fixture(resolution: Fixture.resolvedIssue(nativeType: "Bug"))
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+        model.reference = "#42"
+
+        await model.resolve()
+        model.title = "Edited title"
+        model.context = "Edited context."
+
+        #expect(model.makeDraft()?.source.nativeType == "Bug")
+    }
+
     @Test("reopened generated drafts keep generated prompt ownership")
     func reopenedGeneratedDraftsKeepGeneratedPromptOwnership() {
         let source = Fixture.resolvedIssue().source
@@ -368,7 +381,9 @@ private final class Fixture {
     static func resolvedIssue(
         candidateProjectIDs: [String] = ["alas"],
         displayReference: String = "#42",
-        title: String = "Fix offline sync conflicts"
+        title: String = "Fix offline sync conflicts",
+        labels: [String] = [],
+        nativeType: String? = nil
     ) -> ResolvedIssue {
         let source = IssueSnapshot(
             identity: .init(providerID: .github, stableID: "github.com/mrmans0n/alas\(displayReference)"),
@@ -379,14 +394,15 @@ private final class Fixture {
             title: title,
             body: "Offline changes can overwrite newer server changes.",
             state: .open,
-            labels: [],
+            labels: labels,
             assignees: [],
             providerUpdatedAt: nil,
             capturedAt: .distantPast,
             refreshError: nil,
             contentOrigin: .provider,
             isEditable: false,
-            isRefreshable: true
+            isRefreshable: true,
+            nativeType: nativeType
         )
         return .init(source: source, repositoryLocator: source.repositoryLocator, candidateProjectIDs: candidateProjectIDs, selectedProjectID: candidateProjectIDs.last)
     }

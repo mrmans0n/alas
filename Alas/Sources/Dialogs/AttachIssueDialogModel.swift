@@ -235,7 +235,8 @@ final class AttachIssueDialogModel {
             refreshError: source.refreshError,
             contentOrigin: source.contentOrigin,
             isEditable: source.isEditable,
-            isRefreshable: source.isRefreshable
+            isRefreshable: source.isRefreshable,
+            nativeType: source.nativeType
         )
     }
 }

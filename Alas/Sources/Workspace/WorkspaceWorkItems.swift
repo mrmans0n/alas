@@ -113,7 +113,8 @@ struct WorkspaceWorkItemController: Sendable {
                 refreshError: nil,
                 contentOrigin: item.snapshot.contentOrigin,
                 isEditable: item.snapshot.isEditable,
-                isRefreshable: item.snapshot.isRefreshable
+                isRefreshable: item.snapshot.isRefreshable,
+                nativeType: item.snapshot.nativeType
             )
             state.checkouts[path.checkout].workItems[path.item].snapshot = edited
             state.checkouts[path.checkout].workItems[path.item].lastGoodSnapshot = edited
