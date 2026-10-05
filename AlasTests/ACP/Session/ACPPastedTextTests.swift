@@ -9,6 +9,8 @@ struct ACPPastedTextTests {
         (String(repeating: "a\n", count: 20) + "a", true),
         (String(repeating: "a\r\n", count: 20), false),
         (String(repeating: "a\r\n", count: 21), true),
+        (String(repeating: "a\r", count: 20), false),
+        (String(repeating: "a\r", count: 21), true),
         (String(repeating: "x", count: 2_000), false),
         (String(repeating: "x", count: 2_001), true),
         (String(repeating: "😀", count: 1_001), true),

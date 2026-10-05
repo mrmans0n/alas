@@ -407,10 +407,18 @@ extension ACPComposerDraft {
     /// Concatenate `other` onto this draft, separated by a newline when
     /// both sides carry content, so restoring a queued item never clobbers
     /// text the user has already typed. Appending onto (or of) an empty
-    /// draft just returns the non-empty side unchanged.
+    /// draft just returns the non-empty side unchanged. Pasted-text badges
+    /// in `other` that reuse a number already in this draft are renumbered,
+    /// so the result never shows two "#1" badges or repeats a span ordinal.
     func appending(_ other: ACPComposerDraft) -> ACPComposerDraft {
         if isEmpty { return other }
         if other.isEmpty { return self }
-        return ACPComposerDraft(segments: segments + [.text("\n")] + other.segments)
+        let taken = Set(segments.compactMap { segment -> Int? in
+            if case .pastedText(let ordinal, _) = segment { return ordinal }
+            return nil
+        })
+        return ACPComposerDraft(
+            segments: segments + [.text("\n")] + other.renumberingPastedText(avoiding: taken).segments
+        )
     }
 }

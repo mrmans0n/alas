@@ -196,6 +196,15 @@ struct ACPComposerDraftTests {
         #expect(draft.pastedTextSpans(matching: "see").isEmpty)
     }
 
+    @Test("appending renumbers a pasted badge that reuses a number already in the draft")
+    func appendingRenumbersPastedText() {
+        let base = ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: "a")])
+        let other = ACPComposerDraft(segments: [.pastedText(ordinal: 1, content: "b")])
+        #expect(base.appending(other) == ACPComposerDraft(segments: [
+            .pastedText(ordinal: 1, content: "a"), .text("\n"), .pastedText(ordinal: 2, content: "b"),
+        ]))
+    }
+
     @Test("renumbering moves only colliding pasted ordinals above every ordinal in use")
     func renumberingPastedText() {
         let draft = ACPComposerDraft(segments: [
