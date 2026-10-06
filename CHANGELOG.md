@@ -6,12 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
+
 ## [0.20.4] - 2026-10-06
 
 ### ✨ Features
 
-- Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
-- Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
 - Browse, search, and install agents from the official ACP Registry in Settings → Agents. Installed agents join the chat launch catalog alongside the curated built-ins (#1794).
 - Continue direct-send ACP turns interrupted by an app restart when session recovery is enabled (#1795).
 - Pick model thinking effort when starting sessions on a peer, with a clearer worktree, agent, and model picker (#1797).
