@@ -433,4 +433,26 @@ struct LSPClientLifecycleTests {
         #expect(ack.contains(#""result":null"#))
         transport.finish()
     }
+
+    @Test("oversized progress percentages clamp to 100 instead of trapping")
+    func oversizedProgressPercentage() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp", progressCoalescing: .zero)
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":1e100}}}"#)
+        let events = client.lifecycleEvents
+        let first = try await withTimeout(nanoseconds: 2_000_000_000) {
+            for await event in events {
+                if case .progress(let tasks) = event { return tasks }
+            }
+            return []
+        }
+        #expect(first.map(\.percentage) == [100])
+        transport.finish()
+    }
 }

@@ -982,8 +982,8 @@ actor LSPClient {
     }
 
     private static func progressPercentage(_ value: LSPJSONValue?) -> Int? {
-        guard case .number(let raw)? = value, let number = Double(raw) else { return nil }
-        return min(max(Int(number.rounded()), 0), 100)
+        guard case .number(let raw)? = value, let number = Double(raw), number.isFinite else { return nil }
+        return Int(min(max(number.rounded(), 0), 100))
     }
 
     private func sendErrorResponse(id: LSPID, code: Int, message: String) throws {
