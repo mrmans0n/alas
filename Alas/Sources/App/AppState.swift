@@ -5376,11 +5376,13 @@ final class AppState {
     /// Three-layer resolution against a concrete worktree: an explicit
     /// project override, then the repo's `.alas/config.json` default (local
     /// projects only, and only when the id names an installed, enabled
-    /// agent), then the global default.
+    /// agent), then the global default. SSH projects never resolve to a
+    /// registry install that only exists on this Mac.
     func defaultAgentID(projectId: String, worktreeRoot: URL) -> String? {
-        let scripts = projects.first { $0.id == projectId }?.startupScripts ?? .defaults
+        let project = projects.first { $0.id == projectId }
+        let scripts = project?.startupScripts ?? .defaults
         var repoDefault: String?
-        if projects.first(where: { $0.id == projectId })?.host == nil,
+        if project?.host == nil,
            let repo = repoConfig(worktreeRoot: worktreeRoot),
            let candidate = repo.defaultAgent {
             if agentRegistry.agents.first(where: { $0.id == candidate })?.isEnabled == true {
@@ -5391,10 +5393,14 @@ final class AppState {
                 )
             }
         }
-        return scripts.defaultAgentID(
+        let resolved = scripts.defaultAgentID(
             repoDefaultAgent: repoDefault,
             globalAgentID: config.agents.worktreeAutoLaunch.agentId
         )
+        if project?.host != nil, agent(id: resolved)?.canRunOnRemoteHost == false {
+            return nil
+        }
+        return resolved
     }
 
     private func agentBypassPermissionsEnabled(for project: ProjectConfig) -> Bool {
