@@ -30,6 +30,12 @@ final class LSPServerStatus {
 
     @ObservationIgnored private var initialized = false
     @ObservationIgnored private var tasks: [LSPClient.ProgressTask] = []
+    /// `initialize` has either succeeded or failed. Exit and failure reports
+    /// that arrive before that are held so a server dying mid-initialize
+    /// publishes one crash carrying both, not a partial one that is rewritten.
+    @ObservationIgnored private var initializeResolved = false
+    @ObservationIgnored private var pendingExit: LSPClient.ExitDetail?
+    @ObservationIgnored private var pendingInitializeError: String?
 
     init(language: String, command: String, root: String, remoteHost: String?) {
         self.language = language
@@ -41,11 +47,21 @@ final class LSPServerStatus {
     /// A fresh process for this server is starting (spawn or restart).
     func reset() {
         initialized = false
+        initializeResolved = false
+        pendingExit = nil
+        pendingInitializeError = nil
         tasks = []
         set(.starting)
     }
 
     func markInitialized() {
+        initializeResolved = true
+        if let exit = pendingExit {
+            // The process exited between the initialize reply and this hop.
+            pendingExit = nil
+            publishCrash(exit: exit, initializeError: nil)
+            return
+        }
         initialized = true
         if case .crashed = phase { return }
         set(tasks.isEmpty ? .ready : .indexing(tasks))
@@ -60,22 +76,41 @@ final class LSPServerStatus {
     }
 
     func recordExit(_ exit: LSPClient.ExitDetail) {
-        var detail = crashDetail ?? CrashDetail()
-        detail.exitCode = exit.exitCode
-        detail.uptime = exit.uptime
-        detail.outputTail = exit.outputTail
-        set(.crashed(detail))
+        guard initializeResolved else {
+            pendingExit = exit
+            return
+        }
+        // An initialize failure that was waiting for this exit completes now.
+        let error = pendingInitializeError
+        pendingInitializeError = nil
+        publishCrash(exit: exit, initializeError: error)
     }
 
-    func recordInitializeFailure(_ message: String) {
-        var detail = crashDetail ?? CrashDetail()
-        detail.initializeError = message
-        set(.crashed(detail))
+    /// `exitExpected`: the failure was caused by the server process ending, so
+    /// its exit report follows (or already arrived) and the crash is published
+    /// once that report merges in.
+    func recordInitializeFailure(_ message: String, exitExpected: Bool = false) {
+        initializeResolved = true
+        if let exit = pendingExit {
+            pendingExit = nil
+            publishCrash(exit: exit, initializeError: message)
+        } else if exitExpected {
+            pendingInitializeError = message
+        } else {
+            publishCrash(exit: nil, initializeError: message)
+        }
     }
 
-    private var crashDetail: CrashDetail? {
-        if case .crashed(let detail) = phase { return detail }
-        return nil
+    private func publishCrash(exit: LSPClient.ExitDetail?, initializeError: String?) {
+        var detail = CrashDetail()
+        if case .crashed(let existing) = phase { detail = existing }
+        if let exit {
+            detail.exitCode = exit.exitCode
+            detail.uptime = exit.uptime
+            detail.outputTail = exit.outputTail
+        }
+        if let initializeError { detail.initializeError = initializeError }
+        set(.crashed(detail))
     }
 
     private func set(_ newPhase: Phase) {

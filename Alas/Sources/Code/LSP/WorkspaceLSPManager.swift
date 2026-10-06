@@ -900,13 +900,17 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let status = statuses[key]
         if let error {
             holder.lifeState = .dead
-            status?.recordInitializeFailure(String(describing: error))
-        } else if case .crashed? = status?.phase {
-            // The process exited between the initialize reply and this hop.
-            holder.lifeState = .dead
+            var exitExpected = false
+            if case LSPError.transportClosed = error { exitExpected = true }
+            status?.recordInitializeFailure(String(describing: error), exitExpected: exitExpected)
         } else {
-            holder.lifeState = .ready
             status?.markInitialized()
+            if case .crashed? = status?.phase {
+                // The process exited between the initialize reply and this hop.
+                holder.lifeState = .dead
+            } else {
+                holder.lifeState = .ready
+            }
         }
         holders[key] = holder
         bumpStateTick()

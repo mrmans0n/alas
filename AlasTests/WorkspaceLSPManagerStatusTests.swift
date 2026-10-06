@@ -736,6 +736,34 @@ struct WorkspaceLSPManagerStatusTests {
         #expect(detail.outputTail == ["dyld: missing libfoo"])
     }
 
+    @Test("exit during initialize publishes one merged crash whichever report arrives first", arguments: [true, false])
+    func exitDuringInitializePublishesOnlyTheMergedCrash(exitReportedFirst: Bool) {
+        let status = LSPServerStatus(language: "swift", command: "sourcekit-lsp", root: "/tmp", remoteHost: nil)
+        status.reset()
+        let exit = LSPClient.ExitDetail(exitCode: 2, uptime: .seconds(1), outputTail: ["dyld: missing libfoo"])
+        let merged = LSPServerStatus.Phase.crashed(.init(
+            exitCode: 2,
+            uptime: .seconds(1),
+            outputTail: ["dyld: missing libfoo"],
+            initializeError: "transport closed"
+        ))
+
+        var observed = [status.phase]
+        if exitReportedFirst {
+            status.recordExit(exit)
+            observed.append(status.phase)
+            status.recordInitializeFailure("transport closed", exitExpected: true)
+        } else {
+            status.recordInitializeFailure("transport closed", exitExpected: true)
+            observed.append(status.phase)
+            status.recordExit(exit)
+        }
+        observed.append(status.phase)
+
+        #expect(observed.dropLast().allSatisfy { $0 == .starting })
+        #expect(observed.last == merged)
+    }
+
     @Test func progressAfterReadyShowsIndexingWithoutTickingState() async throws {
         let transport = FakeTransport()
         transport.onSend = { sent in
