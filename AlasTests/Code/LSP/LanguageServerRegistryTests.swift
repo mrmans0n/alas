@@ -36,6 +36,32 @@ struct LanguageServerRegistryTests {
         #expect(r.entry(forLanguage: "swift") == nil)
     }
 
+    @Test("configuredLanguage reports a language only a disabled entry claims")
+    func configuredLanguageCountsDisabledEntries() {
+        let disabled = LanguageServerConfig(
+            language: "zig", extensions: ["zig"], command: "zls", args: [], env: [:],
+            rootMarkers: [], enabled: false
+        )
+        let r = LanguageServerRegistry(userDefined: [disabled])
+        #expect(r.language(forPath: "src/main.zig") == nil)
+        #expect(r.configuredLanguage(forPath: "src/main.zig") == "zig")
+    }
+
+    @Test("configuredLanguage prefers an enabled claimant over a disabled one")
+    func configuredLanguagePrefersEnabledEntries() {
+        // "aaa-lang" sorts before "zzz-lang", so a first-match scan would pick the disabled one.
+        let disabled = LanguageServerConfig(
+            language: "aaa-lang", extensions: ["shared"], command: "aaa", args: [], env: [:],
+            rootMarkers: [], enabled: false
+        )
+        let enabled = LanguageServerConfig(
+            language: "zzz-lang", extensions: ["shared"], command: "zzz", args: [], env: [:],
+            rootMarkers: [], enabled: true
+        )
+        let r = LanguageServerRegistry(userDefined: [disabled, enabled])
+        #expect(r.configuredLanguage(forPath: "file.shared") == "zzz-lang")
+    }
+
     @Test("language inferred from extension")
     func byExtension() {
         let r = LanguageServerRegistry(userDefined: [])

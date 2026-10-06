@@ -1034,6 +1034,32 @@ struct WorkspaceLSPManagerStatusTests {
         spawns.transports.forEach { $0.finish() }
     }
 
+    @Test func leaseSetShowsADisabledChipForAFileOnlyADisabledLanguageClaims() async throws {
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(language: "zig", extensions: ["zig"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: false),
+        ])
+        let mgr = manager(registry: registry, makeClient: { _, _, _, language, rootURI, _ in
+            Issue.record("a disabled language must not spawn a server")
+            return readyClient(language: language, rootURI: rootURI)
+        })
+        let file = "main.zig"
+        try Data().write(to: root.appendingPathComponent(file))
+        let inputs = LSPServerLeaseSet.inputs(worktreeRoot: root, relativePaths: [file], registry: mgr.activeRegistry)
+        #expect(inputs.map(\.language) == ["zig"])
+
+        let leaseSet = LSPServerLeaseSet()
+        await leaseSet.update(inputs: inputs, manager: mgr)
+
+        #expect(leaseSet.chips.count == 1)
+        guard case .unavailable(let language, let reason)? = leaseSet.chips.first else {
+            Issue.record("expected a disabled chip, got \(leaseSet.chips.map(\.id))")
+            return
+        }
+        #expect(language == "zig")
+        #expect(reason == .disabled)
+        leaseSet.release()
+    }
+
     @Test func leaseResolvesNestedPackageRootFromRootMarkers() async throws {
         let package = root.appendingPathComponent("Packages/Core", isDirectory: true)
         try FileManager.default.createDirectory(at: package.appendingPathComponent("Sources"), withIntermediateDirectories: true)
