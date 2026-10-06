@@ -811,6 +811,26 @@ struct WorktreeSymbolIndexTests {
         #expect(Set(failed.symbols.map(\.name)) == ["AlphaRenamed", "Gamma"])
     }
 
+    @Test("a file that could not be read is retried once readable, even with an unchanged stamp")
+    func retriesUnreadableFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("Locked.swift")
+        try "struct Locked {}".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let index = WorktreeSymbolIndex()
+
+        let locked = try #require(await lastSnapshot(index.updates(root: root, files: ["Locked.swift"])))
+        #expect(locked.symbols.isEmpty)
+
+        // chmod changes neither size nor modification date.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        let readable = try #require(await lastSnapshot(index.updates(root: root, files: ["Locked.swift"])))
+        #expect(readable.symbols.map(\.name) == ["Locked"])
+    }
+
     @Test("files over the size cap are skipped")
     func skipsLargeFiles() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -982,15 +1002,14 @@ actor WorktreeSymbolIndex {
             if let url = SymbolSource.containedLocalURL(root: root, relativePath: path),
                let stamp = Self.stamp(of: url) {
                 if current[path]?.stamp != stamp {
-                    let symbols: [SymbolEntry]
                     if stamp.size > Self.maxFileBytes {
-                        symbols = []
-                    } else {
-                        let source = SymbolSource.readBounded(url)
-                        symbols = source.map { SymbolExtractor.symbols(in: $0, relativePath: path) } ?? []
+                        current[path] = Record(stamp: stamp, symbols: [])
+                    } else if let source = SymbolSource.readBounded(url) {
+                        current[path] = Record(stamp: stamp, symbols: SymbolExtractor.symbols(in: source, relativePath: path))
                         parsed += 1
                     }
-                    current[path] = Record(stamp: stamp, symbols: symbols)
+                    // A failed read commits nothing: the previous record (and
+                    // its old stamp) stays, so the next refresh retries.
                 }
             } else {
                 current[path] = nil
@@ -1725,14 +1744,18 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
         let truncated: Bool
     }
 
-    /// Resolves every symbol link in `blocks`, once per URI, off the main actor.
+    /// Resolves every symbol link in `blocks`, once per URI, off the main
+    /// actor. Each file is read once per pass, however many mentions it has.
     static func resolve(blocks: [ACPContentBlock], worktreeRoot: URL) async -> [String: Resolution] {
         var result: [String: Resolution] = [:]
+        var sources: [String: String?] = [:]
         for block in blocks {
             guard case .resourceLink(let uri, _) = block, result[uri] == nil,
                   let target = target(fromURI: uri) else { continue }
-            let source = await SymbolSource.read(root: worktreeRoot, relativePath: target.path)
-            result[uri] = resolve(target, source: source)
+            if sources[target.path] == nil {
+                sources[target.path] = .some(await SymbolSource.read(root: worktreeRoot, relativePath: target.path))
+            }
+            result[uri] = resolve(target, source: sources[target.path] ?? nil)
         }
         return result
     }
@@ -2555,7 +2578,7 @@ Append to `enum ACPSymbolReference`:
     }
 ```
 
-`ACPTranscriptMessageRows.swift`: add `@Environment(\.openURL) private var openURL` to `UserMessageRow`, and replace the `FileChip(...)` inside `ForEach(others, id: \.uri)` with:
+`ACPTranscriptMessageRows.swift`: add `@Environment(\.openURL) private var openURL` to `UserMessageRow`. Change `ForEach(others, id: \.uri) { a in` to `ForEach(Array(others.enumerated()), id: \.offset) { _, a in`: the same symbol mentioned twice has the same URI, and duplicate ids collapse chips (the image row already keys by index for the same reason). Then replace the `FileChip(...)` inside it with:
 
 ```swift
                                 if let target = ACPSymbolReference.target(fromURI: a.uri) {
@@ -2579,7 +2602,7 @@ Append to `enum ACPSymbolReference`:
                                 }
 ```
 
-Apply the same branch in `ACPSubagentPromptRow` (with its own `@Environment(\.openURL) private var openURL`), keeping its existing non-symbol `FileChip(path:lines:iconSystemName: "at")`.
+Apply the same `ForEach` change and branch in `ACPSubagentPromptRow` (with its own `@Environment(\.openURL) private var openURL`), keeping its existing non-symbol `FileChip(path:lines:iconSystemName: "at")`.
 
 - [ ] **Step 4: Run tests and build**
 
