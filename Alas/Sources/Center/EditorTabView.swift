@@ -8,10 +8,6 @@ private struct LSPStatusProbes {
         func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus {
             inner.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot)
         }
-        @MainActor
-        func serverPhase(forFile fileURL: URL, worktreeRoot: URL) -> LSPServerStatus.Phase? {
-            inner.serverStatus(forFile: fileURL, worktreeRoot: worktreeRoot)?.phase
-        }
     }
 
     struct Availability: EditorLSPStatusResolver.AvailabilityProbe {
