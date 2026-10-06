@@ -364,11 +364,23 @@ final class WorkspaceLSPManager: DocumentFormatter {
         case abandoned
     }
 
-    private func resolveKey(entry: LanguageServerConfig, worktreeRoot: URL, fileURL: URL) async -> (key: Key, lspRoot: URL, remoteHost: String?) {
+    /// `offMainLocalProbe` moves the local marker walk (a stat per ancestor)
+    /// off the main actor. Leases pass it: panes retain servers from view
+    /// tasks. Documents keep the synchronous walk so their suspension order,
+    /// which the close/open race handling depends on, is unchanged.
+    private func resolveKey(
+        entry: LanguageServerConfig,
+        worktreeRoot: URL,
+        fileURL: URL,
+        offMainLocalProbe: Bool = false
+    ) async -> (key: Key, lspRoot: URL, remoteHost: String?) {
         let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreeRoot.path)
         let lspRoot: URL
         if let remoteHost {
             lspRoot = await Self.resolveRemoteLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers, host: remoteHost)
+        } else if offMainLocalProbe {
+            let markers = entry.rootMarkers
+            lspRoot = await Task.detached { Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers) }.value
         } else {
             lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
         }
@@ -1006,7 +1018,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         guard let entry = registry.allEntries().first(where: { $0.language == languageId }), entry.enabled else {
             return .unavailable(language: languageId, reason: .disabled)
         }
-        let target = await resolveKey(entry: entry, worktreeRoot: worktreeRoot, fileURL: fileURL)
+        let target = await resolveKey(entry: entry, worktreeRoot: worktreeRoot, fileURL: fileURL, offMainLocalProbe: true)
         let key = target.key
         // Record the lease before claiming so no teardown can see the holder
         // as unreferenced while the claim is suspended. Nothing can release
@@ -1596,7 +1608,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// root for files in nested packages — `Package.swift`, `*.xcodeproj`,
     /// `.git`, etc. Falls back to `worktreeRoot` when no marker is found.
     /// Patterns may contain `*` for simple globs.
-    static func resolveLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String]) -> URL {
+    nonisolated static func resolveLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String]) -> URL {
         guard !markers.isEmpty else { return worktreeRoot }
         let fm = FileManager.default
         let worktreePath = worktreeRoot.standardizedFileURL.path
@@ -1649,7 +1661,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
     }
 
-    private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {
+    nonisolated private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {
         var entries: [String]?
         for marker in markers {
             if marker.contains("*") {
@@ -1666,7 +1678,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// (`*.xcodeproj`, `*.json`, `Package.*`) without pulling in regex or
     /// `fnmatch(3)`. Multiple `*` are supported; `?` and character classes
     /// are not.
-    private static func glob(_ pattern: String, _ name: String) -> Bool {
+    nonisolated private static func glob(_ pattern: String, _ name: String) -> Bool {
         if !pattern.contains("*") { return pattern == name }
         let parts = pattern.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
         var idx = name.startIndex

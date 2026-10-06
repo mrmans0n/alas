@@ -15,29 +15,38 @@ final class LSPServerLeaseSet {
     private(set) var chips: [LSPServerChipModel] = []
     @ObservationIgnored private var leases: [UUID: LSPServerLease] = [:]
 
-    /// Files that exist in the working tree and map to a configured language,
-    /// enabled or not. Matches the existing diff LSP gate.
+    /// Paths that map to a configured language, enabled or not. Pure: callers
+    /// run it from view bodies, so it never touches the file system.
+    /// `update(inputs:manager:)` drops the ones that are not existing regular
+    /// files, matching the existing diff LSP gate.
     static func inputs(worktreeRoot: URL, relativePaths: [String], registry: LanguageServerRegistry) -> [Input] {
         relativePaths.compactMap { path in
-            guard let language = registry.configuredLanguage(forPath: path) else { return nil }
+            registry.configuredLanguage(forPath: path).map { Input(worktreeRoot: worktreeRoot, relativePath: path, language: $0) }
+        }
+    }
+
+    nonisolated private static func existingRegularFiles(_ inputs: [Input]) -> [Input] {
+        let fileManager = FileManager.default
+        return inputs.filter { input in
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: worktreeRoot.appendingPathComponent(path).path, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else { return nil }
-            return Input(worktreeRoot: worktreeRoot, relativePath: path, language: language)
+            return fileManager.fileExists(atPath: input.worktreeRoot.appendingPathComponent(input.relativePath).path, isDirectory: &isDirectory)
+                && !isDirectory.boolValue
         }
     }
 
     /// Retains one server per (root, language, directory) group, then drops the
     /// previous leases. Directories bound remote root probes; duplicates that
-    /// resolve to the same server are released at once.
+    /// resolve to the same server are released at once. The existence check
+    /// runs off the main actor: a review can list thousands of files.
     func update(inputs: [Input], manager: WorkspaceLSPManager) async {
         struct Group: Hashable {
             let worktreeRoot: URL
             let language: String
             let directory: String
         }
-        let groups = Dictionary(grouping: inputs) {
+        let present = await Task.detached { Self.existingRegularFiles(inputs) }.value
+        guard !Task.isCancelled else { return }
+        let groups = Dictionary(grouping: present) {
             Group(worktreeRoot: $0.worktreeRoot, language: $0.language, directory: ($0.relativePath as NSString).deletingLastPathComponent)
         }
         var acquired: [UUID: LSPServerLease] = [:]

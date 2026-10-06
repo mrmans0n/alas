@@ -18,6 +18,7 @@ struct WorkspaceLSPManagerStatusTests {
     private func manager(
         withFakeEntry language: String = "swift",
         enabled: Bool = true,
+        rootMarkers: [String] = [],
         makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil,
         sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }
     ) -> WorkspaceLSPManager {
@@ -31,7 +32,7 @@ struct WorkspaceLSPManagerStatusTests {
                 command: "/usr/bin/true",
                 args: [],
                 env: [:],
-                rootMarkers: [],
+                rootMarkers: rootMarkers,
                 enabled: enabled
             )
         ])
@@ -938,6 +939,56 @@ struct WorkspaceLSPManagerStatusTests {
         try await eventually("grace for the fresh server") { gate.requested == [WorkspaceLSPManager.idleGrace] }
         gate.fire()
         try await eventually("fresh server stopped") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseSetDerivesInputsWithoutTouchingDiskAndRetainsOnlyRegularFiles() async throws {
+        let present = "present.swift"
+        try Data().write(to: root.appendingPathComponent(present))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("dir.swift"), withIntermediateDirectories: true)
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let inputs = LSPServerLeaseSet.inputs(
+            worktreeRoot: root,
+            relativePaths: ["missing.swift", "dir.swift", present, "notes.txt"],
+            registry: mgr.activeRegistry
+        )
+        #expect(inputs.map(\.relativePath) == ["missing.swift", "dir.swift", present])
+
+        let leaseSet = LSPServerLeaseSet()
+        await leaseSet.update(inputs: Array(inputs.prefix(2)), manager: mgr)
+        #expect(leaseSet.chips.isEmpty)
+        #expect(spawns.transports.isEmpty)
+
+        await leaseSet.update(inputs: inputs, manager: mgr)
+        #expect(leaseSet.chips.count == 1)
+        #expect(spawns.transports.count == 1)
+        leaseSet.release()
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseResolvesNestedPackageRootFromRootMarkers() async throws {
+        let package = root.appendingPathComponent("Packages/Core", isDirectory: true)
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try Data().write(to: package.appendingPathComponent("Package.swift"))
+        let nestedFile = package.appendingPathComponent("Sources/Core.swift")
+        let spawns = SpawnLog()
+        let mgr = manager(rootMarkers: ["Package.swift"], makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: nestedFile, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        #expect(lease.status.root == package.standardizedFileURL.path)
         spawns.transports.forEach { $0.finish() }
     }
 }
