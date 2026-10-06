@@ -932,7 +932,8 @@ actor LSPClient {
         switch kind {
         case "begin":
             guard let title = value["title"]?.stringValue else { return }
-            if progressTasks[token] == nil { progressOrder.append(token) }
+            progressOrder.removeAll { $0 == token }
+            progressOrder.append(token)
             progressTasks[token] = ProgressTask(
                 token: token,
                 title: title,
