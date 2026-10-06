@@ -128,11 +128,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// stays put.
     private(set) var availabilityGeneration = 0
     @ObservationIgnored private var graceTasks: [Key: Task<Void, Never>] = [:]
-    /// Live `LSPServerLease` IDs per server key, never holding an empty set.
-    /// Kept apart from `holders` so a release that lands while the holder is
-    /// being replaced (restart, dead-client respawn) is never lost, and so
-    /// leases stay attached to whichever holder currently serves the key.
-    @ObservationIgnored private var leaseIDsByKey: [Key: Set<UUID>] = [:]
+    /// Live `LSPServerLease`s per server key (lease id to the language it was
+    /// retained for), never holding an empty dictionary. Kept apart from
+    /// `holders` so a release that lands while the holder is being replaced
+    /// (restart, dead-client respawn) is never lost, and so leases stay
+    /// attached to whichever holder currently serves the key. The language
+    /// lets a restart respawn through an alias that is still enabled.
+    @ObservationIgnored private var leaseIDsByKey: [Key: [UUID: String]] = [:]
     private let sleep: @Sendable (Duration) async throws -> Void
 
     /// Bumping counter that lets `@Observable` consumers (the status badge)
@@ -1030,7 +1032,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // as unreferenced while the claim is suspended. Nothing can release
         // this id until the lease object exists below.
         let id = UUID()
-        leaseIDsByKey[key, default: []].insert(id)
+        leaseIDsByKey[key, default: [:]][id] = languageId
         switch await claimHolder(key: key, entry: entry, lspRoot: target.lspRoot, remoteHost: target.remoteHost, languageId: languageId, claim: .lease) {
         case .claimed(let client, let ready, let isFirstOpener, _):
             if isFirstOpener { reapOnInitializeFailure(client, ready: ready) }
@@ -1057,7 +1059,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private func releaseLease(key: Key, id: UUID) {
         // Forget the lease before looking for its holder: the holder is absent
         // mid-restart and mid-respawn, and the release must still count.
-        guard leaseIDsByKey[key]?.remove(id) != nil else { return }
+        guard leaseIDsByKey[key]?.removeValue(forKey: id) != nil else { return }
         if leaseIDsByKey[key]?.isEmpty == true { leaseIDsByKey.removeValue(forKey: key) }
         guard let holder = holders[key] else { return }
         settleIfUnreferenced(holder, key: key)
@@ -1184,8 +1186,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // respawn a holder when there are any; a lease-only server needs its
         // own. Only claim when none exists: `claimHolder` would discard a dead
         // holder, and with it the documents just reopened onto it.
-        if holders[key] == nil, leaseIDsByKey[key] != nil, let entry = registry.entry(forLanguage: language) {
-            if case .claimed(let client, let ready, true, _) = await claimHolder(key: key, entry: entry, lspRoot: reopenRoot, remoteHost: key.host, languageId: language, claim: .lease) {
+        if holders[key] == nil, let entry = leaseRespawnEntry(for: key) {
+            if case .claimed(let client, let ready, true, _) = await claimHolder(key: key, entry: entry, lspRoot: reopenRoot, remoteHost: key.host, languageId: entry.language, claim: .lease) {
                 reapOnInitializeFailure(client, ready: ready)
             }
             // The last lease may have been released while the replacement spawned.
@@ -1196,6 +1198,20 @@ final class WorkspaceLSPManager: DocumentFormatter {
             statuses.removeValue(forKey: key)
             lifecycleTasks.removeValue(forKey: key)?.cancel()
         }
+    }
+
+    /// The enabled entry a leased server respawns through. Languages that
+    /// share one server (typescript and javascript) share a key, so the
+    /// language a restart was started for may have been disabled while another
+    /// leased alias is still enabled. Prefers the leases' own languages, then
+    /// any enabled entry that spawns the same command.
+    private func leaseRespawnEntry(for key: Key) -> LanguageServerConfig? {
+        guard let leases = leaseIDsByKey[key] else { return nil }
+        let leasedLanguages = Set(leases.values)
+        let sameServer = registry.allEntries().filter {
+            $0.enabled && $0.command == key.command && $0.args == key.args && $0.env == key.env
+        }
+        return sameServer.first { leasedLanguages.contains($0.language) } ?? sameServer.first
     }
 
     /// True when `fileURL` has already been delivered to a live (non-dead)

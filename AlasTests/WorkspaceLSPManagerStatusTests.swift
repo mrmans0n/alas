@@ -36,7 +36,15 @@ struct WorkspaceLSPManagerStatusTests {
                 enabled: enabled
             )
         ])
-        return WorkspaceLSPManager(
+        return manager(registry: registry, makeClient: makeClient, sleep: sleep)
+    }
+
+    private func manager(
+        registry: LanguageServerRegistry,
+        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }
+    ) -> WorkspaceLSPManager {
+        WorkspaceLSPManager(
             registry: registry,
             makeAvailability: {
                 LanguageServerAvailability(
@@ -989,6 +997,38 @@ struct WorkspaceLSPManagerStatusTests {
         }
 
         #expect(lease.status.root == package.standardizedFileURL.path)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func restartRespawnsLeaseOnlyServerThroughAnEnabledAlias() async throws {
+        func registry(typescriptEnabled: Bool) -> LanguageServerRegistry {
+            LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(language: "typescript", extensions: ["ts"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: typescriptEnabled),
+                LanguageServerConfig(language: "javascript", extensions: ["js"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true),
+            ])
+        }
+        let spawns = SpawnLog()
+        let mgr = manager(registry: registry(typescriptEnabled: true), makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        // Both aliases resolve to one server: same root, command, args and env.
+        guard case .serving(let typescriptLease) = await mgr.retainServer(worktreeRoot: root, fileURL: root.appendingPathComponent("a.ts"), languageId: "typescript"),
+              case .serving(let javascriptLease) = await mgr.retainServer(worktreeRoot: root, fileURL: root.appendingPathComponent("a.js"), languageId: "javascript")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        #expect(typescriptLease.status === javascriptLease.status)
+        try await eventually("ready") { typescriptLease.status.phase == .ready }
+
+        mgr.updateRegistry(registry(typescriptEnabled: false))
+        await mgr.restart(status: typescriptLease.status)
+
+        #expect(spawns.transports.count == 2)
+        try await eventually("ready after restart") { javascriptLease.status.phase == .ready }
+        #expect(spawns.transports[0].terminateCount == 1)
         spawns.transports.forEach { $0.finish() }
     }
 }
