@@ -191,7 +191,10 @@ struct ACPRegistryTests {
         let installer = ACPRegistryInstaller(
             root: root,
             platform: "darwin-aarch64",
-            download: { _ in Issue.record("npm installs download nothing"); throw URLError(.badURL) },
+            download: { _ in
+                Issue.record("npm installs download nothing")
+                throw URLError(.badURL)
+            },
             runner: { command, args in
                 #expect(command == "npm")
                 #expect(args.last == "@google/gemini-cli@0.62.0")
