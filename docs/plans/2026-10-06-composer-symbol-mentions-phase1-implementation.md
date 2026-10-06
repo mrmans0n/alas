@@ -396,11 +396,14 @@ struct SymbolExtractorTests {
 
         func (s *Server) Start() {}
 
+        func (c Client) Start() {}
+
         func main() {}
         """, symbols: [
             ("Server", .type, nil, 2, 2),
-            ("Start", .method, nil, 4, 4),
-            ("main", .function, nil, 6, 6),
+            ("Start", .method, "Server", 4, 4),
+            ("Start", .method, "Client", 6, 6),
+            ("main", .function, nil, 8, 8),
         ]),
         Expected(path: "src/lib.rs", source: """
         pub struct Index;
@@ -690,6 +693,12 @@ enum SymbolExtractor {
     }
 
     private static func containerName(of declaration: Node, text: NSString) -> String? {
+        // Go methods name their type in the receiver, `func (s *Server) Start()`.
+        if declaration.nodeType == "method_declaration",
+           let receiver = declaration.child(byFieldName: "receiver"),
+           let type = firstDescendant(of: receiver, type: "type_identifier") {
+            return text.substring(with: type.range)
+        }
         var current = declaration.parent
         while let node = current {
             if let type = node.nodeType, containerTypes.contains(type),
@@ -697,6 +706,15 @@ enum SymbolExtractor {
                 return text.substring(with: nameNode.range)
             }
             current = node.parent
+        }
+        return nil
+    }
+
+    private static func firstDescendant(of node: Node, type: String) -> Node? {
+        for index in 0..<node.childCount {
+            guard let child = node.child(at: index) else { continue }
+            if child.nodeType == type { return child }
+            if let found = firstDescendant(of: child, type: type) { return found }
         }
         return nil
     }
@@ -1074,13 +1092,13 @@ git commit -m "feat(symbols): add incremental worktree symbol index"
             "TabStore.restore", "SessionManager.restore", "Fixture.restore",
             "RestorePolicy", "SessionManagerTests.testRestore",
         ])
-        #expect(MentionSymbolRanking.rank(symbols, query: "sesman rest", limit: 1).map(\.qualifiedName) == ["SessionManager.restore"])
+        #expect(MentionSymbolRanking.rank(symbols, query: "tabst rest", limit: 1).map(\.qualifiedName) == ["TabStore.restore"])
         #expect(MentionSymbolRanking.rank(symbols, query: "zzz", limit: 10).isEmpty)
     }
 
-    @Test("type beats member on an otherwise equal match")
+    @Test("on an equal match, a type beats a member even when the type lives in tests")
     func typeBeatsMember() {
-        let symbols = [symbol("Store", .property, container: "App"), symbol("Store", .class)]
+        let symbols = [symbol("Store", .property, container: "App"), symbol("Store", .class, path: "Tests/StoreTests.swift")]
         #expect(MentionSymbolRanking.rank(symbols, query: "Store", limit: 2).map(\.kind) == [.class, .property])
     }
 
@@ -1227,9 +1245,9 @@ enum MentionSymbolRanking {
         }
         scored.sort {
             if $0.namePriority != $1.namePriority { return $0.namePriority > $1.namePriority }
-            if $0.isTest != $1.isTest { return !$0.isTest }
             if $0.score != $1.score { return $0.score > $1.score }
             if $0.entry.kind.isType != $1.entry.kind.isType { return $0.entry.kind.isType }
+            if $0.isTest != $1.isTest { return !$0.isTest }
             if $0.entry.relativePath.count != $1.entry.relativePath.count {
                 return $0.entry.relativePath.count < $1.entry.relativePath.count
             }
@@ -1240,7 +1258,7 @@ enum MentionSymbolRanking {
 }
 ```
 
-Note the order: the first test pins that a test-path exact match ("Fixture.restore") ranks below non-test exact matches but above weaker non-test matches, so `isTest` sorts right after `namePriority`.
+Order follows the spec: name priority and fuzzy score first, then types before members, non-test before test, shorter path, original order. In the first test the three exact `restore` methods tie on score, so the test-path one sorts last among them.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1410,8 +1428,9 @@ enum ACPSymbolReference {
     }
 
     static func target(fromURI uri: String) -> Target? {
-        guard let components = URLComponents(string: uri), components.scheme == scheme,
-              components.host == "symbol" else { return nil }
+        // URI schemes are case-insensitive; Foundation keeps the original case.
+        guard let components = URLComponents(string: uri), components.scheme?.lowercased() == scheme,
+              components.host?.lowercased() == "symbol" else { return nil }
         var values: [String: String] = [:]
         for item in components.queryItems ?? [] { values[item.name] = item.value }
         guard let path = values["path"], SymbolSource.isSafeRelativePath(path),
@@ -1563,7 +1582,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
             .resourceLink(uri: ACPSymbolReference.uri(for: withoutCode), name: "SessionManager.restore()"),
             .resourceLink(uri: ACPSymbolReference.uri(for: gone), name: "SessionManager.close()"),
             .resourceLink(uri: "file:///tmp/wt/a.swift", name: "a.swift"),
-            .resourceLink(uri: "alas-symbol://symbol?path=../escape.swift&name=x&kind=function&start=0&end=0", name: "x()"),
+            .resourceLink(uri: "ALAS-SYMBOL://symbol?path=../escape.swift&name=x&kind=function&start=0&end=0", name: "x()"),
         ]
         let reference = "Referenced symbol: SessionManager.restore(), method in Sources/SessionManager.swift, lines 4–6."
 
@@ -1581,7 +1600,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         #expect(embedded[5] == blocks[4])
         #expect(embedded[6] == .text("Referenced symbol: x() (unreadable link; not sent)."))
         #expect(!embedded.contains { block in
-            if case .resourceLink(let uri, _) = block { return uri.hasPrefix("alas-symbol:") }
+            if case .resourceLink(let uri, _) = block { return uri.lowercased().hasPrefix("alas-symbol:") }
             return false
         }, "agents never see the alas-symbol scheme")
 
@@ -1725,7 +1744,7 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
             guard case .resourceLink(let uri, let name) = block else { return [block] }
             guard let resolution = resolutions[uri] else {
                 // A symbol link that failed validation never reaches the agent.
-                guard uri.hasPrefix("\(scheme):") else { return [block] }
+                guard uri.lowercased().hasPrefix("\(scheme):") else { return [block] }
                 return [.text("Referenced symbol: \(name ?? "unknown") (unreadable link; not sent).")]
             }
             let reference = referenceText(for: resolution)
