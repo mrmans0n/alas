@@ -47,6 +47,18 @@ struct ACPRegistryInstalledAgent: Codable, Equatable, Identifiable, Sendable {
             supportsModeSelection: true
         )
     }
+
+    /// Installs the registry browser has no row for: entries dropped from the
+    /// registry, or every install when the registry could not be loaded
+    /// (`registry == nil`). The browser lists these so they stay uninstallable.
+    static func unlisted(
+        _ installed: [ACPRegistryInstalledAgent],
+        registry: [ACPRegistryAgent]?
+    ) -> [ACPRegistryInstalledAgent] {
+        guard let registry else { return installed }
+        let listed = Set(registry.map(\.id))
+        return installed.filter { !listed.contains($0.registryID) }
+    }
 }
 
 extension AppConfig.Agents {

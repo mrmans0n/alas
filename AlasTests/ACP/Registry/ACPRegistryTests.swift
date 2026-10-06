@@ -70,6 +70,14 @@ struct ACPRegistryTests {
         ) == .unsupported)
     }
 
+    @Test func installsMissingFromTheRegistryStayListedForUninstall() {
+        let installed = [Self.record(registryID: "goose", version: "1.0.0"), Self.record(registryID: "amp", version: "0.9.0")]
+
+        #expect(ACPRegistryInstalledAgent.unlisted(installed, registry: [Self.agent(id: "amp")]).map(\.registryID) == ["goose"])
+        // When the registry cannot be loaded, every install needs a row.
+        #expect(ACPRegistryInstalledAgent.unlisted(installed, registry: nil) == installed)
+    }
+
     @Test func curatedRegistryAgentsMapToBuiltinLaunchSpecs() {
         let builtinIDs = Set(ACPLaunchCatalog.builtinSpecs.map(\.agentID))
         for builtinID in ACPRegistryCuratedAgents.builtinIDByRegistryID.values {
@@ -119,6 +127,21 @@ struct ACPRegistryTests {
         #expect(throws: ACPRegistryInstallError.missingNpmExecutable("lib")) {
             try ACPRegistryInstaller.npmExecutableName(manifest: Data(manifest.utf8), packageName: "lib")
         }
+    }
+
+    @Test(arguments: ["../outside", "a/b", "", "Upper", "-lead"])
+    func uninstallRejectsRegistryIDsThatAreNotSafePathComponents(id: String) throws {
+        let parent = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let root = parent.appendingPathComponent("acp-agents")
+        let outside = parent.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let installer = ACPRegistryInstaller(root: root)
+
+        #expect(throws: ACPRegistryInstallError.invalidRegistryID(id)) {
+            try installer.uninstall(registryID: id)
+        }
+        #expect(FileManager.default.fileExists(atPath: outside.path))
     }
 
     // MARK: - Installs

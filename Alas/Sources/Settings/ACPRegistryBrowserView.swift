@@ -38,6 +38,21 @@ final class ACPRegistryBrowserModel {
         agents.filter { $0.matches(query: query) }
     }
 
+    func unlistedInstalls(_ installed: [ACPRegistryInstalledAgent]) -> [ACPRegistryInstalledAgent] {
+        let registry: [ACPRegistryAgent]?
+        switch loadState {
+        case .loading: return []
+        case .failed: registry = nil
+        case .loaded(let agents): registry = agents
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ACPRegistryInstalledAgent.unlisted(installed, registry: registry).filter {
+            trimmed.isEmpty
+                || $0.displayName.localizedCaseInsensitiveContains(trimmed)
+                || $0.registryID.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
     func install(_ agent: ACPRegistryAgent, state: AppState) async {
         guard operations[agent.id] == nil else { return }
         operations[agent.id] = .installing
@@ -102,6 +117,7 @@ struct ACPRegistryBrowserView: View {
 
     @ViewBuilder
     private var content: some View {
+        let unlisted = model.unlistedInstalls(state.config.agents.registry)
         switch model.loadState {
         case .loading:
             VStack(spacing: 8) {
@@ -121,10 +137,18 @@ struct ACPRegistryBrowserView: View {
                 AlasButton(title: "Retry", style: .normal) {
                     Task { await model.load() }
                 }
+                if !unlisted.isEmpty {
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            unlistedRows(unlisted, note: "Installed from the ACP registry.")
+                        }
+                    }
+                    .padding(.top, 8)
+                }
             }
         case .loaded(let agents):
             let visible = model.visibleAgents(agents)
-            if visible.isEmpty {
+            if visible.isEmpty && unlisted.isEmpty {
                 Text("No agents match “\(model.query)”.")
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
@@ -144,10 +168,66 @@ struct ACPRegistryBrowserView: View {
                                 onUninstall: { model.uninstall(registryID: agent.id, state: state) }
                             )
                         }
+                        unlistedRows(unlisted, note: "No longer listed in the ACP registry.")
                     }
                 }
             }
         }
+    }
+
+    private func unlistedRows(_ installs: [ACPRegistryInstalledAgent], note: String) -> some View {
+        ForEach(installs) { install in
+            ACPRegistryUnlistedRow(
+                install: install,
+                note: note,
+                error: model.errors[install.registryID],
+                onUninstall: { model.uninstall(registryID: install.registryID, state: state) }
+            )
+        }
+    }
+}
+
+/// An install with no registry row; it can only be uninstalled.
+private struct ACPRegistryUnlistedRow: View {
+    let install: ACPRegistryInstalledAgent
+    let note: String
+    let error: String?
+    let onUninstall: () -> Void
+    @Environment(\.theme) var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(install.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    Text(install.version)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+                if let error {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("warn"))
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            AlasButton(title: "Uninstall", style: .subtle, action: onUninstall)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color("bg-2"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(theme.color("line-soft"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

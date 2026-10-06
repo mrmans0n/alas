@@ -3,6 +3,7 @@ import Foundation
 
 enum ACPRegistryInstallError: LocalizedError, Equatable {
     case unsupportedPlatform(String)
+    case invalidRegistryID(String)
     case checksumMismatch
     case invalidCommand(String)
     case missingExecutable(String)
@@ -14,6 +15,8 @@ enum ACPRegistryInstallError: LocalizedError, Equatable {
         switch self {
         case .unsupportedPlatform(let name):
             return "\(name) has no macOS distribution in the ACP registry."
+        case .invalidRegistryID(let id):
+            return "`\(id)` is not a valid ACP registry agent id."
         case .checksumMismatch:
             return "The downloaded archive does not match the registry checksum."
         case .invalidCommand(let command):
@@ -67,6 +70,8 @@ struct ACPRegistryInstaller: Sendable {
     }
 
     func install(_ agent: ACPRegistryAgent) async throws -> ACPRegistryInstalledAgent {
+        // Validate before any filesystem work: the id names the install directory.
+        _ = try installDirectory(registryID: agent.id)
         guard let plan = agent.installPlan(platform: platform) else {
             throw ACPRegistryInstallError.unsupportedPlatform(agent.name)
         }
@@ -102,13 +107,24 @@ struct ACPRegistryInstaller: Sendable {
     }
 
     func uninstall(registryID: String) throws {
-        let directory = installDirectory(registryID: registryID)
+        let directory = try installDirectory(registryID: registryID)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }
         try FileManager.default.removeItem(at: directory)
     }
 
-    func installDirectory(registryID: String) -> URL {
-        root.appendingPathComponent(registryID, isDirectory: true)
+    /// The agent's directory under `root`. Throws unless `registryID` matches
+    /// the registry schema (`^[a-z][a-z0-9-]*$`), so a hostile entry cannot
+    /// name a path outside `root`.
+    func installDirectory(registryID: String) throws -> URL {
+        guard Self.isValidRegistryID(registryID) else {
+            throw ACPRegistryInstallError.invalidRegistryID(registryID)
+        }
+        return root.appendingPathComponent(registryID, isDirectory: true)
+    }
+
+    static func isValidRegistryID(_ id: String) -> Bool {
+        guard let first = id.unicodeScalars.first, ("a"..."z").contains(first) else { return false }
+        return id.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
     }
 
     // MARK: - Distributions
@@ -171,7 +187,7 @@ struct ACPRegistryInstaller: Sendable {
         var promoted = false
         defer { if !promoted { try? fm.removeItem(at: staging) } }
         let relative = try await populate(staging)
-        let destination = installDirectory(registryID: registryID)
+        let destination = try installDirectory(registryID: registryID)
         if fm.fileExists(atPath: destination.path) {
             _ = try fm.replaceItemAt(destination, withItemAt: staging)
         } else {
