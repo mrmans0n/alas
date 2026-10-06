@@ -59,7 +59,7 @@ struct ChangeSummaryTests {
     func parseAcceptsOneBoundedParagraph() {
         let output = #" {"summary": " Adds a branch picker to the remote sheet and remembers the last choice. "} "#
 
-        #expect(ChangeSummaryPolicy.parse(output, facts: Self.facts()) == "Adds a branch picker to the remote sheet and remembers the last choice.")
+        #expect(Self.parse(output, Self.facts()) == "Adds a branch picker to the remote sheet and remembers the last choice.")
     }
 
     @Test(arguments: [
@@ -70,13 +70,14 @@ struct ChangeSummaryTests {
         #"{"summary": "One. Two. Three. Four."}"#,
         #"{"summary": "Adds a picker introduced in a1b2c3d."}"#,
         #"{"summary": "Adds a picker across 12 files."}"#,
+        #"{"summary": "Updates two files to add a picker."}"#,
         #"{"summary": "Adds a picker; the change was verified locally."}"#,
         #"{"summary": "Adds a picker and the build passes."}"#,
         #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
         "Adds a picker.",
     ])
     func parseRejectsOutputOutsideTheContract(output: String) {
-        #expect(ChangeSummaryPolicy.parse(output, facts: Self.facts()) == nil)
+        #expect(Self.parse(output, Self.facts()) == nil)
     }
 
     /// Evidence is a test file plus an issue title; without it the branch
@@ -86,6 +87,7 @@ struct ChangeSummaryTests {
         (#"{"summary": "Adds a picker and covers it with tests."}"#, true, true),
         (#"{"summary": "Adds a picker because users lose their place."}"#, false, false),
         (#"{"summary": "Adds a picker because users lose their place."}"#, true, true),
+        (#"{"summary": "Adds a picker to avoid losing the user's place."}"#, false, false),
         (#"{"summary": "Adds a picker, and the tests are passing."}"#, true, false),
         (#"{"summary": "Adds a picker; CI is green."}"#, true, false),
         (#"{"summary": "Adds a picker and the checks have passed."}"#, true, false),
@@ -96,11 +98,24 @@ struct ChangeSummaryTests {
             issueTitle: withEvidence ? "Users lose their place when switching branches" : nil
         )
 
-        #expect((ChangeSummaryPolicy.parse(output, facts: facts) != nil) == accepted)
+        #expect((Self.parse(output, facts) != nil) == accepted)
+    }
+
+    @Test
+    func claimsAreCheckedOnlyAgainstEvidenceThePromptCarried() {
+        let sources = (0 ..< 400).map { "Sources/Module\($0)/File\($0).swift" }
+        let packed = Self.facts(files: ["Sources/Picker.swift"] + sources + ["Tests/PickerTests.swift"])
+        let output = #"{"summary": "Adds a picker and covers it with tests."}"#
+
+        #expect(!ChangeSummaryPolicy.request(for: packed).coverage.isComplete)
+        #expect(Self.parse(output, packed) == nil)
+        #expect(Self.parse(output, Self.facts(files: ["Sources/Picker.swift", "Tests/PickerTests.swift"])) != nil)
     }
 
     @Test(arguments: [
         ("Tests/Picker.swift", true),
+        ("AlasTests/EventHolder.swift", true),
+        ("MyAppTests/Fixtures.swift", true),
         ("AlasTests/PickerTests.swift", true),
         ("pkg/picker_test.go", true),
         ("tests_helpers/test_picker.py", true),
@@ -148,6 +163,28 @@ struct ChangeSummaryTests {
         let draft = ChangeSummaryDraft(narrative: "Adds a picker.", facts: facts, coverage: ChangeSummaryPolicy.request(for: facts).coverage)
 
         #expect(draft.describes(headSHA: head, mergeBaseSHA: mergeBase) == matches)
+    }
+
+    @Test
+    func runResultsKeepEachScriptsLatestFinishedRun() {
+        let history = [
+            Self.historyEntry(id: "old", script: "test", outcome: .failed(exitCode: 1), at: 100),
+            Self.historyEntry(id: "new", script: "test", outcome: .succeeded, at: 200),
+            Self.historyEntry(id: "lint", script: "lint", outcome: .succeeded, at: 150),
+        ]
+        var rerun = Self.record(id: "rerun", script: "test")
+        rerun.status = .running
+        var unpersisted = Self.record(id: "fresh", script: "lint")
+        unpersisted.status = .finished(.failed(exitCode: 2))
+        unpersisted.finishedAt = Date(timeIntervalSince1970: 300)
+
+        let runs = ChangeSummaryFacts.latestRuns(history: history, records: [rerun, unpersisted])
+            .sorted { $0.scriptName < $1.scriptName }
+
+        #expect(runs == [
+            .init(scriptName: "lint", outcome: .failed(exitCode: 2), finishedAt: Date(timeIntervalSince1970: 300)),
+            .init(scriptName: "test", outcome: .succeeded, finishedAt: Date(timeIntervalSince1970: 200)),
+        ])
     }
 
     @Test
@@ -212,6 +249,27 @@ struct ChangeSummaryTests {
 
     static func run(_ outcome: RunOutcome) -> ChangeSummaryFacts.RunResult {
         .init(scriptName: "test", outcome: outcome, finishedAt: Date(timeIntervalSince1970: 1_000))
+    }
+
+    static func parse(_ output: String, _ facts: ChangeSummaryFacts) -> String? {
+        ChangeSummaryPolicy.parse(output, evidence: ChangeSummaryPolicy.request(for: facts).evidence)
+    }
+
+    static func historyEntry(id: String, script: String, outcome: RunOutcome, at seconds: TimeInterval) -> RunHistorySummary {
+        RunHistorySummary(
+            id: id, scriptKey: script, scriptName: script, worktreeID: "wt", branch: "feature/picker",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/tmp/wt"), endpoint: nil, outcome: outcome,
+            startedAt: Date(timeIntervalSince1970: seconds - 10), finishedAt: Date(timeIntervalSince1970: seconds),
+            portConflict: nil
+        )
+    }
+
+    static func record(id: String, script: String) -> RunRecord {
+        RunRecord(
+            id: id, scriptKey: script, scriptName: script, worktreeID: "wt", branch: "feature/picker",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/tmp/wt"), endpoint: nil,
+            status: .starting, startedAt: Date(timeIntervalSince1970: 250)
+        )
     }
 
     private static func payload(_ request: ChangeSummaryRequest) throws -> [String: Any] {

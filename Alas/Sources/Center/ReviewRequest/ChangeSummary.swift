@@ -79,7 +79,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         base: String,
         branch: String,
         headSHA: String,
-        runRecords: [RunRecord],
+        runResults: [RunResult],
         issueTitle: String?
     ) {
         self.init(
@@ -91,14 +91,30 @@ struct ChangeSummaryFacts: Equatable, Sendable {
             files: context.changedFiles.map {
                 .init(path: $0.path, status: $0.status, additions: $0.add, deletions: $0.del)
             },
-            runResults: runRecords.compactMap { record in
-                guard case let .finished(outcome) = record.status, let finishedAt = record.finishedAt else { return nil }
-                return .init(scriptName: record.scriptName, outcome: outcome, finishedAt: finishedAt)
-            },
+            runResults: runResults,
             issueTitle: issueTitle,
             commitBody: context.singleCommitBody,
             hasUncommittedChanges: context.hasUncommittedChanges
         )
+    }
+
+    /// The latest finished run of each script: durable history, plus any
+    /// completion still only in memory. A rerun in progress keeps reporting
+    /// the run before it, and history survives an app restart.
+    static func latestRuns(history: [RunHistorySummary], records: [RunRecord]) -> [RunResult] {
+        var latest: [String: RunResult] = [:]
+        func offer(_ scriptKey: String, _ result: RunResult) {
+            if let current = latest[scriptKey], current.finishedAt >= result.finishedAt { return }
+            latest[scriptKey] = result
+        }
+        for entry in history {
+            offer(entry.scriptKey, .init(scriptName: entry.scriptName, outcome: entry.outcome, finishedAt: entry.finishedAt))
+        }
+        for record in records {
+            guard case let .finished(outcome) = record.status, let finishedAt = record.finishedAt else { continue }
+            offer(record.scriptKey, .init(scriptName: record.scriptName, outcome: outcome, finishedAt: finishedAt))
+        }
+        return Array(latest.values)
     }
 
     private static func nonEmpty(_ text: String?) -> String? {
@@ -125,9 +141,18 @@ struct ChangeSummaryCoverage: Equatable, Sendable {
     }
 }
 
+/// The evidence actually packed into the prompt. Output is validated against
+/// this, never against facts the model did not see.
+struct ChangeSummaryEvidence: Equatable, Sendable {
+    let subjects: [String]
+    let paths: [String]
+    let descriptions: [String]
+}
+
 struct ChangeSummaryRequest: Equatable, Sendable {
     let messages: [LocalTextMessage]
     let coverage: ChangeSummaryCoverage
+    let evidence: ChangeSummaryEvidence
 }
 
 /// A drafted summary and the facts it was drafted from.
@@ -263,6 +288,11 @@ enum ChangeSummaryPolicy {
                 commitCount: facts.commits.count,
                 filesShown: payload.files.count,
                 fileCount: facts.files.count
+            ),
+            evidence: ChangeSummaryEvidence(
+                subjects: payload.commitSubjects,
+                paths: payload.files.map(\.path),
+                descriptions: [payload.issueTitle, payload.commitBody].compactMap { $0 }
             )
         )
     }
@@ -297,15 +327,17 @@ enum ChangeSummaryPolicy {
         /(?i)\b(?:verified|verifies|validated|(?:tests?|checks?|ci|builds?)\s+(?:(?:now|all|still|is|are|was|were|has|have|had|been)\s+)*(?:pass|passes|passed|passing|succeed|succeeds|succeeded|succeeding|green)|(?:fully|thoroughly|well)\s+tested)\b/
     }
     private static var testMention: Regex<Substring> { /(?i)\b(?:tests?|tested|testing|specs?|ci)\b/ }
-    private static var motivation: Regex<Substring> { /(?i)\b(?:because|so that|in order to|due to)\b/ }
+    private static var motivation: Regex<Substring> {
+        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up))\b/
+    }
     private static var commitHash: Regex<Substring> { /\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
-        /(?i)\b\d+\s+(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
+        /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)\s+(?:(?:new|changed|source|modified)\s+)?(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
     }
 
     /// Returns the narrative, or nil unless the output is exactly
     /// `{"summary": "..."}` and the text stays within what the evidence shows.
-    static func parse(_ output: String, facts: ChangeSummaryFacts) -> String? {
+    static func parse(_ output: String, evidence: ChangeSummaryEvidence) -> String? {
         let data = Data(output.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
         guard data.count <= 4_096,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -328,32 +360,37 @@ enum ChangeSummaryPolicy {
 
         // Mentioning tests is fine when the change touches them; a reason is
         // fine when a description states one.
-        if summary.firstMatch(of: testMention) != nil, !evidenceMentionsTests(facts) { return nil }
-        if summary.firstMatch(of: motivation) != nil, facts.issueTitle == nil, facts.commitBody == nil { return nil }
+        if summary.firstMatch(of: testMention) != nil, !evidenceMentionsTests(evidence) { return nil }
+        if summary.firstMatch(of: motivation) != nil, evidence.descriptions.isEmpty { return nil }
         return summary
     }
 
-    private static func evidenceMentionsTests(_ facts: ChangeSummaryFacts) -> Bool {
-        let texts = facts.commits.map(\.subject) + [facts.issueTitle, facts.commitBody].compactMap { $0 }
-        return texts.contains { $0.firstMatch(of: testMention) != nil } || facts.files.contains { isTestPath($0.path) }
+    private static func evidenceMentionsTests(_ evidence: ChangeSummaryEvidence) -> Bool {
+        (evidence.subjects + evidence.descriptions).contains { $0.firstMatch(of: testMention) != nil }
+            || evidence.paths.contains(where: isTestPath)
     }
 
     private static let testDirectories: Set<String> = ["test", "tests", "spec", "specs", "__tests__", "testing"]
 
     /// A test directory, or a file named as a test by common conventions:
-    /// `FooTests.swift`, `foo_test.go`, `test_foo.py`, `foo.test.ts`, `foo.spec.js`.
-    /// Words that merely contain "test", like `Latest.swift`, do not count.
+    /// `Tests/`, `AlasTests/`, `FooTests.swift`, `foo_test.go`, `test_foo.py`,
+    /// `foo.test.ts`, `foo.spec.js`. Words that merely contain "test", like
+    /// `Latest.swift`, do not count.
     static func isTestPath(_ path: String) -> Bool {
         let components = path.split(separator: "/").map(String.init)
-        if components.dropLast().contains(where: { testDirectories.contains($0.lowercased()) }) { return true }
         guard let name = components.last else { return false }
+        if components.dropLast().contains(where: isTestName) { return true }
         let parts = name.split(separator: ".").map(String.init)
         if parts.dropFirst().contains(where: { ["test", "tests", "spec"].contains($0.lowercased()) }) { return true }
-        let stem = parts.first ?? name
-        let lowered = stem.lowercased()
-        return ["Test", "Tests", "Spec", "Specs"].contains(where: stem.hasSuffix)
-            || ["_test", "_tests", "-test", "_spec", "-spec"].contains(where: lowered.hasSuffix)
-            || lowered.hasPrefix("test_") || testDirectories.contains(lowered)
+        return isTestName(parts.first ?? name)
+    }
+
+    private static func isTestName(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return testDirectories.contains(lowered)
+            || ["Test", "Tests", "Spec", "Specs"].contains(where: name.hasSuffix)
+            || ["_test", "_tests", "-test", "-tests", "_spec", "-spec"].contains(where: lowered.hasSuffix)
+            || lowered.hasPrefix("test_")
     }
 
     /// A terminator only ends a sentence before whitespace, so versions and
@@ -442,7 +479,7 @@ struct ChangeSummarizer {
             timeout: timeout
         )
         let narrative = await router.generate(request, caller: .changeSummary, priority: .userInitiated) {
-            ChangeSummaryPolicy.parse($0, facts: facts)
+            ChangeSummaryPolicy.parse($0, evidence: prepared.evidence)
         }
         return narrative.map { ChangeSummaryDraft(narrative: $0, facts: facts, coverage: prepared.coverage) }
     }

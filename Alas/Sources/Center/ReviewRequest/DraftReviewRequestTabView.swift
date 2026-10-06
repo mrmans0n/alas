@@ -36,6 +36,7 @@ struct DraftReviewRequestTabView: View {
     @State private var changeSummaryVisible = false
     @State private var changeSummaryDraft: ChangeSummaryDraft?
     @State private var changeSummaryTask: Task<Void, Never>?
+    @State private var runHistory: [RunHistorySummary] = []
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
@@ -689,7 +690,10 @@ struct DraftReviewRequestTabView: View {
             base: tabState.baseBranch,
             branch: tabState.branchName,
             headSHA: snapshot.local.headSHA,
-            runRecords: appState.runRecords.records(worktreeID: worktreeId),
+            runResults: ChangeSummaryFacts.latestRuns(
+                history: runHistory,
+                records: appState.runRecords.records(worktreeID: worktreeId)
+            ),
             issueTitle: issueTitle
         )
     }
@@ -700,11 +704,17 @@ struct DraftReviewRequestTabView: View {
     }
 
     private func summarizeChange() {
-        guard changeSummaryTask == nil, let facts = currentChangeSummaryFacts else { return }
+        guard changeSummaryTask == nil, currentChangeSummaryFacts != nil else { return }
         changeSummaryVisible = true
         changeSummaryDraft = nil
         let summarizer = appState.makeChangeSummarizer()
         changeSummaryTask = Task { @MainActor in
+            await loadRunHistory()
+            guard !Task.isCancelled else { return }
+            guard let facts = currentChangeSummaryFacts else {
+                changeSummaryTask = nil
+                return
+            }
             let draft = await summarizer.summarize(facts)
             guard !Task.isCancelled else { return }
             changeSummaryDraft = draft
@@ -720,9 +730,19 @@ struct DraftReviewRequestTabView: View {
             await loadContext()
             return false
         }
+        await loadRunHistory()
         guard draft.isCurrent(for: currentChangeSummaryFacts) else { return false }
         Clipboard.copy(ChangeSummaryPolicy.markdown(for: draft))
         return true
+    }
+
+    /// Completed runs survive restarts and reruns only in durable history.
+    private func loadRunHistory() async {
+        guard let store = appState.runHistoryStore else { return }
+        let limit = RunHistoryStore.defaultMaximumEntriesPerWorktree
+        if let page = try? await store.page(worktreeID: worktreeId, offset: 0, limit: limit) {
+            runHistory = page.entries
+        }
     }
 
     private func cancelChangeSummary() {
