@@ -519,4 +519,27 @@ assert.equal(creation.isValidBranchName("feature\u0001broken"), false);
   assert.deepStrictEqual(flow.snapshot(), creation.initialState());
 }
 
+{
+  const agents = [
+    { id: "claude", name: "Claude", isDefault: true },
+    { id: "registry-goose", name: "goose", unavailableProjectIds: ["ssh-project"] },
+  ];
+  assert.deepStrictEqual(creation.agentsForProject(agents, "ssh-project").map(({ id }) => id), ["claude"]);
+  assert.deepStrictEqual(creation.agentsForProject(agents, "local-project").map(({ id }) => id), ["claude", "registry-goose"]);
+  assert.deepStrictEqual(creation.agentsForProject(agents, null).map(({ id }) => id), ["claude", "registry-goose"]);
+
+  // A choice made before the agent list arrives is kept until it can be checked.
+  const { flow } = newFlow();
+  flow.startNewWorktree();
+  flow.setAgent("registry-goose");
+  flow.selectProject("local-project");
+  assert.equal(flow.snapshot().agentId, "registry-goose");
+  assert.equal(flow.reconcileAgents(agents), false);
+  assert.equal(flow.snapshot().agentId, "registry-goose");
+
+  // Switching to a project whose host cannot run the agent clears it.
+  flow.selectProject("ssh-project");
+  assert.equal(flow.snapshot().agentId, null);
+}
+
 console.log("remote web worktree creation tests passed");
