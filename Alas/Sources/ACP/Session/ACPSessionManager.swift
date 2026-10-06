@@ -5725,16 +5725,6 @@ extension ACPSessionManager {
         }
         return attempt
     }
-    /// Whether any pending value names an option the agent does not
-    /// advertise, or a value that option does not accept.
-    private static func hasUnacceptedValue(
-        _ values: [String: ACPConfigValue],
-        in options: [ACPConfigOption]
-    ) -> Bool {
-        values.contains { id, value in
-            !(options.first { $0.id == id }?.acceptsPersistedValue(value) ?? false)
-        }
-    }
 
     private func restoreConfigOptionValues(
         _ persistedValues: [String: ACPConfigValue],
@@ -5742,6 +5732,7 @@ extension ACPSessionManager {
         userEditRevisionsAtAttachStart: [String: UInt64],
         userEditRevisionsAtRestoreStart: [String: UInt64],
         excluding excludedId: String?,
+        resendPendingValues: Bool = false,
         in session: ACPSession,
         using runner: ACPSessionRunner,
         attempt: AttachmentAttempt
@@ -5765,7 +5756,7 @@ extension ACPSessionManager {
             guard currentOption == loadedOption
                     || pendingValue != nil
                     || refreshedByRestoreResponse[loadedOption.id] == currentOption,
-                  currentOption.currentValue != selectedValue,
+                  currentOption.currentValue != selectedValue || (resendPendingValues && pendingValue != nil),
                   currentOption.acceptsPersistedValue(selectedValue)
             else { continue }
             let updatesModel = currentOption.category == "model" || currentOption.category == "Model"
@@ -7532,11 +7523,12 @@ extension ACPSessionManager {
             }()
             let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
             // A model switch can publish the new model's config options after
-            // the `session/set_model` reply. A pending value the old options
-            // reject (a thinking level only the new model offers) gets a
-            // bounded wait for that update before restoration skips it.
-            if let modelToRestore, modelToRestore != result.currentModel,
-               Self.hasUnacceptedValue(pendingUserConfigOptionValues, in: session.availableConfigOptions) {
+            // the `session/set_model` reply, resetting levels such as thinking
+            // to the new model's default. Give that update a bounded wait
+            // before restoring pending values, then send them even when they
+            // match the pre-switch state, so the user's choice wins.
+            let modelSwitched = modelToRestore != nil && modelToRestore != result.currentModel
+            if modelSwitched, !pendingUserConfigOptionValues.isEmpty {
                 _ = await configOptionsChange(of: session, within: delegatedReasoningRefreshTimeout)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             }
@@ -7547,6 +7539,7 @@ extension ACPSessionManager {
                 userEditRevisionsAtAttachStart: userConfigOptionEditRevisionsAtAttachStart,
                 userEditRevisionsAtRestoreStart: userConfigOptionEditRevisionsAtRestoreStart,
                 excluding: configBackedModelId,
+                resendPendingValues: modelSwitched,
                 in: session,
                 using: runner,
                 attempt: attempt

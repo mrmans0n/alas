@@ -4342,6 +4342,57 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(params.value == .string("max"))
     }
 
+    @Test("fresh attach keeps a queued effort the new model's late options would reset")
+    func freshAttachReappliesQueuedEffortAfterTheModelSwitchResetsIt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        // Already the pre-switch value, so a plain restore would skip it.
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("medium"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { session.currentModel == "opus" }
+        // Opus publishes its own default, which would overwrite the choice.
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "high", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("medium"))
+    }
+
     @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
     func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
