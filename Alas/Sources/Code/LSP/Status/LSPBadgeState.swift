@@ -108,8 +108,30 @@ enum LSPCrashSummary {
         let after = detail.uptime.map {
             " after \($0.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow)))"
         } ?? ""
-        if let code = detail.exitCode { return "Exited with code \(code)\(after)." }
+        switch detail.termination {
+        case .exit(let code): return "Exited with code \(code)\(after)."
+        case .signal(let signal): return "Terminated by \(signalName(signal))\(after)."
+        case nil: break
+        }
         if let error = detail.initializeError { return "Failed to start: \(error)" }
         return "Connection closed\(after)."
+    }
+
+    private static func signalName(_ signal: Int32) -> String {
+        let name: String? = switch signal {
+        case SIGHUP: "SIGHUP"
+        case SIGINT: "SIGINT"
+        case SIGABRT: "SIGABRT"
+        case SIGBUS: "SIGBUS"
+        case SIGFPE: "SIGFPE"
+        case SIGILL: "SIGILL"
+        case SIGKILL: "SIGKILL"
+        case SIGPIPE: "SIGPIPE"
+        case SIGSEGV: "SIGSEGV"
+        case SIGTERM: "SIGTERM"
+        case SIGTRAP: "SIGTRAP"
+        default: nil
+        }
+        return name.map { "signal \(signal) (\($0))" } ?? "signal \(signal)"
     }
 }

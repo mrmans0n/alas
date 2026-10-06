@@ -32,7 +32,14 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     }
     /// Mirrors the live transport: report the exit status, then end the stream.
     func deliverExit(_ code: Int32) {
-        cont.yield(.exited(code))
+        deliver(.exit(code))
+    }
+    /// A server killed by a signal reports the signal number, not an exit code.
+    func deliverSignal(_ signal: Int32) {
+        deliver(.signal(signal))
+    }
+    private func deliver(_ termination: SpawnedProcess.Termination) {
+        cont.yield(.exited(termination))
         cont.finish()
     }
     /// Finish the incoming stream so LSPClient.consume() exits and the
@@ -87,7 +94,7 @@ private final class ProgressSnapshots: @unchecked Sendable {
 }
 
 enum ExitScenario: String, Sendable, CaseIterable {
-    case serverExits, streamEndsWithoutStatus, exitAfterShutdown
+    case serverExits, serverKilledBySignal, streamEndsWithoutStatus, exitAfterShutdown
 }
 
 struct OutputTailCase: Sendable, CustomTestStringConvertible {
@@ -124,6 +131,7 @@ struct LSPClientLifecycleTests {
         transport.deliverStderr("boot\npanicked at foo\n")
         switch scenario {
         case .serverExits: transport.deliverExit(101)
+        case .serverKilledBySignal: transport.deliverSignal(11)
         case .streamEndsWithoutStatus: transport.finish()
         case .exitAfterShutdown:
             await client.shutdown()
@@ -139,10 +147,12 @@ struct LSPClientLifecycleTests {
         }
         switch scenario {
         case .serverExits:
-            #expect(exits.map(\.exitCode) == [101])
+            #expect(exits.map(\.termination) == [.exit(101)])
             #expect(exits.first?.outputTail == ["boot", "panicked at foo"])
+        case .serverKilledBySignal:
+            #expect(exits.map(\.termination) == [.signal(11)])
         case .streamEndsWithoutStatus:
-            #expect(exits.map(\.exitCode) == [nil])
+            #expect(exits.map(\.termination) == [nil])
         case .exitAfterShutdown:
             #expect(exits.isEmpty)
         }

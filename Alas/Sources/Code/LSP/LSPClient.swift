@@ -18,8 +18,8 @@ actor LSPClient {
     }
 
     struct ExitDetail: Sendable, Equatable {
-        /// `nil` when the transport closed without reporting an exit status.
-        let exitCode: Int32?
+        /// `nil` when the transport closed without reporting how the process ended.
+        let termination: SpawnedProcess.Termination?
         let uptime: Duration?
         let outputTail: [String]
     }
@@ -768,7 +768,7 @@ actor LSPClient {
             pending.removeAll()
             for continuation in diagnosticsSubscribers.values { continuation.finish() }
             diagnosticsSubscribers.removeAll()
-            reportExit(code: nil)
+            reportExit(termination: nil)
             lifecycleContinuation.finish()
         }
         for await event in transport.incoming {
@@ -777,8 +777,8 @@ actor LSPClient {
                 handle(frame: data)
             case .stderr(let data):
                 outputTail.append(data)
-            case .exited(let code):
-                reportExit(code: code)
+            case .exited(let termination):
+                reportExit(termination: termination)
                 state = .dead
                 stopSemanticRequests()
                 cancelInboundRequests()
@@ -794,14 +794,14 @@ actor LSPClient {
 
     /// Reports the first end of the server process once. Exits the client caused
     /// (`shutdown()`) are not crashes and emit nothing.
-    private func reportExit(code: Int32?) {
+    private func reportExit(termination: SpawnedProcess.Termination?) {
         guard !hasExited else { return }
         hasExited = true
         progressTasks.removeAll()
         progressOrder.removeAll()
         guard !isShuttingDown else { return }
         lifecycleContinuation.yield(.exited(ExitDetail(
-            exitCode: code,
+            termination: termination,
             uptime: startedAt.map { ContinuousClock.now - $0 },
             outputTail: outputTail.finish()
         )))

@@ -688,7 +688,7 @@ struct WorkspaceLSPManagerStatusTests {
 
         try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
         guard case .crashed(let detail) = status.phase else { return }
-        #expect(detail.exitCode == 134)
+        #expect(detail.termination == .exit(134))
         #expect(detail.outputTail == ["fatal: boom"])
         #expect(mgr.stateTick > tick)
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
@@ -710,7 +710,7 @@ struct WorkspaceLSPManagerStatusTests {
 
         try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
         guard case .crashed(let detail) = status.phase else { return }
-        #expect(detail.exitCode == nil)
+        #expect(detail.termination == nil)
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
     }
 
@@ -730,7 +730,7 @@ struct WorkspaceLSPManagerStatusTests {
         let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
         try await eventually("exit code and initialize error") {
             guard case .crashed(let detail) = status.phase else { return false }
-            return detail.exitCode == 2 && detail.initializeError != nil
+            return detail.termination == .exit(2) && detail.initializeError != nil
         }
         guard case .crashed(let detail) = status.phase else { return }
         #expect(detail.outputTail == ["dyld: missing libfoo"])
@@ -740,9 +740,9 @@ struct WorkspaceLSPManagerStatusTests {
     func exitDuringInitializePublishesOnlyTheMergedCrash(exitReportedFirst: Bool) {
         let status = LSPServerStatus(language: "swift", command: "sourcekit-lsp", root: "/tmp", remoteHost: nil)
         status.reset()
-        let exit = LSPClient.ExitDetail(exitCode: 2, uptime: .seconds(1), outputTail: ["dyld: missing libfoo"])
+        let exit = LSPClient.ExitDetail(termination: .exit(2), uptime: .seconds(1), outputTail: ["dyld: missing libfoo"])
         let merged = LSPServerStatus.Phase.crashed(.init(
-            exitCode: 2,
+            termination: .exit(2),
             uptime: .seconds(1),
             outputTail: ["dyld: missing libfoo"],
             initializeError: "transport closed"

@@ -31,7 +31,7 @@ struct LSPServerStatusDetail: View {
         case .crashed(let detail):
             VStack(alignment: .leading, spacing: 6) {
                 Text(LSPCrashSummary.headline(detail)).font(.system(size: 11))
-                if detail.exitCode != nil, let error = detail.initializeError {
+                if detail.termination != nil, let error = detail.initializeError {
                     Text("Failed to start: \(error)")
                         .font(.system(size: 10))
                         .foregroundColor(theme.color("fg-muted"))

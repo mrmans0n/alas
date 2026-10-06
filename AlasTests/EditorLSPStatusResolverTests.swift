@@ -6,7 +6,7 @@ private let indexingTasks = [
     LSPClient.ProgressTask(token: "a", title: "Indexing", message: "40/100", percentage: 40),
     LSPClient.ProgressTask(token: "b", title: "Building", message: nil, percentage: 10),
 ]
-private let crash = LSPServerStatus.CrashDetail(exitCode: 11, uptime: .seconds(3), outputTail: ["segfault"], initializeError: nil)
+private let crash = LSPServerStatus.CrashDetail(termination: .signal(11), uptime: .seconds(3), outputTail: ["segfault"], initializeError: nil)
 
 @Suite("EditorLSPStatusResolver")
 @MainActor
@@ -192,5 +192,14 @@ struct LSPBadgeStateMakeTests {
             percentage: 10,
             tooltip: LSPProgressSummary.tooltip(command: "sourcekit-lsp", tasks: indexingTasks)
         ))
+    }
+
+    @Test(arguments: [
+        (SpawnedProcess.Termination.exit(2), "Exited with code 2."),
+        (SpawnedProcess.Termination.signal(11), "Terminated by signal 11 (SIGSEGV)."),
+        (SpawnedProcess.Termination.signal(40), "Terminated by signal 40."),
+    ])
+    func crashHeadlineSeparatesSignalsFromExitCodes(termination: SpawnedProcess.Termination, expected: String) {
+        #expect(LSPCrashSummary.headline(.init(termination: termination)) == expected)
     }
 }

@@ -22,7 +22,7 @@ final class LSPTransport: @unchecked Sendable {
     enum Incoming: Sendable {
         case frame(Data)
         case stderr(Data)
-        case exited(Int32)
+        case exited(SpawnedProcess.Termination)
     }
 
     private struct DescendantKey: Hashable {
@@ -134,7 +134,7 @@ final class LSPTransport: @unchecked Sendable {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
             self.drainStderr()
-            self.continuation?.yield(.exited(termination.status))
+            self.continuation?.yield(.exited(termination))
             self.continuation?.finish()
         }
         self.process = process

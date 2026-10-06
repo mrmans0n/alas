@@ -15,7 +15,7 @@ final class LSPServerStatus {
     }
 
     struct CrashDetail: Equatable, Sendable {
-        var exitCode: Int32?
+        var termination: SpawnedProcess.Termination?
         var uptime: Duration?
         var outputTail: [String] = []
         var initializeError: String?
@@ -105,7 +105,7 @@ final class LSPServerStatus {
         var detail = CrashDetail()
         if case .crashed(let existing) = phase { detail = existing }
         if let exit {
-            detail.exitCode = exit.exitCode
+            detail.termination = exit.termination
             detail.uptime = exit.uptime
             detail.outputTail = exit.outputTail
         }

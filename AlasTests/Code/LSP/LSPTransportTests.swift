@@ -38,23 +38,37 @@ struct LSPTransportFramingTests {
             let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "printf 'fatal\\n' >&2; exit 3"], environment: nil)
             try transport.start()
             var stderr = Data()
-            var exitCode: Int32?
+            var termination: SpawnedProcess.Termination?
             var stderrAfterExit = false
             for await event in transport.incoming {
                 switch event {
                 case .stderr(let data):
-                    if exitCode != nil { stderrAfterExit = true }
+                    if termination != nil { stderrAfterExit = true }
                     stderr.append(data)
-                case .exited(let code):
-                    exitCode = code
+                case .exited(let reported):
+                    termination = reported
                 case .frame:
                     break
                 }
             }
-            #expect(exitCode == 3, "iteration \(iteration)")
+            #expect(termination == .exit(3), "iteration \(iteration)")
             #expect(String(decoding: stderr, as: UTF8.self) == "fatal\n", "iteration \(iteration)")
             #expect(!stderrAfterExit, "iteration \(iteration)")
         }
+    }
+
+    @Test("a server killed by a signal reports the signal, not an exit code", arguments: [
+        ("exit 9", SpawnedProcess.Termination.exit(9)),
+        ("kill -KILL $$", SpawnedProcess.Termination.signal(9)),
+    ])
+    func terminationKeepsSignalApartFromExitCode(script: String, expected: SpawnedProcess.Termination) async throws {
+        let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script], environment: nil)
+        try transport.start()
+        var termination: SpawnedProcess.Termination?
+        for await event in transport.incoming {
+            if case .exited(let reported) = event { termination = reported }
+        }
+        #expect(termination == expected)
     }
 
     @Test("decodes a single frame")
