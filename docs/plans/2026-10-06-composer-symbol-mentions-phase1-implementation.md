@@ -1500,7 +1500,8 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
 **Files:**
 - Modify: `Alas/Sources/ACP/Session/ACPSymbolReference.swift`
 - Modify: `Alas/Sources/ACP/Session/ACPSessionRunner.swift` (steer path ~3644–3674; `sendNow` ~4098–4223)
-- Test: `AlasTests/ACP/Session/ACPSymbolReferenceTests.swift`, `AlasTests/ACP/Session/ACPImageBlocksTests.swift`
+- Modify: `Alas/Sources/ACP/Session/ACPSession.swift` (new method beside `attachCheckpoint` at ~761)
+- Test: `AlasTests/ACP/Session/ACPSymbolReferenceTests.swift`, `AlasTests/ACP/Session/ACPImageBlocksTests.swift`, `AlasTests/ACP/Session/ACPSessionTests.swift`
 
 **Interfaces:**
 - Consumes: Task 5 types, `SymbolSource.read`, `SymbolExtractor.symbols`, `LanguageRegistry.codeFenceLanguage(forPath:)`.
@@ -1513,6 +1514,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
   - `ACPSymbolReference.referenceText(for:) -> String`
   - `ACPSymbolReference.replacingReferences(in:resolutions:embeddedContext:worktreeRoot:) -> [ACPContentBlock]`
   - `ACPSymbolReference.attachingSnapshots(to:resolutions:) -> [ACPMessage.Attachment]`
+  - `ACPSession.replaceSymbolSnapshots(inUserMessage: UUID, resolutions:) -> Int?` (index of the changed message)
 
 - [ ] **Step 1: Write the failing tests** (add to `ACPSymbolReferenceTests`)
 
@@ -1629,6 +1631,32 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         #expect(snapshot?.excerpt == resolution.declaration)
         #expect(snapshot?.contentHash.count == 64)
         #expect(attachments[1].symbol == nil)
+    }
+```
+
+Add to `ACPSessionTests` (next to `checkpointCaptureAttachesToRecordedPrompt`):
+
+```swift
+    @Test("a retried send re-stamps the recorded symbol snapshot with what it actually sent")
+    func retryRestampsSymbolSnapshot() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let target = ACPSymbolReference.Target(path: "A.swift", name: "run", kind: .function,
+                                               container: nil, lineRange: 0...0, includeCode: true)
+        let uri = ACPSymbolReference.uri(for: target)
+        let first = ACPSymbolReference.resolve(target, source: "func run() {}")
+        let id = session.recordUserPrompt(
+            text: "@run() ",
+            attachments: ACPSymbolReference.attachingSnapshots(to: [.init(uri: uri, name: "run()")], resolutions: [uri: first]))
+
+        let retried = ACPSymbolReference.resolve(target, source: "// moved\nfunc run() { work() }")
+        #expect(session.replaceSymbolSnapshots(inUserMessage: id, resolutions: [uri: retried]) == 0)
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(attachments.first?.symbol?.lineRange == 1...1)
+        #expect(attachments.first?.symbol?.excerpt == "func run() { work() }")
+        #expect(session.replaceSymbolSnapshots(inUserMessage: id, resolutions: [uri: retried]) == nil, "unchanged: nothing to persist")
     }
 ```
 
@@ -1831,18 +1859,58 @@ Change its `recordUserPrompt` attachments argument the same way, and replace its
                     worktreeRoot: URL(fileURLWithPath: self.worktreePath))
 ```
 
-If `worktreePath` is not accessible at the insertion point in `sendNow` (it is read inside the later `do` block), capture `let worktreeRoot = URL(fileURLWithPath: self.worktreePath)` at the top of the task body and use it in both places. A queued retry with `transcriptRecorded == true` skips recording as today; the wire still uses the fresh resolution.
+If `worktreePath` is not accessible at the insertion point in `sendNow` (it is read inside the later `do` block), capture `let worktreeRoot = URL(fileURLWithPath: self.worktreePath)` at the top of the task body and use it in both places.
+
+A retry whose prompt is already recorded (`transcriptRecorded == true`, or `recordUserPrompt == false` with a known message) skips recording, but the wire still uses the fresh resolution. Re-stamp the recorded message so its snapshot describes what is actually sent. Add to `ACPSession`, beside `attachCheckpoint`:
+
+```swift
+    /// Re-stamps symbol snapshots on an already-recorded user message when a
+    /// retried delivery resolved its symbols again. Returns the message index
+    /// when a snapshot changed, so the caller can persist it.
+    func replaceSymbolSnapshots(
+        inUserMessage id: UUID, resolutions: [String: ACPSymbolReference.Resolution]
+    ) -> Int? {
+        guard !resolutions.isEmpty,
+              let index = transcript.messages.firstIndex(where: {
+                  guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
+                  return messageID == id
+              }),
+              case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index]
+        else { return nil }
+        let updated = ACPSymbolReference.attachingSnapshots(to: attachments, resolutions: resolutions)
+        guard updated.map(\.symbol) != attachments.map(\.symbol) else { return nil }
+        transcript.replaceMessage(at: index, with: .user(
+            id: messageID, messageId: remoteMessageID, text: text, attachments: updated,
+            delegatedSource: delegatedSource, pastedSpans: pastedSpans
+        ))
+        return index
+    }
+```
+
+In `sendNow`, inside the `MainActor.run` block, in the branch where `shouldRecord` is false, before `self.resetStreamingPersistBuffer()`:
+
+```swift
+                let recordedID = recordedUserMessageID
+                    ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
+                if let recordedID,
+                   let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, resolutions: symbolResolutions) {
+                    self.persistIndices([index])
+                }
+```
+
+In the steer path, in the `else` of `if recordUserPrompt { … }` (add one if absent), do the same with `recordedUserMessageID`. A retry with no known message id leaves the old snapshot; the queue does not carry one in that case today.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run with `-only-testing AlasTests/ACPSymbolReferenceTests -only-testing AlasTests/ACPImageBlocksTests -only-testing AlasTests/ACPSessionReferenceTests`.
+Run with `-only-testing AlasTests/ACPSymbolReferenceTests -only-testing AlasTests/ACPImageBlocksTests -only-testing AlasTests/ACPSessionReferenceTests -only-testing AlasTests/ACPSessionTests`.
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Alas/Sources/ACP/Session/ACPSymbolReference.swift Alas/Sources/ACP/Session/ACPSessionRunner.swift \
-  AlasTests/ACP/Session/ACPSymbolReferenceTests.swift AlasTests/ACP/Session/ACPImageBlocksTests.swift
+  Alas/Sources/ACP/Session/ACPSession.swift AlasTests/ACP/Session/ACPSymbolReferenceTests.swift \
+  AlasTests/ACP/Session/ACPImageBlocksTests.swift AlasTests/ACP/Session/ACPSessionTests.swift
 git commit -m "feat(acp): resolve symbol mentions at send time and expand them for the agent"
 ```
 
@@ -2508,10 +2576,11 @@ xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
   -only-testing AlasTests/WorktreeSymbolIndexTests -only-testing AlasTests/ACPMentionPickerTests \
   -only-testing AlasTests/ACPSymbolReferenceTests -only-testing AlasTests/ACPMessageTests \
   -only-testing AlasTests/ACPImageBlocksTests -only-testing AlasTests/ACPSessionReferenceTests \
-  -only-testing AlasTests/ACPComposerDraftTests -only-testing AlasTests/TreeSitterHighlighterTests test
+  -only-testing AlasTests/ACPComposerDraftTests -only-testing AlasTests/TreeSitterHighlighterTests \
+  -only-testing AlasTests/ACPSessionTests test
 ```
 
-Expected: all PASS; the summary names 10 suites.
+Expected: all PASS; the summary names 11 suites.
 
 - [ ] **Step 2: Smoke-run the app**
 
