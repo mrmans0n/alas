@@ -65,6 +65,13 @@ struct PluginViewTreeTests {
         #expect(throws: PluginViewTreeError(reason: "kind \"\(kind)\" needs \"api\": \(api)")) { try decode(json, api: api - 1).get() }
     }
 
+    /// API 13's `success` tone, here on a button, which draws its tone from API 13.
+    @Test func theSuccessToneNeedsAPI13() throws {
+        let json = #"{"id":"b","kind":"button","label":"Merge","style":"primary","tone":"success"}"#
+        #expect(throws: PluginViewTreeError(reason: "tone \"success\" needs \"api\": 13")) { try decode(json, api: 12).get() }
+        #expect(try decode(json, api: 13).get().tone == .success)
+    }
+
     /// Markdown has its own 32 KiB bound, in bytes, above the 4,000-character cap on other strings.
     @Test(arguments: [(32 * 1024, nil), (32 * 1024 + 1, "markdown \"m\" text is longer than 32768 bytes"), (nil, "markdown \"m\" needs text")] as [(Int?, String?)])
     func markdownTextIsRequiredAndBounded(bytes: Int?, reason: String?) {

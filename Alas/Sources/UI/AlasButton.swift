@@ -6,6 +6,8 @@ struct AlasButton: View {
     let title: String
     var icon: String? = nil
     var style: AlasButtonStyle = .normal
+    /// Replaces the accent a primary button fills with, or the text color of the others.
+    var tint: Color? = nil
     let action: () -> Void
     @Environment(\.theme) var theme
 
@@ -31,7 +33,7 @@ struct AlasButton: View {
 
     private var background: Color {
         switch style {
-        case .primary: return theme.color("accent")
+        case .primary: return tint ?? theme.color("accent")
         case .normal:  return theme.color("bg-3")
         case .subtle:  return .clear
         }
@@ -39,8 +41,8 @@ struct AlasButton: View {
     private var foreground: Color {
         switch style {
         case .primary: return theme.color("bg-0")
-        case .normal:  return theme.color("fg")
-        case .subtle:  return theme.color("fg-muted")
+        case .normal:  return tint ?? theme.color("fg")
+        case .subtle:  return tint ?? theme.color("fg-muted")
         }
     }
 }

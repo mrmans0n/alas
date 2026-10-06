@@ -99,7 +99,9 @@ struct PluginViewNodeView: View {
                 .foregroundColor(color(node.tone))
                 .background(Capsule().fill(color(node.tone).opacity(0.15)))
         case .button:
-            AlasButton(title: node.label ?? "", icon: node.icon, style: buttonStyle) { events.send(node.id, "click") }
+            AlasButton(title: node.label ?? "", icon: node.icon, style: buttonStyle, tint: node.tone.map { color($0) }) {
+                events.send(node.id, "click")
+            }
                 .disabled(node.disabled)
                 .opacity(node.disabled ? 0.5 : 1)
                 .accessibilityLabel(node.label ?? "")

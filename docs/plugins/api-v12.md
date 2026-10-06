@@ -8,6 +8,7 @@ API 12 adds web tabs: a tab whose content is a page the plugin ships, shown in
 a sandboxed web view. Use it for what native view trees can't draw, such as
 charts, graphs and diagrams. Prefer view trees when they fit: they are themed,
 accessible and cheaper.
+[API 13](api-v13.md) adds button tones and a `success` tone.
 
 ## The manifest
 

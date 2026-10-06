@@ -38,7 +38,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 13), .unsupportedAPI(13)),
+        (manifest(api: 14), .unsupportedAPI(14)),
         (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
         (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
          .invalidPanel(#"at most one panel with location "configure""#)),
@@ -249,8 +249,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 12"),
-        (13, "requires plugin API 13; this Alas supports up to 12"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 13"),
+        (14, "requires plugin API 14; this Alas supports up to 13"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)
