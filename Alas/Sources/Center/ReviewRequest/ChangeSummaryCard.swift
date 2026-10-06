@@ -24,10 +24,14 @@ enum ChangeSummaryPhase: Equatable {
 struct ChangeSummaryCard: View {
     let phase: ChangeSummaryPhase
     let onSummarize: () -> Void
+    /// Copies the summary after re-checking the repository; false when the
+    /// branch moved and the summary went stale instead.
+    let onCopy: (ChangeSummaryDraft) async -> Bool
     let onCancel: () -> Void
     let onDismiss: () -> Void
 
     @State private var copied = false
+    @State private var copying = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -66,9 +70,13 @@ struct ChangeSummaryCard: View {
             AlasButton(title: "Cancel", icon: "x", action: onCancel)
         case let .current(draft):
             AlasButton(title: copied ? "Copied" : "Copy", icon: copied ? "checkmark" : "doc.on.doc") {
-                Clipboard.copy(ChangeSummaryPolicy.markdown(for: draft))
-                copied = true
+                copying = true
+                Task { @MainActor in
+                    copied = await onCopy(draft)
+                    copying = false
+                }
             }
+            .disabled(copying)
             .help("Copy the summary and change facts as Markdown")
         case .failed, .stale:
             AlasButton(title: "Summarize Again", icon: "arrow.clockwise", action: onSummarize)

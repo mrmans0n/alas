@@ -35,6 +35,8 @@ struct ChangeSummaryFacts: Equatable, Sendable {
     let base: String
     let branch: String
     let headSHA: String
+    /// Merge base with `base`. HEAD and this pin the commits and files.
+    let mergeBaseSHA: String?
     /// Newest first, as `git log` lists them.
     let commits: [Commit]
     let files: [File]
@@ -52,6 +54,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         base: String,
         branch: String,
         headSHA: String,
+        mergeBaseSHA: String?,
         commits: [Commit],
         files: [File],
         runResults: [RunResult],
@@ -62,6 +65,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         self.base = base
         self.branch = branch
         self.headSHA = headSHA
+        self.mergeBaseSHA = mergeBaseSHA
         self.commits = commits
         self.files = files
         self.runResults = runResults.sorted { ($0.scriptName, $0.finishedAt) < ($1.scriptName, $1.finishedAt) }
@@ -82,6 +86,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
             base: base,
             branch: branch,
             headSHA: headSHA,
+            mergeBaseSHA: context.mergeBaseSHA,
             commits: context.commits.map { .init(sha: $0.sha, shortSHA: $0.shortSha, subject: $0.rawSubject) },
             files: context.changedFiles.map {
                 .init(path: $0.path, status: $0.status, additions: $0.add, deletions: $0.del)
@@ -136,6 +141,12 @@ struct ChangeSummaryDraft: Equatable, Sendable {
     func isCurrent(for facts: ChangeSummaryFacts?) -> Bool {
         facts == self.facts
     }
+
+    /// The base can advance without anything reloading the branch context,
+    /// so a summary is re-checked against the repository before it is copied.
+    func describes(headSHA: String?, mergeBaseSHA: String?) -> Bool {
+        headSHA == facts.headSHA && mergeBaseSHA == facts.mergeBaseSHA
+    }
 }
 
 /// Prompt, bounded input, and strict validation for drafting a change summary
@@ -154,7 +165,8 @@ enum ChangeSummaryPolicy {
     static let payloadByteBudget = 3_000
     static let subjectCharacterLimit = 120
     static let pathCharacterLimit = 160
-    static let descriptionCharacterLimit = 400
+    static let refByteLimit = 120
+    static let descriptionByteLimit = 400
     static let copiedCommitLimit = 20
 
     static let systemPrompt = """
@@ -175,10 +187,10 @@ enum ChangeSummaryPolicy {
             let deletions: Int
         }
         struct Payload: Encodable {
-            let branch: String
-            let base: String
-            let issueTitle: String?
-            let commitBody: String?
+            var branch: String
+            var base: String
+            var issueTitle: String?
+            var commitBody: String?
             let commitCount: Int
             let fileCount: Int
             var commitSubjects: [String]
@@ -195,19 +207,29 @@ enum ChangeSummaryPolicy {
                  additions: $0.additions, deletions: $0.deletions)
         }
         var payload = Payload(
-            branch: String(facts.branch.prefix(subjectCharacterLimit)),
-            base: String(facts.base.prefix(subjectCharacterLimit)),
-            issueTitle: facts.issueTitle.map { String($0.prefix(descriptionCharacterLimit)) },
-            commitBody: facts.commitBody.map { String($0.prefix(descriptionCharacterLimit)) },
+            branch: prefix(facts.branch, utf8Bytes: refByteLimit),
+            base: prefix(facts.base, utf8Bytes: refByteLimit),
+            issueTitle: facts.issueTitle.map { prefix($0, utf8Bytes: descriptionByteLimit) },
+            commitBody: facts.commitBody.map { prefix($0, utf8Bytes: descriptionByteLimit) },
             commitCount: facts.commits.count,
             fileCount: facts.files.count,
             commitSubjects: [],
             files: []
         )
+        func fits(_ candidate: Payload) -> Bool { encode(candidate).count <= payloadByteBudget }
+
+        // JSON escaping can still inflate the fixed fields past the budget, so
+        // shed descriptions first, then shorten the refs.
+        let shrinkSteps: [(inout Payload) -> Void] = [
+            { $0.commitBody = nil },
+            { $0.issueTitle = nil },
+            { $0.branch = prefix($0.branch, utf8Bytes: 32); $0.base = prefix($0.base, utf8Bytes: 32) },
+            { $0.branch = ""; $0.base = "" },
+        ]
+        for shrink in shrinkSteps where !fits(payload) { shrink(&payload) }
 
         // Commits may take half of what the fixed fields leave; files take the
         // rest, and commits then reclaim anything files did not need.
-        func fits(_ candidate: Payload) -> Bool { encode(candidate).count <= payloadByteBudget }
         let commitBudget = encode(payload).count + (payloadByteBudget - encode(payload).count) / 2
         var nextCommit = 0
         while nextCommit < subjects.count {
@@ -245,6 +267,18 @@ enum ChangeSummaryPolicy {
         )
     }
 
+    /// The longest prefix of whole characters within `limit` UTF-8 bytes.
+    static func prefix(_ text: String, utf8Bytes limit: Int) -> String {
+        var used = 0
+        var end = text.startIndex
+        for character in text {
+            used += character.utf8.count
+            guard used <= limit else { break }
+            end = text.index(after: end)
+        }
+        return String(text[..<end])
+    }
+
     /// Source files first, then docs and config, then lockfiles and
     /// generated noise, keeping Git's order within each tier.
     private static func prioritized(_ files: [ChangeSummaryFacts.File]) -> [ChangeSummaryFacts.File] {
@@ -260,7 +294,7 @@ enum ChangeSummaryPolicy {
     // MARK: Output
 
     private static var verificationClaim: Regex<Substring> {
-        /(?i)\b(?:verified|verifies|validated|(?:tests?|checks?|ci|builds?)\s+(?:now\s+)?(?:pass|passes|passed|passing|succeed|succeeds|succeeded|green)|(?:fully|thoroughly|well)\s+tested)\b/
+        /(?i)\b(?:verified|verifies|validated|(?:tests?|checks?|ci|builds?)\s+(?:(?:now|all|still|is|are|was|were|has|have|had|been)\s+)*(?:pass|passes|passed|passing|succeed|succeeds|succeeded|succeeding|green)|(?:fully|thoroughly|well)\s+tested)\b/
     }
     private static var testMention: Regex<Substring> { /(?i)\b(?:tests?|tested|testing|specs?|ci)\b/ }
     private static var motivation: Regex<Substring> { /(?i)\b(?:because|so that|in order to|due to)\b/ }
@@ -300,9 +334,26 @@ enum ChangeSummaryPolicy {
     }
 
     private static func evidenceMentionsTests(_ facts: ChangeSummaryFacts) -> Bool {
-        let texts = facts.commits.map(\.subject) + facts.files.map(\.path)
-            + [facts.issueTitle, facts.commitBody].compactMap { $0 }
-        return texts.contains { $0.firstMatch(of: testMention) != nil || $0.localizedCaseInsensitiveContains("test") }
+        let texts = facts.commits.map(\.subject) + [facts.issueTitle, facts.commitBody].compactMap { $0 }
+        return texts.contains { $0.firstMatch(of: testMention) != nil } || facts.files.contains { isTestPath($0.path) }
+    }
+
+    private static let testDirectories: Set<String> = ["test", "tests", "spec", "specs", "__tests__", "testing"]
+
+    /// A test directory, or a file named as a test by common conventions:
+    /// `FooTests.swift`, `foo_test.go`, `test_foo.py`, `foo.test.ts`, `foo.spec.js`.
+    /// Words that merely contain "test", like `Latest.swift`, do not count.
+    static func isTestPath(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        if components.dropLast().contains(where: { testDirectories.contains($0.lowercased()) }) { return true }
+        guard let name = components.last else { return false }
+        let parts = name.split(separator: ".").map(String.init)
+        if parts.dropFirst().contains(where: { ["test", "tests", "spec"].contains($0.lowercased()) }) { return true }
+        let stem = parts.first ?? name
+        let lowered = stem.lowercased()
+        return ["Test", "Tests", "Spec", "Specs"].contains(where: stem.hasSuffix)
+            || ["_test", "_tests", "-test", "_spec", "-spec"].contains(where: lowered.hasSuffix)
+            || lowered.hasPrefix("test_") || testDirectories.contains(lowered)
     }
 
     /// A terminator only ends a sentence before whitespace, so versions and
@@ -325,7 +376,8 @@ enum ChangeSummaryPolicy {
             "",
             "## Change facts",
             "",
-            "- Range: `\(facts.base)...\(facts.branch)` at `\(facts.headSHA.prefix(7))`",
+            "- Range: `\(facts.base)...\(facts.branch)` at `\(facts.headSHA.prefix(7))`"
+                + (facts.mergeBaseSHA.map { " (merge base `\($0.prefix(7))`)" } ?? ""),
             "- Commits: \(facts.commits.count)",
             "- Files changed: \(facts.files.count) (+\(facts.additions) −\(facts.deletions))",
         ]

@@ -8,6 +8,9 @@ struct ReviewRequestDraftContext: Equatable {
     let fileDiffsByPath: [String: String]
     let hasUncommittedChanges: Bool
     let singleCommitBody: String?
+    /// Where the branch forks from the base, or nil when Git finds none. The
+    /// branch diff and commit list change exactly when this or HEAD moves.
+    let mergeBaseSHA: String?
 
     init(
         commitSubjects: [String],
@@ -16,7 +19,8 @@ struct ReviewRequestDraftContext: Equatable {
         diff: String,
         fileDiffsByPath: [String: String],
         hasUncommittedChanges: Bool,
-        singleCommitBody: String? = nil
+        singleCommitBody: String? = nil,
+        mergeBaseSHA: String? = nil
     ) {
         self.commitSubjects = commitSubjects
         self.commits = commits
@@ -25,6 +29,7 @@ struct ReviewRequestDraftContext: Equatable {
         self.fileDiffsByPath = fileDiffsByPath
         self.hasUncommittedChanges = hasUncommittedChanges
         self.singleCommitBody = singleCommitBody
+        self.mergeBaseSHA = mergeBaseSHA
     }
 }
 
@@ -55,6 +60,7 @@ extension GitService {
             ["status", "--porcelain"],
             cwd: worktreePath
         )
+        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
         async let commitBodyResult = Process.git(
             ["log", "\(baseRef)..HEAD", "--pretty=format:%b"],
             cwd: worktreePath
@@ -110,8 +116,26 @@ extension GitService {
             diff: diff.stdout,
             fileDiffsByPath: fileDiffsByPath,
             hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            singleCommitBody: singleCommitBody
+            singleCommitBody: singleCommitBody,
+            mergeBaseSHA: await mergeBase
         )
+    }
+
+    /// HEAD and the merge base with `baseRef` as they are now, for checking
+    /// that loaded branch context still describes the repository.
+    func reviewRequestRangeIdentity(worktreePath: URL, baseRef: String) async -> (head: String?, mergeBase: String?) {
+        async let head = Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
+        let headSHA = (try? await head).flatMap { $0.exitCode == 0 ? $0.stdout : nil }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (headSHA, await mergeBase)
+    }
+
+    private func reviewRequestMergeBase(worktreePath: URL, baseRef: String) async -> String? {
+        guard let result = try? await Process.git(["merge-base", baseRef, "HEAD"], cwd: worktreePath),
+              result.exitCode == 0 else { return nil }
+        let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha.isEmpty ? nil : sha
     }
 
     private static func assertReviewRequestSuccess(_ result: ProcessResult) throws {

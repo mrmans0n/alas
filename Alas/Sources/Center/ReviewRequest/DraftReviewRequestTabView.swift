@@ -297,6 +297,7 @@ struct DraftReviewRequestTabView: View {
                         currentFacts: currentChangeSummaryFacts
                     ),
                     onSummarize: summarizeChange,
+                    onCopy: copyChangeSummary,
                     onCancel: cancelChangeSummary,
                     onDismiss: cancelChangeSummary
                 )
@@ -709,6 +710,19 @@ struct DraftReviewRequestTabView: View {
             changeSummaryDraft = draft
             changeSummaryTask = nil
         }
+    }
+
+    /// The base can move without changing `contextKey`, so confirm HEAD and
+    /// the merge base first; a moved branch reloads and leaves the card stale.
+    private func copyChangeSummary(_ draft: ChangeSummaryDraft) async -> Bool {
+        let identity = await git.reviewRequestRangeIdentity(worktreePath: worktreePath, baseRef: tabState.baseBranch)
+        guard draft.describes(headSHA: identity.head, mergeBaseSHA: identity.mergeBase) else {
+            await loadContext()
+            return false
+        }
+        guard draft.isCurrent(for: currentChangeSummaryFacts) else { return false }
+        Clipboard.copy(ChangeSummaryPolicy.markdown(for: draft))
+        return true
     }
 
     private func cancelChangeSummary() {

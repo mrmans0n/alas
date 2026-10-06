@@ -39,6 +39,23 @@ struct ChangeSummaryTests {
     }
 
     @Test
+    func oversizedDescriptionsAndRefsStayWithinTheInputBudget() throws {
+        let facts = Self.facts(
+            branch: String(repeating: "🚀", count: 400),
+            issueTitle: String(repeating: "\u{1}", count: 1_000),
+            commitBody: String(repeating: "\u{1}", count: 1_000)
+        )
+
+        let request = ChangeSummaryPolicy.request(for: facts)
+        let payload = try Self.payload(request)
+
+        #expect(request.messages.reduce(0) { $0 + $1.content.utf8.count } <= ChangeSummaryPolicy.inputTokenLimit)
+        #expect(payload["commitBody"] == nil)
+        #expect(payload["issueTitle"] != nil)
+        #expect(request.coverage.isComplete)
+    }
+
+    @Test
     func parseAcceptsOneBoundedParagraph() {
         let output = #" {"summary": " Adds a branch picker to the remote sheet and remembers the last choice. "} "#
 
@@ -62,25 +79,43 @@ struct ChangeSummaryTests {
         #expect(ChangeSummaryPolicy.parse(output, facts: Self.facts()) == nil)
     }
 
+    /// Evidence is a test file plus an issue title; without it the branch
+    /// only touches `Latest.swift`, whose name merely contains "test".
     @Test(arguments: [
         (#"{"summary": "Adds a picker and covers it with tests."}"#, false, false),
         (#"{"summary": "Adds a picker and covers it with tests."}"#, true, true),
         (#"{"summary": "Adds a picker because users lose their place."}"#, false, false),
         (#"{"summary": "Adds a picker because users lose their place."}"#, true, true),
+        (#"{"summary": "Adds a picker, and the tests are passing."}"#, true, false),
+        (#"{"summary": "Adds a picker; CI is green."}"#, true, false),
+        (#"{"summary": "Adds a picker and the checks have passed."}"#, true, false),
     ])
     func testsAndMotivationNeedSupportingEvidence(output: String, withEvidence: Bool, accepted: Bool) {
-        let isAboutTests = output.contains("tests")
         let facts = Self.facts(
-            files: ["Sources/Picker.swift"] + (withEvidence && isAboutTests ? ["Tests/PickerTests.swift"] : []),
-            issueTitle: withEvidence && !isAboutTests ? "Users lose their place when switching branches" : nil
+            files: ["Sources/Latest.swift"] + (withEvidence ? ["Tests/PickerTests.swift"] : []),
+            issueTitle: withEvidence ? "Users lose their place when switching branches" : nil
         )
 
         #expect((ChangeSummaryPolicy.parse(output, facts: facts) != nil) == accepted)
     }
 
     @Test(arguments: [
+        ("Tests/Picker.swift", true),
+        ("AlasTests/PickerTests.swift", true),
+        ("pkg/picker_test.go", true),
+        ("tests_helpers/test_picker.py", true),
+        ("web/picker.spec.ts", true),
+        ("Sources/Latest.swift", false),
+        ("Sources/Contest/Attestation.swift", false),
+    ])
+    func testPathsFollowNamingConventions(path: String, isTest: Bool) {
+        #expect(ChangeSummaryPolicy.isTestPath(path) == isTest)
+    }
+
+    @Test(arguments: [
         ("same", false),
         ("head", true),
+        ("base", true),
         ("files", true),
         ("run", true),
         ("unloaded", true),
@@ -90,6 +125,7 @@ struct ChangeSummaryTests {
         let draft = ChangeSummaryDraft(narrative: "Adds a picker.", facts: facts, coverage: ChangeSummaryPolicy.request(for: facts).coverage)
         let current: ChangeSummaryFacts? = switch change {
         case "head": Self.facts(headSHA: "ffffffffffffffffffffffffffffffffffffffff", runResults: [Self.run(.succeeded)])
+        case "base": Self.facts(mergeBaseSHA: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", runResults: [Self.run(.succeeded)])
         case "files": Self.facts(files: ["Sources/App.swift"], runResults: [Self.run(.succeeded)])
         case "run": Self.facts(runResults: [Self.run(.failed(exitCode: 1))])
         case "unloaded": nil
@@ -99,6 +135,19 @@ struct ChangeSummaryTests {
         let phase = ChangeSummaryPhase.resolve(isSummarizing: false, draft: draft, currentFacts: current)
 
         #expect(phase == (stale ? .stale : .current(draft)))
+    }
+
+    @Test(arguments: [
+        (Self.head, Self.mergeBase, true),
+        (Self.head, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", false),
+        ("ffffffffffffffffffffffffffffffffffffffff", Self.mergeBase, false),
+        (nil, Self.mergeBase, false),
+    ] as [(String?, String?, Bool)])
+    func copyRequiresTheRepositoryToStillMatchTheSummary(head: String?, mergeBase: String?, matches: Bool) {
+        let facts = Self.facts()
+        let draft = ChangeSummaryDraft(narrative: "Adds a picker.", facts: facts, coverage: ChangeSummaryPolicy.request(for: facts).coverage)
+
+        #expect(draft.describes(headSHA: head, mergeBaseSHA: mergeBase) == matches)
     }
 
     @Test
@@ -118,7 +167,7 @@ struct ChangeSummaryTests {
 
         ## Change facts
 
-        - Range: `main...feature/picker` at `0123456`
+        - Range: `main...feature/picker` at `0123456` (merge base `abcdef0`)
         - Commits: 22
         - Files changed: 1 (+10 −2)
         - Latest run results in this worktree (not tied to a commit): `test` failed (exit 2) at Oct 6, 14:02
@@ -133,23 +182,30 @@ struct ChangeSummaryTests {
 
     // MARK: Fixtures
 
+    static let head = "0123456789abcdef0123456789abcdef01234567"
+    static let mergeBase = "abcdef0123456789abcdef0123456789abcdef01"
+
     static func facts(
-        headSHA: String = "0123456789abcdef0123456789abcdef01234567",
+        branch: String = "feature/picker",
+        headSHA: String = head,
+        mergeBaseSHA: String = mergeBase,
         commits: Int = 1,
         files: [String] = ["Sources/App.swift", "Sources/Picker.swift"],
         runResults: [ChangeSummaryFacts.RunResult] = [],
         issueTitle: String? = nil,
+        commitBody: String? = nil,
         uncommitted: Bool = false
     ) -> ChangeSummaryFacts {
         ChangeSummaryFacts(
             base: "main",
-            branch: "feature/picker",
+            branch: branch,
             headSHA: headSHA,
+            mergeBaseSHA: mergeBaseSHA,
             commits: (0 ..< commits).map { .init(sha: "sha\($0)full", shortSHA: "sha\($0)", subject: "Commit \($0)") },
             files: files.map { .init(path: $0, status: "M", additions: 10, deletions: 2) },
             runResults: runResults,
             issueTitle: issueTitle,
-            commitBody: nil,
+            commitBody: commitBody,
             hasUncommittedChanges: uncommitted
         )
     }
