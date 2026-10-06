@@ -1809,7 +1809,6 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
             let cost = line.utf8.count + (kept.isEmpty ? 0 : 1)
             if kept.count == maxExcerptLines || bytes + cost > budget {
                 if kept.isEmpty {
-                    // One huge line (minified code): cut it to the byte budget.
                     // One huge line (minified code): cut it to the byte
                     // budget on a scalar boundary, never mid-character.
                     var cut = String.UnicodeScalarView()
