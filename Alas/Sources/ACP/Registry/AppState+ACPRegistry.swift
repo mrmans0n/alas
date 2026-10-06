@@ -21,8 +21,9 @@ extension AppState {
     func uninstallRegistryAgent(
         registryID: String,
         installer: ACPRegistryInstaller = ACPRegistryInstaller()
-    ) throws {
-        try installer.uninstall(registryID: registryID)
+    ) async throws {
+        // npm installs can hold large `node_modules` trees; delete off the main actor.
+        try await Task.detached { try installer.uninstall(registryID: registryID) }.value
         config.agents.registry.removeAll { $0.registryID == registryID }
         saveConfig()
         rescanAgents()

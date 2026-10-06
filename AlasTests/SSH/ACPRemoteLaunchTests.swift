@@ -27,6 +27,16 @@ struct ACPRemoteLaunchTests {
         #expect(!command.contains("'~/bin/gemini acp'"))
     }
 
+    @Test func agentCommandForwardsLaunchEnvironmentBeforeTheCommand() {
+        let command = ACPRemoteLaunch.agentCommand(
+            command: "uvx",
+            arguments: ["fast-agent-acp==0.10.1"],
+            environment: ["Z_KEY": "z", "FAST_AGENT_MODEL": "codex plan"]
+        )
+
+        #expect(command.hasSuffix("'FAST_AGENT_MODEL=codex plan' 'Z_KEY=z' 'uvx' 'fast-agent-acp==0.10.1'"))
+    }
+
     @Test func channelInvocationRunsBatchSSHInWorktree() {
         let invocation = ACPRemoteLaunch.channelInvocation(
             host: "devbox", worktreePath: "/srv/repo",

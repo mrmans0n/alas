@@ -65,11 +65,13 @@ final class ACPRegistryBrowserModel {
         }
     }
 
-    func uninstall(registryID: String, state: AppState) {
+    func uninstall(registryID: String, state: AppState) async {
         guard operations[registryID] == nil else { return }
+        operations[registryID] = .uninstalling
         errors[registryID] = nil
+        defer { operations[registryID] = nil }
         do {
-            try state.uninstallRegistryAgent(registryID: registryID)
+            try await state.uninstallRegistryAgent(registryID: registryID)
         } catch {
             errors[registryID] = error.localizedDescription
         }
@@ -165,7 +167,7 @@ struct ACPRegistryBrowserView: View {
                                 operation: model.operations[agent.id],
                                 error: model.errors[agent.id],
                                 onInstall: { Task { await model.install(agent, state: state) } },
-                                onUninstall: { model.uninstall(registryID: agent.id, state: state) }
+                                onUninstall: { Task { await model.uninstall(registryID: agent.id, state: state) } }
                             )
                         }
                         unlistedRows(unlisted, note: "No longer listed in the ACP registry.")
@@ -181,7 +183,8 @@ struct ACPRegistryBrowserView: View {
                 install: install,
                 note: note,
                 error: model.errors[install.registryID],
-                onUninstall: { model.uninstall(registryID: install.registryID, state: state) }
+                isRemoving: model.operations[install.registryID] != nil,
+                onUninstall: { Task { await model.uninstall(registryID: install.registryID, state: state) } }
             )
         }
     }
@@ -192,6 +195,7 @@ private struct ACPRegistryUnlistedRow: View {
     let install: ACPRegistryInstalledAgent
     let note: String
     let error: String?
+    let isRemoving: Bool
     let onUninstall: () -> Void
     @Environment(\.theme) var theme
 
@@ -218,7 +222,16 @@ private struct ACPRegistryUnlistedRow: View {
                 }
             }
             Spacer(minLength: 8)
-            AlasButton(title: "Uninstall", style: .subtle, action: onUninstall)
+            if isRemoving {
+                HStack(spacing: 6) {
+                    Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                    Text("Removing…")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+            } else {
+                AlasButton(title: "Uninstall", style: .subtle, action: onUninstall)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

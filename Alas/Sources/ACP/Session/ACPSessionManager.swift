@@ -4567,6 +4567,7 @@ final class ACPSessionManager: ObservableObject {
                 worktreePath: worktreePath,
                 command: spec.command,
                 arguments: spec.arguments,
+                environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv),
                 nodeBinDirectory: spec.remoteNodeBinDirectory
             )
             // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
