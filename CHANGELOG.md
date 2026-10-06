@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
+
 ### 🐛 Fixes
 
 - Keep center-pane tabs draggable without moving the window while preserving window dragging from empty tab-bar space.

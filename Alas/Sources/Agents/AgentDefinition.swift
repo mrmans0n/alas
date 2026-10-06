@@ -19,6 +19,12 @@ struct AgentDefinition: Codable, Equatable, Identifiable {
     var isBuiltin: Bool
     var isEnabled: Bool
     var builtinLogoAssetName: String?
+    /// Set for agents installed from the ACP registry. Those are ACP-only:
+    /// their command is a stdio ACP server, not an interactive CLI.
+    var acpRegistryID: String?
+
+    /// Whether the agent can run in a terminal tab or in prompt mode.
+    var supportsTerminal: Bool { acpRegistryID == nil }
 
     /// The binary configured by the user. Prefers a non-blank override;
     /// otherwise returns the catalog/custom `binary` unchanged.

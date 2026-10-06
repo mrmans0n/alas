@@ -33,7 +33,8 @@ respond when it needs you.
   over [ACP](https://agentclientprotocol.com). Tool
   calls, plans, and permission prompts render inline, and past sessions can be
   browsed and resumed. Works with Claude Code, Codex, Cursor, Gemini, Antigravity,
-  OpenCode, Pi, OMP, and Copilot.
+  OpenCode, Pi, OMP, and Copilot, and installs more chat agents from the
+  official [ACP Registry](https://agentclientprotocol.com) in Settings → Agents.
 
 - **Prepare the next turn.** Queue, edit, reorder, or schedule prompts while an
   agent works. Attach issue context, dictate prompts, and configure external MCP

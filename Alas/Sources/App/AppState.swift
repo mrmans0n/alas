@@ -1135,6 +1135,7 @@ final class AppState {
     /// Recompute `agentRegistry` from `config.agents` + a fresh detection
     /// scan. Safe to call repeatedly.
     func rescanAgents() {
+        ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
         let registry = composeRegistryWithoutDetection()
         Task { @MainActor in
             let installedIds = await AgentDetector.scanCurrentEnvironment(
@@ -1143,7 +1144,7 @@ final class AppState {
             self.agentAvailabilityStore.invalidateAll()
             self.agentRegistry = AgentRegistry(
                 builtinState: self.config.agents.builtinState,
-                customs: self.config.agents.custom,
+                customs: self.config.agents.userAgents,
                 installedIds: installedIds
             )
             self.snapInvalidatedAgentSelections()
@@ -1239,7 +1240,7 @@ final class AppState {
         guard case .ssh = target else { return }
         let candidates = AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
-            customs: config.agents.custom
+            customs: config.agents.userAgents
         )
         if force {
             agentAvailabilityStore.invalidate(target: target, worktreePath: worktreePath.path)
@@ -1264,7 +1265,7 @@ final class AppState {
     private func composeRegistryWithoutDetection() -> AgentRegistry {
         AgentRegistry(
             builtinState: config.agents.builtinState,
-            customs: config.agents.custom,
+            customs: config.agents.userAgents,
             installedIds: []
         )
     }
@@ -1278,7 +1279,7 @@ final class AppState {
     private func snapInvalidatedAgentSelections() {
         let enabledIds = Set(AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
-            customs: config.agents.custom
+            customs: config.agents.userAgents
         ).map(\.id))
         var changed = false
         let currentTool = config.changes.aiToolId
@@ -1517,6 +1518,9 @@ final class AppState {
         // Publish the effective shortcut reservations so the terminal pane
         // can honor user overrides from the very first keystroke.
         ShortcutReservations.update(from: config)
+        // Restored ACP sessions of registry agents attach before the first
+        // agent rescan, so their launch specs must be known from the start.
+        ACPLaunchCatalog.publishRegistryAgents(config.agents.registry)
         self.projectsManager = ProjectsManager(persistedProjects: projectsFile.projects)
         let spacesManager = spacesFile.map(SpacesManager.init(file:))
             ?? SpacesManager.migrating(projects: projectsFile.projects)
@@ -3355,7 +3359,7 @@ final class AppState {
             id: agentId,
             worktreePath: launchRoot,
             executionTarget: launchTarget
-        ) else {
+        ), agent.supportsTerminal else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         if agent.id == AgentKind.copilot.rawValue, project.host == nil {
@@ -3935,7 +3939,7 @@ final class AppState {
         case .ssh:
             Set(AgentConfiguredCatalog.enabled(
                 builtinState: config.agents.builtinState,
-                customs: config.agents.custom
+                customs: config.agents.userAgents
             ).map(\.id))
         }
         return WorkspaceConfigurationResolver.resolve(.init(
@@ -5120,7 +5124,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = availableAgent(id: agentId, for: worktree) else {
+        guard let agent = availableAgent(id: agentId, for: worktree), agent.supportsTerminal else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -5142,7 +5146,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard let agent = availableAgent(id: agentId, for: worktree) else {
+        guard let agent = availableAgent(id: agentId, for: worktree), agent.supportsTerminal else {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
@@ -5195,7 +5199,7 @@ final class AppState {
     ) async throws -> String? {
         guard let agentId else { return nil }
         await loadAgentAvailability(for: worktree, force: refreshAvailability, retryFailed: refreshAvailability)
-        guard let agent = availableAgent(id: agentId, for: worktree) else {
+        guard let agent = availableAgent(id: agentId, for: worktree), agent.supportsTerminal else {
             throw WorktreeAgentStartupError.agentUnavailable
         }
         return agentStartupCommand(for: agent, project: project)
@@ -7198,7 +7202,7 @@ final class AppState {
                     let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
                     return AgentConfiguredCatalog.enabled(
                         builtinState: self.config.agents.builtinState,
-                        customs: self.config.agents.custom
+                        customs: self.config.agents.userAgents
                     ).map {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
@@ -7215,7 +7219,7 @@ final class AppState {
                     guard let self else { return [] }
                     let configured = AgentConfiguredCatalog.all(
                         builtinState: self.config.agents.builtinState,
-                        customs: self.config.agents.custom
+                        customs: self.config.agents.userAgents
                     )
                     var availability = await self.loadAgentAvailabilityForDelegation(worktree)
                     if case .local = self.agentExecutionTarget(for: worktree) {
@@ -13318,7 +13322,7 @@ final class AppState {
         if let pinnedRemoteHost {
             let configuredAgents = AgentConfiguredCatalog.enabled(
                 builtinState: config.agents.builtinState,
-                customs: config.agents.custom
+                customs: config.agents.userAgents
             )
             let needsRemoteHome = configuredAgents.contains {
                 $0.binaryOverride?.trimmingCharacters(in: .whitespaces).hasPrefix("~/") == true
@@ -13614,7 +13618,7 @@ final class AppState {
     ) -> ACPLaunchSpec {
         let agents = configuredAgents ?? AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
-            customs: config.agents.custom
+            customs: config.agents.userAgents
         )
         let configuredAgent = agents.first(where: { $0.id == spec.agentID })
         var launchSpec = spec

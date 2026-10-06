@@ -181,6 +181,19 @@ struct AppConfigTests {
         #expect(decoded.collapsedProjectIds == ["project-b", "project-a"])
     }
 
+    @Test func installedRegistryAgentsRoundTrip() throws {
+        var cfg = AppConfig.defaults
+        cfg.agents.registry = [ACPRegistryInstalledAgent(
+            registryID: "goose", displayName: "goose", version: "1.53.0",
+            command: "/apps/acp-agents/goose/goose", arguments: ["acp"],
+            environment: ["GOOSE_MODE": "acp"], isEnabled: false
+        )]
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
+
+        #expect(decoded.agents.registry == cfg.agents.registry)
+    }
+
     @Test func decodeOldConfigPreservesPreviousSidebarMaterial() throws {
         let json = """
         {

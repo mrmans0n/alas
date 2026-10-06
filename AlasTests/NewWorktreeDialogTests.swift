@@ -578,6 +578,19 @@ struct NewWorktreeDialogTests {
         #expect(resolved == "none")
     }
 
+    @Test func resolvedLaunchAgentDropsACPOnlyRegistryAgentInTerminalMode() {
+        let registryAgent = ACPRegistryInstalledAgent(
+            registryID: "goose", displayName: "goose", version: "1.0.0",
+            command: "/tmp/goose", arguments: ["acp"], environment: [:], isEnabled: true
+        ).agentDefinition
+        let resolved = NewWorktreeDialog.resolvedLaunchAgent(
+            initialAgentId: registryAgent.id,
+            mode: .terminal,
+            enabledAgents: [Self.agent(id: "claude", displayName: "Claude"), registryAgent]
+        )
+        #expect(resolved == "none")
+    }
+
     @Test func resolvedLaunchAgentReplacesNonACPInACPMode() {
         let agents = [
             Self.agent(id: "amp",    displayName: "Amp"),     // not ACP-capable

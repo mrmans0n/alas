@@ -957,7 +957,7 @@ struct NewWorktreeDialog: View {
     private var pickerAgents: [AgentDefinition] {
         let enabled = launchEligibleAgents
         switch launchMode {
-        case .terminal: return enabled
+        case .terminal: return enabled.filter(\.supportsTerminal)
         case .acp:      return Self.acpCapableAgents(from: enabled)
         }
     }
@@ -977,7 +977,7 @@ struct NewWorktreeDialog: View {
     private var configuredEnabledAgents: [AgentDefinition] {
         AgentConfiguredCatalog.enabled(
             builtinState: state.config.agents.builtinState,
-            customs: state.config.agents.custom
+            customs: state.config.agents.userAgents
         )
     }
 
@@ -1134,7 +1134,8 @@ struct NewWorktreeDialog: View {
     }
 
     /// Decide which agent id the picker should hold given the desired
-    /// `mode`. In terminal mode any enabled agent (or "none") is valid.
+    /// `mode`. In terminal mode any enabled terminal-capable agent (or
+    /// "none") is valid; an ACP-only agent falls back to "none".
     /// In ACP mode "none" is not allowed and the agent must be
     /// ACP-capable; if the incoming id isn't, fall back to the first
     /// ACP-capable enabled agent, or "none" if none exist.
@@ -1145,6 +1146,9 @@ struct NewWorktreeDialog: View {
     ) -> String {
         switch mode {
         case .terminal:
+            if enabledAgents.contains(where: { $0.id == initialAgentId && !$0.supportsTerminal }) {
+                return "none"
+            }
             return initialAgentId
         case .acp:
             let capable = acpCapableAgents(from: enabledAgents)

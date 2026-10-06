@@ -6,7 +6,14 @@ struct AgentsPane: View {
     var onNavigate: (SettingsSection) -> Void = { _ in }
 
     @State private var editing: EditTarget?
+    @State private var registryBrowser: RegistryBrowserRequest?
     @State private var piAdapterState: PiMCPAdapterInspector.State = .unknown
+
+    /// Opens the ACP registry sheet, optionally pre-searched for one agent.
+    struct RegistryBrowserRequest: Identifiable {
+        let id = UUID()
+        var query = ""
+    }
 
     /// The sheet's content depends on what was clicked: existing agent (by
     /// id) or a brand-new custom (`.new`).
@@ -36,6 +43,9 @@ struct AgentsPane: View {
                             .tracking(0.6)
                             .foregroundColor(theme.color("fg-dim"))
                         Spacer()
+                        AlasButton(title: "Browse ACP Registry", style: .subtle) {
+                            registryBrowser = RegistryBrowserRequest()
+                        }
                         AlasButton(title: "Add custom agent", style: .subtle) {
                             editing = .new
                         }
@@ -110,6 +120,13 @@ struct AgentsPane: View {
                 onDismiss: { editing = nil }
             )
         }
+        .sheet(item: $registryBrowser) { request in
+            ACPRegistryBrowserView(
+                state: state,
+                initialQuery: request.query,
+                onDismiss: { registryBrowser = nil }
+            )
+        }
     }
 
     private var autoLaunchPicker: some View {
@@ -142,7 +159,13 @@ struct AgentsPane: View {
                 AgentCard(
                     agent: agent,
                     installed: installedIds.contains(agent.id),
-                    onTap: { editing = .existing(agent.id) },
+                    onTap: {
+                        if agent.acpRegistryID != nil {
+                            registryBrowser = RegistryBrowserRequest(query: agent.displayName)
+                        } else {
+                            editing = .existing(agent.id)
+                        }
+                    },
                     onToggle: { isOn in toggleEnabled(agent: agent, isOn: isOn) }
                 )
             }
@@ -161,6 +184,8 @@ struct AgentsPane: View {
             state.config.agents.builtinState[agent.id] = entry
         } else if let idx = state.config.agents.custom.firstIndex(where: { $0.id == agent.id }) {
             state.config.agents.custom[idx].isEnabled = isOn
+        } else if let idx = state.config.agents.registry.firstIndex(where: { $0.id == agent.id }) {
+            state.config.agents.registry[idx].isEnabled = isOn
         }
         state.saveConfig()
         state.rescanAgents()
@@ -211,7 +236,9 @@ private struct AgentCard: View {
 
     @ViewBuilder
     private var statusPill: some View {
-        if !agent.isBuiltin {
+        if agent.acpRegistryID != nil {
+            pill(text: "registry", fg: theme.color("accent"))
+        } else if !agent.isBuiltin {
             pill(text: "custom", fg: theme.color("accent"))
         } else if installed {
             pill(text: "installed", fg: theme.color("add"))
