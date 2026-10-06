@@ -4254,15 +4254,24 @@ extension ACPSessionRunner {
                 // before dispatch; a direct one needs its marker saved just as
                 // durably before the prompt can reach the agent. Set after the
                 // preflight work, so an exit during it leaves no stale marker.
+                var markedDirectTurn = false
                 if queuedItemId == nil {
                     let markerWrite = await MainActor.run { () -> Task<Void, Never>? in
                         guard self.activePromptID == promptID else { return nil }
                         self.setDirectTurnInFlight(true)
                         return self.persistenceTail
                     }
+                    markedDirectTurn = markerWrite != nil
                     await markerWrite?.value
                 }
+                // Invalidated before the request went out: a turn that was never
+                // sent must not be continued. A newer prompt owns its own marker.
+                let releaseUnsentMarker = { @MainActor in
+                    guard markedDirectTurn, self.activePromptID == nil || self.activePromptID == promptID else { return }
+                    self.setDirectTurnInFlight(false)
+                }
                 guard await self.hasConfirmedLeaseForSideEffect() else {
+                    await releaseUnsentMarker()
                     onDispatchRegistered?()
                     throw CancellationError()
                 }
@@ -4270,7 +4279,10 @@ extension ACPSessionRunner {
                 // prompt while that work is in progress, so verify ownership
                 // again before sending a stale RPC.
                 guard await MainActor.run(body: {
-                    guard self.activePromptID == promptID else { return false }
+                    guard self.activePromptID == promptID else {
+                        releaseUnsentMarker()
+                        return false
+                    }
                     // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
                     let sentAt = self.nextSentAt()
                     // Updates sent during that work belong to what came before.
