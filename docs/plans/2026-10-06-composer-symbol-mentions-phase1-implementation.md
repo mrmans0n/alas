@@ -831,14 +831,18 @@ struct WorktreeSymbolIndexTests {
         #expect(readable.symbols.map(\.name) == ["Locked"])
     }
 
-    @Test("a read that fails after opening is a failure, not an empty file")
-    func failedReadIsNil() throws {
-        // A directory opens for reading but every read throws EISDIR.
+    @Test("only regular files are read: directories and FIFOs return nil without blocking", .timeLimit(.minutes(1)))
+    func readsRegularFilesOnly() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         #expect(SymbolSource.readBounded(directory) == nil)
+
+        // A blocking open on a FIFO with no writer would hang forever.
+        let fifo = directory.appendingPathComponent("Pipe.swift")
+        #expect(mkfifo(fifo.path, 0o644) == 0)
+        #expect(SymbolSource.readBounded(fifo) == nil)
     }
 
     @Test("files over the size cap are skipped")
@@ -920,11 +924,16 @@ enum SymbolSource {
         }.value
     }
 
-    /// Reads at most `maxBytes + 1` bytes, so a file that grew past the cap
-    /// after any earlier size check is rejected instead of read whole.
+    /// Reads at most `maxBytes + 1` bytes of a regular file, so a file that
+    /// grew past the cap is rejected instead of read whole. Opens
+    /// non-blocking and checks the descriptor, so a FIFO or device never
+    /// stalls ranking or prompt dispatch.
     static func readBounded(_ url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
+        let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
         // A throwing read is a failure (nil), never an empty file: an empty
         // result would be indexed with the current stamp and never retried.
         let data: Data
