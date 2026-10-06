@@ -80,6 +80,7 @@ struct ReviewChangesTabView: View {
     @Environment(\.theme) private var theme
     @State private var session: ReviewChangesLoadedSession?
     @State private var isLoading = false
+    @State private var lspLeases = LSPServerLeaseSet()
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
     @State private var railCollapsed = false
@@ -191,6 +192,7 @@ struct ReviewChangesTabView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
             toolbarButton(
                 systemName: "scope",
                 tooltip: "Choose review scope",
@@ -230,6 +232,15 @@ struct ReviewChangesTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(theme.color("bg-2"))
+        .lspServerLeases(
+            lspLeases,
+            inputs: LSPServerLeaseSet.inputs(
+                worktreeRoot: worktree.path,
+                relativePaths: session?.files.map(\.summary.path) ?? [],
+                registry: appState.lsp.activeRegistry
+            ),
+            manager: appState.lsp
+        )
     }
 
     private var layoutSwitcher: some View {

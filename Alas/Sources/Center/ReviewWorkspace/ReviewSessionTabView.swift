@@ -88,6 +88,7 @@ struct ReviewSessionTabView: View {
     @State private var record: ReviewSessionRecord?
     @State private var loaded: ReviewSessionLoadedContext?
     @State private var loadedTrackedResolvedSHA: String?
+    @State private var lspLeases = LSPServerLeaseSet()
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var selectedFileID: DiffReviewFileID?
@@ -253,6 +254,15 @@ struct ReviewSessionTabView: View {
         return "\(tabState.sessionID.rawValue):\(loadGeneration):\(revisionGeneration):\(retargetGeneration)"
     }
 
+    private var lspLeaseInputs: [LSPServerLeaseSet.Input] {
+        guard let appState, let worktree, let files = loaded?.session.files else { return [] }
+        return LSPServerLeaseSet.inputs(
+            worktreeRoot: worktree.path,
+            relativePaths: files.map(\.summary.path),
+            registry: appState.lsp.activeRegistry
+        )
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
@@ -273,6 +283,9 @@ struct ReviewSessionTabView: View {
                     }
                 }
                 Spacer(minLength: 12)
+                if let appState {
+                    LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
+                }
                 if let providerDescription = record?.target.providerDescription {
                     Text(providerDescription)
                         .font(.system(size: 11, weight: .medium))
@@ -287,6 +300,7 @@ struct ReviewSessionTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(theme.color("bg-2"))
+        .lspServerLeases(lspLeases, inputs: lspLeaseInputs, manager: appState?.lsp)
         .background(
             DiffReviewAccessibilityMarker(
                 identifier: "review-session-title",

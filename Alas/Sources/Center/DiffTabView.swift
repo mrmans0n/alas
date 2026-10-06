@@ -51,6 +51,7 @@ struct DiffTabView: View {
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var lspLeases = LSPServerLeaseSet()
     @StateObject private var copyFeedback = CopyFeedbackState()
     @StateObject private var renderContextCache = DiffTabRenderContextCache()
     @FocusState private var draftComposerFocused: Bool
@@ -302,6 +303,7 @@ struct DiffTabView: View {
                 }
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1.5))
             }
+            LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
             HStack(spacing: 4) {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
@@ -314,6 +316,11 @@ struct DiffTabView: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .lspServerLeases(
+            lspLeases,
+            inputs: LSPServerLeaseSet.inputs(worktreeRoot: worktreePath, relativePaths: [relativePath], registry: appState.lsp.activeRegistry),
+            manager: appState.lsp
+        )
     }
 
     private func load() async {
