@@ -474,10 +474,20 @@ struct NewWorktreeDialogTests {
         #expect(agents.map(\.id) == ["claude"])
     }
 
-    @Test func launchEligibleAgentsForRemoteProjectUsesConfiguredAgents() {
+    @Test func launchEligibleAgentsForRemoteProjectUsesConfiguredAgentsThatCanRunRemotely() {
+        func registry(_ id: String, command: String) -> AgentDefinition {
+            ACPRegistryInstalledAgent(
+                registryID: id, displayName: id, version: "1.0.0",
+                command: command, arguments: [], environment: [:], isEnabled: true
+            ).agentDefinition
+        }
         let configured = [
             Self.agent(id: "claude", displayName: "Claude"),
             Self.agent(id: "codex", displayName: "Codex"),
+            // Lives in this Mac's Application Support; cannot launch over SSH.
+            registry("goose", command: "/Users/me/Library/Application Support/Alas/acp-agents/goose/goose"),
+            // Resolved on the remote PATH.
+            registry("fast-agent", command: "uvx"),
         ]
         let locallyInstalled = [
             Self.agent(id: "claude", displayName: "Claude"),
@@ -489,7 +499,7 @@ struct NewWorktreeDialogTests {
             locallyEnabledAgents: locallyInstalled
         )
 
-        #expect(agents.map(\.id) == ["claude", "codex"])
+        #expect(agents.map(\.id) == ["claude", "codex", "registry-fast-agent"])
     }
 
     @Test func remoteAutoLaunchDefaultUsesConfiguredAgentCatalog() {

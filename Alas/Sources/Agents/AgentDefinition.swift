@@ -26,6 +26,11 @@ struct AgentDefinition: Codable, Equatable, Identifiable {
     /// Whether the agent can run in a terminal tab or in prompt mode.
     var supportsTerminal: Bool { acpRegistryID == nil }
 
+    /// Registry binary and npm installs live under this Mac's Application
+    /// Support, so they cannot launch on an SSH host. A bare registry command
+    /// (`uvx`) still resolves on the remote PATH.
+    var canRunOnRemoteHost: Bool { acpRegistryID == nil || !binary.contains("/") }
+
     /// The binary configured by the user. Prefers a non-blank override;
     /// otherwise returns the catalog/custom `binary` unchanged.
     var configuredBinary: String {

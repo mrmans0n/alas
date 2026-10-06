@@ -1075,7 +1075,7 @@ struct NewWorktreeDialog: View {
         configuredEnabledAgents: [AgentDefinition],
         locallyEnabledAgents: [AgentDefinition]
     ) -> [AgentDefinition] {
-        isRemoteProject ? configuredEnabledAgents : locallyEnabledAgents
+        isRemoteProject ? configuredEnabledAgents.filter(\.canRunOnRemoteHost) : locallyEnabledAgents
     }
 
     nonisolated static func resolvedAutoLaunchAgentID(

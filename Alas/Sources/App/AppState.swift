@@ -1241,7 +1241,7 @@ final class AppState {
         let candidates = AgentConfiguredCatalog.enabled(
             builtinState: config.agents.builtinState,
             customs: config.agents.userAgents
-        )
+        ).filter(\.canRunOnRemoteHost)
         if force {
             agentAvailabilityStore.invalidate(target: target, worktreePath: worktreePath.path)
         }
@@ -3940,7 +3940,7 @@ final class AppState {
             Set(AgentConfiguredCatalog.enabled(
                 builtinState: config.agents.builtinState,
                 customs: config.agents.userAgents
-            ).map(\.id))
+            ).filter(\.canRunOnRemoteHost).map(\.id))
         }
         return WorkspaceConfigurationResolver.resolve(.init(
             globalTerminal: config.terminal,
