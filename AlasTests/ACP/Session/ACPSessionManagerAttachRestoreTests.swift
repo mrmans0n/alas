@@ -4393,6 +4393,48 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(params.value == .string("medium"))
     }
 
+    @Test("fresh attach does not wait for options after a model switch that failed", .timeLimit(.minutes(1)))
+    func freshAttachSkipsTheRefreshWaitWhenTheModelSwitchFails() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [.init(id: "sonnet", name: "Sonnet")],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        // A remembered model the agent no longer knows: the switch is refused.
+        client.script(method: "session/set_model") { _ in
+            throw ACPClientError.noScript(method: "session/set_model")
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        // No options update ever arrives, so a wait would run for 30 seconds.
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "gone"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let started = ContinuousClock.now
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(ContinuousClock.now - started < .seconds(10))
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.value == .string("high"))
+    }
+
     @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
     func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

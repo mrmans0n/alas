@@ -7521,17 +7521,21 @@ extension ACPSessionManager {
                 guard case .configOption(let id) = session.chipState.models?.source else { return nil }
                 return id
             }()
-            let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
             // A model switch can publish the new model's config options after
             // the `session/set_model` reply, resetting levels such as thinking
             // to the new model's default. Give that update a bounded wait
             // before restoring pending values, then send them even when they
-            // match the pre-switch state, so the user's choice wins.
-            let modelSwitched = modelToRestore != nil && modelToRestore != result.currentModel
-            if modelSwitched, !pendingUserConfigOptionValues.isEmpty {
+            // match the pre-switch state, so the user's choice wins. Only a
+            // switch that took effect counts, and the values stay queued
+            // during the wait so a superseded attempt leaves them for the next.
+            let modelSwitched = modelToRestore != nil
+                && modelToRestore != result.currentModel
+                && session.currentModel == modelToRestore
+            if modelSwitched, pendingConfigOptionValues[sessionId]?.isEmpty == false {
                 _ = await configOptionsChange(of: session, within: delegatedReasoningRefreshTimeout)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             }
+            let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
             let userConfigOptionEditRevisionsAtRestoreStart = session.userConfigOptionEditRevisionsSnapshot()
             await restoreConfigOptionValues(
                 persistedConfigOptionValues,
