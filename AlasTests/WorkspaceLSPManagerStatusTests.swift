@@ -17,7 +17,9 @@ struct WorkspaceLSPManagerStatusTests {
 
     private func manager(
         withFakeEntry language: String = "swift",
-        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil
+        enabled: Bool = true,
+        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }
     ) -> WorkspaceLSPManager {
         let makeClient = makeClient ?? { _, _, _, language, rootURI, _ in
             readyClient(language: language, rootURI: rootURI)
@@ -30,7 +32,7 @@ struct WorkspaceLSPManagerStatusTests {
                 args: [],
                 env: [:],
                 rootMarkers: [],
-                enabled: true
+                enabled: enabled
             )
         ])
         return WorkspaceLSPManager(
@@ -43,14 +45,19 @@ struct WorkspaceLSPManagerStatusTests {
                     gatekeeperAssessor: { _ in .allowed }
                 )
             },
-            makeClient: makeClient
+            makeClient: makeClient,
+            sleep: sleep
         )
     }
 
     private func readyClient(language: String, rootURI: String) -> LSPClient {
+        LSPClient(transport: Self.replyingTransport(), language: language, rootURI: rootURI)
+    }
+
+    private static func replyingTransport() -> FakeTransport {
         let transport = FakeTransport()
         transport.onSend = { sent in
-            guard let id = Self.requestId(in: sent) else { return }
+            guard let id = requestId(in: sent) else { return }
             if sent.contains(#""method":"initialize""#) {
                 transport.deliverFrame(
                     #"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{"textDocumentSync":1}}}"#
@@ -59,7 +66,7 @@ struct WorkspaceLSPManagerStatusTests {
                 transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
             }
         }
-        return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        return transport
     }
 
     private static func requestId(in json: String) -> Int? {
@@ -741,6 +748,97 @@ struct WorkspaceLSPManagerStatusTests {
         try await eventually("ready") { status.phase == .ready }
         #expect(mgr.stateTick == tick)
         transport.finish()
+    }
+
+    @Test func leaseOutlivesDocumentsAndGraceShutdownIsCancelledByRetaining() async throws {
+        let transport = Self.replyingTransport()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        #expect(first.status === mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(transport.terminateCount == 0)
+
+        first.release()
+        try await eventually("first grace") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        guard case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        #expect(second.status === first.status)
+        gate.fire()
+        second.release()
+        try await eventually("second grace") { gate.requested.count == 2 }
+        #expect(transport.terminateCount == 0)
+
+        gate.fire()
+        try await eventually("grace shutdown") { transport.terminateCount == 1 }
+        transport.finish()
+    }
+
+    @Test func restartRespawnsLeaseOnlyServerWithSameStatus() async throws {
+        final class Spawns { var transports: [FakeTransport] = [] }
+        let spawns = Spawns()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+
+        await mgr.restart(status: lease.status)
+
+        #expect(spawns.transports.count == 2)
+        #expect(spawns.transports[0].terminateCount == 1)
+        try await eventually("ready after restart") { lease.status.phase == .ready }
+        #expect(spawns.transports[1].terminateCount == 0)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func retainReportsDisabledLanguageWithoutSpawning() async {
+        let mgr = manager(enabled: false, makeClient: { _, _, _, language, rootURI, _ in
+            Issue.record("a disabled language must not spawn a server")
+            return readyClient(language: language, rootURI: rootURI)
+        })
+        let result = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        guard case .unavailable(let language, let reason) = result else {
+            Issue.record("expected unavailable")
+            return
+        }
+        #expect(language == "swift")
+        #expect(reason == .disabled)
+    }
+}
+
+/// Stands in for `Task.sleep` in the idle-grace timer: records requested
+/// durations and suspends until `fire()`.
+@MainActor
+private final class GraceGate {
+    private(set) var requested: [Duration] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(_ duration: Duration) async {
+        requested.append(duration)
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func fire() {
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 }
 

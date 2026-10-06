@@ -1727,6 +1727,7 @@
 		C512EC7827D3C46907DDB7A1 /* HighlightCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E50B0600EF60A0D9B09877 /* HighlightCapture.swift */; };
 		C51451EC8E103EB5FEF82EFE /* ACPSessionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EB39DE3614B5BEC4D3EBF13 /* ACPSessionLifecycleTests.swift */; };
 		C51D65D3D40F801BC94ABBDD /* TabsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A218B5125FC963339E40605E /* TabsManager.swift */; };
+		C52F7B7A99568B3C2785A160 /* LSPServerLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C3574F2F0499524C0A2EB1 /* LSPServerLease.swift */; };
 		C533E936D5BB793DBA80D09D /* WelcomeSky.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF4175CC7D75C908087A6824 /* WelcomeSky.swift */; };
 		C54DD220F01DC5BB858BB407 /* AgentInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53B597B64DC2E72758FBE2A /* AgentInstaller.swift */; };
 		C55B79DC0AAE96CFA14BE76F /* CommitFilesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E7E4823B42BBA6EA7610DB /* CommitFilesListView.swift */; };
@@ -2972,6 +2973,7 @@
 		519CFB3707E8DDBDECD6C5D1 /* Alas.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alas.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		51B81A3BC3C4B5A08A9B8291 /* CheckpointRestoreIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestoreIntegrationTests.swift; sourceTree = "<group>"; };
 		51B868809675C4110044C92E /* SpacesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpacesManager.swift; sourceTree = "<group>"; };
+		51C3574F2F0499524C0A2EB1 /* LSPServerLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPServerLease.swift; sourceTree = "<group>"; };
 		5210D5B1E2FD2EF68139506E /* ProcessGitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitTests.swift; sourceTree = "<group>"; };
 		52171CE4B568197AC859D30E /* WorkspaceEditUndoCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceEditUndoCoordinator.swift; sourceTree = "<group>"; };
 		524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangeSummaryVisibility.swift; sourceTree = "<group>"; };
@@ -6546,6 +6548,7 @@
 		7311DAD88DF4EA6C9658B4C3 /* Status */ = {
 			isa = PBXGroup;
 			children = (
+				51C3574F2F0499524C0A2EB1 /* LSPServerLease.swift */,
 				BB2929E80676F63E0BDAA5EF /* LSPServerStatus.swift */,
 			);
 			path = Status;
@@ -9046,6 +9049,7 @@
 				DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */,
 				B1AA5711DF32D3C824323A59 /* LSPOutputTail.swift in Sources */,
 				49ABEAD7E0FF5EBE0B96C219 /* LSPPositionCodec.swift in Sources */,
+				C52F7B7A99568B3C2785A160 /* LSPServerLease.swift in Sources */,
 				3440E2EF037F5CCB40A2AA1B /* LSPServerRequests.swift in Sources */,
 				7F7366DF99D54F78856FE7EB /* LSPServerStatus.swift in Sources */,
 				70FCC2B12AE446728EE7CF8D /* LSPTransport.swift in Sources */,
