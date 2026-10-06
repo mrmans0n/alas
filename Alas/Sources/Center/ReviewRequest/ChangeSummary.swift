@@ -330,8 +330,12 @@ enum ChangeSummaryPolicy {
         /(?i)\b(?:verified|verifies|validated|(?:tests?|checks?|ci|builds?)\s+(?:(?:now|all|still|is|are|was|were|has|have|had|been)\s+)*(?:pass|passes|passed|passing|succeed|succeeds|succeeded|succeeding|green)|(?:fully|thoroughly|well)\s+tested)\b/
     }
     private static var testMention: Regex<Substring> { /(?i)\b(?:tests?|tested|testing|specs?|ci)\b/ }
-    /// Outcome words. Next to a test mention they read as a claim about a
-    /// run the model never saw, so the pair is rejected however it is phrased.
+    /// Things that get run and checked. Paired with an outcome word they read
+    /// as a claim about a run the model never saw.
+    private static var checkMention: Regex<Substring> {
+        /(?i)\b(?:tests?|tested|testing|specs?|ci|builds?|built|checks?|lint\w*|compil\w*)\b/
+    }
+    /// Outcome words; rejected next to a check mention however it is phrased.
     private static var outcomeWord: Regex<Substring> {
         /(?i)\b(?:pass\w*|succe\w*|green|complet\w*|ran|runs?|running|fail\w*|verif\w*|validat\w*|confirm\w*|works?|working)\b/
     }
@@ -368,9 +372,8 @@ enum ChangeSummaryPolicy {
 
         // Mentioning tests is fine when the change touches them; a reason is
         // fine when a description states one.
-        if summary.firstMatch(of: testMention) != nil {
-            guard evidenceMentionsTests(evidence), summary.firstMatch(of: outcomeWord) == nil else { return nil }
-        }
+        if summary.firstMatch(of: checkMention) != nil, summary.firstMatch(of: outcomeWord) != nil { return nil }
+        if summary.firstMatch(of: testMention) != nil, !evidenceMentionsTests(evidence) { return nil }
         if summary.firstMatch(of: motivation) != nil, evidence.descriptions.isEmpty { return nil }
         return summary
     }

@@ -73,6 +73,7 @@ struct ChangeSummaryTests {
         #"{"summary": "Updates two files to add a picker."}"#,
         #"{"summary": "Adds a picker; the change was verified locally."}"#,
         #"{"summary": "Adds a picker and the build passes."}"#,
+        #"{"summary": "The build completed successfully."}"#,
         #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
         "Adds a picker.",
     ])

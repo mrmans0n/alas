@@ -213,6 +213,7 @@ extension GitService {
                 authorInitials: CommitInfo.initials(for: String(fields[2])),
                 date: isoFormatter.date(from: String(fields[3])) ?? Date(timeIntervalSince1970: 0),
                 subject: subject,
+                rawSubject: rawSubject,
                 conventionalTag: tag,
                 filesChanged: filesChanged,
                 insertions: additions,

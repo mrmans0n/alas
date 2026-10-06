@@ -14,6 +14,7 @@ struct GitServiceReviewRequestDraftTests {
         try write("README.md", "Initial\n", in: repo)
         try await git(["add", "README.md"], cwd: repo)
         try await git(["commit", "-m", "chore: initial"], cwd: repo)
+        let base = try await git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         try await git(["checkout", "-b", "feature/pr-drafts"], cwd: repo)
         try write("Sources/A.swift", "let committed = 1\n", in: repo)
         try await git(["add", "Sources/A.swift"], cwd: repo)
@@ -28,6 +29,7 @@ struct GitServiceReviewRequestDraftTests {
         #expect(context.commitSubjects == ["feat: add committed file"])
         #expect(context.commits.count == 1)
         #expect(context.commits[0].subject == "add committed file")
+        #expect(context.commits[0].rawSubject == "feat: add committed file")
         #expect(context.commits[0].conventionalTag == "feat")
         #expect(context.commits[0].author == "Test User")
         #expect(context.commits[0].filesChanged == 1)
@@ -39,6 +41,7 @@ struct GitServiceReviewRequestDraftTests {
         #expect(!context.diff.contains("Uncommitted.swift"))
         #expect(!context.fileDiffsByPath["Sources/A.swift", default: ""].contains("Uncommitted.swift"))
         #expect(context.hasUncommittedChanges)
+        #expect(context.mergeBaseSHA == base)
     }
 
     @Test func loadsDiffForEachChangedFile() async throws {
