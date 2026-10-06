@@ -89,6 +89,7 @@ private struct LSPServerLeasesModifier: ViewModifier {
     struct TaskKey: Hashable {
         let inputs: [LSPServerLeaseSet.Input]
         let registryGeneration: Int
+        let availabilityGeneration: Int
     }
 
     let leaseSet: LSPServerLeaseSet
@@ -97,7 +98,11 @@ private struct LSPServerLeasesModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task(id: TaskKey(inputs: inputs, registryGeneration: manager?.registryGeneration ?? 0)) {
+            .task(id: TaskKey(
+                inputs: inputs,
+                registryGeneration: manager?.registryGeneration ?? 0,
+                availabilityGeneration: manager?.availabilityGeneration ?? 0
+            )) {
                 guard let manager else { return }
                 await leaseSet.update(inputs: inputs, manager: manager)
             }

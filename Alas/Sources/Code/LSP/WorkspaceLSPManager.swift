@@ -122,6 +122,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
     static let idleGrace: Duration = .seconds(120)
     /// Bumped on every registry replacement so lease owners rebuild.
     private(set) var registryGeneration = 0
+    /// Bumped when a runtime install or Gatekeeper fix invalidates the cached
+    /// availability of a language, so lease owners retry servers that were
+    /// unavailable. The registry itself did not change, so `registryGeneration`
+    /// stays put.
+    private(set) var availabilityGeneration = 0
     @ObservationIgnored private var graceTasks: [Key: Task<Void, Never>] = [:]
     /// Live `LSPServerLease` IDs per server key, never holding an empty set.
     /// Kept apart from `holders` so a release that lands while the holder is
@@ -222,6 +227,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     func invalidateAvailabilityCache(forLanguage language: String) {
         let languages = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: language))
         availabilityCache = availabilityCache.filter { !languages.contains($0.key) }
+        availabilityGeneration &+= 1
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
