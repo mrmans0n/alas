@@ -32,6 +32,9 @@ struct DraftReviewRequestTabView: View {
     @State private var reviewSessionLaunchError: String?
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var changeSummaryVisible = false
+    @State private var changeSummaryDraft: ChangeSummaryDraft?
+    @State private var changeSummaryTask: Task<Void, Never>?
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
@@ -127,6 +130,7 @@ struct DraftReviewRequestTabView: View {
         }
         .onDisappear {
             generation?.cancel()
+            cancelChangeSummary()
         }
     }
 
@@ -284,6 +288,18 @@ struct DraftReviewRequestTabView: View {
     private var contextBrowser: some View {
         VStack(spacing: 0) {
             draftContextHeader
+            if changeSummaryVisible {
+                ChangeSummaryCard(
+                    phase: ChangeSummaryPhase.resolve(
+                        isSummarizing: changeSummaryTask != nil,
+                        draft: changeSummaryDraft,
+                        currentFacts: currentChangeSummaryFacts
+                    ),
+                    onSummarize: summarizeChange,
+                    onCancel: cancelChangeSummary,
+                    onDismiss: cancelChangeSummary
+                )
+            }
             draftCommitStrip
             Divider().overlay(theme.color("line"))
             draftContextContent
@@ -322,6 +338,11 @@ struct DraftReviewRequestTabView: View {
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+            if canSummarizeChange {
+                AlasButton(title: "Summarize", icon: "sparkle", action: summarizeChange)
+                    .disabled(changeSummaryTask != nil)
+                    .help("Draft a summary of this branch on-device. It is only copied when you choose Copy.")
             }
             AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
                 if let targetMismatchMessage {
@@ -642,6 +663,48 @@ struct DraftReviewRequestTabView: View {
                 self.error = (error as NSError).localizedDescription
             }
         }
+    }
+
+    /// Facts for the branch as currently loaded, or nil while it is loading
+    /// or no longer matches the draft's target.
+    private var currentChangeSummaryFacts: ChangeSummaryFacts? {
+        guard let context, loadedContextKey == contextKey, let snapshot = matchingSnapshot else { return nil }
+        let issueTitle = appState.worktree(withId: worktreeId).flatMap {
+            appState.projectsManager.issueAttachment(projectId: $0.projectId, worktreeId: worktreeId)?.title
+        }
+        return ChangeSummaryFacts(
+            context: context,
+            base: tabState.baseBranch,
+            branch: tabState.branchName,
+            headSHA: snapshot.local.headSHA,
+            runRecords: appState.runRecords.records(worktreeID: worktreeId),
+            issueTitle: issueTitle
+        )
+    }
+
+    private var canSummarizeChange: Bool {
+        guard let context, !context.changedFiles.isEmpty, loadedContextKey == contextKey else { return false }
+        return appState.makeChangeSummarizer().isAvailable
+    }
+
+    private func summarizeChange() {
+        guard changeSummaryTask == nil, let facts = currentChangeSummaryFacts else { return }
+        changeSummaryVisible = true
+        changeSummaryDraft = nil
+        let summarizer = appState.makeChangeSummarizer()
+        changeSummaryTask = Task { @MainActor in
+            let draft = await summarizer.summarize(facts)
+            guard !Task.isCancelled else { return }
+            changeSummaryDraft = draft
+            changeSummaryTask = nil
+        }
+    }
+
+    private func cancelChangeSummary() {
+        changeSummaryTask?.cancel()
+        changeSummaryTask = nil
+        changeSummaryDraft = nil
+        changeSummaryVisible = false
     }
 
     private func createReviewRequest() {

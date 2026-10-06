@@ -1858,6 +1858,20 @@ final class AppState {
         )
     }
 
+    /// Change summaries are user-initiated, like conflict explanations.
+    func makeChangeSummarizer() -> ChangeSummarizer {
+        ChangeSummarizer(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { LocalTextAppleIntelligence.isAvailable },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.localTextModelAvailable ?? false
+            }
+        )
+    }
+
     /// Nil when no on-device model can run, so the caller shows only the observed excerpt.
     func makeRunFailureBriefGenerator() -> RunFailureBriefCoordinator.Generate? {
         let router = LocalTextAppleFirstRouter(
