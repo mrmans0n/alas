@@ -831,6 +831,16 @@ struct WorktreeSymbolIndexTests {
         #expect(readable.symbols.map(\.name) == ["Locked"])
     }
 
+    @Test("a read that fails after opening is a failure, not an empty file")
+    func failedReadIsNil() throws {
+        // A directory opens for reading but every read throws EISDIR.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(SymbolSource.readBounded(directory) == nil)
+    }
+
     @Test("files over the size cap are skipped")
     func skipsLargeFiles() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -906,7 +916,10 @@ enum SymbolSource {
     static func readBounded(_ url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        let data = (try? handle.read(upToCount: maxBytes + 1)).flatMap { $0 } ?? Data()
+        // A throwing read is a failure (nil), never an empty file: an empty
+        // result would be indexed with the current stamp and never retried.
+        let data: Data
+        do { data = try handle.read(upToCount: maxBytes + 1) ?? Data() } catch { return nil }
         guard data.count <= maxBytes else { return nil }
         return String(data: data, encoding: .utf8)
     }
