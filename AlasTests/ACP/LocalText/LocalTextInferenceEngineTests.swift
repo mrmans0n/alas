@@ -221,6 +221,21 @@ struct LocalTextInferenceEngineTests {
         #expect(probe.releaseCount == 1)
     }
 
+    @Test func failedLoadReleasesTheGPUCache() async throws {
+        let fixture = try EngineLeaseFixture()
+        let releases = Mutex(0)
+        let engine = LocalTextInferenceEngine(
+            acquireLease: { try fixture.acquire() },
+            load: { _ in throw POSIXError(.EIO) },
+            releaseCache: { releases.withLock { $0 += 1 } },
+            observeMemoryPressure: false
+        )
+        await #expect(throws: LocalTextInferenceFailure.generationFailed) {
+            try await engine.generate(request, caller: .nextPrompt, priority: .automatic)
+        }
+        #expect(releases.withLock { $0 } == 1)
+    }
+
     private var request: LocalTextGenerationRequest {
         .init(messageCandidates: [[.init(role: .user, content: "test")]], inputTokenLimit: 8_192,
               maxTokens: 8, temperature: 0, prefillStepSize: 512, timeout: .seconds(15))
@@ -278,7 +293,7 @@ private final class LocalTextEngineProbe: Sendable {
                     return .init(text: value, selectedCandidateIndex: 0)
                 }
             },
-            release: { self.state.withLock { $0.releases += 1 } },
+            releaseCache: { self.state.withLock { $0.releases += 1 } },
             supported: { true },
             clock: clock.clock,
             observeMemoryPressure: false
