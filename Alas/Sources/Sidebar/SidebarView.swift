@@ -628,13 +628,16 @@ private struct SidebarWorktreeFilterRow: View {
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, inset)
-        // Hides the content that scrolls beneath the row while it is pinned.
+        // Hides the content that scrolls beneath the row while a filter is
+        // applied; fades in and out as the text appears and clears.
         .background {
             let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
+            .opacity(text.isEmpty ? 0 : 1)
+            .animation(.easeInOut(duration: 0.2), value: text.isEmpty)
         }
         .offset(y: y - inset)
         .opacity(opacity)
