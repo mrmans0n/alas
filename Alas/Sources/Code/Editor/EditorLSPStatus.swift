@@ -27,6 +27,30 @@ extension EditorLSPStatus {
         }
     }
 
+    /// Overlays live server progress onto the coarse holder-derived status.
+    /// Kept apart from `EditorLSPStatusResolver` so only the badge, not the
+    /// whole editor tab, observes `LSPServerStatus.phase`.
+    func refined(by phase: LSPServerStatus.Phase?) -> EditorLSPStatus {
+        guard let phase else { return self }
+        switch (self, phase) {
+        // A restart marks the holder dead until the replacement spawns; the
+        // status is already `.starting`, which is the truth to show.
+        case (.ready(let language, _), .starting), (.problem(let language, .dead, _), .starting):
+            return .loading(language: language)
+        case (.ready(let language, let command), .indexing(let tasks)):
+            return .indexing(
+                language: language,
+                command: command,
+                percentage: LSPProgressSummary.percentage(tasks),
+                tasks: tasks
+            )
+        case (.problem(let language, .dead, let command), .crashed(let detail)):
+            return .problem(language: language, kind: .dead(detail), command: command)
+        default:
+            return self
+        }
+    }
+
     var badgeState: LSPBadgeState {
         switch self {
         case .ready(let language, let command):

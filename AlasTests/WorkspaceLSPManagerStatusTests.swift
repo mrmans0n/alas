@@ -817,6 +817,33 @@ struct WorkspaceLSPManagerStatusTests {
         spawns.transports.forEach { $0.finish() }
     }
 
+    @Test func restartShowsStartingWhileTheOldServerShutsDown() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            // The first server never answers `shutdown`, so the restart suspends mid-teardown.
+            let transport = Self.replyingTransport(repliesToShutdown: !spawns.transports.isEmpty)
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        try await eventually("ready") { status.phase == .ready }
+        let stuck = spawns.transports[0]
+
+        let restarting = Task { await mgr.restartHolder(forFile: fileURL, worktreeRoot: root, languageId: "swift") }
+        try await eventually("shutdown requested") { stuck.sent.contains { $0.contains(#""method":"shutdown""#) } }
+
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+        #expect(status.phase == .starting)
+
+        let shutdownRequest = try #require(stuck.sent.first { $0.contains(#""method":"shutdown""#) })
+        let shutdownID = try #require(Self.requestId(in: shutdownRequest))
+        stuck.deliverFrame(#"{"jsonrpc":"2.0","id":\#(shutdownID),"result":null}"#)
+        await restarting.value
+        try await eventually("ready after restart") { status.phase == .ready }
+        spawns.transports.forEach { $0.finish() }
+    }
+
     @Test func retainReportsDisabledLanguageWithoutSpawning() async {
         let mgr = manager(enabled: false, makeClient: { _, _, _, language, rootURI, _ in
             Issue.record("a disabled language must not spawn a server")

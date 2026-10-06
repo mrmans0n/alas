@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct EditorLSPStatusBadge: View {
+    /// Coarse holder-derived status. Live progress is layered on in this view's
+    /// own body so only the badge re-renders on indexing updates.
     let status: EditorLSPStatus
+    let serverStatus: LSPServerStatus?
     /// When `false`, the override picker is hidden everywhere in the popover.
     /// External editor tabs (SDK files opened via cmd-click) pass `false`
     /// because `EditorBuffer.applyEffectiveLanguageToLSP` bails for
@@ -19,7 +22,7 @@ struct EditorLSPStatusBadge: View {
     @State private var resolvedLanguages: [(language: String, displayName: String)] = []
 
     var body: some View {
-        let badge = status.badgeState
+        let badge = LSPBadgeState.make(editor: status, phase: serverStatus?.phase)
         Button { popoverOpen.toggle() } label: {
             LSPStatusPill(state: badge, isHighlighted: popoverOpen)
         }
@@ -55,7 +58,7 @@ struct EditorLSPStatusBadge: View {
 
     @ViewBuilder
     private var popoverBody: some View {
-        switch status {
+        switch status.refined(by: serverStatus?.phase) {
         case .ready(let lang, let cmd):
             readyBody(language: lang, command: cmd)
         case .loading(let lang):

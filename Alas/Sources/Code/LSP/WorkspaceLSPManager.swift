@@ -1130,12 +1130,15 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     private func restartHolder(key: Key, existing: Holder, language: String) async {
-        // Mark the holder dead synchronously so the badge transitions through
-        // `.dead` and concurrent `openDocument` calls see a dying holder
-        // rather than bumping refs on the one we're about to shut down.
+        // Mark the holder dead synchronously so concurrent `openDocument`
+        // calls see a dying holder rather than bumping refs on the one we're
+        // about to shut down. The stable status goes back to `.starting` in
+        // the same step: the shutdown below can take seconds, and an
+        // Alas-initiated restart must not read as a crash while it runs.
         if var h = holders[key], h.client === existing.client {
             h.lifeState = .dead
             holders[key] = h
+            statuses[key]?.reset()
             bumpStateTick()
         }
 
@@ -1169,7 +1172,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
             languagesByURI = cur.languagesByURI
             holders.removeValue(forKey: key)
             bumpStateTick()
-            statuses[key]?.reset()
         } else {
             // The holder was already replaced (e.g. by the dead-client
             // detection path in a concurrent `openDocument`). Nothing for

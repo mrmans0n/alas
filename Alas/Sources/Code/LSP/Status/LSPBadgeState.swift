@@ -49,6 +49,11 @@ enum LSPBadgeState: Equatable {
     case problem(language: String, reason: LSPProblemReason)
     case noLanguage(fileExtension: String)
 
+    /// The editor badge: holder-derived status refined by the live server phase.
+    static func make(editor: EditorLSPStatus, phase: LSPServerStatus.Phase?) -> LSPBadgeState {
+        editor.refined(by: phase).badgeState
+    }
+
     var glyph: LSPPillGlyph {
         switch self {
         case .starting, .indexing: .loading

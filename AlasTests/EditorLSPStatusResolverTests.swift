@@ -195,3 +195,34 @@ struct EditorLSPStatusResolverTests {
         #expect(r.resolve(absolutePath: swiftFile.path, override: nil, worktreeRoot: root) == testCase.expected)
     }
 }
+
+@Suite("LSPBadgeState.make")
+struct LSPBadgeStateMakeTests {
+    @Test func startingPhaseOverridesTheTemporarilyDeadHolderOfARestart() {
+        let state = LSPBadgeState.make(
+            editor: .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"),
+            phase: .starting
+        )
+        #expect(state == .starting(language: "swift"))
+    }
+
+    @Test func deadHolderWithCrashedPhaseStaysAProblem() {
+        let state = LSPBadgeState.make(
+            editor: .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"),
+            phase: .crashed(crash)
+        )
+        #expect(state == .problem(language: "swift", reason: .crashed))
+    }
+
+    @Test func indexingPhaseRefinesAReadyHolder() {
+        let state = LSPBadgeState.make(
+            editor: .ready(language: "swift", command: "sourcekit-lsp"),
+            phase: .indexing(indexingTasks)
+        )
+        #expect(state == .indexing(
+            language: "swift",
+            percentage: 10,
+            tooltip: LSPProgressSummary.tooltip(command: "sourcekit-lsp", tasks: indexingTasks)
+        ))
+    }
+}
