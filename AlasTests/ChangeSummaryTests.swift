@@ -121,6 +121,7 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds caching for faster responses."}"#,
         #"{"summary": "Adds caching, allowing faster responses."}"#,
         #"{"summary": "Adds a branch picker to let users switch repositories."}"#,
+        #"{"summary": "Adds caching, preventing duplicate requests."}"#,
         #"{"summary": "Reworks the picker, letting it load more reliably."}"#,
         #"{"summary": "Adds a picker, see [docs](https://example.invalid)."}"#,
         #"{"summary": "Adds a picker for @org/team."}"#,

@@ -344,9 +344,10 @@ enum ChangeSummaryPolicy {
         /(?i)\b(?:pass\w*|succe\w*|green|complet\w*|ran|runs?|running|fail\w*|confirm\w*|works?|working|clean(?:ly)?)\b/
     }
     /// Whether a description supports a stated reason cannot be checked, so
-    /// the narrative never gives one.
+    /// the narrative never gives one. Purpose verbs are matched in every
+    /// inflection, with or without a connector such as "to".
     private static var motivation: Regex<Substring> {
-        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always)|so\s+(?:\w+\s+){0,3}(?:don't|doesn't|won't|can't)|to (?:let|allow|enable|help)|enabling|making (?:it|things|them) possible)\b/
+        /(?i)\b(?:because|so that|in order to|due to|to (?:fix|address|speed up|make sure|let)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always|don't|doesn't|won't|can't)|letting|making (?:it|things|them) possible|(?:avoid|prevent|ensur|reduc|allow|enabl|help)\w*)\b/
     }
     /// Benefits are claimed through words like these whatever connects them
     /// ("for", "allowing", "letting"), so the words themselves are rejected.
