@@ -822,6 +822,36 @@ struct WorkspaceLSPManagerStatusTests {
         transport.finish()
     }
 
+    @Test func graceStartsOnlyWhenTheLastOfTwoLeasesIsReleased() async throws {
+        let transport = Self.replyingTransport()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift"),
+              case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        try await eventually("ready") { first.status.phase == .ready }
+
+        first.release()
+        first.release()
+        await Task.yield()
+        #expect(gate.requested.isEmpty)
+
+        second.release()
+        try await eventually("grace after the last release") { !gate.requested.isEmpty }
+        await Task.yield()
+        #expect(gate.requested == [WorkspaceLSPManager.idleGrace])
+        #expect(WorkspaceLSPManager.idleGrace == .seconds(120))
+        transport.finish()
+    }
+
     @Test func restartRespawnsLeaseOnlyServerWithSameStatus() async throws {
         final class Spawns { var transports: [FakeTransport] = [] }
         let spawns = Spawns()
