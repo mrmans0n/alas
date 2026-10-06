@@ -87,12 +87,15 @@ final class ACPSessionStore {
 
     /// Durable `ACPSession.directTurnInFlight`: a turn sent from an idle
     /// composer leaves no queue row, so launch recovery needs this marker to
-    /// find it. Only `setDirectTurnInFlight` writes it.
+    /// find it. Only `setDirectTurnInFlight` writes it. The replica metadata
+    /// trigger is recreated so another Mac taking over the session sees it.
     private func migrate_to_v25() throws {
         let columns = try db.query("PRAGMA table_info(sessions)")
         if !columns.contains(where: { ($0["name"] as? String) == "direct_turn_in_flight" }) {
             try db.exec("ALTER TABLE sessions ADD COLUMN direct_turn_in_flight INTEGER NOT NULL DEFAULT 0")
         }
+        try db.exec("DROP TRIGGER IF EXISTS replica_sessions_update")
+        try createReplicaSchema()
     }
 
     private func migrate_to_v1() throws {
