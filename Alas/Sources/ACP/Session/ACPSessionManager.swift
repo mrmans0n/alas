@@ -7427,6 +7427,7 @@ extension ACPSessionManager {
                     persist(session)
                 }
             }
+            let optionsRevisionBeforeModelRestore = session.availableConfigOptionsRevision
             if let m = modelToRestore {
                 let remoteId = session.remoteSessionId ?? sessionId
                 switch session.chipState.models?.source {
@@ -7531,7 +7532,13 @@ extension ACPSessionManager {
             let modelSwitched = modelToRestore != nil
                 && modelToRestore != result.currentModel
                 && session.currentModel == modelToRestore
-            if modelSwitched, pendingConfigOptionValues[sessionId]?.isEmpty == false {
+            // With a plain `session/set_model` nothing writes the options
+            // locally, so a changed revision means the refresh already landed.
+            var optionsAlreadyRefreshed = false
+            if case .model? = session.chipState.models?.source {
+                optionsAlreadyRefreshed = session.availableConfigOptionsRevision != optionsRevisionBeforeModelRestore
+            }
+            if modelSwitched, !optionsAlreadyRefreshed, pendingConfigOptionValues[sessionId]?.isEmpty == false {
                 _ = await configOptionsChange(of: session, within: delegatedReasoningRefreshTimeout)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             }
