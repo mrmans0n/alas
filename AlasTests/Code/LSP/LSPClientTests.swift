@@ -58,6 +58,17 @@ private func withTimeout<T: Sendable>(
     }
 }
 
+/// Polls `condition` on the main actor until it holds or five seconds pass.
+@MainActor
+func eventually(_ description: String, _ condition: () -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while ContinuousClock.now < deadline {
+        if condition() { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    try #require(condition(), "Timed out waiting for \(description)")
+}
+
 enum ExitScenario: String, Sendable, CaseIterable {
     case serverExits, streamEndsWithoutStatus, exitAfterShutdown
 }

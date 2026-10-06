@@ -114,6 +114,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private var pendingOpenRefs: [Key: [String: Int]] = [:]
     private var pendingTemporaryOpenRefs: [Key: [String: Int]] = [:]
 
+    /// One status per live server key. Kept across restarts and dead-client
+    /// respawns; removed only with the holder in `removeHolder`.
+    private var statuses: [Key: LSPServerStatus] = [:]
+    @ObservationIgnored private var lifecycleTasks: [Key: Task<Void, Never>] = [:]
+
     /// Bumping counter that lets `@Observable` consumers (the status badge)
     /// re-run derivations when a holder transitions starting → ready → dead.
     /// Incremented under `@MainActor` so SwiftUI sees changes without a hop.
@@ -349,12 +354,27 @@ final class WorkspaceLSPManager: DocumentFormatter {
                     rootPath: lspRoot.path
                 )
                 let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI, remoteHost)
-                let task = Task<Bool, Never> {
+                let status = statuses[key] ?? LSPServerStatus(
+                    language: entry.language,
+                    command: entry.command,
+                    root: lspRoot.path,
+                    remoteHost: remoteHost
+                )
+                statuses[key] = status
+                status.reset()
+                subscribeLifecycle(of: newClient, key: key)
+                let task = Task<Bool, Never> { [weak self] in
                     await newClient.setConfigurationHandler { [weak self] scope, section in
                         await self?.configurationValue(scope: scope, section: section, key: key) ?? .null
                     }
-                    do { try await newClient.initialize()
-                    return true } catch { return false }
+                    do {
+                        try await newClient.initialize()
+                        self?.didFinishInitialize(key: key, client: newClient, error: nil)
+                        return true
+                    } catch {
+                        self?.didFinishInitialize(key: key, client: newClient, error: error)
+                        return false
+                    }
                 }
                 holders[key] = Holder(
                     client: newClient,
@@ -378,11 +398,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
 
         let initOk = await ready.value
-        if var h = holders[key], h.client === client {
-            h.lifeState = initOk ? .ready : .dead
-            holders[key] = h
-            bumpStateTick()
-        }
         if !initOk {
             // Init failed. The opener that spawned the client owns the
             // shutdown call to release the failed `Process`. Leave the
@@ -404,7 +419,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // refless, shut it down once.
             if let cur = holders[key], cur.client === client, cur.refsByURI.isEmpty {
                 await client.shutdown()
-                holders.removeValue(forKey: key)
+                removeHolder(key)
             }
             return nil
         }
@@ -551,8 +566,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // dead entry — otherwise repeated open-then-close attempts on a
         // misconfigured server would accumulate stale holders.
         if holder.lifeState == .dead, refs.isEmpty {
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+            removeHolder(key)
             return
         }
 
@@ -587,8 +601,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // Shut down the server if no files remain on it.
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+            removeHolder(key)
         }
     }
 
@@ -728,6 +741,60 @@ final class WorkspaceLSPManager: DocumentFormatter {
             return holder.openedURIs.contains(uri) ? .ready : .loading
         case .dead: return .dead
         }
+    }
+
+    /// Live status of the server serving `fileURL`, found through the holder
+    /// that tracks the file. Never probes the remote host.
+    func serverStatus(forFile fileURL: URL, worktreeRoot: URL) -> LSPServerStatus? {
+        guard let key = holderKey(forURI: fileURL.lspURI, withinWorktreeRoot: worktreeRoot) else { return nil }
+        return statuses[key]
+    }
+
+    private func subscribeLifecycle(of client: LSPClient, key: Key) {
+        lifecycleTasks[key]?.cancel()
+        let events = client.lifecycleEvents
+        lifecycleTasks[key] = Task { [weak self] in
+            for await event in events {
+                self?.handleLifecycle(event, key: key, client: client)
+            }
+        }
+    }
+
+    private func handleLifecycle(_ event: LSPClient.LifecycleEvent, key: Key, client: LSPClient) {
+        guard var holder = holders[key], holder.client === client, let status = statuses[key] else { return }
+        switch event {
+        case .progress(let tasks):
+            status.applyProgress(tasks)
+        case .exited(let detail):
+            holder.lifeState = .dead
+            holders[key] = holder
+            status.recordExit(detail)
+            bumpStateTick()
+        }
+    }
+
+    private func didFinishInitialize(key: Key, client: LSPClient, error: (any Error)?) {
+        guard var holder = holders[key], holder.client === client else { return }
+        let status = statuses[key]
+        if let error {
+            holder.lifeState = .dead
+            status?.recordInitializeFailure(String(describing: error))
+        } else if case .crashed? = status?.phase {
+            // The process exited between the initialize reply and this hop.
+            holder.lifeState = .dead
+        } else {
+            holder.lifeState = .ready
+            status?.markInitialized()
+        }
+        holders[key] = holder
+        bumpStateTick()
+    }
+
+    private func removeHolder(_ key: Key) {
+        holders.removeValue(forKey: key)
+        statuses.removeValue(forKey: key)
+        lifecycleTasks.removeValue(forKey: key)?.cancel()
+        bumpStateTick()
     }
 
     /// Read-only access to the active registry for derivation by views.
@@ -919,6 +986,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             languagesByURI = cur.languagesByURI
             holders.removeValue(forKey: key)
             bumpStateTick()
+            statuses[key]?.reset()
         } else {
             // The holder was already replaced (e.g. by the dead-client
             // detection path in a concurrent `openDocument`). Nothing for
@@ -940,6 +1008,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
             for _ in 0 ..< temporaryRefCount {
                 _ = await openTemporaryDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: temporaryText)
             }
+        }
+
+        if holders[key] == nil {
+            statuses.removeValue(forKey: key)
+            lifecycleTasks.removeValue(forKey: key)?.cancel()
         }
     }
 
@@ -1278,8 +1351,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // to avoid leaking the LSP process until app exit.
         if let c = holders[key], c.refsByURI.isEmpty {
             await c.client.shutdown()
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+            removeHolder(key)
         }
     }
 

@@ -651,6 +651,97 @@ struct WorkspaceLSPManagerStatusTests {
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
         transport.finish()
     }
+
+    private static let initializeReply = #"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#
+
+    @Test func crashAfterReadyMarksStatusCrashed() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        #expect(status.phase == .ready)
+        let tick = mgr.stateTick
+
+        transport.deliverStderr("fatal: boom\n")
+        transport.deliverExit(134)
+
+        try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.exitCode == 134)
+        #expect(detail.outputTail == ["fatal: boom"])
+        #expect(mgr.stateTick > tick)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+    }
+
+    @Test func streamEndWithoutExitStatusMarksStatusCrashed() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        #expect(status.phase == .ready)
+
+        transport.finish()
+
+        try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.exitCode == nil)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+    }
+
+    @Test func exitDuringInitializeRecordsExitAndInitializeError() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverStderr("dyld: missing libfoo\n")
+                transport.deliverExit(2)
+            }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let client = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        #expect(client == nil)
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        try await eventually("exit code and initialize error") {
+            guard case .crashed(let detail) = status.phase else { return false }
+            return detail.exitCode == 2 && detail.initializeError != nil
+        }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.outputTail == ["dyld: missing libfoo"])
+    }
+
+    @Test func progressAfterReadyShowsIndexingWithoutTickingState() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI, progressCoalescing: .zero)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        let tick = mgr.stateTick
+
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":10}}}"#)
+        let indexing = LSPServerStatus.Phase.indexing([
+            LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 10)
+        ])
+        try await eventually("indexing") { status.phase == indexing }
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+        try await eventually("ready") { status.phase == .ready }
+        #expect(mgr.stateTick == tick)
+        transport.finish()
+    }
 }
 
 /// Captures the `realPath` carried by `.lspBlockedByGatekeeper`. The
