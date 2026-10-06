@@ -1,3 +1,4 @@
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -102,9 +103,10 @@ struct MermaidRenderServiceTests {
         let key = TestMermaid.key(source: "graph TD; A-->B")
         let first = Task { await service.render(key: key) }
 
-        #expect(await backend.waitForStart())
-        let second = Task { await service.render(key: key) }
-        first.cancel()
+        await backend.waitForStart()
+        let second = Task {
+            await joinSharedRender(service: service, key: key, cancelling: first, backend: backend)
+        }
         _ = await (first.value, second.value)
 
         #expect(!(await backend.observedCancellation))
@@ -163,25 +165,52 @@ actor FakeMermaidBackend: MermaidRenderingBackend {
 }
 
 private actor CancellationTrackingMermaidBackend: MermaidRenderingBackend {
-    private(set) var started = false
-    private(set) var observedCancellation = false
+    private let started = AsyncStream<Void>.makeStream()
+    private let cancellation = Mutex(false)
+    private var completion: CheckedContinuation<Void, Never>?
+    var observedCancellation: Bool { cancellation.withLock { $0 } }
 
     func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
-        started = true
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        observedCancellation = Task.isCancelled
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                completion = continuation
+                started.continuation.yield()
+            }
+        } onCancel: {
+            cancellation.withLock { $0 = true }
+        }
         return .failed(.renderFailed("cancelled"))
     }
 
-    func waitForStart() async -> Bool {
-        for _ in 0 ..< 1_000 {
-            if started {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
+    func waitForStart() async {
+        for await _ in started.stream { break }
     }
+
+    func finish() {
+        completion?.resume()
+        completion = nil
+    }
+}
+
+private func joinSharedRender(
+    service: isolated MermaidRenderService,
+    key: MermaidRenderKey,
+    cancelling first: Task<MermaidRenderOutcome, Never>,
+    backend: CancellationTrackingMermaidBackend
+) async -> MermaidRenderOutcome {
+    let cancelled = AsyncStream<Void>.makeStream()
+    service.onConsumerCancellationForTesting = { cancelled.continuation.yield() }
+    // This task inherits the service's isolation. It cannot cancel the first
+    // consumer until render() registers the second and suspends for its outcome.
+    let cancellation = Task {
+        _ = service
+        first.cancel()
+        for await _ in cancelled.stream { break }
+        await backend.finish()
+    }
+    let outcome = await service.render(key: key)
+    await cancellation.value
+    return outcome
 }
 
 private actor SuspendedMermaidBackend: MermaidRenderingBackend {

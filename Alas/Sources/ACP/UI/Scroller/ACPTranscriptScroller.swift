@@ -741,7 +741,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// The caption for a delegated prompt, resolved here because the
         /// sender's display name comes from the host, not the message.
         private static func delegatedLabel(host: ACPTranscriptScroller, message: ACPMessage) -> String? {
-            guard case .user(_, _, _, _, let source?) = message else { return nil }
+            guard case .user(_, _, _, _, let source?, _) = message else { return nil }
             return ACPDelegatedPromptSource.transcriptLabel(for: source, agentDisplayName: host.agentDisplayName)
         }
 
@@ -1201,18 +1201,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Invisible tail spacer the tail-follow scroll pins to the
             // viewport bottom; guarantees the streaming caret / last
             // message sits above the composer pill. Its content is a
-            // fixed-height `Color.clear` that reads neither theme nor
-            // openURL, so — unlike every other row — a constant equality
-            // token is correct here: nothing about it ever needs to rebuild.
+            // `Color.clear` of a given height that reads neither theme nor
+            // openURL, so its height alone is the equality token.
             // Still routed through `wrapRow` for the same column framing
             // every other row gets, matching the legacy VStack where this
             // spacer was a plain child of the same constrained stack.
+            // The background task tray docks above the pill, so its height
+            // extends the spacer; the token is that height.
+            let spacerHeight = composerSpacerHeight + session.backgroundTrayHeight
             specs.append(ACPTranscriptRowSpec(
                 id: "__composer_spacer__",
-                equalityToken: ACPRowEqualityToken(true),
+                equalityToken: ACPRowEqualityToken(spacerHeight),
                 build: {
                     wrapRow(host: host) {
-                        Color.clear.frame(height: composerSpacerHeight)
+                        Color.clear.frame(height: spacerHeight)
                     }
                 }
             ))

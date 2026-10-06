@@ -402,6 +402,107 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].deliveryUncertain)
     }
 
+    @Test("resuming interrupted turns continues the answered turn and resends the unconfirmed prompt",
+          arguments: [UncertainOrigin.legacyRestore, .brokerGenerationChange])
+    func resumeInterruptedTurns(origin: UncertainOrigin) {
+        let s = mkSession()
+        let generation: ACPBrokerGeneration? = origin == .legacyRestore ? nil : ACPBrokerGeneration(rawValue: 7)
+        let delivered = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: generation)
+        let unsent = QueuedPrompt(
+            blocks: [.text("second")], status: .sending, dispatchedBrokerGeneration: generation)
+        s.continuesInterruptedTurns = { true }
+        s.deliveredQueuedPromptIDs = [delivered.id]
+        s.restoreQueue([delivered, unsent], markLegacySendingUncertain: true)
+        if origin == .brokerGenerationChange {
+            s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+        }
+
+        // Queued at the drop, so a persist before (or without) a successful
+        // attach still carries the continuation.
+        #expect(s.queue.map(\.blocks).first == [.text(ACPSession.interruptedTurnContinueText)])
+        #expect(s.consumeInterruptedTurns(resume: true))
+
+        #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)], [.text("second")]])
+        #expect(s.queue.allSatisfy { $0.status == .pending && $0.lastError == nil && !$0.deliveryUncertain })
+        #expect(s.queue[1].brokerOperationAttempt == 1)
+        #expect(!s.consumeInterruptedTurns(resume: true))
+    }
+
+    @Test("resuming does not resend a prompt the live transcript shows answered after hydration")
+    func resumeUsesLiveDeliveryEvidence() {
+        let s = mkSession()
+        let generation = ACPBrokerGeneration(rawValue: 7)
+        let head = QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchedBrokerGeneration: generation)
+        // Hydration saw no agent output, so its snapshot does not cover the head.
+        s.restoreQueue([head], markLegacySendingUncertain: true)
+        #expect(s.deliveredQueuedPromptIDs.isEmpty)
+        s.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .agent(id: UUID(), StreamingText("started the migration")),
+        ]
+        s.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8))
+
+        #expect(s.consumeInterruptedTurns(resume: true))
+
+        #expect(s.queue.map(\.blocks) == [[.text(ACPSession.interruptedTurnContinueText)]])
+    }
+
+    @Test("an interruption an attach never consumed is still resumed on the next launch")
+    func unconsumedInterruptionSurvivesRelaunch() throws {
+        let s = mkSession()
+        let item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+        #expect(s.queue[0].awaitingInterruptionResume)
+
+        // The attach failed before consuming it; what was persisted is restored.
+        let stored = try JSONDecoder().decode([QueuedPrompt].self, from: JSONEncoder().encode(s.queue))
+        let relaunched = mkSession()
+        relaunched.restoreQueue(stored, markLegacySendingUncertain: true)
+
+        #expect(relaunched.consumeInterruptedTurns(resume: true))
+        #expect(relaunched.queue.map(\.id) == [item.id])
+        #expect(!relaunched.queue[0].deliveryUncertain && !relaunched.queue[0].awaitingInterruptionResume)
+    }
+
+    @Test("a queued continuation is removed when the setting was turned off before it was sent")
+    func queuedContinuationRemovedWhenSettingTurnedOff() {
+        let s = mkSession()
+        s.continuesInterruptedTurns = { true }
+        let answered = QueuedPrompt(blocks: [.text("first")], status: .sending, transcriptRecorded: true)
+        let later = QueuedPrompt(blocks: [.text("later")])
+        s.deliveredQueuedPromptIDs = [answered.id]
+        s.restoreQueue([answered, later], markLegacySendingUncertain: true)
+        #expect(s.queue.first?.isInterruptedTurnContinuation == true)
+
+        #expect(s.consumeInterruptedTurns(resume: false))
+
+        #expect(s.queue.map(\.id) == [later.id])
+    }
+
+    @Test("interrupted prompts stay held without the setting and are persisted as held",
+          arguments: [false, true])
+    func interruptedPromptsStayHeld(settingOnNextLaunch: Bool) throws {
+        let s = mkSession()
+        let item = QueuedPrompt(blocks: [.text("do it")], status: .sending)
+        s.restoreQueue([item], markLegacySendingUncertain: true)
+
+        // Launch 1, setting off: the held state must reach the store.
+        #expect(s.consumeInterruptedTurns(resume: false))
+        let stored = try JSONDecoder().decode([QueuedPrompt].self, from: JSONEncoder().encode(s.queue))
+        #expect(stored.map(\.status) == [.pending])
+
+        // Launch 2 restores what launch 1 stored; it is no longer newly interrupted.
+        let next = mkSession()
+        next.restoreQueue(stored, markLegacySendingUncertain: true)
+        #expect(!next.consumeInterruptedTurns(resume: settingOnNextLaunch))
+        #expect(next.queue.map(\.id) == [item.id])
+        #expect(next.queue[0].deliveryUncertain)
+    }
+
     enum RetainedUncertainPrompt: CaseIterable {
         /// Steering records the row first and persists the item as uncertain;
         /// the running turn's output after that row does not prove delivery.

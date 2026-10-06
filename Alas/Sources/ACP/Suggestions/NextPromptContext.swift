@@ -8,7 +8,7 @@ enum NextPromptContext {
     static func snapshot(session: ACPSession, completedUserID: UUID) -> [NextPromptTurn]? {
         let messages = session.transcript.messages
         guard let latestIndex = messages.lastIndex(where: {
-            if case .user(let id, _, _, _, _) = $0 { return id == completedUserID }
+            if case .user(let id, _, _, _, _, _) = $0 { return id == completedUserID }
             return false
         }) else { return nil }
 
@@ -40,7 +40,7 @@ enum NextPromptContext {
     @MainActor
     private static func turn(in messages: [ACPMessage], userIndex: Int, endIndex: Int,
                              remaining: Int) -> (turn: NextPromptTurn, bytes: Int)? {
-        guard case .user(_, _, let user, let attachments, let delegatedSource) = messages[userIndex],
+        guard case .user(_, _, let user, let attachments, let delegatedSource, _) = messages[userIndex],
               delegatedSource == nil,
               attachments.allSatisfy(\.isCheckpointReference) else { return nil }
         let userBytes = messages[userIndex].contentUTF8Length

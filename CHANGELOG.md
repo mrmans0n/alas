@@ -10,9 +10,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
 
+## [0.20.3] - 2026-10-05
+
+### ✨ Features
+
+- Add Antigravity CLI as a built-in agent and let individual sessions disable its native subagents (#1774, #1784).
+- Add branch-name templates for new worktrees, start sessions directly on peers, and tailor the first agent prompt to the ticket kind (#1776, #1779, #1787).
+- Expand ACP sessions with docked background tasks, collapsed paste badges, and opt-in continuation after an app restart (#1789, #1792, #1786).
+- Refresh ACP goal controls and report web-tab page failures from plugins (#1778, #1788).
+
 ### 🐛 Fixes
 
-- Keep center-pane tabs draggable without moving the window while preserving window dragging from empty tab-bar space.
+- Keep remote and plugin panes aligned and uncluttered, including native component styling and baseline alignment (#1777, #1780, #1781).
+- Prevent tab dragging from moving the window and keep dictation audio work off the main actor (#1782, #1783).
+- Resolve concurrency races exposed by Swift CI (#1785).
+
+### 🏗️ Internal
+
+- Give CI batches more headroom and wait for cleanup to complete (#1790).
 
 ## [0.20.2] - 2026-10-05
 

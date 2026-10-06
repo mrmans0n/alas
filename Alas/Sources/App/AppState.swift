@@ -2546,11 +2546,13 @@ final class AppState {
     }
 
     private func bootstrapScheduledACPSessions(owner: SessionOwnerID, manager: ACPSessionManager) async {
-        _ = await manager.bootstrapScheduledQueueSessions { [weak self] sessionId in
+        let releaseUntabbed: @MainActor (ACPSession.ID) -> Void = { [weak self] sessionId in
             guard let self else { return }
             guard !hasACPSessionTab(owner: owner, sessionId: sessionId) else { return }
             cleanupACPSession(owner: owner, sessionId: sessionId)
         }
+        _ = await manager.bootstrapScheduledQueueSessions(onBootstrapped: releaseUntabbed)
+        _ = await manager.bootstrapInterruptedQueueSessions(onBootstrapped: releaseUntabbed)
     }
 
     private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
@@ -12910,6 +12912,9 @@ final class AppState {
             autoResumeAfterUsageLimit: { [weak self] in
                 self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
             },
+            continueInterruptedSessions: { [weak self] in
+                self?.config.harness.acpContinueInterruptedSessions ?? false
+            },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
@@ -13387,6 +13392,9 @@ final class AppState {
             },
             autoResumeAfterUsageLimit: { [weak self] in
                 self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
+            },
+            continueInterruptedSessions: { [weak self] in
+                self?.config.harness.acpContinueInterruptedSessions ?? false
             },
             qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in

@@ -86,7 +86,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let restart = Task { await manager.restartConnection(to: session.id) }
         let duplicateRestart = Task { await manager.restartConnection(to: session.id) }
 
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             session.agentState == .ready && launchCount == 1
         }
         #expect(await setupGate.hasEntered)
@@ -230,11 +230,11 @@ struct ACPSessionManagerAttachRestoreTests {
                 await manager.restartConnection(to: session.id)
             }
         }
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             await staleInitializeGate.hasEntered
         }
         let currentRestart = Task { await manager.restartConnection(to: session.id) }
-        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+        try await waitUntilAsync {
             await currentInitializeGate.hasEntered && session.agentState == .spawning
         }
 
@@ -1545,6 +1545,42 @@ struct ACPSessionManagerAttachRestoreTests {
 
         #expect(bootstrapped == [seededSession.id])
         #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
+    }
+
+    @Test("an interrupted scheduled prompt is persisted as held when auto-continue is off")
+    func interruptedScheduledPromptIsPersistedHeldWhenAutoContinueIsOff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("half sent")], scheduledAt: Date().addingTimeInterval(3600), status: .sending),
+        ])
+        let manager = manager(store: store, client: ACPMockClient())
+
+        _ = await manager.bootstrapScheduledQueueSessions()
+        await manager.flushAllPersistence()
+
+        let stored = try #require(try store.loadQueue(sessionId: "local").first)
+        #expect(stored.status == .pending && stored.deliveryUncertain)
+        #expect(!stored.awaitingInterruptionResume)
+        #expect(try store.interruptedQueueSessionIds().isEmpty)
+    }
+
+    @Test("an answered interrupted scheduled prompt is persisted as dropped when auto-continue is off")
+    func answeredInterruptedScheduledPromptIsPersistedDroppedWhenAutoContinueIsOff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try appendMessage(.user(id: UUID(), text: "first", attachments: []), to: store, seq: 0)
+        try appendMessage(.agent(id: UUID(), StreamingText("started the migration")), to: store, seq: 1)
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("first")], scheduledAt: Date().addingTimeInterval(3600),
+                         status: .sending, transcriptRecorded: true),
+        ])
+        let manager = manager(store: store, client: ACPMockClient())
+
+        _ = await manager.bootstrapScheduledQueueSessions()
+        await manager.flushAllPersistence()
+
+        #expect(try store.loadQueue(sessionId: "local").isEmpty)
     }
 
     @Test("bootstrap defers future scheduled queues until deadline")
@@ -4316,7 +4352,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.transcript.messages.count == 3)
         #expect(try store.loadMessages(sessionId: "local").count == 3)
-        guard case .user(_, _, let text, let attachments, _) = session.transcript.messages[0] else {
+        guard case .user(_, _, let text, let attachments, _, _) = session.transcript.messages[0] else {
             Issue.record("Expected hydrated user message to remain first")
             return
         }
@@ -4529,7 +4565,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.queue.isEmpty
         }
         #expect(session.transcript.messages.count == 2)
-        guard case .user(_, _, let text, _, _) = session.transcript.messages[1] else {
+        guard case .user(_, _, let text, _, _, _) = session.transcript.messages[1] else {
             Issue.record("Expected queued prompt to append after hydrated transcript")
             return
         }
@@ -4579,9 +4615,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let attachTask = Task { @MainActor in
             await manager.attach(to: session.id, freshlyCreated: false)
         }
-        for _ in 0 ..< 50 where !(await newSessionGate.hasEntered) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try await waitUntilAsync { await newSessionGate.hasEntered }
         #expect(await newSessionGate.hasEntered)
         await manager.queueForceSend(for: session.id, itemId: forced.id)
         await newSessionGate.release()

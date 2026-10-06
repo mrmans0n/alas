@@ -1853,7 +1853,8 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             assignees: response.assignees.compactMap { normalizedOptionalString($0.username) },
             providerUpdatedAt: try parseOptionalGitLabDate(response.updatedAt),
             capturedAt: Date(),
-            refreshError: nil
+            refreshError: nil,
+            nativeType: normalizedOptionalString(response.issueType)
         )
     }
 
@@ -2223,9 +2224,11 @@ private struct GitLabIssueResponse: Decodable {
     let updatedAt: String?
     let labels: [String]
     let assignees: [Assignee]
+    let issueType: String?
 
     private enum CodingKeys: String, CodingKey {
         case iid, title, description, state, labels, assignees
+        case issueType = "issue_type"
         case webURL = "web_url"
         case updatedAt = "updated_at"
     }
@@ -2240,6 +2243,7 @@ private struct GitLabIssueResponse: Decodable {
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
         assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
+        issueType = try? container.decodeIfPresent(String.self, forKey: .issueType)
     }
 
     struct Assignee: Decodable { let username: String? }

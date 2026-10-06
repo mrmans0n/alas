@@ -2009,7 +2009,8 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             assignees: response.assignees.compactMap { normalizedOptionalString($0.login) },
             providerUpdatedAt: try parseOptionalDate(response.updatedAt),
             capturedAt: Date(),
-            refreshError: nil
+            refreshError: nil,
+            nativeType: normalizedOptionalString(response.issueType)
         )
     }
 
@@ -2607,9 +2608,11 @@ private struct GitHubIssueResponse: Decodable {
     let labels: [Label]
     let assignees: [Assignee]
     let pullRequest: PullRequestMarker?
+    let issueType: String?
 
     private enum CodingKeys: String, CodingKey {
         case number, title, body, state, labels, assignees
+        case issueType = "type"
         case htmlURL = "html_url"
         case updatedAt = "updated_at"
         case pullRequest = "pull_request"
@@ -2626,9 +2629,13 @@ private struct GitHubIssueResponse: Decodable {
         labels = try container.decodeIfPresent([Label].self, forKey: .labels) ?? []
         assignees = try container.decodeIfPresent([Assignee].self, forKey: .assignees) ?? []
         pullRequest = try container.decodeIfPresent(PullRequestMarker.self, forKey: .pullRequest)
+        // Issue types are org-level and optional; an unexpected shape must
+        // not make the whole issue unreadable.
+        issueType = (try? container.decodeIfPresent(IssueTypeField.self, forKey: .issueType))?.name
     }
 
     struct Label: Decodable { let name: String? }
+    struct IssueTypeField: Decodable { let name: String? }
     struct Assignee: Decodable { let login: String? }
     struct PullRequestMarker: Decodable {}
 }

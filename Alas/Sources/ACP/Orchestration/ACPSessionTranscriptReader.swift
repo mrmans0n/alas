@@ -49,7 +49,7 @@ enum ACPSessionTranscriptReader {
         }
         for message in messages {
             switch message {
-            case .user(_, _, let text, _, _):
+            case .user(_, _, let text, _, _, _):
                 append("user", text)
             case .agent(_, _, let buffer):
                 append("agent", buffer.value)

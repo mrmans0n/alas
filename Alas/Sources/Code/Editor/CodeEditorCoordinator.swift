@@ -52,6 +52,7 @@ final class CodeEditorCoordinator {
     private var semanticBindingID = UUID()
     private var semanticSupportsRange = false
     private var inlayFeature: InlayHintsFeature?
+    private let inlayPresentationExpirySleep: @Sendable () async throws -> Void
     private var inlayLayout: EditorInlayLayout?
     private var inlayClient: LSPClient?
     private var inlaySubscription: Task<Void, Never>?
@@ -104,8 +105,10 @@ final class CodeEditorCoordinator {
         CenterTypography.resolveCodeFont(family: family, size: size)
     }
 
-    init(appState: AppState) {
+    init(appState: AppState,
+         inlayPresentationExpirySleep: @escaping @Sendable () async throws -> Void = InlayHintsFeature.waitForPresentationExpiry) {
         self.appState = appState
+        self.inlayPresentationExpirySleep = inlayPresentationExpirySleep
     }
 
     func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
@@ -1446,7 +1449,7 @@ final class CodeEditorCoordinator {
             self?.inlayLayout?.clear()
             self?.inlayResponse = nil
             self?.inlayResponsesByPosition = [:]
-        })
+        }, presentationExpirySleep: inlayPresentationExpirySleep)
         updateInlaySettings()
         updateInlayClient()
         observeInlaySettings(bindingID: inlayBindingID)

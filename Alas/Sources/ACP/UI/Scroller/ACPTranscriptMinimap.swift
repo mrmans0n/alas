@@ -61,7 +61,7 @@ struct ACPTranscriptMinimapLayout {
             }
         case .thought, .toolCall, .fileEdit, .plan:
             return 1
-        case .user(_, _, let text, _, _):
+        case .user(_, _, let text, _, _, _):
             switch text.utf8.count {
             case 0..<80: return 1
             case 80..<400: return 2

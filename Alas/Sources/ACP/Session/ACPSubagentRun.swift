@@ -242,7 +242,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
             if let messageId = chunk.messageId {
                 if let index = userIndex(messageId: messageId),
-                   case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] {
+                   case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index] {
                     messages[index] = .user(
                         id: id,
                         messageId: messageId,
@@ -263,7 +263,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             // open id-less row instead of fragmenting each block into its
             // own bubble.
             if let index = legacyTrailingUserIndex(),
-               case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] {
+               case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index] {
                 messages[index] = .user(
                     id: id,
                     messageId: nil,
@@ -568,7 +568,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// not skip past that intervening content and reopen the earlier
     /// bubble, concatenating both turns' text into one row.
     private func userIndex(messageId: String) -> Int? {
-        guard case .user(_, let id, _, _, _) = messages.last, id == messageId else { return nil }
+        guard case .user(_, let id, _, _, _, _) = messages.last, id == messageId else { return nil }
         return messages.count - 1
     }
 
@@ -730,7 +730,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
             if ordinal < candidates.count, candidates[ordinal] <= replayCursor {
                 replayIdentifiedUserOrdinal[messageId] = ordinal + 1
                 let index = candidates[ordinal]
-                if case .user(let id, _, _, _, let source) = messages[index] {
+                if case .user(let id, _, _, _, let source, _) = messages[index] {
                     messages[index] = .user(
                         id: id, messageId: messageId, text: "", attachments: [], delegatedSource: source)
                 }
@@ -760,7 +760,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
         if ordinal < candidates.count, candidates[ordinal] <= replayCursor {
             legacyUserRunOrdinal += 1
             let index = candidates[ordinal]
-            if case .user(let id, _, _, _, let source) = messages[index] {
+            if case .user(let id, _, _, _, let source, _) = messages[index] {
                 messages[index] = .user(id: id, messageId: nil, text: "", attachments: [], delegatedSource: source)
             }
             appendToUserRow(at: index, messageId: nil, text: text, attachments: attachments)
@@ -775,7 +775,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     }
 
     private func appendToUserRow(at index: Int, messageId: String?, text: String, attachments: [ACPMessage.Attachment]) {
-        guard case .user(let id, _, let existingText, let existingAttachments, let source) = messages[index] else {
+        guard case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index] else {
             return
         }
         messages[index] = .user(
@@ -792,7 +792,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private func identifiedUserCandidates(withId messageId: String) -> [Int] {
         messages.indices.filter { index in
             guard !legacyRecoveredIndices.contains(index) else { return false }
-            if case .user(_, let id, _, _, _) = messages[index] { return id == messageId }
+            if case .user(_, let id, _, _, _, _) = messages[index] { return id == messageId }
             return false
         }
     }
@@ -801,7 +801,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     private func legacyUserCandidates() -> [Int] {
         messages.indices.filter {
             guard !legacyRecoveredIndices.contains($0) else { return false }
-            if case .user(_, nil, _, _, _) = messages[$0] { return true }
+            if case .user(_, nil, _, _, _, _) = messages[$0] { return true }
             return false
         }
     }
@@ -972,7 +972,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// predecessor's plan would silently concatenate into the FIRST
     /// turn's bubble instead of starting its own.
     private func legacyTrailingUserIndex() -> Int? {
-        guard case .user(_, nil, _, _, _) = messages.last else { return nil }
+        guard case .user(_, nil, _, _, _, _) = messages.last else { return nil }
         return messages.count - 1
     }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 enum ACPMessage: Equatable {
-    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment], delegatedSource: ACPDelegatedPromptSource? = nil)
+    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment], delegatedSource: ACPDelegatedPromptSource? = nil, pastedSpans: [ACPPastedTextSpan] = [])
     case agent(id: UUID, messageId: String?, StreamingText)
     case thought(id: UUID, messageId: String?, StreamingText)
     case toolCall(ToolCall)
@@ -36,7 +36,7 @@ enum ACPMessage: Equatable {
 
     var stableIdentityKey: StableIdentityKey {
         switch self {
-        case .user(let id, let messageId, _, _, _):
+        case .user(let id, let messageId, _, _, _, _):
             messageId.map(StableIdentityKey.userMessageId) ?? .userUUID(id)
         case .agent(let id, let messageId, _):
             messageId.map(StableIdentityKey.agentMessageId) ?? .agentUUID(id)
@@ -86,7 +86,7 @@ enum ACPMessage: Equatable {
     @MainActor
     var contentUTF8Length: Int {
         switch self {
-        case .user(_, _, let text, _, _):
+        case .user(_, _, let text, _, _, _):
             text.utf8.count
         case .agent(_, _, let text), .thought(_, _, let text):
             text.utf8Length
@@ -600,7 +600,7 @@ enum ACPMessageCodec {
     @MainActor
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(_, let messageId, let text, let atts, let delegatedSource): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts, delegatedSource: delegatedSource))
+        case .user(_, let messageId, let text, let atts, let delegatedSource, let pastedSpans): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts, delegatedSource: delegatedSource, pastedSpans: pastedSpans.isEmpty ? nil : pastedSpans))
         case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .toolCall(let tc):             return try encoder.encode(tc)
@@ -615,7 +615,7 @@ enum ACPMessageCodec {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource)
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource, pastedSpans: p.pastedSpans ?? [])
         case "agent":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
             return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata))
@@ -651,12 +651,16 @@ enum ACPMessageCodec {
         let text: String
         let attachments: [ACPMessage.Attachment]
         let delegatedSource: ACPDelegatedPromptSource?
+        /// Absent for messages without pastes and for rows written before
+        /// pasted-text badges existed; both decode as no spans.
+        let pastedSpans: [ACPPastedTextSpan]?
 
-        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource? = nil) {
+        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment], delegatedSource: ACPDelegatedPromptSource? = nil, pastedSpans: [ACPPastedTextSpan]? = nil) {
             self.messageId = messageId
             self.text = text
             self.attachments = attachments
             self.delegatedSource = delegatedSource
+            self.pastedSpans = pastedSpans
         }
     }
     private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem] }

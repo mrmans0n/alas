@@ -79,6 +79,10 @@ struct AgentsPane: View {
                                 desc: "When a provider usage limit stops a session, continue it after the limit resets. When the reset time is unknown, check again periodically for up to a day.") {
                         AlasToggle(on: state.bind(\.harness.acpAutoResumeAfterUsageLimit))
                     }
+                    SettingsRow(name: "Continue interrupted sessions after restart",
+                                desc: "When a crash, update, or reboot ends a turn that was sent from the queue, ask the agent to continue it on the next launch and resend queued messages whose delivery could not be confirmed. Messages sent directly to an idle chat are not recovered.") {
+                        AlasToggle(on: state.bind(\.harness.acpContinueInterruptedSessions))
+                    }
                     SettingsRow(name: "Alas MCP transport",
                                 desc: "How the built-in Alas MCP server is delivered. Use HTTP if your agent restricts stdio MCP servers by policy.") {
                         Picker("", selection: state.bind(\.harness.alasMCPTransport)) {

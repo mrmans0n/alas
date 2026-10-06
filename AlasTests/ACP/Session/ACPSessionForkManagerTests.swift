@@ -87,24 +87,22 @@ struct ACPSessionForkManagerTests {
           arguments: [false, true])
     func mergeRejectsForkTakeover(archive: Bool) async throws {
         let (manager, store, source, fork) = try await mergeFixture()
-        let takeover = Task { @MainActor in
-            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-            while manager._heartbeatTasks[source.id] == nil, ContinuousClock.now < deadline {
-                await Task.yield()
-            }
-            #expect(manager._ownedLeases.contains(source.id))
-            #expect(manager._heartbeatTasks[fork.id] != nil)
-            #expect(manager._heartbeatTasks[source.id] != nil)
-            // Advance the contender's clock past expiry, without a real sleep,
-            // to exercise takeover even if a renewal task is stalled.
-            let claimed = try store.claimLease(sessionId: fork.id, instanceId: "other", pid: Int64(getpid()),
-                                               now: Int64(Date().timeIntervalSince1970) + 16, staleAfter: 15)
-            #expect(claimed)
-        }
+        try #require(store.loadLease(sessionId: source.id) == nil)
+        // Seize the fork at the source claim itself. A polling task can miss
+        // that window and run after context has already been delivered.
+        try store.db.exec("""
+            CREATE TRIGGER seize_fork_on_source_claim AFTER INSERT ON session_leases
+            WHEN NEW.session_id = '\(source.id)'
+            BEGIN
+                UPDATE session_leases
+                SET owner_instance = 'other', lease_token = 'takeover', heartbeat_at = NEW.heartbeat_at
+                WHERE session_id = '\(fork.id)';
+            END
+            """)
         await #expect(throws: ACPSessionForkMergeError.forkUnavailable) {
             try await manager.mergeForkBack(id: fork.id, archive: archive)
         }
-        try await takeover.value
+        #expect(try store.loadLease(sessionId: fork.id)?.ownerInstance == "other")
         #expect(try store.loadQueue(sessionId: source.id).isEmpty)
         #expect(try store.loadSession(id: fork.id)?.archived == false)
         #expect(manager._heartbeatTasks[fork.id] == nil)

@@ -49,6 +49,7 @@ struct ACPSessionRunnerQueueTests {
         onPromptWorkChanged: (() -> Void)? = nil,
         onPersist: (() -> Void)? = nil,
         isConnectionCurrent: (() -> Bool)? = nil,
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
         pluginContext: (@MainActor (String) async -> [String])? = nil,
@@ -77,6 +78,7 @@ struct ACPSessionRunnerQueueTests {
             onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent ?? { true },
+            incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
             validateLease: validateLease)
         return (runner, mock, session, store)
     }
@@ -259,17 +261,27 @@ struct ACPSessionRunnerQueueTests {
         #expect(Self.sentPromptTexts(mock) == ["first"])
     }
 
-    @Test("a Claude limit announced only in agent text still in the coalescing buffer is detected")
-    func bufferedClaudeLimitTextIsDetected() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+    @Test("a Claude limit is detected across flushed and buffered agent text", arguments: [nil, "You've hit your ", "An ordinary answer. "] as [String?])
+    func bufferedClaudeLimitTextIsDetected(flushedText: String?) async throws {
+        let (runner, mock, session, _) = try mkRunner(incomingUpdateCoalesceNanos: 30_000_000_000)
         runner.start()
         defer { runner.stop() }
-        mock.script(method: "session/prompt") { _ in
+        mock.scriptAsync(method: "session/prompt") { _ in
             // Claude's error_during_execution path builds the error from
             // `errors`, so the limit text arrives only as an agent chunk.
-            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.init(
-                content: .text("You've hit your limit · resets 3pm (Europe/Madrid)")
+            if let flushedText {
+                await MainActor.run {
+                    _ = session.apply(.agentMessageChunk(.text(flushedText)))
+                }
+            }
+            mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text(
+                flushedText == "You've hit your " ? "limit · resets 3pm (Europe/Madrid)" : "You've hit your limit · resets 3pm (Europe/Madrid)"
             ))))
+            // Keep this chunk buffered so the split-message case cannot pass
+            // merely because the coalescer happened to flush before the RPC failed.
+            if flushedText != nil {
+                try await waitUntil { runner.pendingIncomingUpdateCountForTesting == 1 }
+            }
             throw ACPClientError.jsonrpc(.init(code: -32603, message: "Internal error: error_during_execution", data: nil))
         }
         session.enqueue(blocks: [.text("first")])
@@ -362,7 +374,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(accepted)
         #expect(requests == (outcome == "injected" ? 1 : 2))
         #expect(session.transcript.messages.count == 1)
-        guard case .user(_, _, let text, _, _) = session.transcript.messages.first else {
+        guard case .user(_, _, let text, _, _, _) = session.transcript.messages.first else {
             Issue.record("Missing user prompt")
             return
         }
@@ -431,14 +443,14 @@ struct ACPSessionRunnerQueueTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 && session.queue.isEmpty }
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("tail")]])
         let users = session.transcript.messages.compactMap { message -> String? in
-            if case .user(_, _, let text, _, _) = message { return text }
+            if case .user(_, _, let text, _, _, _) = message { return text }
             return nil
         }
         #expect(users == ["running", "redirect", "tail"])
         func timeline(_ messages: [ACPMessage]) -> [String] {
             messages.compactMap {
                 switch $0 {
-                case .user(_, _, let text, _, _): "user:\(text)"
+                case .user(_, _, let text, _, _, _): "user:\(text)"
                 case .agent(_, _, let text): "agent:\(text.value)"
                 default: nil
                 }
@@ -540,7 +552,7 @@ struct ACPSessionRunnerQueueTests {
         }
         try await waitUntil { accepted == true && session.queue.isEmpty }
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt }.last == [.text("tail")])
-        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
+        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _, _) = $0 { return true }
         return false }.count == 1)
     }
 
@@ -870,7 +882,7 @@ struct ACPSessionRunnerQueueTests {
         try await waitUntil { session.queue.isEmpty }
         #expect(session.transcript.streamingState == .idle)
         #expect(session.transcript.messages.filter {
-            if case .user(_, _, "selected", _, _) = $0 { return true }
+            if case .user(_, _, "selected", _, _, _) = $0 { return true }
             return false
         }.count == 1)
     }
@@ -991,7 +1003,7 @@ struct ACPSessionRunnerQueueTests {
         let rows = try store.loadMessages(sessionId: "s")
         #expect(rows.map(\.kind) == ["agent", "agent", "user"])
         let user = try #require(rows.last)
-        guard case .user(_, _, let text, _, _) = try ACPMessageCodec.decode(kind: user.kind, payload: user.payload) else {
+        guard case .user(_, _, let text, _, _, _) = try ACPMessageCodec.decode(kind: user.kind, payload: user.payload) else {
             Issue.record("expected the persisted steering user row")
             return
         }
@@ -1289,7 +1301,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(!session.supportsSteering)
         #expect(mock.sent.contains { $0.method == "session/cancel" })
         #expect(mock.sent.compactMap { ($0.params as? ACPSessionPromptParams)?.prompt } == [[.text("running")], [.text("redirect")], [.text("tail")]])
-        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _) = $0 { return true }
+        #expect(session.transcript.messages.filter { if case .user(_, _, "redirect", _, _, _) = $0 { return true }
         return false }.count == 1)
     }
 
@@ -1614,7 +1626,7 @@ struct ACPSessionRunnerQueueTests {
             #expect(held.status == .pending && held.lastError != nil && held.deliveryUncertain)
         }
         #expect(session.transcript.messages.compactMap { message -> String? in
-            if case .user(_, _, let text, _, _) = message { return text }
+            if case .user(_, _, let text, _, _, _) = message { return text }
             return nil
         } == ["Selected prompt"])
         let beforeReplay = session.queue
@@ -1980,7 +1992,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(queueWasEmptyAtCallback)
         #expect(turn?.sessionID == session.id)
         #expect(turn?.incarnation == session.incarnation)
-        if case .some(.user(let userID, _, _, _, _)) = session.transcript.messages.first {
+        if case .some(.user(let userID, _, _, _, _, _)) = session.transcript.messages.first {
             #expect(turn?.userMessageID == userID)
         } else {
             Issue.record("expected queued user row")
@@ -2265,7 +2277,7 @@ struct ACPSessionRunnerQueueTests {
         runner.flushQueueIfIdle()
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.last else {
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages.last else {
             Issue.record("expected a recorded user message")
             return
         }
@@ -2288,7 +2300,7 @@ struct ACPSessionRunnerQueueTests {
         runner.flushQueueIfIdle()
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        guard case .user(_, _, _, let attachments, _) = session.transcript.messages.last else {
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages.last else {
             Issue.record("expected a recorded user message")
             return
         }
@@ -3038,7 +3050,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].transcriptRecorded == true)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, _, _) = msg { userTexts.append(text) }
         }
         #expect(userTexts == ["queued-q"])
     }
@@ -3060,7 +3072,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].transcriptRecorded == true)
         var users = session.transcript.messages.filter { if case .user = $0 { return true } else { return false } }
         #expect(users.count == 1)
-        guard case .user(let originalUserID, _, _, _, _) = users[0] else {
+        guard case .user(let originalUserID, _, _, _, _, _) = users[0] else {
             Issue.record("expected original queued user row")
             return
         }
@@ -3088,7 +3100,7 @@ struct ACPSessionRunnerQueueTests {
         session.transcript.streamingState = .idle
         runner.flushQueueIfIdle()
         try await waitUntil { session.queue.first?.lastError != nil }
-        guard case .some(.user(let userID, _, _, _, _)) = session.transcript.messages.first,
+        guard case .some(.user(let userID, _, _, _, _, _)) = session.transcript.messages.first,
               let queueID = session.queue.first?.id else {
             Issue.record("expected failed queued user row")
             return
@@ -3199,7 +3211,7 @@ struct ACPSessionRunnerQueueTests {
         var userTexts: [String] = []
         var delegatedSources: [ACPDelegatedPromptSource?] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _, let delegatedSource) = msg {
+            if case .user(_, _, let text, _, let delegatedSource, _) = msg {
                 userTexts.append(text)
                 delegatedSources.append(delegatedSource)
             }
@@ -3233,7 +3245,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.count == 2)
         var userTexts: [String] = []
         for msg in session.transcript.messages {
-            if case .user(_, _, let text, _, _) = msg { userTexts.append(text) }
+            if case .user(_, _, let text, _, _, _) = msg { userTexts.append(text) }
         }
         #expect(userTexts == ["selected", "first"])
         #expect(session.queue.isEmpty)

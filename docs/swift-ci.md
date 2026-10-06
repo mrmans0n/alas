@@ -38,7 +38,7 @@ time launching test hosts than running tests. See
 `docs/testing/test-cost-baseline-2026-09.md`.
 
 The build runner publishes compiled products and the test plan, then finishes.
-Four dependent test runners balance all eight ordinary batches and the subprocess
+Four dependent test runners balance all ten ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
@@ -263,11 +263,18 @@ Each invocation report now records measured `suite_seconds`, summed from the
 result bundle's per-test durations. The coverage audit exports them in
 `timings.json` as `suites`, together with `invocation_overhead_seconds`, the
 median gap between an invocation's wall time and its tests. When the committed
-baseline has `suites`, planning fills the eight ordinary batches longest-first
+baseline has `suites`, planning fills the ten ordinary batches longest-first
 into the lightest batch, and invocations without an exact timing are estimated
 as the sum of their suites plus that overhead. A new suite weighs the median
 suite until measured. Without `suites` the planner keeps the previous
 round-robin behavior.
+
+Ten batches preserve room for Xcode startup and result finalization within the
+360-second watchdog. In October 2026, an eight-batch invocation passed all
+1,708 definitions in 320.530 seconds but was interrupted before its result
+bundle finished. Replaying the 12,807-definition inventory with ten batches
+reduces the largest ordinary batch from 1,933 to 1,559 definitions; coverage,
+exclusions, and invocation deadlines stay identical.
 
 Replaying run 36231832336's per-suite times against run 36252321940's
 inventory: round-robin planning left the runners 324s apart (all eight ordinary

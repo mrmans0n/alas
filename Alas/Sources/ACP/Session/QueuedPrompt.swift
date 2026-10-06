@@ -46,6 +46,15 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// True when this prompt may have reached a broker but completion could
     /// not be confirmed. The queue flusher must not resend it automatically.
     var deliveryUncertain: Bool
+    /// Set when a connection ending left this prompt's delivery uncertain, and
+    /// cleared once an attach has consumed that interruption. Persisted so a
+    /// launch can find the session again when an earlier attach failed after
+    /// the held prompt was saved. A prompt that was already uncertain when
+    /// restored never gets it: that interruption predates this launch.
+    var awaitingInterruptionResume: Bool = false
+    /// Marks the continuation Alas queues for a turn a restart interrupted, so
+    /// launch recovery never mistakes a user's own prompt for it.
+    var interruptedTurnContinuation: Bool = false
     /// Set only on the resume item Alas schedules after a usage limit. It
     /// carries the limit so a relaunch restores the session's Limited state.
     var usageLimit: ACPUsageLimit?
@@ -62,6 +71,15 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Internal task notifications retain their persisted delivery identity.
     /// Failed ones offer Retry/Send now, rather than dropping only the queue half.
     var canRemoveFromQueue: Bool { status == .pending && backgroundTaskWake == nil }
+
+    static let interruptedTurnContinueText =
+        "Your previous turn was interrupted because Alas restarted. Continue where you left off."
+
+    /// The continuation queued for a turn an app restart interrupted. It is an
+    /// ordinary pending row, so launch recovery recognizes it by its flag.
+    var isInterruptedTurnContinuation: Bool {
+        interruptedTurnContinuation && status == .pending && lastError == nil
+    }
 
     static let deliveryUncertaintyMessage =
         "Delivery is uncertain because the previous connection ended before confirming this prompt. Retry to send it again."
@@ -81,6 +99,8 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          dispatchCount: Int = 0,
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
          deliveryUncertain: Bool = false,
+         awaitingInterruptionResume: Bool = false,
+         interruptedTurnContinuation: Bool = false,
          usageLimit: ACPUsageLimit? = nil)
     {
         self.id = id
@@ -98,12 +118,15 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.dispatchCount = dispatchCount
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
+        self.awaitingInterruptionResume = awaitingInterruptionResume
+        self.interruptedTurnContinuation = interruptedTurnContinuation
         self.usageLimit = usageLimit
     }
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
+        case awaitingInterruptionResume, interruptedTurnContinuation
         case usageLimit
     }
 
@@ -124,6 +147,8 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         dispatchCount = (try? c.decode(Int.self, forKey: .dispatchCount)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
+        awaitingInterruptionResume = (try? c.decode(Bool.self, forKey: .awaitingInterruptionResume)) ?? false
+        interruptedTurnContinuation = (try? c.decode(Bool.self, forKey: .interruptedTurnContinuation)) ?? false
         usageLimit = try? c.decode(ACPUsageLimit.self, forKey: .usageLimit)
         if deliveryUncertain, lastError == nil {
             lastError = Self.deliveryUncertaintyMessage
@@ -180,20 +205,52 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         in queue: [QueuedPrompt],
         transcript: [ACPMessageWire]
     ) -> Set<UUID> {
+        deliveredRecordedPromptIDs(in: queue, newestFirst: transcript.reversed().lazy.map {
+            if $0.isAgentSideProgress { return .progress }
+            guard case .user(_, let text, let attachments, _, _) = $0 else { return .other }
+            return .user(text: text, attachments: attachments)
+        })
+    }
+
+    /// The same check against the live transcript, which hydration-time
+    /// evidence cannot see: output that arrived after hydration.
+    static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        liveTranscript: [ACPMessage]
+    ) -> Set<UUID> {
+        deliveredRecordedPromptIDs(in: queue, newestFirst: liveTranscript.reversed().lazy.map {
+            if $0.isAgentSideProgress { return .progress }
+            guard case .user(_, _, let text, let attachments, _, _) = $0 else { return .other }
+            return .user(text: text, attachments: attachments)
+        })
+    }
+
+    enum TranscriptEntry {
+        case progress
+        case user(text: String, attachments: [ACPMessage.Attachment])
+        case other
+    }
+
+    private static func deliveredRecordedPromptIDs(
+        in queue: [QueuedPrompt],
+        newestFirst entries: some Sequence<TranscriptEntry>
+    ) -> Set<UUID> {
         var answered = false
-        for message in transcript.reversed() {
-            if message.isAgentSideProgress {
+        for entry in entries {
+            switch entry {
+            case .progress:
                 answered = true
+            case .other:
                 continue
+            case .user(let text, let attachments):
+                guard answered else { return [] }
+                return Set(queue.lazy.filter {
+                    $0.transcriptRecorded
+                        && $0.dispatchCount <= 1
+                        && $0.brokerOperationAttempt == 0
+                        && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
+                }.map(\.id))
             }
-            guard case .user(_, let text, let attachments, _) = message else { continue }
-            guard answered else { return [] }
-            return Set(queue.lazy.filter {
-                $0.transcriptRecorded
-                    && $0.dispatchCount <= 1
-                    && $0.brokerOperationAttempt == 0
-                    && $0.restorableDraft.matchesPersistedUserPrompt(text: text, attachments: attachments)
-            }.map(\.id))
         }
         return []
     }

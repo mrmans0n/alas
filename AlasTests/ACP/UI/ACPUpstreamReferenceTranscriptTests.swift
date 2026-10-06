@@ -60,6 +60,26 @@ struct ACPUpstreamReferenceTranscriptTests {
         #expect(board.string(forType: .string) == "see #12 please")
     }
 
+    @Test("copying a transcript selection with a pasted-text chip writes the full paste")
+    func transcriptCopyPastedText() throws {
+        let content = String(repeating: "log line\n", count: 30)
+        let contents = try #require(ACPPastedTextContents(
+            text: "see " + content, spans: [ACPPastedTextSpan(ordinal: 1, utf16Offset: 4, utf16Length: content.utf16.count)]
+        ))
+        let text = rendered("see " + ACPPastedTextChip.marker(label: ACPPastedTextPolicy.label(ordinal: 1, content: content)))
+        #expect(ACPPastedTextChip.chipify(text, contents: contents) == 1)
+        let textView = ACPMarkdownInlineNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.textStorage?.setAttributedString(text)
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: [.string]))
+        #expect(board.string(forType: .string) == "see " + content)
+    }
+
     @Test("a paragraph without references never subscribes to store revisions")
     func plainParagraphSkipsStoreSubscription() async {
         let store = await UpstreamReferenceFixtures.store()

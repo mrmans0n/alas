@@ -46,7 +46,14 @@ struct EditorInlayLayoutTests {
         let window = NSWindow(contentRect: scroll.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView = scroll
         window.orderFront(nil)
-        let coordinator = CodeEditorCoordinator(appState: app)
+        // Retention during edits/refresh is independent of the two-second
+        // watchdog, whose expiry is covered by InlayHintsFeatureTests.
+        let coordinator = CodeEditorCoordinator(appState: app, inlayPresentationExpirySleep: {
+            // Each canceled watchdog needs its own wait: cancellation finishes
+            // an AsyncStream, so sharing one would expire later watches at once.
+            let expiry = AsyncStream<Void>.makeStream()
+            for await _ in expiry.stream { break }
+        })
         coordinator.attach(textView: view, buffer: buffer, layoutManager: layout, worktreeId: "inlays", worktreeRoot: root, tabId: "tab", revealLine: nil, revealCharacter: nil, theme: try ThemeStore().current)
         defer { coordinator.detach()
         window.orderOut(nil)

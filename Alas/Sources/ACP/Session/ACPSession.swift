@@ -333,6 +333,8 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published private(set) var subagents: [String: ACPSubagentRun] = [:]
     @Published var backgroundTasks: [ACPBackgroundTask] = []
     @Published var backgroundTaskStopSupported = false
+    /// The user's explicit collapse choice for the background task tray; nil follows the default.
+    @Published var backgroundTrayExpanded: Bool?
     private var subagentOrder: [String] = []
 
     private static let metadataPreviewLimit = 4096
@@ -513,7 +515,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
-            case .user(_, _, let text, _, _):
+            case .user(_, _, let text, _, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .agent(_, _, let buffer):
                 return !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -529,7 +531,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func canForkMessage(at index: Int) -> Bool {
         guard transcript.messages.indices.contains(index) else { return false }
         switch transcript.messages[index] {
-        case .user(_, _, let text, _, _):
+        case .user(_, _, let text, _, _, _):
             return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .agent(_, _, let buffer):
             guard !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -608,6 +610,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func recordUserPrompt(
         text: String,
         attachments: [ACPMessage.Attachment],
+        pastedSpans: [ACPPastedTextSpan] = [],
         delegatedSource: ACPDelegatedPromptSource? = nil
     ) -> UUID {
         // Materialise any held replay candidate before the new prompt so
@@ -621,7 +624,8 @@ final class ACPSession: ObservableObject, Identifiable {
             messageId: nil,
             text: text,
             attachments: attachments,
-            delegatedSource: delegatedSource
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
         ))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -756,9 +760,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func attachCheckpoint(_ checkpointID: CheckpointID, toUserMessage id: UUID) -> Bool {
         guard let index = transcript.messages.firstIndex(where: {
-            guard case .user(let messageID, _, _, _, _) = $0 else { return false }
+            guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
             return messageID == id
-        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource) = transcript.messages[index]
+        }), case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index]
         else { return false }
 
         let updatedAttachments = attachments.filter { !$0.isCheckpointReference }
@@ -768,7 +772,8 @@ final class ACPSession: ObservableObject, Identifiable {
             messageId: remoteMessageID,
             text: text,
             attachments: updatedAttachments,
-            delegatedSource: delegatedSource
+            delegatedSource: delegatedSource,
+            pastedSpans: pastedSpans
         ))
         return true
     }
@@ -2602,6 +2607,7 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         guard queue[idx].canRemoveFromQueue else { return }
         queue[idx].blocks = blocks
+        queue[idx].interruptedTurnContinuation = false
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
         queue[idx].dispatchedBrokerGeneration = nil
@@ -2742,12 +2748,11 @@ final class ACPSession: ObservableObject, Identifiable {
             restored.dispatchedBrokerGeneration = nil
             return restored
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
         if usageLimit == nil {
             usageLimit = usageLimitResumeItem?.usageLimit
         }
-        return queue.count != count
+        return dropped
     }
 
     /// Restore a persisted queue and Limited state as one snapshot. The queue
@@ -2776,14 +2781,86 @@ final class ACPSession: ObservableObject, Identifiable {
     /// follow-up steered into a running turn has no provenance and records
     /// its row before steering is confirmed, so output after it is no proof.
     /// A turn that failed after partial output keeps its error and Retry.
-    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) {
-        guard !deliveredQueuedPromptIDs.isEmpty else { return }
+    ///
+    /// With auto-continue on, the dropped prompt's continuation is queued here
+    /// rather than held in memory until an attach succeeds: the shortened queue
+    /// can be persisted before then, and a failed attach would otherwise lose
+    /// the only record that the turn needs continuing. Returns whether the
+    /// queue changed.
+    private func dropDeliveredQueuedPrompts(newlyUncertain: Set<UUID>) -> Bool {
+        for index in queue.indices where newlyUncertain.contains(queue[index].id) {
+            queue[index].awaitingInterruptionResume = true
+        }
+        guard !deliveredQueuedPromptIDs.isEmpty else { return false }
+        let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
                 && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
                 && deliveredQueuedPromptIDs.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
+        guard queue.count != count else { return false }
+        if continuesInterruptedTurns() { enqueueInterruptedTurnContinuation() }
+        return true
+    }
+
+    /// Whether the "Continue interrupted sessions after restart" setting is on.
+    var continuesInterruptedTurns: @MainActor () -> Bool = { false }
+
+    private func enqueueInterruptedTurnContinuation() {
+        let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+        queue.insert(
+            QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)], interruptedTurnContinuation: true),
+            at: insertAt)
+    }
+
+    static let interruptedTurnContinueText = QueuedPrompt.interruptedTurnContinueText
+
+    /// Consumes the interruptions recorded since the last attach. With
+    /// `resume`, uncertain prompts are released for resending and a turn the
+    /// agent had started answering after hydration gets a continue prompt at
+    /// the head of the queue. Without it they stay held for an explicit Retry.
+    /// A turn the stored transcript already showed answered was handled when
+    /// it was dropped.
+    ///
+    /// Returns whether the queue needs persisting: true whenever an
+    /// interruption was recorded, even when held, because restoring rewrote
+    /// the stored `.sending` item as `.pending` and uncertain. Left stored as
+    /// `.sending`, a later launch with the setting on would treat the same
+    /// prompt as newly interrupted and resend it.
+    @discardableResult
+    func consumeInterruptedTurns(resume: Bool) -> Bool {
+        let itemIDs = Set(queue.filter(\.awaitingInterruptionResume).map(\.id))
+        var answeredTurn = false
+        for index in queue.indices { queue[index].awaitingInterruptionResume = false }
+        guard resume else {
+            // A continuation queued while the setting was on is Alas's own, not
+            // the user's: with it off now, it must not be sent.
+            let count = queue.count
+            queue.removeAll { $0.isInterruptedTurnContinuation }
+            return !itemIDs.isEmpty || queue.count != count
+        }
+        var changed = !itemIDs.isEmpty
+        // `deliveredQueuedPromptIDs` is a hydration snapshot. A prompt sent
+        // and answered after hydration is only visible in the live
+        // transcript, and resending it would repeat the agent's side effects.
+        let liveDelivered = QueuedPrompt.deliveredRecordedPromptIDs(
+            in: queue, liveTranscript: transcript.messages)
+        for item in queue where itemIDs.contains(item.id)
+            && item.deliveryUncertain
+            && item.lastError == QueuedPrompt.deliveryUncertaintyMessage {
+            if liveDelivered.contains(item.id) {
+                queue.removeAll { $0.id == item.id }
+                answeredTurn = true
+            } else {
+                changed = retryQueueItem(id: item.id) || changed
+            }
+        }
+        if answeredTurn {
+            enqueueInterruptedTurnContinuation()
+            changed = true
+        }
+        return changed
     }
 
     /// Holds prompts dispatched on a broker generation that this connection
@@ -2799,9 +2876,8 @@ final class ACPSession: ObservableObject, Identifiable {
             queue[index].markDeliveryUncertain()
             newlyUncertain.insert(queue[index].id)
         }
-        let count = queue.count
-        dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
-        return !newlyUncertain.isEmpty || queue.count != count
+        let dropped = dropDeliveredQueuedPrompts(newlyUncertain: newlyUncertain)
+        return !newlyUncertain.isEmpty || dropped
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
@@ -3570,7 +3646,7 @@ final class ACPSession: ObservableObject, Identifiable {
             switch (kind, transcript.messages[i]) {
             case (.agent, .agent(_, nil, _)): return i
             case (.thought, .thought(_, nil, _)): return i
-            case (.user, .user(_, nil, _, _, _)): return i
+            case (.user, .user(_, nil, _, _, _, _)): return i
             default: continue
             }
         }
@@ -3601,7 +3677,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
         let located = messageId.flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
         if let i = located,
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
             if text == mergedText && attachments == mergedAttachments {
@@ -3631,7 +3707,10 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments,
-                delegatedSource: delegatedSource))
+                delegatedSource: delegatedSource,
+                // Spans index into `text`; an attachment-only update leaves
+                // the text untouched, but any text change invalidates them.
+                pastedSpans: mergedText == text ? pastedSpans : []))
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
             }
@@ -3640,7 +3719,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
 
         if let i = lastEchoedLocalUserPromptIndex(matching: addition, attachments: newAttachments),
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[i] {
             if existingMessageId == nil {
                 if let messageId {
                     transcript.replaceMessage(at: i, with: .user(
@@ -3648,7 +3727,8 @@ final class ACPSession: ObservableObject, Identifiable {
                         messageId: messageId,
                         text: text,
                         attachments: Self.mergingAttachments(attachments, newAttachments),
-                        delegatedSource: delegatedSource))
+                        delegatedSource: delegatedSource,
+                        pastedSpans: pastedSpans))
                     reconciledLocalUserPromptMessageIds.insert(messageId)
                     transcript.noteStreamingChange(at: i)
                 } else {
@@ -3660,7 +3740,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if messageId == nil,
            let i = lastLegacyUserChunkIndex(),
-           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource) = transcript.messages[i] {
+           case .user(let id, let existingMessageId, let text, let attachments, let delegatedSource, _) = transcript.messages[i] {
             let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             if text == mergedText && attachments == mergedAttachments {
@@ -3727,7 +3807,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func lastLegacyUserChunkIndex() -> Int? {
         guard let index = transcript.messages.indices.last else { return nil }
-        if case .user(let id, let messageId, _, _, _) = transcript.messages[index],
+        if case .user(let id, let messageId, _, _, _, _) = transcript.messages[index],
            messageId == nil,
            legacyUserChunkMessageIds.contains(id) {
             return index
@@ -3738,7 +3818,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func lastEchoedLocalUserPromptIndex(matching text: String, attachments: [ACPMessage.Attachment]) -> Int? {
         guard !text.isEmpty || !attachments.isEmpty else { return nil }
         return transcript.messages.indices.reversed().first { index in
-            if case .user(let id, let messageId, let existing, let existingAttachments, _) = transcript.messages[index] {
+            if case .user(let id, let messageId, let existing, let existingAttachments, _, _) = transcript.messages[index] {
                 guard messageId == nil,
                       !legacyUserChunkMessageIds.contains(id) else { return false }
                 if !text.isEmpty {
@@ -3844,7 +3924,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         guard !text.isEmpty || !attachments.isEmpty else { return false }
         return transcript.messages.contains { message in
-            guard case .user(_, _, let existing, let existingAttachments, _) = message else { return false }
+            guard case .user(_, _, let existing, let existingAttachments, _, _) = message else { return false }
             if !text.isEmpty, existing.contains(text) {
                 return true
             }

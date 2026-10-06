@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Network
+import Synchronization
 @testable import Alas
 
 @MainActor
@@ -242,7 +243,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.ws-rejected-origin")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -278,7 +279,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.pair-rejected-origin")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -309,7 +310,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.ws-private-origin")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -335,7 +336,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(host: NWEndpoint.Host("127.0.0.1"), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.health-cors")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -855,11 +856,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(
-            host: NWEndpoint.Host("127.0.0.1"),
-            port: NWEndpoint.Port(rawValue: port)!,
-            using: .tcp
-        )
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.policy-refresh")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -1021,11 +1018,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(
-            host: NWEndpoint.Host("127.0.0.1"),
-            port: NWEndpoint.Port(rawValue: port)!,
-            using: .tcp
-        )
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.ws-rejected-host")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -1053,11 +1046,7 @@ struct RemoteServerIntegrationTests {
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
 
-        let conn = NWConnection(
-            host: NWEndpoint.Host("127.0.0.1"),
-            port: NWEndpoint.Port(rawValue: port)!,
-            using: .tcp
-        )
+        let conn = loopbackConnection(port: port)
         let queue = DispatchQueue(label: "io.alas.tests.remote.ws-route")
         try await start(conn, on: queue)
         defer { conn.cancel() }
@@ -1239,14 +1228,32 @@ struct RemoteServerIntegrationTests {
         #expect(list?.map(\.id) == ["local", "srv-b:s1"])
     }
 
+    private func loopbackConnection(port: UInt16) -> NWConnection {
+        let parameters = NWParameters.tcp
+        // Use an OS-assigned source port on the loopback interface.
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        return NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: parameters)
+    }
+
     private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()
+            let portRetries = Mutex(3)
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     completion.finish(.success(()), continuation: continuation)
-                case .failed(let error):
+                case .waiting(.posix(.EADDRINUSE)):
+                    // CI can reuse a recently closed loopback tuple. Waiting
+                    // for a path change never retries that local port collision.
+                    let retry = portRetries.withLock { remaining in
+                        guard remaining > 0 else { return false }
+                        remaining -= 1
+                        return true
+                    }
+                    if retry { conn.restart() }
+                    else { completion.finish(.failure(NWError.posix(.EADDRINUSE)), continuation: continuation) }
+                case .waiting(let error), .failed(let error):
                     completion.finish(.failure(error), continuation: continuation)
                 case .cancelled:
                     completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)

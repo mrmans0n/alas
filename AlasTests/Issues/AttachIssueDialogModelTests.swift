@@ -205,6 +205,19 @@ struct AttachIssueDialogModelTests {
         #expect(!model.prompt.contains("Keep this only for the first issue."))
     }
 
+    @Test("editing title or context keeps the issue's native type")
+    func editsKeepNativeType() async {
+        let fixture = Fixture(resolution: Fixture.resolvedIssue(nativeType: "Bug"))
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+        model.reference = "#42"
+
+        await model.resolve()
+        model.title = "Edited title"
+        model.context = "Edited context."
+
+        #expect(model.makeDraft()?.source.nativeType == "Bug")
+    }
+
     @Test("reopened generated drafts keep generated prompt ownership")
     func reopenedGeneratedDraftsKeepGeneratedPromptOwnership() {
         let source = Fixture.resolvedIssue().source
@@ -304,6 +317,57 @@ struct AttachIssueDialogModelTests {
 
         #expect(first.makeDraft() == second.makeDraft())
     }
+
+    @Test("a label decides the kind and generates its prompt")
+    func labelDecidesKind() async {
+        let fixture = Fixture(resolution: Fixture.resolvedIssue(labels: ["bug"]))
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+        model.reference = "#42"
+
+        await model.resolve()
+
+        #expect(model.kind == .bug)
+        #expect(model.kindCaption == "from label \"bug\"")
+        #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source, kind: .bug))
+    }
+
+    @Test("changing the kind leaves an edited prompt alone until reset")
+    func kindChangeRespectsEditedPrompt() async {
+        let fixture = Fixture()
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+        model.reference = "#42"
+        await model.resolve()
+
+        model.setPrompt("Custom.")
+        model.setKind(.bug)
+        #expect(model.prompt == "Custom.")
+        #expect(model.canResetPrompt)
+
+        model.resetPromptToTemplate()
+        #expect(model.prompt == IssuePromptBuilder.build(source: fixture.resolution.source, kind: .bug))
+        #expect(!model.canResetPrompt)
+    }
+
+    @Test("a reopened draft keeps its kind and generated-prompt ownership")
+    func reopenedDraftKeepsKind() async {
+        let source = Fixture.resolvedIssue().source
+        let draft = AttachedIssueDraft(
+            source: source,
+            projectID: "alas",
+            branchSeed: "42-fix-offline-sync-conflicts",
+            prompt: IssuePromptBuilder.build(source: source, kind: .bug),
+            kind: .bug,
+            kindOrigin: .user
+        )
+        let model = AttachIssueDialogModel(environment: Fixture().environment, initialDraft: draft)
+
+        #expect(model.kind == .bug)
+        #expect(!model.canResetPrompt)
+        model.title = "Renamed"
+        #expect(model.prompt.contains("**Title:** Renamed"))
+        #expect(model.prompt.hasPrefix("Fix GitHub issue #42."))
+        #expect(model.makeDraft()?.kind == .bug)
+    }
 }
 
 @MainActor
@@ -339,7 +403,7 @@ private final class Fixture {
     }
 
     var environment: AttachIssueDialogModel.Environment {
-        .init(
+        return .init(
             resolve: { [self] _ in
                 if suspendResolution {
                     await withCheckedContinuation { continuation in
@@ -368,7 +432,9 @@ private final class Fixture {
     static func resolvedIssue(
         candidateProjectIDs: [String] = ["alas"],
         displayReference: String = "#42",
-        title: String = "Fix offline sync conflicts"
+        title: String = "Fix offline sync conflicts",
+        labels: [String] = [],
+        nativeType: String? = nil
     ) -> ResolvedIssue {
         let source = IssueSnapshot(
             identity: .init(providerID: .github, stableID: "github.com/mrmans0n/alas\(displayReference)"),
@@ -379,14 +445,15 @@ private final class Fixture {
             title: title,
             body: "Offline changes can overwrite newer server changes.",
             state: .open,
-            labels: [],
+            labels: labels,
             assignees: [],
             providerUpdatedAt: nil,
             capturedAt: .distantPast,
             refreshError: nil,
             contentOrigin: .provider,
             isEditable: false,
-            isRefreshable: true
+            isRefreshable: true,
+            nativeType: nativeType
         )
         return .init(source: source, repositoryLocator: source.repositoryLocator, candidateProjectIDs: candidateProjectIDs, selectedProjectID: candidateProjectIDs.last)
     }

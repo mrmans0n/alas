@@ -5,6 +5,8 @@ struct AttachedIssueDraft: Equatable, Sendable {
     var projectID: String?
     var branchSeed: String
     var prompt: String
+    var kind: IssueKind? = nil
+    var kindOrigin: IssueKindOrigin? = nil
 
     var attachment: IssueAttachment {
         IssueAttachment(

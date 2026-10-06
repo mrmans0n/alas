@@ -308,10 +308,41 @@ struct ACPComposer: View {
         }
     }
 
+    /// Active background work, docked flush on top of the pill. Lives here
+    /// rather than around `ACPComposer` for the same reason as `noticeBanner`.
+    @ViewBuilder
+    private var backgroundTaskTray: some View {
+        let tasks = session.activeBackgroundTasks
+        if !tasks.isEmpty {
+            let sessionId = session.id
+            let canStop = !manager.isMirror(sessionId: sessionId)
+                && session.backgroundTaskStopSupported && session.agentState == .ready
+            ACPBackgroundTaskTray(
+                tasks: tasks,
+                canStop: canStop,
+                expandedOverride: $session.backgroundTrayExpanded,
+                stop: { [manager] id in
+                    Task { _ = await manager.runners[sessionId]?.stopBackgroundTask(id: id) }
+                },
+                stopAll: { [manager] in
+                    let ids = tasks.filter(\.canStop).map(\.id)
+                    Task {
+                        for id in ids { _ = await manager.runners[sessionId]?.stopBackgroundTask(id: id) }
+                    }
+                }
+            )
+            .padding(.horizontal, 12)
+        }
+    }
+
     private var composerRow: some View {
         HStack {
             Spacer(minLength: 0)
-            pill.frame(maxWidth: contentMaxWidth)
+            VStack(spacing: 0) {
+                backgroundTaskTray
+                pill
+            }
+            .frame(maxWidth: contentMaxWidth)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)

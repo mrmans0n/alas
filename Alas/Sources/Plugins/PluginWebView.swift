@@ -9,6 +9,9 @@ enum PluginWebPolicy {
     static let scriptPath = "/ui.js"
     /// Live pages per plugin, across its projects; each costs a WebContent process.
     static let maxLivePagesPerPlugin = 4
+    /// Problems the bridge reports per document, and the page reports per web view, so a failing page can't flood the log.
+    static let maxProblemsPerDocument = 5
+    static let maxProblemsPerPage = 20
 
     static func shellURL(pluginID: String) -> URL { URL(string: "\(scheme)://\(pluginID)/")! }
 
@@ -168,7 +171,8 @@ enum PluginWebPolicy {
 
     /// Runs in the bridge's isolated world, the only one with the message handler. Enforces the size, queue and
     /// rate limits before forwarding, so a page over them never costs the app anything, and turns trusted clicks on
-    /// https links into requests to open them.
+    /// https links into requests to open them. It also reports what keeps a page from working (script errors,
+    /// failed loads, blocked resources), a few per document, so they reach the plugin's log instead of a blank tab.
     static func relayScript(
         outEvent: String, maxBytes: Int, queue: Int,
         bytesPerSecond: Int = PluginHost.maxWebBytesPerSecond, minCost: Int = PluginHost.minWebPostCost
@@ -194,6 +198,25 @@ enum PluginWebPolicy {
             pending += 1;
             const settle = () => { pending -= 1; };
             handler.postMessage({ post: text }).then(settle, settle);
+          });
+          let problems = 0;
+          const problem = (text) => {
+            if (problems++ < \(maxProblemsPerDocument)) handler.postMessage({ problem: String(text).slice(0, 500) });
+          };
+          window.addEventListener("error", (event) => {
+            if (event instanceof ErrorEvent) {
+              problem(`${event.message} (${String(event.filename).split("/").pop()}:${event.lineno})`);
+            } else if (event.target instanceof Element) {
+              problem(`could not load ${event.target.getAttribute("src") || event.target.localName}`);
+            }
+          }, true);
+          window.addEventListener("unhandledrejection", (event) => {
+            let reason = "";
+            try { reason = String(event.reason); } catch (e) {}
+            problem(`unhandled promise rejection: ${reason}`);
+          });
+          document.addEventListener("securitypolicyviolation", (event) => {
+            problem(`blocked by the page's security policy: ${event.violatedDirective} ${event.blockedURI}`);
           });
           document.addEventListener("click", (event) => {
             if (!event.isTrusted) return;
@@ -284,7 +307,11 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     private let schemeHandler: PluginWebSchemeHandler
     private var token: UUID?
     private var isClosed = false
+    private var problems = 0
+    private var crashes = 0
     var openExternal: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Each problem the page had, after it went to the plugin's log; the tab shows the latest.
+    var onProblem: (String) -> Void = { _ in }
 
     private let slots: PluginWebPageSlots
 
@@ -329,7 +356,10 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
 
     /// Loads the shell once the content rules are in place; without them the page stays blank.
     private func load() async {
-        guard let rules = await Self.contentRuleList(), !isClosed else { return }
+        guard let rules = await Self.contentRuleList() else {
+            return report("could not set up the page's sandbox (its content rules did not compile)")
+        }
+        guard !isClosed else { return }
         webView.configuration.userContentController.add(rules)
         webView.load(URLRequest(url: PluginWebPolicy.shellURL(pluginID: pluginID)))
     }
@@ -407,7 +437,12 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         if let text = body["open"] as? String {
             if let url = PluginWebPolicy.externalLink(text) { openExternal(url) }
             replyHandler(nil, nil)
+        } else if let text = body["problem"] as? String {
+            report(text)
+            replyHandler(nil, nil)
         } else if let json = body["post"] as? String, let token {
+            // A page that posts is running: only crashes in a row count towards giving up.
+            crashes = 0
             // Queued synchronously, so posts reach the plugin in the order the page made them.
             host.webMessage(tab: tab, page: token, json: json) { replyHandler(nil, $0) }
         } else {
@@ -445,10 +480,42 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         attach()
     }
 
+    /// Reloaded a few times; a page whose web process keeps stopping before it posts anything is left stopped, and
+    /// says so.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !isClosed else { return }
+        crashes += 1
+        guard crashes <= 3 else { return report("the page's web process keeps stopping; close and reopen the tab to try again") }
+        report("the page's web process stopped; reloading")
         attach()
         webView.load(URLRequest(url: PluginWebPolicy.shellURL(pluginID: pluginID)))
+    }
+
+    /// Only the shell loads in the main frame, so its failure is the page's. Navigations the policy cancels (links,
+    /// other URLs) end the same way and are not problems.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        guard !isClosed, !Self.isCancellation(error) else { return }
+        report("could not load the page: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        guard !isClosed, !Self.isCancellation(error) else { return }
+        report("could not load the page: \(error.localizedDescription)")
+    }
+
+    static func isCancellation(_ error: any Error) -> Bool {
+        let error = error as NSError
+        // WebKitErrorFrameLoadInterruptedByPolicyChange: a navigation the policy delegate cancelled.
+        return (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled)
+            || (error.domain == "WebKitErrorDomain" && error.code == 102)
+    }
+
+    /// Logs a problem with the page to its plugin and shows it on the tab, up to `maxProblemsPerPage`.
+    private func report(_ text: String) {
+        guard !isClosed, problems < PluginWebPolicy.maxProblemsPerPage else { return }
+        problems += 1
+        host.webPageProblem(tab: tab, text)
+        onProblem(text)
     }
 
     func webView(
@@ -480,6 +547,7 @@ struct PluginWebTabView: View {
     @Environment(\.theme) private var theme
     @State private var page: PluginWebPage?
     @State private var refused = false
+    @State private var problem: String?
     private let slots = PluginWebPageSlots.shared
 
     var body: some View {
@@ -487,6 +555,15 @@ struct PluginWebTabView: View {
         Group {
             if let page {
                 PluginWebSurface(webView: page.webView).id(ObjectIdentifier(page))
+                    .overlay(alignment: .top) {
+                        if let problem {
+                            Text("\(host.manifest.name)'s page: \(problem) — more in Settings → Plugins")
+                                .font(.caption).foregroundColor(theme.color("del")).lineLimit(3)
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 6))
+                                .padding(8)
+                        }
+                    }
             } else if refused {
                 Text("\(host.manifest.name) already shows \(PluginWebPolicy.maxLivePagesPerPlugin) web tabs. Close one to show this one.")
                     .foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center).padding(24)
@@ -500,12 +577,14 @@ struct PluginWebTabView: View {
         .onDisappear {
             page?.close()
             page = nil
+            problem = nil
         }
         .onChange(of: theme) { _, theme in page?.apply(theme) }
     }
 
     private func open() {
         page = PluginWebPage.open(host: host, tab: tabIndex, script: script, theme: theme)
+        page?.onProblem = { problem = $0 }
         refused = page == nil
     }
 }
