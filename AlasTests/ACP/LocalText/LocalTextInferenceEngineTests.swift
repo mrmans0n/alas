@@ -200,7 +200,8 @@ struct LocalTextInferenceEngineTests {
         #expect(probe.leaseIsClosed)
     }
 
-    @Test func idleDeadlineUnloadsAfterSixtySeconds() async throws {
+    @Test("Idle unload after sixty seconds closes the lease and releases the model's GPU cache")
+    func idleDeadlineUnloadsAfterSixtySeconds() async throws {
         let probe = try LocalTextEngineProbe()
         let engine = probe.engine()
         let task = Task {
@@ -213,9 +214,26 @@ struct LocalTextInferenceEngineTests {
         probe.clock.advance(.seconds(59))
         await Task.yield()
         #expect(!probe.leaseIsClosed)
+        #expect(probe.releaseCount == 0)
         probe.clock.advance(.seconds(1))
         await probe.waitUntilLeaseCloses()
         #expect(probe.leaseIsClosed)
+        #expect(probe.releaseCount == 1)
+    }
+
+    @Test func failedLoadReleasesTheGPUCache() async throws {
+        let fixture = try EngineLeaseFixture()
+        let releases = Mutex(0)
+        let engine = LocalTextInferenceEngine(
+            acquireLease: { try fixture.acquire() },
+            load: { _ in throw POSIXError(.EIO) },
+            releaseCache: { releases.withLock { $0 += 1 } },
+            observeMemoryPressure: false
+        )
+        await #expect(throws: LocalTextInferenceFailure.generationFailed) {
+            try await engine.generate(request, caller: .nextPrompt, priority: .automatic)
+        }
+        #expect(releases.withLock { $0 } == 1)
     }
 
     private var request: LocalTextGenerationRequest {
@@ -237,6 +255,7 @@ private final class LocalTextEngineProbe: Sendable {
         var cancellations = 0
         var firstDrained = false
         var closedBeforeFirstDrain = false
+        var releases = 0
     }
 
     init() throws { fixture = try EngineLeaseFixture() }
@@ -246,6 +265,7 @@ private final class LocalTextEngineProbe: Sendable {
     var leaseWasClosedBeforeFirstDrain: Bool { state.withLock(\.closedBeforeFirstDrain) }
     var firstDrainPrecededLeaseClose: Bool { state.withLock { $0.firstDrained && !$0.closedBeforeFirstDrain } }
     var leaseIsClosed: Bool { fixture.canLockExclusively() }
+    var releaseCount: Int { state.withLock(\.releases) }
 
     func engine() -> LocalTextInferenceEngine {
         LocalTextInferenceEngine(
@@ -273,6 +293,7 @@ private final class LocalTextEngineProbe: Sendable {
                     return .init(text: value, selectedCandidateIndex: 0)
                 }
             },
+            releaseCache: { self.state.withLock { $0.releases += 1 } },
             supported: { true },
             clock: clock.clock,
             observeMemoryPressure: false

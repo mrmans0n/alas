@@ -1084,6 +1084,11 @@ struct PluginHostTests {
         DecorationCase(step: decorate("sidebar.row", target: "wt", #"{"text":"a"}"#), items: [], warns: 1),
         DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a","command":"nope"}"#), items: nil),
         DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a","tone":"pink"}"#), items: nil),
+        // `success` is API 13's.
+        DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a","tone":"success"}"#), items: nil),
+        DecorationCase(
+            step: decorate("worktree.row", target: "wt", #"{"text":"a","tone":"success"}"#),
+            manifest: api6Manifest.replacingOccurrences(of: #""api":6"#, with: #""api":13"#), items: ["a|success|"]),
         DecorationCase(step: decorate("run.row", target: "repo:dev.sh", #"{"text":"a"}"#), items: nil),
         DecorationCase(step: decorate("worktree.row", target: "wt", #"{"text":"a"}"#), manifest: api5Manifest, items: []),
     ])

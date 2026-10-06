@@ -1,6 +1,8 @@
+import AppKit
 import Foundation
 import Network
 import Observation
+import SwiftUI
 import Testing
 import WebKit
 @testable import Alas
@@ -143,6 +145,59 @@ struct PluginWebTests {
         page.onProblem = { shown.append($0) }
         #expect(await awaitCondition { host.log.contains { $0.level == "error" && $0.message.contains("boom") } })
         #expect(shown.contains { $0.contains("boom") })
+    }
+
+    /// An approved web tab, shown through the real plugin tab view, opens its page and the page draws. The tab used to
+    /// stay blank: its page was opened from an `onAppear` on a view with nothing in it, which SwiftUI never calls.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func aWebTabOpensAndDrawsItsPageInThePluginTabView() async throws {
+        struct MemoryStore: PersistenceStoreProtocol {
+            func write<T: Encodable>(_: T, to _: URL) throws {}
+            func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "plugin-web-tab-\(UUID().uuidString)")
+        let folder = root.appending(path: Self.id)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let suite = "PluginWebTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try Data(#"{"id":"\#(Self.id)","name":"P","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8)
+            .write(to: folder.appending(path: "plugin.json"))
+        try PluginJSFixture.source([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]]).write(to: folder.appending(path: "p.js"))
+        try Data(#"document.body.textContent = "drawn";"#.utf8).write(to: folder.appending(path: "ui.js"))
+        let project = ProjectConfig(id: "proj", name: "Project", path: "/tmp/proj", color: "blue", addedAt: Date())
+        let manager = PluginManager(
+            directory: root, approvals: PluginApprovalStore(defaults: defaults), projects: { [project] }, actions: { _ in .inert })
+        await manager.reload()
+        await manager.approve(try #require(manager.plugin(id: Self.id)))
+        let state = AppState(store: MemoryStore())
+        state.pluginManager = manager
+        let worktree = Worktree(
+            id: "wt", projectId: "proj", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/proj"), status: .clean,
+            lastActivity: Date())
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = NSHostingView(rootView: PluginTabView(
+            state: state, worktree: worktree, tab: PluginTabState(pluginID: Self.id, contributionID: "w", title: "W")))
+        window.orderFrontRegardless()
+        defer { window.close() }
+
+        func webView(in view: NSView) -> WKWebView? {
+            (view as? WKWebView) ?? view.subviews.lazy.compactMap(webView(in:)).first
+        }
+        var page: WKWebView?
+        #expect(await awaitCondition { page = webView(in: window.contentView!)
+        return page != nil })
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        var text = ""
+        while text != "drawn", ContinuousClock.now < deadline {
+            text = (try? await page?.evaluateJavaScript("document.body?.textContent ?? ''") as? String) ?? ""
+            if text != "drawn" { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(text == "drawn")
     }
 
     @MainActor

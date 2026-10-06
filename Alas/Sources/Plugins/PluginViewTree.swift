@@ -18,7 +18,14 @@ struct PluginViewNode: Equatable, Sendable {
             }
         }
     }
-    enum Tone: String, Sendable { case normal, dim, accent, warn, danger }
+    enum Tone: String, Sendable {
+        case normal, dim, accent, warn, danger
+        // API 13.
+        case success
+
+        /// The plugin API that introduced the tone; an older plugin that sends it breaks the message.
+        var api: Int { self == .success ? 13 : 4 }
+    }
     struct MenuItem: Equatable, Sendable {
         let id: String
         let label: String
@@ -149,6 +156,7 @@ enum PluginViewTree {
 
         if let toneName = raw.tone {
             guard let tone = PluginViewNode.Tone(rawValue: toneName) else { throw err("\(prefix) has unknown tone \"\(toneName)\"") }
+            guard tone.api <= api else { throw err("tone \"\(toneName)\" needs \"api\": \(tone.api)") }
             node.tone = tone
         }
         if let spacing = raw.spacing {

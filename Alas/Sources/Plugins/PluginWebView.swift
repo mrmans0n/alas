@@ -552,7 +552,10 @@ struct PluginWebTabView: View {
 
     var body: some View {
         let hasRoom = slots.hasRoom(host.manifest.id)
-        Group {
+        // A container that is always there: SwiftUI never calls `onAppear` for a view with nothing in it, which is
+        // what this is until the page it opens exists, so the tab stayed blank.
+        ZStack {
+            Color.clear
             if let page {
                 PluginWebSurface(webView: page.webView).id(ObjectIdentifier(page))
                     .overlay(alignment: .top) {

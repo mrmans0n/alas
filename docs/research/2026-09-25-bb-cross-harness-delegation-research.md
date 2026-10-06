@@ -384,3 +384,25 @@ Decision: implement the wrapper, with a versioned registry of known subagent ext
 | Setting on, user `PI_ACP_PI_COMMAND` = marker script | `read,bash,edit,write,probe_echo` | `read,bash,edit,write,probe_echo` |
 
 The marker script recorded both invocations, `--mode rpc --no-themes --exclude-tools subagent,bg_wait,subagent_supervisor` and, on load, `--mode rpc --no-themes --session <file>.jsonl --exclude-tools …`, so the user's command ran with every original argument. The user's `~/.pi/agent/settings.json` checksum was unchanged and no file under `~/.pi/agent` outside `sessions/` changed.
+
+## Issue #1592: Copilot `--excluded-tools`
+
+Live probe on 2026-10-06 of `@github/copilot` installed into a temporary npm prefix. Each run used a temporary `HOME`/`COPILOT_HOME`, `COPILOT_OFFLINE=true`, and a loopback OpenAI-compatible server as the BYOK provider (`COPILOT_PROVIDER_BASE_URL`). The tools below are the `tools` array of the first chat-completions request after `session/prompt`. No GitHub credentials, paid provider, or global settings were used. `agentInfo` reports `{"name": "Copilot", "version": "<x.y.z>"}`.
+
+| Launch arguments (`copilot … --acp`) | Model-visible tools (1.0.92) |
+|---|---|
+| none | `bash, create, edit, glob, grep, list_agents, list_bash, read_agent, read_bash, sql, stop_bash, task, view, write_agent` |
+| `--excluded-tools=task,list_agents,read_agent,write_agent` (also the space-separated form) | `bash, create, edit, glob, grep, list_bash, read_bash, sql, stop_bash, view` |
+| `--excluded-tools=bash --excluded-tools=task,…` | the above minus `bash` (repeated exclusions accumulate) |
+| `--available-tools=bash,view,task --excluded-tools=task,…` (either order) | `bash, task, view` (**an allowlist makes Copilot ignore every exclusion**) |
+| `--available-tools=bash,view --available-tools=task` | `bash, task, view` (repeated allowlists union) |
+| `--available-tools=` | every tool (an empty allowlist is no allowlist) |
+| `--available-tools=TASK,view` or `task*,view` | `view` (exact, case-sensitive names; no globs) |
+| HTTP MCP server `alas` + exclusion | adds `alas-session_new`; MCP tools are unaffected |
+| HTTP MCP server `alas` + `--available-tools=bash,view` | `bash, view` (an allowlist hides MCP tools; listing `alas` or `alas-session_new` keeps them) |
+
+Copilot rejects stdio MCP servers sent by an ACP client ("Rejecting non-http/sse MCP server"), which is why Alas injects its HTTP server.
+
+**Resume.** The exclusion follows the process, not the session. A session created with the flag and loaded (`session/load`) by a process without it got all four tools back; a session created without it and loaded with it lost them. Alas launches every attach with the session's stored policy, so this matches its activation boundary.
+
+**Versions.** The same exclusion removes exactly the four tools on 1.0.76, 1.0.77, 1.0.78, 1.0.79, 1.0.80, 1.0.86, and 1.0.92 (1.0.76–1.0.86 also expose `session_store_sql` and `skill`, unaffected). 1.0.59, 1.0.60, 1.0.64, 1.0.70, and 1.0.75 answer `session/new` with "Authentication required" under BYOK offline mode, so they could not be measured without a GitHub account; Alas's floor is the measured 1.0.76, not the changelog's 1.0.60. Internal helpers Copilot may run without a model-visible tool are outside this claim.

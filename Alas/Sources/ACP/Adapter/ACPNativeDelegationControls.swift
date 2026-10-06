@@ -27,6 +27,11 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// session/load, and session/resume. The server stores the filter with
     /// the session, and a request without it restores the stored one.
     case antigravityDisabledTools
+    /// `copilot --acp`: `--excluded-tools` for the native agent tools on the
+    /// launch command line, which `session/new` and `session/load` both obey.
+    /// Copilot ignores exclusions while `--available-tools` is set, so the
+    /// same tools are also removed from any allowlist in the arguments.
+    case copilotExcludedTools
 
     /// The `agentInfo.name` of the adapter whose contract was verified. A
     /// different ACP server that happens to share the binary name (Alas
@@ -39,6 +44,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .ompConfigOverlay: "oh-my-pi"
         case .piCommandWrapper: ACPManagedAdapterDescriptor.pi.packageName
         case .antigravityDisabledTools: "antigravity-acp"
+        case .copilotExcludedTools: "Copilot"
         }
     }
 
@@ -61,6 +67,9 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .ompConfigOverlay: "18.2.11"
         case .piCommandWrapper: "0.0.34"
         case .antigravityDisabledTools: "1.3.0"
+        // Oldest release measured; earlier ones reject the offline provider
+        // the probe needs, so they stay unverified.
+        case .copilotExcludedTools: "1.0.76"
         }
     }
 
@@ -71,7 +80,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         switch self {
         case .openCodeConfigContent: 2
         case .claudeDisallowedTools, .codexConfigEnvironment, .ompConfigOverlay, .piCommandWrapper,
-             .antigravityDisabledTools: nil
+             .antigravityDisabledTools, .copilotExcludedTools: nil
         }
     }
 }
@@ -98,7 +107,8 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case ACPManagedAdapterDescriptor.pi.agentID: .toolOmission(.piCommandWrapper)
         case "omp": .toolOmission(.ompConfigOverlay)
         case "antigravity": .toolOmission(.antigravityDisabledTools)
-        case "cursor-agent", "gemini", "copilot": .unverified
+        case "copilot": .toolOmission(.copilotExcludedTools)
+        case "cursor-agent", "gemini": .unverified
         default: .unsupported
         }
     }
@@ -150,6 +160,12 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
             return "Removes Antigravity's invoke_subagent, define_subagent, "
                 + "manage_subagents, and send_message tools from the model's tool list "
                 + "for the session. Your Antigravity settings are not changed."
+        case .toolOmission(.copilotExcludedTools):
+            return "Removes Copilot's task, list_agents, read_agent, and write_agent "
+                + "tools from the model's tool list with --excluded-tools. Exclusions "
+                + "in your extra arguments are kept, and these tools are also removed "
+                + "from any --available-tools allowlist there. Requires Copilot 1.0.76 "
+                + "or later."
         case .runtimeDenial:
             return "The native subagent tool stays visible to the model, but "
                 + "its calls are rejected."
@@ -212,6 +228,7 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
     case adapterUnverified(agentID: String, found: String?, expected: String)
     case launchOverlayUnavailable(agentID: String, detail: String)
     case piCommandUnavailable(command: String, isUserCommand: Bool)
+    case copilotAllowlistEmpty
 
     var errorDescription: String? {
         switch self {
@@ -279,6 +296,13 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
                 + "not find the Pi command \"\(command)\" that its launch wrapper runs. "
                 + "\(fix) or turn off \"Disable native subagents\" for Pi in "
                 + "Settings → Agents, then start a new session."
+        case .copilotAllowlistEmpty:
+            return "Native subagents are disabled for this session, but the Copilot "
+                + "--available-tools allowlist in its extra arguments has no tools left "
+                + "once Alas removes the native agent tools, and Copilot treats an empty "
+                + "allowlist as every tool. Add the tools Copilot should keep, or turn "
+                + "off \"Disable native subagents\" for Copilot in Settings → Agents, "
+                + "then start a new session."
         }
     }
 }
@@ -298,6 +322,8 @@ enum ACPNativeDelegationControls {
     /// invoke_subagent, define_subagent, manage_subagents, and send_message
     /// (verified against antigravity-acp 1.3.0).
     static let antigravitySubagentTool = "start_subagent"
+    /// Copilot's model-visible native agent tools (verified on 1.0.76–1.0.92).
+    static let copilotNativeAgentTools = ["task", "list_agents", "read_agent", "write_agent"]
     static let codexConfigKey = "CODEX_CONFIG"
     /// The whole OMP overlay. It sets nothing else, so every other key keeps
     /// the value from the user's global and project settings.
@@ -398,7 +424,48 @@ enum ACPNativeDelegationControls {
                 inheritedEnvironment: inheritedEnvironment,
                 wrapper: wrapper
             ))
+        case .copilotExcludedTools:
+            // Plain arguments; they reach a remote host unchanged and the
+            // remote adapter's version is still checked.
+            return spec.replacingArguments(try copilotArguments(spec.arguments))
         }
+    }
+
+    /// `arguments` with Copilot's native agent tools excluded. Repeated
+    /// `--excluded-tools` accumulate, so the user's own are left in place.
+    /// Every `--available-tools` (`=` or space-separated, repeated ones
+    /// union) folds into one allowlist without those tools; one left empty
+    /// would mean every tool, so it fails instead.
+    static func copilotArguments(_ arguments: [String]) throws -> [String] {
+        let flag = "--available-tools"
+        var kept: [String] = []
+        var allowlist: [String]?
+        var inAllowlist = false
+        func allow(_ value: some StringProtocol) {
+            allowlist!.append(contentsOf: value.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !copilotNativeAgentTools.contains($0) })
+        }
+        for argument in arguments {
+            if argument == flag {
+                allowlist = allowlist ?? []
+                inAllowlist = true
+            } else if argument.hasPrefix(flag + "=") {
+                allowlist = allowlist ?? []
+                allow(argument.dropFirst(flag.count + 1))
+                inAllowlist = false
+            } else if inAllowlist, !argument.hasPrefix("-") {
+                allow(argument)
+            } else {
+                inAllowlist = false
+                kept.append(argument)
+            }
+        }
+        if let allowlist {
+            guard !allowlist.isEmpty else { throw ACPNativeDelegationError.copilotAllowlistEmpty }
+            kept.append(flag + "=" + allowlist.joined(separator: ","))
+        }
+        return kept + ["--excluded-tools=" + copilotNativeAgentTools.joined(separator: ",")]
     }
 
     /// Fails unless the adapter identifies itself as the verified package at

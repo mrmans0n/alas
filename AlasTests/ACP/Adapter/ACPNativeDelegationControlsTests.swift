@@ -13,7 +13,7 @@ struct ACPNativeDelegationControlsTests {
             ("cursor-agent", .unverified),
             ("gemini", .unverified),
             ("antigravity", .toolOmission(.antigravityDisabledTools)),
-            ("copilot", .unverified),
+            ("copilot", .toolOmission(.copilotExcludedTools)),
             ("opencode", .toolOmission(.openCodeConfigContent)),
             ("omp", .toolOmission(.ompConfigOverlay)),
             ("3F2504E0-4F89-11D3-9A0C-0305E82C3301", .unsupported),
@@ -22,7 +22,7 @@ struct ACPNativeDelegationControlsTests {
     func supportResolution(agentID: String, expected: ACPNativeDelegationSupport) {
         let support = ACPNativeDelegationSupport.resolve(agentID: agentID)
         #expect(support == expected)
-        #expect(support.canEnforce == ["claude", "codex", "opencode", "omp", "pi", "antigravity"].contains(agentID))
+        #expect(support.canEnforce == ["claude", "codex", "opencode", "omp", "pi", "antigravity", "copilot"].contains(agentID))
         // Unenforceable states never carry the activation/enforcement copy.
         if !support.canEnforce {
             #expect(support.settingsRowDescription(isOn: true, alasToolsExposed: true)
@@ -186,6 +186,38 @@ struct ACPNativeDelegationControlsTests {
         let permissions = try FileManager.default.attributesOfItem(atPath: overlay.path)[.posixPermissions]
         #expect(permissions as? Int == 0o600)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [overlay.lastPathComponent])
+    }
+
+    @Test(
+        "Copilot launches exclude the native agent tools, keep user exclusions, and narrow any allowlist",
+        arguments: [
+            ([], ["--acp", "--excluded-tools=task,list_agents,read_agent,write_agent"]),
+            (["--excluded-tools=bash"], ["--excluded-tools=bash", "--acp", "--excluded-tools=task,list_agents,read_agent,write_agent"]),
+            (["--available-tools=bash,task, view"], ["--acp", "--available-tools=bash,view", "--excluded-tools=task,list_agents,read_agent,write_agent"]),
+            (["--available-tools", "bash", "write_agent", "--model", "x", "--available-tools=grep"],
+             ["--model", "x", "--acp", "--available-tools=bash,grep", "--excluded-tools=task,list_agents,read_agent,write_agent"]),
+        ]
+    )
+    func copilotLaunchArguments(extra: [String], expected: [String]) throws {
+        let copilot = try #require(ACPLaunchCatalog.spec(for: "copilot")).prependingArguments(extra)
+        func launch(disabled: Bool) throws -> ACPLaunchSpec {
+            try ACPNativeDelegationControls.applyingLaunchControls(
+                to: copilot, nativeSubagentsDisabled: disabled, inheritedEnvironment: [:], isRemote: true)
+        }
+        #expect(try launch(disabled: false) == copilot)
+        #expect(try launch(disabled: true).arguments == expected)
+    }
+
+    @Test(
+        "a Copilot allowlist left empty without the native agent tools fails instead of allowing every tool",
+        arguments: [["--available-tools=task,read_agent"], ["--available-tools="], ["--available-tools"]]
+    )
+    func copilotEmptyAllowlistFails(extra: [String]) throws {
+        let copilot = try #require(ACPLaunchCatalog.spec(for: "copilot")).prependingArguments(extra)
+        #expect(throws: ACPNativeDelegationError.copilotAllowlistEmpty) {
+            try ACPNativeDelegationControls.applyingLaunchControls(
+                to: copilot, nativeSubagentsDisabled: true, inheritedEnvironment: [:], isRemote: false)
+        }
     }
 
     @Test("an overlay Alas cannot write fails the OMP launch")
@@ -613,6 +645,8 @@ struct ACPNativeDelegationControlsTests {
             ("pi", "0.0.33", false),
             ("antigravity", "1.3.0", true),
             ("antigravity", "1.2.9", false),
+            ("copilot", "1.0.76", true),
+            ("copilot", "1.0.75", false),
         ]
     )
     func adapterVersionGate(agentID: String, version: String, passes: Bool) {
