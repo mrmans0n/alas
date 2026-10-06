@@ -15244,7 +15244,9 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
-        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }), acpIds.contains(agent.id) else {
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }),
+              acpIds.contains(agent.id),
+              resolved.project.host == nil || agent.canRunOnRemoteHost else {
             return .failure("Agent is no longer available.")
         }
 
@@ -15291,7 +15293,9 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
-        guard agentRegistry.enabled().contains(where: { $0.id == agentId && acpIDs.contains($0.id) }) else {
+        guard agentRegistry.enabled().contains(where: {
+            $0.id == agentId && acpIDs.contains($0.id) && (project.host == nil || $0.canRunOnRemoteHost)
+        }) else {
             return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
         }
 
