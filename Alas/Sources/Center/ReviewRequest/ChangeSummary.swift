@@ -327,8 +327,11 @@ enum ChangeSummaryPolicy {
     /// Whether a description supports a stated reason cannot be checked, so
     /// the narrative never gives one.
     private static var motivation: Regex<Substring> {
-        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always)|so\s+(?:\w+\s+){0,3}(?:don't|doesn't|won't|can't))\b/
+        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always)|so\s+(?:\w+\s+){0,3}(?:don't|doesn't|won't|can't)|for (?:faster|better|quicker|easier|safer|simpler|smoother|improved|more|less|fewer)|enabling|making (?:it|things|them) (?:easier|faster|possible|simpler|safer))\b/
     }
+    /// Links, images, and HTML would become live when pasted into a
+    /// description, and the card shows the narrative as plain text.
+    private static var markup: Regex<Substring> { /!\[|\]\(|\]\[|<[A-Za-z\/!]/ }
     private static var commitHash: Regex<Substring> { /\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
         /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)\s+(?:(?:new|changed|source|modified)\s+)?(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
@@ -355,7 +358,8 @@ enum ChangeSummaryPolicy {
               summary.firstMatch(of: testMention) == nil,
               summary.firstMatch(of: commitHash) == nil,
               summary.firstMatch(of: restatedCount) == nil,
-              summary.firstMatch(of: motivation) == nil
+              summary.firstMatch(of: motivation) == nil,
+              summary.firstMatch(of: markup) == nil
         else { return nil }
 
         if summary.firstMatch(of: checkMention) != nil, summary.firstMatch(of: outcomeWord) != nil { return nil }
@@ -372,7 +376,9 @@ enum ChangeSummaryPolicy {
     // MARK: Copy
 
     /// Markdown the user may paste into a pull request or report: the
-    /// reviewed narrative followed by the deterministic facts.
+    /// reviewed narrative followed by the deterministic facts. Refs, script
+    /// names, and commit subjects come from the repository and are not shown
+    /// on the card, so they are copied as code spans that render literally.
     static func markdown(for draft: ChangeSummaryDraft, dateFormatter: (Date) -> String = defaultDate) -> String {
         let facts = draft.facts
         var lines = ["## Summary", "", draft.narrative]
@@ -382,7 +388,7 @@ enum ChangeSummaryPolicy {
             "",
             "## Change facts",
             "",
-            "- Range: `\(facts.base)...\(facts.branch)` at `\(facts.headSHA.prefix(7))`"
+            "- Range: \(codeSpan("\(facts.base)...\(facts.branch)")) at `\(facts.headSHA.prefix(7))`"
                 + (facts.mergeBaseSHA.map { " (merge base `\($0.prefix(7))`)" } ?? ""),
             "- Commits: \(facts.commits.count)",
             "- Files changed: \(facts.files.count) (+\(facts.additions) −\(facts.deletions))",
@@ -391,7 +397,7 @@ enum ChangeSummaryPolicy {
             lines.append("- Run results: none recorded in this worktree")
         } else {
             let results = facts.runResults.map {
-                "`\($0.scriptName)` \($0.outcomeLabel) at \(dateFormatter($0.finishedAt))"
+                "\(codeSpan($0.scriptName)) \($0.outcomeLabel) at \(dateFormatter($0.finishedAt))"
             }
             lines.append("- Latest run results in this worktree (not tied to a commit): \(results.joined(separator: "; "))")
         }
@@ -399,11 +405,27 @@ enum ChangeSummaryPolicy {
 
         if !facts.commits.isEmpty {
             lines += ["", "### Commits", ""]
-            lines += facts.commits.prefix(copiedCommitLimit).map { "- `\($0.shortSHA)` \($0.subject)" }
+            lines += facts.commits.prefix(copiedCommitLimit).map { "- `\($0.shortSHA)` \(codeSpan($0.subject))" }
             let omitted = facts.commits.count - copiedCommitLimit
             if omitted > 0 { lines.append("- …and \(omitted) more \(omitted == 1 ? "commit" : "commits") not listed") }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// A CommonMark code span whose fence is longer than any backtick run in
+    /// `text`, so links, images, HTML, and mentions inside stay literal.
+    static func codeSpan(_ text: String) -> String {
+        let flattened = text.replacingOccurrences(of: "\n", with: " ")
+        guard !flattened.isEmpty else { return "` `" }
+        var longest = 0
+        var run = 0
+        for character in flattened {
+            run = character == "`" ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        let fence = String(repeating: "`", count: longest + 1)
+        let padding = flattened.hasPrefix("`") || flattened.hasSuffix("`") ? " " : ""
+        return fence + padding + flattened + padding + fence
     }
 
     static func defaultDate(_ date: Date) -> String {

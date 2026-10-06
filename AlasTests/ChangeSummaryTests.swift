@@ -81,6 +81,9 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds a picker and the checks have passed."}"#,
         #"{"summary": "Adds a picker to avoid losing the user's place."}"#,
         #"{"summary": "Adds a branch picker so users can switch repositories."}"#,
+        #"{"summary": "Adds caching for faster responses."}"#,
+        #"{"summary": "Adds a picker, see [docs](https://example.invalid)."}"#,
+        #"{"summary": "Adds a picker <img src=x>."}"#,
         #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
         "Adds a picker.",
     ])
@@ -185,9 +188,19 @@ struct ChangeSummaryTests {
 
         ### Commits
 
-        \((0 ..< 20).map { "- `sha\($0)` Commit \($0)" }.joined(separator: "\n"))
+        \((0 ..< 20).map { "- `sha\($0)` `Commit \($0)`" }.joined(separator: "\n"))
         - …and 2 more commits not listed
         """)
+    }
+
+    @Test(arguments: [
+        ("![status](https://example.invalid/pixel) @team", "`![status](https://example.invalid/pixel) @team`"),
+        ("use `git log` here", "``use `git log` here``"),
+        ("`start", "`` `start ``"),
+        ("", "` `"),
+    ])
+    func copiedRepositoryTextRendersLiterally(text: String, span: String) {
+        #expect(ChangeSummaryPolicy.codeSpan(text) == span)
     }
 
     // MARK: Fixtures
