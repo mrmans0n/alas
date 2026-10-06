@@ -876,11 +876,19 @@ enum SymbolSource {
             return String(data: data, encoding: .utf8)
         }
         return await Task.detached(priority: .userInitiated) {
-            guard let url = containedLocalURL(root: root, relativePath: relativePath),
-                  let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxBytes
-            else { return nil }
-            return try? String(contentsOf: url, encoding: .utf8)
+            guard let url = containedLocalURL(root: root, relativePath: relativePath) else { return nil }
+            return readBounded(url)
         }.value
+    }
+
+    /// Reads at most `maxBytes + 1` bytes, so a file that grew past the cap
+    /// after any earlier size check is rejected instead of read whole.
+    static func readBounded(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: maxBytes + 1)).flatMap { $0 } ?? Data()
+        guard data.count <= maxBytes else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     /// The file's physical URL when it resolves, symlinks included, to a
@@ -978,7 +986,7 @@ actor WorktreeSymbolIndex {
                     if stamp.size > Self.maxFileBytes {
                         symbols = []
                     } else {
-                        let source = try? String(contentsOf: url, encoding: .utf8)
+                        let source = SymbolSource.readBounded(url)
                         symbols = source.map { SymbolExtractor.symbols(in: $0, relativePath: path) } ?? []
                         parsed += 1
                     }
@@ -1976,7 +1984,9 @@ struct ACPSymbolMentionSource {
         let root = worktree.path
         return ACPSymbolMentionSource(
             index: root.isRemoteAlasPath ? nil : { [state] in
+                // Fresh listing on every open, like the file provider does;
                 // nil on a failed enumeration: the index replays its cache.
+                await state.fileIndex.invalidate(forWorktreePath: root)
                 let files = (try? await state.fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
                 return await state.symbolIndex.updates(root: root, files: files)
             },
