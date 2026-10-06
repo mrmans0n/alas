@@ -123,7 +123,8 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds a branch picker to let users switch repositories."}"#,
         #"{"summary": "Reworks the picker, letting it load more reliably."}"#,
         #"{"summary": "Adds a picker, see [docs](https://example.invalid)."}"#,
-        #"{"summary": "Adds a picker <img src=x>."}"#,
+        #"{"summary": "Adds a picker for @org/team."}"#,
+        #"{"summary": "Adds a picker documented at https://example.invalid."}"#,
         #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
         "Adds a picker.",
     ])
@@ -214,7 +215,7 @@ struct ChangeSummaryTests {
         #expect(markdown == """
         ## Summary
 
-        Adds a picker.
+        Adds a picker\\.
 
         _Drafted from 10 of 22 commits; the rest were omitted._
 
@@ -241,6 +242,11 @@ struct ChangeSummaryTests {
     ])
     func copiedRepositoryTextRendersLiterally(text: String, span: String) {
         #expect(ChangeSummaryPolicy.codeSpan(text) == span)
+    }
+
+    @Test
+    func copiedNarrativeEscapesMarkdown() {
+        #expect(ChangeSummaryPolicy.escapedMarkdown("1. ***Adds*** `x` [a](b) <i>") == #"1\. \*\*\*Adds\*\*\* \`x\` \[a\]\(b\) \<i\>"#)
     }
 
     // MARK: Fixtures

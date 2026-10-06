@@ -353,9 +353,9 @@ enum ChangeSummaryPolicy {
     private static var benefit: Regex<Substring> {
         /(?i)\b(?:faster|quicker|easier|safer|simpler|smoother|cleaner|better|improv\w*|efficien\w*|reliab\w*|robust\w*|more (?:secure|stable|readable|maintainable|responsive)|less (?:error-prone|brittle|confusing))\b/
     }
-    /// Links, images, and HTML would become live when pasted into a
-    /// description, and the card shows the narrative as plain text.
-    private static var markup: Regex<Substring> { /!\[|\]\(|\]\[|<[A-Za-z\/!]/ }
+    /// Mentions and URLs become live on code hosts even when escaped, and the
+    /// card shows the narrative as plain text. Other Markdown is escaped on copy.
+    private static var markup: Regex<Substring> { /(?i)(?:^|[^\w])@[\w-]|\b(?:https?|ftp|mailto):|\bwww\./ }
     private static var commitHash: Regex<Substring> { /\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
         /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)[\s-]+(?:[\w-]+\s+){0,2}(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
@@ -406,7 +406,7 @@ enum ChangeSummaryPolicy {
     /// on the card, so they are copied as code spans that render literally.
     static func markdown(for draft: ChangeSummaryDraft, dateFormatter: (Date) -> String = defaultDate) -> String {
         let facts = draft.facts
-        var lines = ["## Summary", "", draft.narrative]
+        var lines = ["## Summary", "", escapedMarkdown(draft.narrative)]
         if let disclosure = draft.coverage.disclosure { lines += ["", "_\(disclosure)_"] }
 
         lines += [
@@ -435,6 +435,17 @@ enum ChangeSummaryPolicy {
             if omitted > 0 { lines.append("- …and \(omitted) more \(omitted == 1 ? "commit" : "commits") not listed") }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Backslash-escapes every ASCII punctuation character, which CommonMark
+    /// permits for all of them, so the reviewed plain text renders as itself.
+    static func escapedMarkdown(_ text: String) -> String {
+        var escaped = ""
+        for character in text {
+            if character.isASCII, character.isPunctuation || character.isSymbol { escaped.append("\\") }
+            escaped.append(character)
+        }
+        return escaped
     }
 
     /// A CommonMark code span whose fence is longer than any backtick run in
