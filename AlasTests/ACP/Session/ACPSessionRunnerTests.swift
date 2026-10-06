@@ -4695,8 +4695,8 @@ struct ACPSessionRunnerTests {
         #expect(observedStoredMessage)
     }
 
-    @Test("onModelsObserved fires when a live availableModelsUpdate names new models")
-    func onModelsObservedFiresOnLiveAvailableModelsUpdate() async throws {
+    @Test("onChipsObserved fires when a live availableModelsUpdate names new models")
+    func onChipsObservedFiresOnLiveAvailableModelsUpdate() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-models-live-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -4704,7 +4704,7 @@ struct ACPSessionRunnerTests {
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
-        var observed: (agentId: String, models: [ChipSpec.Item])?
+        var observed: (agentId: String, chips: ACPChipState)?
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let runner = ACPSessionRunner(
@@ -4713,8 +4713,8 @@ struct ACPSessionRunnerTests {
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
-            onModelsObserved: { agentId, models in
-                observed = (agentId, models)
+            onChipsObserved: { agentId, chips in
+                observed = (agentId, chips)
             }
         )
         runner.start()
@@ -4725,7 +4725,7 @@ struct ACPSessionRunnerTests {
         ])))
         try await waitUntil { observed != nil }
         #expect(observed?.agentId == "claude")
-        #expect(observed?.models.map(\.id) == ["opus", "sonnet"])
+        #expect(observed?.chips.models?.options.map(\.id) == ["opus", "sonnet"])
         #expect(runner.session === session)
     }
 

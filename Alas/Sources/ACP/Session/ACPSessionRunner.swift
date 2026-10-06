@@ -166,13 +166,13 @@ final class ACPSessionRunner {
     private var providerTitleRevision = 0
     private var localTitleAttempted = false
     private var localTitleTask: Task<Void, Never>?
-    /// Fires whenever a live update changes what the agent has advertised as
-    /// its models — an `availableModelsUpdate`, or a `sessionConfigOptionsUpdate`
-    /// that could carry a model-shaped config option. The initial
-    /// `session/new`/`session/load` result is reported separately by
+    /// Fires whenever a live update may change what the agent has advertised
+    /// as its models or thinking levels — an `availableModelsUpdate`, or a
+    /// `sessionConfigOptionsUpdate` — with the normalized chip state. The
+    /// initial `session/new`/`session/load` result is reported separately by
     /// whoever calls `attach`; this covers changes reported later on the
     /// same connection.
-    private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
+    private let onChipsObserved: ((_ agentId: String, _ chips: ACPChipState) -> Void)?
     private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     /// Text plugins add to each prompt (API 7 context providers): wire-only, never in the transcript.
@@ -360,7 +360,7 @@ final class ACPSessionRunner {
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0, fallback: nil) },
-         onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
+         onChipsObserved: ((_ agentId: String, _ chips: ACPChipState) -> Void)? = nil,
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
@@ -401,7 +401,7 @@ final class ACPSessionRunner {
         self.localTitlesEnabled = localTitlesEnabled
         self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.localTitleGenerator = localTitleGenerator
-        self.onModelsObserved = onModelsObserved
+        self.onChipsObserved = onChipsObserved
         self.onPersistedConfigOptionValues = onPersistedConfigOptionValues
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
@@ -1419,7 +1419,7 @@ final class ACPSessionRunner {
         }
         switch params.update {
         case .availableModelsUpdate, .sessionConfigOptionsUpdate:
-            onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
+            onChipsObserved?(session.agentId, session.chipState)
         case .sessionInfoUpdate(let info):
             observeSteeringThreadStatus(info)
         default:

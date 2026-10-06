@@ -4232,6 +4232,424 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
     }
 
+    @Test("fresh attach applies a queued initial config option after the pending model", arguments: [
+        ("high", true),    // advertised: sent after set_model
+        ("ultra", false),  // no longer advertised: skipped, creation still succeeds
+    ])
+    func freshAttachAppliesQueuedInitialConfigOption(value: String, applied: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Thinking",
+                        currentValue: "medium",
+                        options: [
+                            .init(id: "medium", name: "Medium"),
+                            .init(id: "high", name: "High"),
+                        ]
+                    ),
+                ]
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        // The stale value waits out the model-switch refresh window; keep it short.
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .milliseconds(100))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "sonnet"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string(value))
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let expectedMethods = ["initialize", "session/new", "session/set_model"]
+            + (applied ? ["session/set_config_option"] : [])
+        try await waitUntil { client.sent.map(\.method) == expectedMethods }
+        if applied {
+            let params = try #require(client.sent.last?.params as? ACPSessionSetConfigOptionParams)
+            #expect(params.configId == "effort")
+            #expect(params.value == .string("high"))
+        }
+        #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions)["effort"]
+            == .string(applied ? "high" : "medium"))
+        #expect(session.currentModel == "sonnet")
+    }
+
+    @Test("fresh attach waits for the new model's thinking levels before applying a queued effort")
+    func freshAttachWaitsForModelDependentConfigOptionsBeforeApplyingQueuedEffort() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("max"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        // The agent acknowledges the switch before it publishes Opus's levels.
+        try await waitUntil { session.currentModel == "opus" }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(
+                    id: "effort", name: "Thinking", currentValue: "medium",
+                    options: [medium, high, ACPConfigOptionItem(id: "max", name: "Max")]
+                ),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("max"))
+    }
+
+    @Test("fresh attach keeps a queued effort the new model's late options would reset")
+    func freshAttachReappliesQueuedEffortAfterTheModelSwitchResetsIt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        // Already the pre-switch value, so a plain restore would skip it.
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("medium"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { session.currentModel == "opus" }
+        // Opus publishes its own default, which would overwrite the choice.
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "high", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("medium"))
+    }
+
+    @Test("fresh attach does not wait for options after a model switch that failed", .timeLimit(.minutes(1)))
+    func freshAttachSkipsTheRefreshWaitWhenTheModelSwitchFails() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [.init(id: "sonnet", name: "Sonnet")],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        // A remembered model the agent no longer knows: the switch is refused.
+        client.script(method: "session/set_model") { _ in
+            throw ACPClientError.noScript(method: "session/set_model")
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        // No options update ever arrives, so a wait would run for 30 seconds.
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "gone"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let started = ContinuousClock.now
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(ContinuousClock.now - started < .seconds(10))
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.value == .string("high"))
+    }
+
+    @Test("fresh attach does not wait when the options refreshed before set_model completed", .timeLimit(.minutes(1)))
+    func freshAttachSkipsTheRefreshWaitWhenOptionsAlreadyRefreshed() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+                ]
+            ))
+        }
+        // The adapter publishes the new model's options, then acknowledges.
+        client.script(method: "session/set_model") { _ in
+            client.emit(.init(
+                sessionId: "remote-new",
+                update: .sessionConfigOptionsUpdate([
+                    ACPConfigOption(id: "effort", name: "Thinking", currentValue: "high", options: [medium, high]),
+                ])
+            ))
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("medium"))
+        let started = ContinuousClock.now
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(ContinuousClock.now - started < .seconds(10))
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.value == .string("medium"))
+    }
+
+    @Test("fresh attach waits for an effort option the adapter advertises after session/new", .timeLimit(.minutes(1)))
+    func freshAttachWaitsForALateAdvertisedEffortOption() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { client.sent.contains { $0.method == "session/new" } }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("high"))
+    }
+
+    @Test("fresh attach keeps waiting through an unrelated options update for the queued effort", .timeLimit(.minutes(1)))
+    func freshAttachKeepsWaitingPastAnIntermediateOptionsUpdate() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { client.sent.contains { $0.method == "session/new" } }
+        // An unrelated option arrives first; the effort level only after it.
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")]),
+            ])
+        ))
+        try await waitUntil { session.availableConfigOptions.contains { $0.id == "provider" } }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")]),
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("high"))
+    }
+
+    @Test("fresh attach still waits for an unadvertised effort after an unrelated early refresh", .timeLimit(.minutes(1)))
+    func freshAttachWaitsForEffortAfterAnUnrelatedEarlyRefresh() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let provider = ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        // An unrelated option shows up before the switch is acknowledged.
+        client.script(method: "session/set_model") { _ in
+            client.emit(.init(sessionId: "remote-new", update: .sessionConfigOptionsUpdate([provider])))
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { session.currentModel == "opus" }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                provider,
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("high"))
+    }
+
+    @Test("losing the writer lease discards the queued initial config options")
+    func losingTheWriterLeaseDiscardsQueuedInitialConfigOptions() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        try store.seizeLease(
+            sessionId: "local",
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(manager.pendingConfigOptionValues[session.id] == nil)
+    }
+
     @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
     func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5808,6 +6226,7 @@ struct ACPSessionManagerAttachRestoreTests {
         mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+        delegatedReasoningRefreshTimeout: Duration = .seconds(5),
         continueInterruptedSessions: Bool = false
     ) -> ACPSessionManager {
         ACPSessionManager(
@@ -5819,6 +6238,7 @@ struct ACPSessionManagerAttachRestoreTests {
             onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            delegatedReasoningRefreshTimeout: delegatedReasoningRefreshTimeout,
             mcpProjectContextProvider: mcpProjectContextProvider
         )
     }

@@ -39,6 +39,10 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
 
     private let acquireLease: @Sendable () async throws -> LocalTextModelLease
     private let load: @Sendable (URL) async throws -> LoadedModel
+    /// Returns freed model memory to the OS. MLX parks freed buffers in its
+    /// cache (capped near device memory), so dropping the model alone keeps
+    /// its ~3 GB of weights and KV cache resident as GPU memory.
+    private let releaseCache: @Sendable () -> Void
     private let supported: @Sendable () -> Bool
     private let clock: Clock
     private var lease: LocalTextModelLease?
@@ -52,6 +56,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     init(store: LocalTextModelStore, observeMemoryPressure: Bool = true) {
         acquireLease = { try await store.acquireVerifiedLease() }
         load = Self.loadNative
+        releaseCache = { MLX.Memory.clearCache() }
         supported = Self.isSupported
         clock = Clock()
         if observeMemoryPressure {
@@ -65,9 +70,11 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
          load: @escaping @Sendable (URL) async throws -> InjectedEvaluation,
          tokenCount: @escaping @Sendable ([LocalTextMessage]) async throws -> Int = { _ in 0 },
+         releaseCache: @escaping @Sendable () -> Void = {},
          supported: @escaping @Sendable () -> Bool = { true },
          clock: Clock = Clock(), observeMemoryPressure: Bool = true) {
         self.acquireLease = acquireLease
+        self.releaseCache = releaseCache
         self.load = { directory in
             let injected = try await load(directory)
             return .init(tokenCount: tokenCount) { candidates, inputTokenLimit, parameters in
@@ -187,8 +194,14 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                 try Task.checkCancellation()
                 let directory = lease!.directory
                 let loader = Task.detached { [load] in try await load(directory) }
-                evaluation = try await withTaskCancellationHandler { try await loader.value } onCancel: {
-                    loader.cancel()
+                do {
+                    evaluation = try await withTaskCancellationHandler { try await loader.value } onCancel: {
+                        loader.cancel()
+                    }
+                } catch {
+                    // A load can allocate weights before it fails or is cancelled.
+                    releaseCache()
+                    throw error
                 }
             }
             if let reason = cancellationReasons[id] { throw reason }
@@ -310,7 +323,10 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     private func unload() {
         idleTask?.cancel()
         idleTask = nil
-        evaluation = nil
+        if evaluation != nil {
+            evaluation = nil
+            releaseCache()
+        }
         lease?.close()
         lease = nil
     }

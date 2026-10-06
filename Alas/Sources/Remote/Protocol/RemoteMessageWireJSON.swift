@@ -126,6 +126,13 @@ struct RemoteModelOption: Codable, Equatable, Sendable {
     let name: String
 }
 
+/// A thinking level an agent advertised on the sending Mac, remembered
+/// across sessions. A hint for pickers, not a contract.
+struct RemoteEffortOption: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+}
+
 struct RemoteAgentOption: Codable, Equatable, Sendable {
     let id: String
     let name: String
@@ -133,6 +140,9 @@ struct RemoteAgentOption: Codable, Equatable, Sendable {
     /// Nil when the sending Mac has never seen this agent's models, or is
     /// older than this field.
     var models: [RemoteModelOption]? = nil
+    /// Nil when the sending Mac has never seen this agent's thinking levels,
+    /// cannot set them before a session exists, or is older than this field.
+    var efforts: [RemoteEffortOption]? = nil
     /// Projects whose host cannot launch this agent, such as SSH projects
     /// for an agent installed only on the sending Mac. Nil when it runs
     /// everywhere, or the sending Mac is older than this field.

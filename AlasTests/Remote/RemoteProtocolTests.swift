@@ -802,17 +802,20 @@ struct RemoteProtocolTests {
         #expect(decoded == msg)
     }
 
-    @Test(arguments: [nil, "opus"] as [String?])
-    func createSessionCarriesAnOptionalModel(modelId: String?) throws {
-        let message = RemoteClientMessage.createSession(worktreeId: "wt1", agentId: "claude", modelId: modelId)
+    @Test(arguments: [(nil, nil), ("opus", nil), (nil, "high"), ("opus", "high")] as [(String?, String?)])
+    func createSessionCarriesAnOptionalModelAndEffort(modelId: String?, effortId: String?) throws {
+        let message = RemoteClientMessage.createSession(
+            worktreeId: "wt1", agentId: "claude", modelId: modelId, effortId: effortId)
         #expect(try roundTrip(message) == message)
         let json = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
         #expect(json.contains("modelId") == (modelId != nil))
+        #expect(json.contains("effortId") == (effortId != nil))
     }
 
     @Test func creationOptionsCarryOptionalMetadataAndDecodeWithoutIt() throws {
         let agent = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true,
                                       models: [RemoteModelOption(id: "opus", name: "Opus")],
+                                      efforts: [RemoteEffortOption(id: "high", name: "High")],
                                       unavailableProjectIds: ["ssh-project"])
         #expect(try roundTrip(agent) == agent)
         #expect(!agent.isAvailable(inProjectId: "ssh-project"))
@@ -820,9 +823,11 @@ struct RemoteProtocolTests {
         let legacyAgent = try JSONDecoder().decode(
             RemoteAgentOption.self, from: Data(#"{"id":"claude","name":"Claude","isDefault":true}"#.utf8))
         #expect(legacyAgent.models == nil)
+        #expect(legacyAgent.efforts == nil)
         #expect(legacyAgent.isAvailable(inProjectId: "ssh-project"))
         let legacyJSON = String(decoding: try JSONEncoder().encode(legacyAgent), as: UTF8.self)
-        #expect(!legacyJSON.contains("models") && !legacyJSON.contains("unavailableProjectIds"))
+        #expect(!legacyJSON.contains("models") && !legacyJSON.contains("efforts")
+            && !legacyJSON.contains("unavailableProjectIds"))
 
         let legacyWorktree = try JSONDecoder().decode(RemoteWorktreeOption.self, from: Data(#"""
         {"id":"wt1","projectName":"alas","worktreeName":"a","branch":"b","path":"/p","metricsAvailable":false,

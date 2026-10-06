@@ -6,15 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-10-06
+
 ### ✨ Features
 
 - Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
 - Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
+- Browse, search, and install agents from the official ACP Registry in Settings → Agents. Installed agents join the chat launch catalog alongside the curated built-ins (#1794).
+- Continue direct-send ACP turns interrupted by an app restart when session recovery is enabled (#1795).
+- Pick model thinking effort when starting sessions on a peer, with a clearer worktree, agent, and model picker (#1797).
+
+### ⚡ Performance
+
+- Page large broker replays and parse incoming frames incrementally so large backlogs do not block the shared ACP transport (#1800).
 
 ### 🐛 Fixes
 
-- Resolve uv-based ACP Registry agents at install time so a bad package fails there and the first chat skips the download, and hide agents installed only on this Mac from remote-control pickers for SSH repositories.
-- Batch simultaneous Codex background-task completions into one follow-up instead of producing a delayed stream of repetitive replies.
+- Resolve uv-based ACP Registry agents at install time so a bad package fails there and the first chat skips the download. Hide agents installed only on this Mac from remote-control pickers for SSH repositories (#1796).
+- Render image references in sent user messages as compact `🖼` markers (#1798).
+- Preserve OMP task plans when reminder updates omit completed items, and stop task animations when sessions are idle or waiting (#1799).
+- Keep inlay hints from disappearing after edits and avoid CoreText crashes while measuring inlay labels (#1803).
+- Keep each background task's stop button visible and clickable (#1804).
+- Show the sidebar filter-row background only while filtering (#1806).
+- Batch simultaneous Codex background-task completions into one follow-up instead of producing a delayed stream of repetitive replies (#1801).
 
 ## [0.20.3] - 2026-10-05
 

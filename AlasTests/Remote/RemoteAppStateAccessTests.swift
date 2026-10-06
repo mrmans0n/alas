@@ -798,7 +798,7 @@ struct RemoteAppStateAccessTests {
         #expect(agents.map(\.isDefault) == [true, false])
     }
 
-    @Test func remoteAgentsAdvertiseRememberedModels() async throws {
+    @Test func remoteAgentsAdvertiseRememberedModelsAndEfforts() async throws {
         let state = makeRemoteRenameState()
         state.agentRegistry = AgentRegistry(
             builtinState: [
@@ -808,14 +808,21 @@ struct RemoteAppStateAccessTests {
             installedIds: ["codex", "gemini"]
         )
         state.acpModelCatalog.record(agentID: "codex", models: [.init(id: "gpt-5", name: "GPT-5")])
+        state.acpModelCatalog.recordEffort(agentID: "codex", thinking: ChipSpec(
+            source: .configOption(id: "reasoning_effort"),
+            options: [.init(id: "high", name: "High", description: nil)],
+            currentId: nil))
 
         let agents = state.remoteAgents()
 
         #expect(agents.first { $0.id == "codex" }?.models == [RemoteModelOption(id: "gpt-5", name: "GPT-5")])
         #expect(agents.first { $0.id == "gemini" }?.models == nil)
+        #expect(agents.first { $0.id == "codex" }?.efforts == [RemoteEffortOption(id: "high", name: "High")])
+        #expect(agents.first { $0.id == "gemini" }?.efforts == nil)
     }
 
-    @Test func createRemoteSessionQueuesTheRequestedModelForTheFirstTurn() async throws {
+    @Test(arguments: [true, false])
+    func createRemoteSessionQueuesTheRequestedModelAndEffortForTheFirstTurn(effortRemembered: Bool) async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
@@ -828,11 +835,18 @@ struct RemoteAppStateAccessTests {
             customs: [],
             installedIds: ["claude"]
         )
+        if effortRemembered {
+            state.acpModelCatalog.recordEffort(agentID: "claude", thinking: ChipSpec(
+                source: .configOption(id: "effort"),
+                options: [.init(id: "high", name: "High", description: nil)],
+                currentId: nil))
+        }
         state.remoteSessionAttachScheduler = { _, _ in }
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
 
-        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude", modelId: "opus")
+        let result = await state.createRemoteSession(
+            worktreeId: worktreeId, agentId: "claude", modelId: "opus", effortId: "high")
 
         guard case .success(let summary) = result else {
             Issue.record("expected success, got \(result)")
@@ -840,6 +854,8 @@ struct RemoteAppStateAccessTests {
         }
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         #expect(manager.pendingModel[summary.id] == "opus")
+        #expect(manager.pendingConfigOptionValues[summary.id]?["effort"]
+            == (effortRemembered ? .string("high") : nil))
     }
 
     @Test func createRemoteSessionSelectsWorktreeAppendsTabAndReturnsSummary() async throws {

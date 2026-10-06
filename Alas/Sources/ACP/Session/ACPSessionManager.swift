@@ -177,11 +177,12 @@ final class ACPSessionManager: ObservableObject {
     /// `alas mcp --http` process. Not called on `closeSession` (a transient
     /// in-memory unload where a later reattach is expected).
     private let onSessionEnded: (@MainActor (ACPSession.ID) -> Void)?
-    /// Invoked once a session has loaded and the agent has named its models,
-    /// with the normalized model chip items. Feeds `ACPAgentModelCatalog` so
-    /// a session configured before it exists can pick one.
+    /// Invoked once a session has loaded, and again when the agent updates
+    /// its models or config options, with the normalized chip state. Feeds
+    /// `ACPAgentModelCatalog` so a session configured before it exists can
+    /// pick a model or thinking level.
     /// `host` is the SSH host the session runs on, nil for this Mac.
-    private let onModelsObserved: (@MainActor (_ agentId: String, _ host: String?, _ models: [ChipSpec.Item]) -> Void)?
+    private let onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -637,7 +638,7 @@ final class ACPSessionManager: ObservableObject {
     /// by session id. Applied in `attach`, before any queued prompt goes out.
     var pendingModel: [ACPSession.ID: String] = [:]
     var pendingMode: [ACPSession.ID: String] = [:]
-    private var pendingConfigOptionValues: [ACPSession.ID: [String: ACPConfigValue]] = [:]
+    private(set) var pendingConfigOptionValues: [ACPSession.ID: [String: ACPConfigValue]] = [:]
     private struct DeferredConfigOptionUpdate {
         let configId: String
         let value: ACPConfigValue
@@ -942,6 +943,15 @@ final class ACPSessionManager: ObservableObject {
                 updatesModel: updatesModel
             )
         }
+    }
+
+    /// Queues a config option value for a session that has not attached yet,
+    /// before the agent has advertised its options, so `setConfigOption`
+    /// cannot validate it. Attach applies it after any `pendingModel`, and
+    /// skips it if the agent does not advertise the option or value then.
+    func queueInitialConfigOption(for id: ACPSession.ID, configId: String, value: ACPConfigValue) {
+        guard sessions[id] != nil, runners[id] == nil, !isMirror(sessionId: id) else { return }
+        pendingConfigOptionValues[id, default: [:]][configId] = value
     }
 
     private func sendConfigOptionUpdate(
@@ -1650,7 +1660,7 @@ final class ACPSessionManager: ObservableObject {
          builtInMCPHello: (@MainActor (String) -> MCPRegistrationRegistry.Record?)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
-         onModelsObserved: (@MainActor (_ agentId: String, _ host: String?, _ models: [ChipSpec.Item]) -> Void)? = nil,
+         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil,
          issuePreambleProvider: IssuePreambleProvider? = nil)
@@ -1692,7 +1702,7 @@ final class ACPSessionManager: ObservableObject {
         self.builtInMCPHello = builtInMCPHello
         self.clearMCPRegistration = clearMCPRegistration
         self.onSessionEnded = onSessionEnded
-        self.onModelsObserved = onModelsObserved
+        self.onChipsObserved = onChipsObserved
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.issuePreambleProvider = issuePreambleProvider
@@ -5715,12 +5725,14 @@ extension ACPSessionManager {
         }
         return attempt
     }
+
     private func restoreConfigOptionValues(
         _ persistedValues: [String: ACPConfigValue],
         pendingUserValues: [String: ACPConfigValue],
         userEditRevisionsAtAttachStart: [String: UInt64],
         userEditRevisionsAtRestoreStart: [String: UInt64],
         excluding excludedId: String?,
+        resendPendingValues: Bool = false,
         in session: ACPSession,
         using runner: ACPSessionRunner,
         attempt: AttachmentAttempt
@@ -5744,7 +5756,7 @@ extension ACPSessionManager {
             guard currentOption == loadedOption
                     || pendingValue != nil
                     || refreshedByRestoreResponse[loadedOption.id] == currentOption,
-                  currentOption.currentValue != selectedValue,
+                  currentOption.currentValue != selectedValue || (resendPendingValues && pendingValue != nil),
                   currentOption.acceptsPersistedValue(selectedValue)
             else { continue }
             let updatesModel = currentOption.category == "model" || currentOption.category == "Model"
@@ -5881,6 +5893,9 @@ extension ACPSessionManager {
         guard acquiredLease else {
             let discardedModelSelection = pendingModel.removeValue(forKey: sessionId) != nil
             let discardedModeSelection = pendingMode.removeValue(forKey: sessionId) != nil
+            // Queued config values belong to the same discarded creation request;
+            // a later takeover must not apply them to a running session.
+            pendingConfigOptionValues.removeValue(forKey: sessionId)
             if discardedModelSelection {
                 session.currentModel = persistedRows[sessionId]?.currentModel
             }
@@ -6687,11 +6702,11 @@ extension ACPSessionManager {
                                           localTitleGenerator: { [qwenTitleFallback] in
                                               await ACPLocalTitleGenerator.generate(from: $0, fallback: qwenTitleFallback)
                                           },
-                                          onModelsObserved: { [weak self] agentId, models in
+                                          onChipsObserved: { [weak self] agentId, chips in
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
-                                              self.onModelsObserved?(agentId, self.effectiveRemoteHost(), models)
+                                              self.onChipsObserved?(agentId, self.effectiveRemoteHost(), chips)
                                           },
                                           onPersistedConfigOptionValues: { [weak self] values in
                                               guard let self,
@@ -7361,9 +7376,9 @@ extension ACPSessionManager {
             session.goalCapability = initialized.goalCapability
             session.availableProviders = providers
             session.contextRestoreWarning = restoreWarning
-            // An empty list tells the catalog this agent advertised no
+            // An empty model list tells the catalog this agent advertised no
             // models on a live connection; it never erases a remembered list.
-            onModelsObserved?(session.agentId, effectiveRemoteHost(), session.chipState.models?.options ?? [])
+            onChipsObserved?(session.agentId, effectiveRemoteHost(), session.chipState)
             guard await persistSessionRemoteId(session, attempt: attempt) else {
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     await connection.shutdown()
@@ -7415,6 +7430,7 @@ extension ACPSessionManager {
                     persist(session)
                 }
             }
+            let optionsRevisionBeforeModelRestore = session.availableConfigOptionsRevision
             if let m = modelToRestore {
                 let remoteId = session.remoteSessionId ?? sessionId
                 switch session.chipState.models?.source {
@@ -7509,6 +7525,45 @@ extension ACPSessionManager {
                 guard case .configOption(let id) = session.chipState.models?.source else { return nil }
                 return id
             }()
+            // A model switch can publish the new model's config options after
+            // the `session/set_model` reply, resetting levels such as thinking
+            // to the new model's default. Give that update a bounded wait
+            // before restoring pending values, then send them even when they
+            // match the pre-switch state, so the user's choice wins. Only a
+            // switch that took effect counts, and the values stay queued
+            // during the wait so a superseded attempt leaves them for the next.
+            let modelSwitched = modelToRestore != nil
+                && modelToRestore != result.currentModel
+                && session.currentModel == modelToRestore
+            // With a plain `session/set_model` nothing writes the options
+            // locally, so a changed revision means the refresh already landed.
+            var optionsAlreadyRefreshed = false
+            if case .model? = session.chipState.models?.source {
+                optionsAlreadyRefreshed = session.availableConfigOptionsRevision != optionsRevisionBeforeModelRestore
+            }
+            // An adapter may also advertise an option (thinking) only after
+            // `session/new`, with or without a model switch, and may publish
+            // several updates on the way. A pending value no current option
+            // accepts keeps waiting until some update accepts it or the
+            // deadline passes. A value the old options already accept has no
+            // protocol signal for "the relevant refresh", so after a model
+            // switch it gets one bounded wait for the next update.
+            let hasUnacceptedPendingValue: () -> Bool = { [unowned self] in
+                self.pendingConfigOptionValues[sessionId]?.contains { id, value in
+                    !(session.availableConfigOptions.first { $0.id == id }?.acceptsPersistedValue(value) ?? false)
+                } ?? false
+            }
+            let refreshDeadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
+            var waitOnceAfterSwitch = modelSwitched && !optionsAlreadyRefreshed
+            while pendingConfigOptionValues[sessionId]?.isEmpty == false,
+                  hasUnacceptedPendingValue() || waitOnceAfterSwitch {
+                let remaining = ContinuousClock.now.duration(to: refreshDeadline)
+                guard remaining > .zero else { break }
+                let changed = await configOptionsChange(of: session, within: remaining)
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+                waitOnceAfterSwitch = false
+                if !changed { break }
+            }
             let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
             let userConfigOptionEditRevisionsAtRestoreStart = session.userConfigOptionEditRevisionsSnapshot()
             await restoreConfigOptionValues(
@@ -7517,11 +7572,22 @@ extension ACPSessionManager {
                 userEditRevisionsAtAttachStart: userConfigOptionEditRevisionsAtAttachStart,
                 userEditRevisionsAtRestoreStart: userConfigOptionEditRevisionsAtRestoreStart,
                 excluding: configBackedModelId,
+                resendPendingValues: modelSwitched,
                 in: session,
                 using: runner,
                 attempt: attempt
             )
-            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                // Superseded mid-restore: the next attach re-sends what may not
+                // have landed (a repeat is harmless), unless the session is gone.
+                if sessions[sessionId] === session {
+                    for (configId, value) in pendingUserConfigOptionValues
+                    where pendingConfigOptionValues[sessionId]?[configId] == nil {
+                        pendingConfigOptionValues[sessionId, default: [:]][configId] = value
+                    }
+                }
+                return
+            }
             await flushDeferredConfigOptionUpdates(for: session, using: runner, attempt: attempt)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             session.isRestoringPersistedConfigOptions = false

@@ -184,8 +184,6 @@ struct ACPBackgroundTaskTray: View {
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 stopButton(task)
-                    .opacity(hovered ? 1 : 0)
-                    .allowsHitTesting(hovered)
             }
             .frame(height: 26)
             if let error = task.stopError {
@@ -242,19 +240,33 @@ struct ACPBackgroundTaskTray: View {
     @ViewBuilder
     private func stopButton(_ task: ACPBackgroundTask) -> some View {
         if canStop && task.canStop {
-            Button { stop(task.id) } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .frame(width: 18, height: 18)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.color("bg-4")))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Stop")
-            .accessibilityLabel("Stop background task \(task.name)")
+            StopTaskButton(taskName: task.name) { stop(task.id) }
         } else {
             Color.clear.frame(width: 18, height: 18)
         }
+    }
+}
+
+/// Always-visible stop control; the fill appears on hover like the toolbar buttons.
+private struct StopTaskButton: View {
+    let taskName: String
+    let action: () -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(theme.color(hovering ? "fg" : "fg-muted"))
+                .toolbarControlSurface(
+                    isLit: hovering,
+                    metrics: ToolbarControlMetrics(width: 18, height: 18, cornerRadius: 4))
+        }
+        .buttonStyle(.toolbarControl)
+        .onHover { hovering = $0 }
+        .help("Stop")
+        .accessibilityLabel("Stop background task \(taskName)")
     }
 }
