@@ -339,7 +339,7 @@ enum ChangeSummaryPolicy {
     private static var markup: Regex<Substring> { /!\[|\]\(|\]\[|<[A-Za-z\/!]/ }
     private static var commitHash: Regex<Substring> { /\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
-        /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)\s+(?:(?:new|changed|source|modified)\s+)?(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
+        /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)[\s-]+(?:[\w-]+\s+){0,2}(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
     }
 
     /// Returns the narrative, or nil unless the output is exactly

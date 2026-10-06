@@ -129,16 +129,28 @@ extension GitService {
 
     /// HEAD, the merge base with `baseRef`, and whether the tree is dirty, as
     /// they are now, for checking that loaded branch context still describes
-    /// the repository. A failed read is nil and matches nothing.
+    /// the repository. A failed read is nil and matches nothing. HEAD is read
+    /// on both sides of the other reads; if it moved meanwhile they may mix
+    /// two states, so the head is reported as unknown.
     func reviewRequestRangeIdentity(worktreePath: URL, baseRef: String) async -> ReviewRequestRangeIdentity {
-        async let head = Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        let before = await reviewRequestHead(worktreePath: worktreePath)
         async let status = Process.git(["status", "--porcelain"], cwd: worktreePath)
         async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
-        let headSHA = (try? await head).flatMap { $0.exitCode == 0 ? $0.stdout : nil }?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let dirty = (try? await status).flatMap { $0.exitCode == 0 ? $0.stdout : nil }
             .map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return ReviewRequestRangeIdentity(head: headSHA, mergeBase: await mergeBase, hasUncommittedChanges: dirty)
+        let resolvedMergeBase = await mergeBase
+        let after = await reviewRequestHead(worktreePath: worktreePath)
+        return ReviewRequestRangeIdentity(
+            head: before == after ? after : nil,
+            mergeBase: resolvedMergeBase,
+            hasUncommittedChanges: dirty
+        )
+    }
+
+    private func reviewRequestHead(worktreePath: URL) async -> String? {
+        guard let result = try? await Process.git(["rev-parse", "HEAD"], cwd: worktreePath),
+              result.exitCode == 0 else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func reviewRequestMergeBase(worktreePath: URL, baseRef: String) async -> String? {

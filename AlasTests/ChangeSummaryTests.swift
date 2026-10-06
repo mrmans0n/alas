@@ -71,6 +71,8 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds a picker introduced in a1b2c3d."}"#,
         #"{"summary": "Adds a picker across 12 files."}"#,
         #"{"summary": "Updates two files to add a picker."}"#,
+        #"{"summary": "Performs a 20-file refactor of the picker."}"#,
+        #"{"summary": "Touches three Swift source files."}"#,
         #"{"summary": "Adds a picker; the change was verified locally."}"#,
         #"{"summary": "Adds a picker and the build passes."}"#,
         #"{"summary": "The build completed successfully."}"#,
