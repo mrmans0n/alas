@@ -1303,6 +1303,7 @@ struct ACPSymbolReferenceTests {
         "alas-symbol://symbol?path=a/../../b.swift&name=a&kind=method&start=0&end=0",
         "alas-symbol://symbol?path=a.swift&name=a&kind=nonsense&start=0&end=0",
         "alas-symbol://symbol?path=a.swift&name=a&kind=method&start=5&end=2",
+        "alas-symbol://symbol?path=a.swift&name=a&kind=method&start=0&end=9223372036854775807",
         "alas-session://abc",
         "file:///tmp/a.swift",
     ])
@@ -1359,6 +1360,9 @@ import Foundation
 /// see the `alas-symbol` scheme.
 enum ACPSymbolReference {
     static let scheme = "alas-symbol"
+    /// Upper bound for parsed line numbers, so `+ 1` and range counting
+    /// can never overflow on a crafted link.
+    static let maxLineNumber = 10_000_000
 
     struct Target: Equatable, Hashable, Sendable {
         let path: String
@@ -1415,7 +1419,7 @@ enum ACPSymbolReference {
               let kind = values["kind"].flatMap(SymbolKind.init(rawValue:)),
               let start = values["start"].flatMap(Int.init),
               let end = values["end"].flatMap(Int.init),
-              start >= 0, end >= start else { return nil }
+              start >= 0, end >= start, end <= maxLineNumber else { return nil }
         return Target(path: path, name: name, kind: kind, container: values["container"],
                       lineRange: start...end, includeCode: values["code"] == "1")
     }
@@ -1559,6 +1563,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
             .resourceLink(uri: ACPSymbolReference.uri(for: withoutCode), name: "SessionManager.restore()"),
             .resourceLink(uri: ACPSymbolReference.uri(for: gone), name: "SessionManager.close()"),
             .resourceLink(uri: "file:///tmp/wt/a.swift", name: "a.swift"),
+            .resourceLink(uri: "alas-symbol://symbol?path=../escape.swift&name=x&kind=function&start=0&end=0", name: "x()"),
         ]
         let reference = "Referenced symbol: SessionManager.restore(), method in Sources/SessionManager.swift, lines 4–6."
 
@@ -1574,6 +1579,11 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         #expect(embedded[3] == .text(reference))
         #expect(embedded[4] == .text("Referenced symbol: SessionManager.close(), method in Sources/SessionManager.swift, lines 10–10 (last known location; not found when sent)."))
         #expect(embedded[5] == blocks[4])
+        #expect(embedded[6] == .text("Referenced symbol: x() (unreadable link; not sent)."))
+        #expect(!embedded.contains { block in
+            if case .resourceLink(let uri, _) = block { return uri.hasPrefix("alas-symbol:") }
+            return false
+        }, "agents never see the alas-symbol scheme")
 
         let fenced = ACPSymbolReference.replacingReferences(in: blocks, resolutions: resolutions, embeddedContext: false, worktreeRoot: root)
         guard case .text(let text) = fenced[1] else {
@@ -1712,7 +1722,12 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
         embeddedContext: Bool, worktreeRoot: URL
     ) -> [ACPContentBlock] {
         blocks.flatMap { block -> [ACPContentBlock] in
-            guard case .resourceLink(let uri, _) = block, let resolution = resolutions[uri] else { return [block] }
+            guard case .resourceLink(let uri, let name) = block else { return [block] }
+            guard let resolution = resolutions[uri] else {
+                // A symbol link that failed validation never reaches the agent.
+                guard uri.hasPrefix("\(scheme):") else { return [block] }
+                return [.text("Referenced symbol: \(name ?? "unknown") (unreadable link; not sent).")]
+            }
             let reference = referenceText(for: resolution)
             guard resolution.target.includeCode, resolution.found, let declaration = resolution.declaration else {
                 return [.text(reference)]
