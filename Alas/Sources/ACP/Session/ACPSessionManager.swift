@@ -7538,7 +7538,14 @@ extension ACPSessionManager {
             if case .model? = session.chipState.models?.source {
                 optionsAlreadyRefreshed = session.availableConfigOptionsRevision != optionsRevisionBeforeModelRestore
             }
-            if modelSwitched, !optionsAlreadyRefreshed, pendingConfigOptionValues[sessionId]?.isEmpty == false {
+            // An adapter may also advertise an option (thinking) only after
+            // `session/new`, with or without a model switch; a pending value
+            // no current option accepts waits for that update too.
+            let hasUnacceptedPendingValue = pendingConfigOptionValues[sessionId]?.contains { id, value in
+                !(session.availableConfigOptions.first { $0.id == id }?.acceptsPersistedValue(value) ?? false)
+            } ?? false
+            if (modelSwitched || hasUnacceptedPendingValue), !optionsAlreadyRefreshed,
+               pendingConfigOptionValues[sessionId]?.isEmpty == false {
                 _ = await configOptionsChange(of: session, within: delegatedReasoningRefreshTimeout)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             }
@@ -7555,7 +7562,17 @@ extension ACPSessionManager {
                 using: runner,
                 attempt: attempt
             )
-            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                // Superseded mid-restore: the next attach re-sends what may not
+                // have landed (a repeat is harmless), unless the session is gone.
+                if sessions[sessionId] === session {
+                    for (configId, value) in pendingUserConfigOptionValues
+                    where pendingConfigOptionValues[sessionId]?[configId] == nil {
+                        pendingConfigOptionValues[sessionId, default: [:]][configId] = value
+                    }
+                }
+                return
+            }
             await flushDeferredConfigOptionUpdates(for: session, using: runner, attempt: attempt)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             session.isRestoringPersistedConfigOptions = false

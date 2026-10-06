@@ -154,7 +154,6 @@ struct RemoteAgentOption: Codable, Equatable, Sendable {
         guard let projectId else { return true }
         return unavailableProjectIds?.contains(projectId) != true
     }
-
 }
 
 struct RemoteProjectOption: Codable, Equatable, Sendable {
