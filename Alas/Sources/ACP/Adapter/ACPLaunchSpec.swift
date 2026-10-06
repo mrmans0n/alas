@@ -102,22 +102,19 @@ struct ACPLaunchSpec: Equatable {
     /// A copy of this spec with launch arguments added after the
     /// adapter-specific argument tail (`omp acp --config …`).
     func appendingArguments(_ arguments: [String]) -> ACPLaunchSpec {
-        ACPLaunchSpec(
-            agentID: agentID, command: command, arguments: self.arguments + arguments,
-            extraEnv: extraEnv,
-            setupCheck: setupCheck,
-            supportsModelSelection: supportsModelSelection,
-            supportsModeSelection: supportsModeSelection,
-            mcpInjection: mcpInjection,
-            remoteNodeBinDirectory: remoteNodeBinDirectory)
+        replacingArguments(self.arguments + arguments)
     }
 
     /// A copy of this spec with launch arguments inserted before the
     /// adapter-specific argument tail. Used for frozen Workspace launch
     /// preferences that must affect adapter process startup.
     func prependingArguments(_ arguments: [String]) -> ACPLaunchSpec {
+        replacingArguments(arguments + self.arguments)
+    }
+
+    func replacingArguments(_ arguments: [String]) -> ACPLaunchSpec {
         ACPLaunchSpec(
-            agentID: agentID, command: command, arguments: arguments + self.arguments,
+            agentID: agentID, command: command, arguments: arguments,
             extraEnv: extraEnv,
             setupCheck: setupCheck,
             supportsModelSelection: supportsModelSelection,
