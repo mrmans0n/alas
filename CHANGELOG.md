@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Resolve uv-based ACP Registry agents at install time so a bad package fails there and the first chat skips the download, and hide agents installed only on this Mac from remote-control pickers for SSH repositories.
+- Batch simultaneous Codex background-task completions into one follow-up instead of producing a delayed stream of repetitive replies.
 
 ## [0.20.3] - 2026-10-05
 

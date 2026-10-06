@@ -178,7 +178,9 @@ extension ACPSession {
         let initial = ACPBackgroundTask(ownerSessionId: ownerSessionId, asyncTaskId: update.asyncTaskId,
                                         name: update.name ?? update.asyncTaskId)
         var task = backgroundTasks.first(where: { $0.id == initial.id }) ?? initial
-        let canEnrichWake = task.wakeId.flatMap { id in queue.first { $0.id == id } }.map {
+        let canEnrichWake = task.wakeId.flatMap { id in
+            queue.first { $0.containsBackgroundTaskWake(wakeId: id) }
+        }.map {
             $0.status == .pending && $0.lastError == nil && !$0.deliveryUncertain
         } ?? true
         task.merge(update, wakeOnCompletion: agentId == "codex", canEnrichWake: canEnrichWake)
