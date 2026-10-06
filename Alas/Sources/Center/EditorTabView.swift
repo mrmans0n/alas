@@ -669,6 +669,7 @@ struct EditorTabView: View {
 
         return EditorLSPStatusBadge(
             status: status,
+            serverStatus: appState.lsp.serverStatus(forFile: URL(fileURLWithPath: absolutePath), worktreeRoot: worktreePath),
             supportsOverride: !isExternal,
             availableLanguages: availableLanguagesProvider,
             openFilesUsingLanguage: openFilesUsingLanguage,

@@ -54,7 +54,7 @@ struct EditorLSPStatusResolver {
             case .ready:
                 return .ready(language: language, command: command ?? "")
             case .dead:
-                return .problem(language: language, kind: .dead, command: command)
+                return .problem(language: language, kind: .dead(nil), command: command)
             }
         case nil:
             // Language is mentioned somewhere (override) but the registry has

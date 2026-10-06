@@ -2,8 +2,14 @@ import Testing
 import Foundation
 @testable import Alas
 
-@MainActor
+private let indexingTasks = [
+    LSPClient.ProgressTask(token: "a", title: "Indexing", message: "40/100", percentage: 40),
+    LSPClient.ProgressTask(token: "b", title: "Building", message: nil, percentage: 10),
+]
+private let crash = LSPServerStatus.CrashDetail(termination: .signal(11), uptime: .seconds(3), outputTail: ["segfault"], initializeError: nil)
+
 @Suite("EditorLSPStatusResolver")
+@MainActor
 struct EditorLSPStatusResolverTests {
     struct FakeManager: EditorLSPStatusResolver.ManagerProbe {
         var status: WorkspaceLSPManager.DocumentStatus = .none
@@ -133,7 +139,7 @@ struct EditorLSPStatusResolverTests {
             registry: FakeRegistry(languageByExt: ["swift": "swift"])
         )
         let result = r.resolve(absolutePath: swiftFile.path, override: nil, worktreeRoot: root)
-        #expect(result == .problem(language: "swift", kind: .dead, command: "sourcekit-lsp"))
+        #expect(result == .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"))
     }
 
     /// Regression guard for the `case nil` arm of the resolver. The override
@@ -149,5 +155,51 @@ struct EditorLSPStatusResolverTests {
         )
         let result = r.resolve(absolutePath: swiftFile.path, override: "unknown", worktreeRoot: root)
         #expect(result == .problem(language: "unknown", kind: .disabled, command: nil))
+    }
+}
+
+@Suite("LSPBadgeState.make")
+struct LSPBadgeStateMakeTests {
+    @Test func startingPhaseOverridesTheTemporarilyDeadHolderOfARestart() {
+        let state = LSPBadgeState.make(
+            editor: .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"),
+            phase: .starting
+        )
+        #expect(state == .starting(language: "swift"))
+    }
+
+    @Test func deadHolderWithCrashedPhaseStaysAProblem() {
+        let state = LSPBadgeState.make(
+            editor: .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"),
+            phase: .crashed(crash)
+        )
+        #expect(state == .problem(language: "swift", reason: .crashed))
+    }
+
+    @Test func crashedPhaseCarriesItsDetailIntoTheDeadHolderStatus() {
+        let refined = EditorLSPStatus.problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp")
+            .refined(by: .crashed(crash))
+        #expect(refined == .problem(language: "swift", kind: .dead(crash), command: "sourcekit-lsp"))
+    }
+
+    @Test func indexingPhaseRefinesAReadyHolder() {
+        let state = LSPBadgeState.make(
+            editor: .ready(language: "swift", command: "sourcekit-lsp"),
+            phase: .indexing(indexingTasks)
+        )
+        #expect(state == .indexing(
+            language: "swift",
+            percentage: 10,
+            tooltip: LSPProgressSummary.tooltip(command: "sourcekit-lsp", tasks: indexingTasks)
+        ))
+    }
+
+    @Test(arguments: [
+        (SpawnedProcess.Termination.exit(2), "Exited with code 2."),
+        (SpawnedProcess.Termination.signal(11), "Terminated by signal 11 (SIGSEGV)."),
+        (SpawnedProcess.Termination.signal(40), "Terminated by signal 40."),
+    ])
+    func crashHeadlineSeparatesSignalsFromExitCodes(termination: SpawnedProcess.Termination, expected: String) {
+        #expect(LSPCrashSummary.headline(.init(termination: termination)) == expected)
     }
 }

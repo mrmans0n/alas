@@ -114,6 +114,29 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private var pendingOpenRefs: [Key: [String: Int]] = [:]
     private var pendingTemporaryOpenRefs: [Key: [String: Int]] = [:]
 
+    /// One status per live server key. Kept across restarts and dead-client
+    /// respawns; removed only with the holder in `removeHolder`.
+    private var statuses: [Key: LSPServerStatus] = [:]
+    @ObservationIgnored private var lifecycleTasks: [Key: Task<Void, Never>] = [:]
+
+    static let idleGrace: Duration = .seconds(120)
+    /// Bumped on every registry replacement so lease owners rebuild.
+    private(set) var registryGeneration = 0
+    /// Bumped when a runtime install or Gatekeeper fix invalidates the cached
+    /// availability of a language, so lease owners retry servers that were
+    /// unavailable. The registry itself did not change, so `registryGeneration`
+    /// stays put.
+    private(set) var availabilityGeneration = 0
+    @ObservationIgnored private var graceTasks: [Key: Task<Void, Never>] = [:]
+    /// Live `LSPServerLease`s per server key (lease id to the language it was
+    /// retained for), never holding an empty dictionary. Kept apart from
+    /// `holders` so a release that lands while the holder is being replaced
+    /// (restart, dead-client respawn) is never lost, and so leases stay
+    /// attached to whichever holder currently serves the key. The language
+    /// lets a restart respawn through an alias that is still enabled.
+    @ObservationIgnored private var leaseIDsByKey: [Key: [UUID: String]] = [:]
+    private let sleep: @Sendable (Duration) async throws -> Void
+
     /// Bumping counter that lets `@Observable` consumers (the status badge)
     /// re-run derivations when a holder transitions starting → ready → dead.
     /// Incremented under `@MainActor` so SwiftUI sees changes without a hop.
@@ -148,19 +171,22 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 language: language,
                 rootURI: rootURI
             )
-        }
+        },
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.registry = registry
         self.makeAvailability = makeAvailability
         self.cachedAvailability = makeAvailability()
         self.remoteLSPAvailable = remoteLSPAvailable
         self.makeClient = makeClient
+        self.sleep = sleep
     }
 
     func updateRegistry(_ registry: LanguageServerRegistry) {
         self.registry = registry
         cachedAvailability = makeAvailability()
         availabilityCache.removeAll()
+        registryGeneration &+= 1
     }
 
     /// Returns the cached availability status for `language`, falling back
@@ -203,6 +229,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     func invalidateAvailabilityCache(forLanguage language: String) {
         let languages = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: language))
         availabilityCache = availabilityCache.filter { !languages.contains($0.key) }
+        availabilityGeneration &+= 1
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
@@ -231,158 +258,31 @@ final class WorkspaceLSPManager: DocumentFormatter {
         ownership: DocumentOwnership
     ) async -> LSPClient? {
         guard let entry = registry.entry(forLanguage: languageId) else { return nil }
-        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreeRoot.path)
-        let lspRoot: URL
-        if let remoteHost {
-            lspRoot = await Self.resolveRemoteLSPRoot(
-                fileURL: fileURL,
-                worktreeRoot: worktreeRoot,
-                markers: entry.rootMarkers,
-                host: remoteHost
-            )
-        } else {
-            lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
-        }
-        let key = Key(host: remoteHost, root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        let target = await resolveKey(entry: entry, worktreeRoot: worktreeRoot, fileURL: fileURL)
+        let key = target.key
         let uri = fileURL.lspURI
-        var shouldReplaceTemporaryText = false
-        // If a previous holder's server died (process exited, transport
-        // closed) we'd otherwise reuse the dead client and silently fail to
-        // deliver hover/diagnostics/definition until the user closed every
-        // tab for that language. Drop the dead holder and fall through to
-        // spawn a fresh one. Identity-check the dictionary entry before
-        // removing, so we don't clobber a holder another task already
-        // swapped in while we were awaiting the state read.
-        if let existing = holders[key] {
-            let dead = await existing.client.state == .dead
-            if dead, let cur = holders[key], cur.client === existing.client {
-                holders.removeValue(forKey: key)
-                bumpStateTick()
-            }
-        }
         let client: LSPClient
         let ready: Task<Bool, Never>
         let isFirstOpener: Bool
-        if let existing = holders[key] {
-            var refs = existing.refsByURI
-            refs[uri, default: 0] += 1
-            var temporaryRefs = existing.temporaryRefsByURI
-            if ownership == .temporary {
-                temporaryRefs[uri, default: 0] += 1
-            } else if existing.openedURIs.contains(uri),
-                      normalRefCount(forURI: uri, in: existing) == 0,
-                      (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
-                shouldReplaceTemporaryText = true
-            }
-            // Record this open's text as the latest pending — if `didOpen`
-            // hasn't been sent yet, whichever awaiter wakes first will read
-            // this value rather than the stale `text` captured on a prior
-            // call. (Codex case: tab closed and reopened with different
-            // content while the server was still initializing.)
-            holders[key] = holderByUpdatingRefs(
-                existing,
-                uri: uri,
-                text: text,
-                refs: refs,
-                temporaryRefs: temporaryRefs,
-                ownership: ownership
-            )
-            client = existing.client
-            ready = existing.ready
-            isFirstOpener = false
-        } else {
-            addPendingOpenRef(key: key, uri: uri, ownership: ownership)
-            let availability = makeAvailability()
-            if let remoteHost {
-                guard await remoteLSPAvailable(entry.command, remoteHost, entry.env) else {
-                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
-                    return nil
-                }
-            } else {
-                switch await availability.statusRemediatingGatekeeper(for: entry) {
-                case .disabled, .notInstalled:
-                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
-                    return nil
-                case .blockedByGatekeeper(let realPath):
-                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
-                    NotificationCenter.default.post(
-                        name: .lspBlockedByGatekeeper,
-                        object: nil,
-                        userInfo: ["language": entry.language, "realPath": realPath]
-                    )
-                    return nil
-                case .available:
-                    break
-                }
-            }
-            guard consumePendingOpenRef(key: key, uri: uri, ownership: ownership) else { return nil }
-            if let existing = holders[key] {
-                var refs = existing.refsByURI
-                refs[uri, default: 0] += 1
-                var temporaryRefs = existing.temporaryRefsByURI
-                if ownership == .temporary {
-                    temporaryRefs[uri, default: 0] += 1
-                } else if existing.openedURIs.contains(uri),
-                          normalRefCount(forURI: uri, in: existing) == 0,
-                          (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
-                    shouldReplaceTemporaryText = true
-                }
-                holders[key] = holderByUpdatingRefs(
-                    existing,
-                    uri: uri,
-                    text: text,
-                    refs: refs,
-                    temporaryRefs: temporaryRefs,
-                    ownership: ownership
-                )
-                client = existing.client
-                ready = existing.ready
-                isFirstOpener = false
-            } else {
-                let spawn = Self.resolveSpawn(
-                    command: entry.command,
-                    args: entry.args,
-                    env: entry.env,
-                    language: entry.language,
-                    availability: availability,
-                    remoteHost: remoteHost,
-                    rootPath: lspRoot.path
-                )
-                let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI, remoteHost)
-                let task = Task<Bool, Never> {
-                    await newClient.setConfigurationHandler { [weak self] scope, section in
-                        await self?.configurationValue(scope: scope, section: section, key: key) ?? .null
-                    }
-                    do { try await newClient.initialize()
-                    return true } catch { return false }
-                }
-                holders[key] = Holder(
-                    client: newClient,
-                    ready: task,
-                    serverGeneration: UUID(),
-                    refsByURI: [uri: 1],
-                    temporaryRefsByURI: ownership == .temporary ? [uri: 1] : [:],
-                    temporaryTextsByURI: ownership == .temporary ? [uri: text] : [:],
-                    openedURIs: [],
-                    versions: [:],
-                    pendingOpenText: [uri: text],
-                    texts: [:],
-                    languagesByURI: [:],
-                    lifeState: .starting
-                )
-                bumpStateTick()
-                client = newClient
-                ready = task
-                isFirstOpener = true
-            }
+        let shouldReplaceTemporaryText: Bool
+        switch await claimHolder(
+            key: key,
+            entry: entry,
+            lspRoot: target.lspRoot,
+            remoteHost: target.remoteHost,
+            languageId: languageId,
+            claim: .document(uri: uri, text: text, ownership: ownership)
+        ) {
+        case .claimed(let claimedClient, let claimedReady, let first, let replace):
+            client = claimedClient
+            ready = claimedReady
+            isFirstOpener = first
+            shouldReplaceTemporaryText = replace
+        case .unavailable, .abandoned:
+            return nil
         }
 
         let initOk = await ready.value
-        if var h = holders[key], h.client === client {
-            h.lifeState = initOk ? .ready : .dead
-            holders[key] = h
-            bumpStateTick()
-        }
         if !initOk {
             // Init failed. The opener that spawned the client owns the
             // shutdown call to release the failed `Process`. Leave the
@@ -402,9 +302,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // the holder). If our spawned client is no longer the live
             // one, just walk away. If it is and the whole holder is
             // refless, shut it down once.
-            if let cur = holders[key], cur.client === client, cur.refsByURI.isEmpty {
-                await client.shutdown()
-                holders.removeValue(forKey: key)
+            if let cur = holders[key], cur.client === client, isUnreferenced(cur, key: key) {
+                await detachAndShutdown(key, client: client)
             }
             return nil
         }
@@ -457,6 +356,245 @@ final class WorkspaceLSPManager: DocumentFormatter {
             }
         }
         return client
+    }
+
+    private enum HolderClaim {
+        case document(uri: String, text: String, ownership: DocumentOwnership)
+        /// No document: only ensures a live holder exists. The lease itself is
+        /// recorded by id in `leaseIDsByKey`.
+        case lease
+    }
+
+    private enum ClaimResult {
+        case claimed(client: LSPClient, ready: Task<Bool, Never>, isFirstOpener: Bool, shouldReplaceTemporaryText: Bool)
+        case unavailable(LSPServerUnavailableReason)
+        /// A document claim whose pending ref a close consumed while availability was probed.
+        case abandoned
+    }
+
+    /// `offMainLocalProbe` moves the local marker walk (a stat per ancestor)
+    /// off the main actor. Leases pass it: panes retain servers from view
+    /// tasks. Documents keep the synchronous walk so their suspension order,
+    /// which the close/open race handling depends on, is unchanged.
+    private func resolveKey(
+        entry: LanguageServerConfig,
+        worktreeRoot: URL,
+        fileURL: URL,
+        offMainLocalProbe: Bool = false
+    ) async -> (key: Key, lspRoot: URL, remoteHost: String?) {
+        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreeRoot.path)
+        let lspRoot: URL
+        if let remoteHost {
+            lspRoot = await Self.resolveRemoteLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers, host: remoteHost)
+        } else if offMainLocalProbe {
+            let markers = entry.rootMarkers
+            lspRoot = await Task.detached { Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers) }.value
+        } else {
+            lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        }
+        let key = Key(host: remoteHost, root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
+        return (key, lspRoot, remoteHost)
+    }
+
+    /// Attaches `claim` to the live holder for `key`, spawning one when needed.
+    /// Documents and leases share this path so they always land on the same server.
+    private func claimHolder(
+        key: Key,
+        entry: LanguageServerConfig,
+        lspRoot: URL,
+        remoteHost: String?,
+        languageId: String,
+        claim: HolderClaim
+    ) async -> ClaimResult {
+        // A dead client would silently drop hover/diagnostics until every tab
+        // closed. Drop it (identity-checked across the await) and respawn. The
+        // status object is kept, and so are leases: they are tracked by id per
+        // key, not on the holder.
+        //
+        // A lease must not do that to a dead holder that still has open
+        // documents: the respawn would forget them, and no editor would reopen
+        // on the new server. The lease attaches to the dead holder, whose
+        // status keeps showing the crash, and the explicit restart reopens the
+        // documents.
+        if let existing = holders[key] {
+            let dead = await existing.client.state == .dead
+            if dead, let cur = holders[key], cur.client === existing.client, !Self.keepsDeadHolder(cur, for: claim) {
+                holders.removeValue(forKey: key)
+                bumpStateTick()
+            }
+        }
+        if let existing = holders[key] {
+            let replace = applyClaim(claim, key: key, to: existing)
+            return .claimed(client: existing.client, ready: existing.ready, isFirstOpener: false, shouldReplaceTemporaryText: replace)
+        }
+        if case .document(let uri, _, let ownership) = claim {
+            addPendingOpenRef(key: key, uri: uri, ownership: ownership)
+        }
+        let availability = makeAvailability()
+        let unavailable: LSPServerUnavailableReason?
+        if let remoteHost {
+            unavailable = await remoteLSPAvailable(entry.command, remoteHost, entry.env) ? nil : .notInstalled
+        } else {
+            switch await availability.statusRemediatingGatekeeper(for: entry) {
+            case .disabled:
+                unavailable = .disabled
+            case .notInstalled:
+                unavailable = .notInstalled
+            case .blockedByGatekeeper(let realPath):
+                NotificationCenter.default.post(
+                    name: .lspBlockedByGatekeeper,
+                    object: nil,
+                    userInfo: ["language": entry.language, "realPath": realPath]
+                )
+                unavailable = .blockedByGatekeeper
+            case .available:
+                unavailable = nil
+            }
+        }
+        if case .document(let uri, _, let ownership) = claim {
+            let stillWanted = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
+            if let unavailable { return .unavailable(unavailable) }
+            guard stillWanted else { return .abandoned }
+        } else if let unavailable {
+            return .unavailable(unavailable)
+        }
+        if let existing = holders[key] {
+            let replace = applyClaim(claim, key: key, to: existing)
+            return .claimed(client: existing.client, ready: existing.ready, isFirstOpener: false, shouldReplaceTemporaryText: replace)
+        }
+        let spawn = Self.resolveSpawn(
+            command: entry.command,
+            args: entry.args,
+            env: entry.env,
+            language: entry.language,
+            availability: availability,
+            remoteHost: remoteHost,
+            rootPath: lspRoot.path
+        )
+        let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI, remoteHost)
+        let status = statuses[key] ?? LSPServerStatus(
+            language: entry.language,
+            command: entry.command,
+            root: lspRoot.path,
+            remoteHost: remoteHost
+        )
+        statuses[key] = status
+        status.reset()
+        subscribeLifecycle(of: newClient, key: key)
+        let task = Task<Bool, Never> { [weak self] in
+            await newClient.setConfigurationHandler { [weak self] scope, section in
+                await self?.configurationValue(scope: scope, section: section, key: key) ?? .null
+            }
+            do {
+                try await newClient.initialize()
+                self?.didFinishInitialize(key: key, client: newClient, error: nil)
+                return true
+            } catch {
+                self?.didFinishInitialize(key: key, client: newClient, error: error)
+                return false
+            }
+        }
+        holders[key] = Self.newHolder(client: newClient, ready: task, claim: claim)
+        bumpStateTick()
+        return .claimed(client: newClient, ready: task, isFirstOpener: true, shouldReplaceTemporaryText: false)
+    }
+
+    private static func keepsDeadHolder(_ holder: Holder, for claim: HolderClaim) -> Bool {
+        guard case .lease = claim else { return false }
+        return !holder.refsByURI.isEmpty
+    }
+
+    /// Adds `claim` to `existing` and cancels a pending idle shutdown. Returns
+    /// whether an editor open must replace temporary diff text already sent.
+    private func applyClaim(_ claim: HolderClaim, key: Key, to existing: Holder) -> Bool {
+        cancelGraceShutdown(key)
+        guard case .document(let uri, let text, let ownership) = claim else { return false }
+        var shouldReplaceTemporaryText = false
+        var refs = existing.refsByURI
+        refs[uri, default: 0] += 1
+        var temporaryRefs = existing.temporaryRefsByURI
+        if ownership == .temporary {
+            temporaryRefs[uri, default: 0] += 1
+        } else if existing.openedURIs.contains(uri),
+                  normalRefCount(forURI: uri, in: existing) == 0,
+                  (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
+            shouldReplaceTemporaryText = true
+        }
+        // Record this open's text as the latest pending: if `didOpen` hasn't
+        // been sent yet, whichever awaiter wakes first reads this value
+        // rather than text captured by an earlier call.
+        holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs, temporaryRefs: temporaryRefs, ownership: ownership)
+        return shouldReplaceTemporaryText
+    }
+
+    private static func newHolder(client: LSPClient, ready: Task<Bool, Never>, claim: HolderClaim) -> Holder {
+        switch claim {
+        case .document(let uri, let text, let ownership):
+            return Holder(
+                client: client,
+                ready: ready,
+                serverGeneration: UUID(),
+                refsByURI: [uri: 1],
+                temporaryRefsByURI: ownership == .temporary ? [uri: 1] : [:],
+                temporaryTextsByURI: ownership == .temporary ? [uri: text] : [:],
+                openedURIs: [],
+                versions: [:],
+                pendingOpenText: [uri: text],
+                texts: [:],
+                languagesByURI: [:],
+                lifeState: .starting
+            )
+        case .lease:
+            return Holder(
+                client: client,
+                ready: ready,
+                serverGeneration: UUID(),
+                refsByURI: [:],
+                temporaryRefsByURI: [:],
+                temporaryTextsByURI: [:],
+                openedURIs: [],
+                versions: [:],
+                pendingOpenText: [:],
+                texts: [:],
+                languagesByURI: [:],
+                lifeState: .starting
+            )
+        }
+    }
+
+    /// No open document and no live lease keep this holder's server wanted.
+    private func isUnreferenced(_ holder: Holder, key: Key) -> Bool {
+        holder.refsByURI.isEmpty && leaseIDsByKey[key] == nil
+    }
+
+    /// Removes the holder in the same synchronous step that found it
+    /// unreferenced, then stops its server. A document or lease claimed while
+    /// the shutdown is suspended spawns a fresh server instead of attaching to
+    /// this dying one.
+    private func detachAndShutdown(_ key: Key, client: LSPClient) async {
+        removeHolder(key)
+        await client.shutdown()
+    }
+
+    /// A freshly spawned server nobody is waiting on must not outlive a failed `initialize`.
+    private func reapOnInitializeFailure(_ client: LSPClient, ready: Task<Bool, Never>) {
+        Task { if !(await ready.value) { await client.shutdown() } }
+    }
+
+    /// Retires `holder` after it may have lost its last lease: a dead server
+    /// goes at once, a live one waits out the idle grace.
+    private func settleIfUnreferenced(_ holder: Holder, key: Key) {
+        guard isUnreferenced(holder, key: key) else { return }
+        if holder.lifeState == .dead {
+            removeHolder(key)
+            Task { await holder.client.shutdown() }
+        } else {
+            scheduleGraceShutdown(key: key, client: holder.client)
+        }
+    }
+
+    private func cancelGraceShutdown(_ key: Key) {
+        graceTasks.removeValue(forKey: key)?.cancel()
     }
 
     /// Apply new content for an open or pending document. If `didOpen` has
@@ -550,9 +688,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // restart. Once the last user-intent ref is released, sweep the
         // dead entry — otherwise repeated open-then-close attempts on a
         // misconfigured server would accumulate stale holders.
-        if holder.lifeState == .dead, refs.isEmpty {
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+        if holder.lifeState == .dead, isUnreferenced(holder, key: key) {
+            removeHolder(key)
             return
         }
 
@@ -585,10 +722,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
 
         // Shut down the server if no files remain on it.
-        if let c = holders[key], c.refsByURI.isEmpty {
-            await c.client.shutdown()
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+        if let c = holders[key], isUnreferenced(c, key: key) {
+            await detachAndShutdown(key, client: c.client)
         }
     }
 
@@ -730,6 +865,65 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
     }
 
+    /// Live status of the server serving `fileURL`, found through the holder
+    /// that tracks the file. Never probes the remote host.
+    func serverStatus(forFile fileURL: URL, worktreeRoot: URL) -> LSPServerStatus? {
+        guard let key = holderKey(forURI: fileURL.lspURI, withinWorktreeRoot: worktreeRoot) else { return nil }
+        return statuses[key]
+    }
+
+    private func subscribeLifecycle(of client: LSPClient, key: Key) {
+        lifecycleTasks[key]?.cancel()
+        let events = client.lifecycleEvents
+        lifecycleTasks[key] = Task { [weak self] in
+            for await event in events {
+                self?.handleLifecycle(event, key: key, client: client)
+            }
+        }
+    }
+
+    private func handleLifecycle(_ event: LSPClient.LifecycleEvent, key: Key, client: LSPClient) {
+        guard var holder = holders[key], holder.client === client, let status = statuses[key] else { return }
+        switch event {
+        case .progress(let tasks):
+            status.applyProgress(tasks)
+        case .exited(let detail):
+            holder.lifeState = .dead
+            holders[key] = holder
+            status.recordExit(detail)
+            bumpStateTick()
+        }
+    }
+
+    private func didFinishInitialize(key: Key, client: LSPClient, error: (any Error)?) {
+        guard var holder = holders[key], holder.client === client else { return }
+        let status = statuses[key]
+        if let error {
+            holder.lifeState = .dead
+            var exitExpected = false
+            if case LSPError.transportClosed = error { exitExpected = true }
+            status?.recordInitializeFailure(String(describing: error), exitExpected: exitExpected)
+        } else {
+            status?.markInitialized()
+            if case .crashed? = status?.phase {
+                // The process exited between the initialize reply and this hop.
+                holder.lifeState = .dead
+            } else {
+                holder.lifeState = .ready
+            }
+        }
+        holders[key] = holder
+        bumpStateTick()
+    }
+
+    private func removeHolder(_ key: Key) {
+        holders.removeValue(forKey: key)
+        statuses.removeValue(forKey: key)
+        lifecycleTasks.removeValue(forKey: key)?.cancel()
+        graceTasks.removeValue(forKey: key)?.cancel()
+        bumpStateTick()
+    }
+
     /// Read-only access to the active registry for derivation by views.
     var activeRegistry: LanguageServerRegistry { registry }
 
@@ -841,6 +1035,66 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return String(lines[line]) == text
     }
 
+    /// Keeps the server for `fileURL` running without opening the file. Returns
+    /// as soon as the server is claimed so the caller can show it starting.
+    func retainServer(worktreeRoot: URL, fileURL: URL, languageId: String) async -> LSPServerRetainResult {
+        guard let entry = registry.allEntries().first(where: { $0.language == languageId }), entry.enabled else {
+            return .unavailable(language: languageId, reason: .disabled)
+        }
+        let target = await resolveKey(entry: entry, worktreeRoot: worktreeRoot, fileURL: fileURL, offMainLocalProbe: true)
+        let key = target.key
+        // Record the lease before claiming so no teardown can see the holder
+        // as unreferenced while the claim is suspended. Nothing can release
+        // this id until the lease object exists below.
+        let id = UUID()
+        leaseIDsByKey[key, default: [:]][id] = languageId
+        switch await claimHolder(key: key, entry: entry, lspRoot: target.lspRoot, remoteHost: target.remoteHost, languageId: languageId, claim: .lease) {
+        case .claimed(let client, let ready, let isFirstOpener, _):
+            if isFirstOpener { reapOnInitializeFailure(client, ready: ready) }
+            guard let status = statuses[key] else {
+                preconditionFailure("a claimed holder always has a status")
+            }
+            return .serving(LSPServerLease(status: status) { [weak self] in self?.releaseLease(key: key, id: id) })
+        case .unavailable(let reason):
+            releaseLease(key: key, id: id)
+            return .unavailable(language: entry.language, reason: reason)
+        case .abandoned:
+            preconditionFailure("lease claims are never abandoned")
+        }
+    }
+
+    /// Restarts the server `status` describes, keeping its documents, leases,
+    /// and the status object itself.
+    func restart(status: LSPServerStatus) async {
+        guard let key = statuses.first(where: { $0.value === status })?.key,
+              let existing = holders[key] else { return }
+        await restartHolder(key: key, existing: existing, language: existing.client.language)
+    }
+
+    private func releaseLease(key: Key, id: UUID) {
+        // Forget the lease before looking for its holder: the holder is absent
+        // mid-restart and mid-respawn, and the release must still count.
+        guard leaseIDsByKey[key]?.removeValue(forKey: id) != nil else { return }
+        if leaseIDsByKey[key]?.isEmpty == true { leaseIDsByKey.removeValue(forKey: key) }
+        guard let holder = holders[key] else { return }
+        settleIfUnreferenced(holder, key: key)
+    }
+
+    /// Keeps an unreferenced server alive for `idleGrace` so switching tabs
+    /// does not force a re-index.
+    private func scheduleGraceShutdown(key: Key, client: LSPClient) {
+        cancelGraceShutdown(key)
+        let sleep = self.sleep
+        graceTasks[key] = Task { [weak self] in
+            do { try await sleep(Self.idleGrace) } catch { return }
+            guard let self, !Task.isCancelled,
+                  let cur = self.holders[key], cur.client === client, self.isUnreferenced(cur, key: key)
+            else { return }
+            self.graceTasks[key] = nil
+            await self.detachAndShutdown(key, client: client)
+        }
+    }
+
     /// Tear down the holder currently serving `fileURL` under `worktreeRoot`
     /// and re-open every URI it had open. Holder-scoped (not tab-scoped) so
     /// all tabs sharing the holder benefit from one restart — which matches
@@ -880,12 +1134,15 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     private func restartHolder(key: Key, existing: Holder, language: String) async {
-        // Mark the holder dead synchronously so the badge transitions through
-        // `.dead` and concurrent `openDocument` calls see a dying holder
-        // rather than bumping refs on the one we're about to shut down.
+        // Mark the holder dead synchronously so concurrent `openDocument`
+        // calls see a dying holder rather than bumping refs on the one we're
+        // about to shut down. The stable status goes back to `.starting` in
+        // the same step: the shutdown below can take seconds, and an
+        // Alas-initiated restart must not read as a crash while it runs.
         if var h = holders[key], h.client === existing.client {
             h.lifeState = .dead
             holders[key] = h
+            statuses[key]?.reset()
             bumpStateTick()
         }
 
@@ -941,6 +1198,37 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 _ = await openTemporaryDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: temporaryText)
             }
         }
+
+        // Leases outlive the holder they were taken against. Reopened documents
+        // respawn a holder when there are any; a lease-only server needs its
+        // own. Only claim when none exists: `claimHolder` would discard a dead
+        // holder, and with it the documents just reopened onto it.
+        if holders[key] == nil, let entry = leaseRespawnEntry(for: key) {
+            if case .claimed(let client, let ready, true, _) = await claimHolder(key: key, entry: entry, lspRoot: reopenRoot, remoteHost: key.host, languageId: entry.language, claim: .lease) {
+                reapOnInitializeFailure(client, ready: ready)
+            }
+            // The last lease may have been released while the replacement spawned.
+            if let holder = holders[key] { settleIfUnreferenced(holder, key: key) }
+        }
+
+        if holders[key] == nil {
+            statuses.removeValue(forKey: key)
+            lifecycleTasks.removeValue(forKey: key)?.cancel()
+        }
+    }
+
+    /// The enabled entry a leased server respawns through. Languages that
+    /// share one server (typescript and javascript) share a key, so the
+    /// language a restart was started for may have been disabled while another
+    /// leased alias is still enabled. Prefers the leases' own languages, then
+    /// any enabled entry that spawns the same command.
+    private func leaseRespawnEntry(for key: Key) -> LanguageServerConfig? {
+        guard let leases = leaseIDsByKey[key] else { return nil }
+        let leasedLanguages = Set(leases.values)
+        let sameServer = registry.allEntries().filter {
+            $0.enabled && $0.command == key.command && $0.args == key.args && $0.env == key.env
+        }
+        return sameServer.first { leasedLanguages.contains($0.language) } ?? sameServer.first
     }
 
     /// True when `fileURL` has already been delivered to a live (non-dead)
@@ -1276,10 +1564,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // skip teardown when in-worktree refs are still present. If the
         // external doc was the last reference, the holder must be cleaned up
         // to avoid leaking the LSP process until app exit.
-        if let c = holders[key], c.refsByURI.isEmpty {
-            await c.client.shutdown()
-            holders.removeValue(forKey: key)
-            bumpStateTick()
+        if let c = holders[key], isUnreferenced(c, key: key) {
+            await detachAndShutdown(key, client: c.client)
         }
     }
 
@@ -1361,7 +1647,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// root for files in nested packages — `Package.swift`, `*.xcodeproj`,
     /// `.git`, etc. Falls back to `worktreeRoot` when no marker is found.
     /// Patterns may contain `*` for simple globs.
-    static func resolveLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String]) -> URL {
+    nonisolated static func resolveLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String]) -> URL {
         guard !markers.isEmpty else { return worktreeRoot }
         let fm = FileManager.default
         let worktreePath = worktreeRoot.standardizedFileURL.path
@@ -1414,7 +1700,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
     }
 
-    private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {
+    nonisolated private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {
         var entries: [String]?
         for marker in markers {
             if marker.contains("*") {
@@ -1431,7 +1717,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// (`*.xcodeproj`, `*.json`, `Package.*`) without pulling in regex or
     /// `fnmatch(3)`. Multiple `*` are supported; `?` and character classes
     /// are not.
-    private static func glob(_ pattern: String, _ name: String) -> Bool {
+    nonisolated private static func glob(_ pattern: String, _ name: String) -> Bool {
         if !pattern.contains("*") { return pattern == name }
         let parts = pattern.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
         var idx = name.startIndex

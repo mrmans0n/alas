@@ -20,6 +20,7 @@ struct DraftReviewRequestTabView: View {
     @State private var loadingContext = false
     @State private var loadedContextKey: String?
     @State private var draftReviewSession: DiffReviewLoadedSession?
+    @State private var lspLeases = LSPServerLeaseSet()
     @State private var selectedFileID: DiffReviewFileID?
     @State private var railCollapsed = false
     @State private var reviewSummaryCollapsed = false
@@ -323,6 +324,7 @@ struct DraftReviewRequestTabView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
             AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
                 if let targetMismatchMessage {
                     reviewSessionLaunchError = targetMismatchMessage
@@ -342,6 +344,15 @@ struct DraftReviewRequestTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(theme.color("bg-2"))
+        .lspServerLeases(
+            lspLeases,
+            inputs: LSPServerLeaseSet.inputs(
+                worktreeRoot: worktreePath,
+                relativePaths: draftReviewSession?.files.map(\.summary.path) ?? [],
+                registry: appState.lsp.activeRegistry
+            ),
+            manager: appState.lsp
+        )
     }
 
     @ViewBuilder

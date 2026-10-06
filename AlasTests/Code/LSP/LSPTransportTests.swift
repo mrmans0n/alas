@@ -20,6 +20,57 @@ struct LSPTransportFramingTests {
         #expect(throws: (any Error).self) { try transport.send(Data(#"{"jsonrpc":"2.0","method":"probe"}"#.utf8)) }
     }
 
+    @Test("draining a pipe returns what is buffered without waiting for the writer to close")
+    func drainBufferedDoesNotWaitForEOF() throws {
+        let pipe = Pipe()
+        defer { try? pipe.fileHandleForWriting.close() }
+        try pipe.fileHandleForWriting.write(contentsOf: Data("fatal\n".utf8))
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+
+        // The write end stays open, as it does when a descendant holds stderr.
+        #expect(String(decoding: LSPTransport.drainBuffered(descriptor: descriptor), as: UTF8.self) == "fatal\n")
+        #expect(LSPTransport.drainBuffered(descriptor: descriptor).isEmpty)
+    }
+
+    @Test("stderr written just before a server exits arrives before the exit event")
+    func stderrPrecedesExit() async throws {
+        for iteration in 0 ..< 20 {
+            let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "printf 'fatal\\n' >&2; exit 3"], environment: nil)
+            try transport.start()
+            var stderr = Data()
+            var termination: SpawnedProcess.Termination?
+            var stderrAfterExit = false
+            for await event in transport.incoming {
+                switch event {
+                case .stderr(let data):
+                    if termination != nil { stderrAfterExit = true }
+                    stderr.append(data)
+                case .exited(let reported):
+                    termination = reported
+                case .frame:
+                    break
+                }
+            }
+            #expect(termination == .exit(3), "iteration \(iteration)")
+            #expect(String(decoding: stderr, as: UTF8.self) == "fatal\n", "iteration \(iteration)")
+            #expect(!stderrAfterExit, "iteration \(iteration)")
+        }
+    }
+
+    @Test("a server killed by a signal reports the signal, not an exit code", arguments: [
+        ("exit 9", SpawnedProcess.Termination.exit(9)),
+        ("kill -KILL $$", SpawnedProcess.Termination.signal(9)),
+    ])
+    func terminationKeepsSignalApartFromExitCode(script: String, expected: SpawnedProcess.Termination) async throws {
+        let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script], environment: nil)
+        try transport.start()
+        var termination: SpawnedProcess.Termination?
+        for await event in transport.incoming {
+            if case .exited(let reported) = event { termination = reported }
+        }
+        #expect(termination == expected)
+    }
+
     @Test("decodes a single frame")
     func singleFrame() async throws {
         let body = #"{"jsonrpc":"2.0","id":1,"result":null}"#

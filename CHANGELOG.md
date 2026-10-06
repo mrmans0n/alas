@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Show language server status in diff and review toolbars and keep loading badges up through indexing, with progress and crash details on click.
 - Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
 - Support "Disable native subagents" for Copilot 1.0.76 and later: sessions start with `--excluded-tools` for `task`, `list_agents`, `read_agent`, and `write_agent`, keeping your own exclusions and narrowing any `--available-tools` allowlist instead of widening it (#1592).
 

@@ -412,6 +412,14 @@ struct LanguageServerRegistry {
         return mergedEntries.first(where: { $0.enabled && $0.extensions.contains(lower) })?.language
     }
 
+    /// Language for `path` counting disabled entries too (enabled entries win),
+    /// so status UI can say a server is disabled instead of showing nothing.
+    func configuredLanguage(forPath path: String) -> String? {
+        let ext = Self.extensionKey(forPath: path)
+        return language(forFileExtension: ext)
+            ?? mergedEntries.first(where: { $0.extensions.contains(ext) })?.language
+    }
+
     func allEntries() -> [LanguageServerConfig] { mergedEntries }
 
     func disabledUserDefinedEntryClaims(fileExtension ext: String) -> Bool {

@@ -27,6 +27,21 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     func deliverFrame(_ json: String) {
         cont.yield(.frame(json.data(using: .utf8)!))
     }
+    func deliverStderr(_ text: String) {
+        cont.yield(.stderr(Data(text.utf8)))
+    }
+    /// Mirrors the live transport: report the exit status, then end the stream.
+    func deliverExit(_ code: Int32) {
+        deliver(.exit(code))
+    }
+    /// A server killed by a signal reports the signal number, not an exit code.
+    func deliverSignal(_ signal: Int32) {
+        deliver(.signal(signal))
+    }
+    private func deliver(_ termination: SpawnedProcess.Termination) {
+        cont.yield(.exited(termination))
+        cont.finish()
+    }
     /// Finish the incoming stream so LSPClient.consume() exits and the
     /// actor's background Task drains. Call at the end of each test.
     func finish() {
@@ -50,8 +65,136 @@ private func withTimeout<T: Sendable>(
     }
 }
 
+/// Polls `condition` on the main actor until it holds or five seconds pass.
+@MainActor
+func eventually(_ description: String, _ condition: () -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while ContinuousClock.now < deadline {
+        if condition() { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    try #require(condition(), "Timed out waiting for \(description)")
+}
+
+/// Pulls progress snapshots from a lifecycle stream one at a time.
+/// Invariant: `next()` is only ever awaited sequentially, never concurrently.
+private final class ProgressSnapshots: @unchecked Sendable {
+    private var iterator: AsyncStream<LSPClient.LifecycleEvent>.AsyncIterator
+
+    init(_ events: AsyncStream<LSPClient.LifecycleEvent>) {
+        iterator = events.makeAsyncIterator()
+    }
+
+    func next() async -> [LSPClient.ProgressTask]? {
+        while let event = await iterator.next() {
+            if case .progress(let tasks) = event { return tasks }
+        }
+        return nil
+    }
+}
+
+enum ExitScenario: String, Sendable, CaseIterable {
+    case serverExits, serverKilledBySignal, streamEndsWithoutStatus, exitAfterShutdown
+}
+
+struct OutputTailCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let chunks: [Data]
+    let expected: [String]
+    var testDescription: String { name }
+
+    init(name: String, chunks: [Data], expected: [String]) {
+        self.name = name
+        self.chunks = chunks
+        self.expected = expected
+    }
+
+    init(name: String, chunks: [String], expected: [String]) {
+        self.init(name: name, chunks: chunks.map { Data($0.utf8) }, expected: expected)
+    }
+}
+
 @Suite("LSPClient.lifecycle", .serialized)
 struct LSPClientLifecycleTests {
+    @Test("exits are reported with the stderr tail unless the client shut the server down", arguments: ExitScenario.allCases)
+    func exitReporting(_ scenario: ExitScenario) async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            } else if sent.contains(#""method":"shutdown""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":null}"#)
+            }
+        }
+        try await client.initialize()
+        transport.deliverStderr("boot\npanicked at foo\n")
+        switch scenario {
+        case .serverExits: transport.deliverExit(101)
+        case .serverKilledBySignal: transport.deliverSignal(11)
+        case .streamEndsWithoutStatus: transport.finish()
+        case .exitAfterShutdown:
+            await client.shutdown()
+            transport.deliverExit(0)
+        }
+        let events = client.lifecycleEvents
+        let exits = try await withTimeout(nanoseconds: 2_000_000_000) {
+            var collected: [LSPClient.ExitDetail] = []
+            for await event in events {
+                if case .exited(let detail) = event { collected.append(detail) }
+            }
+            return collected
+        }
+        switch scenario {
+        case .serverExits:
+            #expect(exits.map(\.termination) == [.exit(101)])
+            #expect(exits.first?.outputTail == ["boot", "panicked at foo"])
+        case .serverKilledBySignal:
+            #expect(exits.map(\.termination) == [.signal(11)])
+        case .streamEndsWithoutStatus:
+            #expect(exits.map(\.termination) == [nil])
+        case .exitAfterShutdown:
+            #expect(exits.isEmpty)
+        }
+    }
+
+    @Test("output tail keeps the last complete lines within its bounds", arguments: [
+        OutputTailCase(name: "line split across chunks", chunks: ["pan", "icked\nnext\n"], expected: ["panicked", "next"]),
+        OutputTailCase(name: "CRLF and blank lines", chunks: ["a\r\n\r\nb\r\n"], expected: ["a", "b"]),
+        OutputTailCase(name: "unterminated final line", chunks: ["a\nb"], expected: ["a", "b"]),
+        OutputTailCase(name: "last 20 lines", chunks: [(1...25).map { "l\($0)\n" }.joined()], expected: (6...25).map { "l\($0)" }),
+        OutputTailCase(
+            name: "8 KB cap drops oldest lines",
+            chunks: [String(repeating: "x", count: 5000) + "\n" + String(repeating: "y", count: 5000) + "\n"],
+            expected: [String(repeating: "y", count: 5000)]
+        ),
+        OutputTailCase(
+            name: "multibyte scalar split across chunks",
+            chunks: [Data([0x61, 0xE2, 0x82]), Data([0xAC, 0x62, 0x0A])],
+            expected: ["a€b"]
+        ),
+        OutputTailCase(
+            name: "100 KB unterminated line keeps its last 8 KB",
+            chunks: [Data(repeating: UInt8(ascii: "x"), count: 100_000)],
+            expected: [String(repeating: "x", count: 8192)]
+        ),
+        OutputTailCase(
+            name: "unterminated line grown over many chunks keeps its last 8 KB",
+            chunks: Array(repeating: Data(repeating: UInt8(ascii: "x"), count: 1000), count: 100),
+            expected: [String(repeating: "x", count: 8192)]
+        ),
+        OutputTailCase(
+            name: "cap does not cut a scalar in half",
+            chunks: [Data(String(repeating: "€", count: 4000).utf8)],
+            expected: [String(repeating: "€", count: 2730)]
+        ),
+    ])
+    func outputTail(_ testCase: OutputTailCase) {
+        var tail = LSPOutputTail()
+        for chunk in testCase.chunks { tail.append(chunk) }
+        #expect(tail.finish() == testCase.expected)
+    }
+
     @Test("initialize handshake completes when server returns capabilities")
     func handshake() async throws {
         let transport = FakeTransport()
@@ -317,6 +460,100 @@ struct LSPClientLifecycleTests {
         }
         try await client.initialize()
         _ = try await client.requestDiagnostics(uri: "file:///tmp/x.kt", previousResultId: "prev123")
+        transport.finish()
+    }
+
+    @Test("work-done progress coalesces to the latest valid state, ignores malformed updates, and acknowledges create")
+    func workDoneProgress() async throws {
+        let transport = FakeTransport()
+        // Production coalescing interval: snapshots are rate limited, not per frame.
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+        #expect((transport.sent.first ?? "").contains(#""window":{"workDoneProgress":true}"#))
+        let snapshots = ProgressSnapshots(client.lifecycleEvents)
+
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":"p1","method":"window/workDoneProgress/create","params":{"token":"idx"}}"#)
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":0}}}"#)
+        let begun = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(begun == [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 0)])
+
+        // Malformed updates while a valid task is active: none may change the task or emit a snapshot.
+        for params in [
+            #"{"token":"idx","value":{"percentage":99}}"#,
+            #"{"token":"idx","value":{"kind":"bogus","percentage":99}}"#,
+            #"{"token":"ghost","value":{"kind":"report","percentage":99}}"#,
+            #"{"token":"idx"}"#,
+            #"{"token":"other","value":{"kind":"begin"}}"#,
+        ] {
+            transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":\#(params)}"#)
+        }
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"report","message":"412/980","percentage":42}}}"#)
+        let reported = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(reported == [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: "412/980", percentage: 42)])
+
+        // The next snapshot after `end` is empty: a malformed frame would have queued a stale one first.
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+        let ended = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(ended == [])
+
+        let ack = transport.sent.first { $0.contains(#""id":"p1""#) } ?? ""
+        #expect(ack.contains(#""result":null"#))
+        transport.finish()
+    }
+
+    @Test("a re-begun progress token moves to the end of the snapshot order")
+    func rebegunProgressTokenMovesToTheEnd() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp", progressCoalescing: .zero)
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+        for (token, title) in [("a", "First"), ("b", "Second"), ("a", "Third")] {
+            transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"\#(token)","value":{"kind":"begin","title":"\#(title)"}}}"#)
+        }
+        let events = client.lifecycleEvents
+        let snapshots = try await withTimeout(nanoseconds: 2_000_000_000) {
+            var collected: [[LSPClient.ProgressTask]] = []
+            for await event in events {
+                if case .progress(let tasks) = event { collected.append(tasks) }
+                if collected.count == 3 { break }
+            }
+            return collected
+        }
+        #expect(snapshots.last == [
+            LSPClient.ProgressTask(token: "b", title: "Second", message: nil, percentage: nil),
+            LSPClient.ProgressTask(token: "a", title: "Third", message: nil, percentage: nil),
+        ])
+        transport.finish()
+    }
+
+    @Test("oversized progress percentages clamp to 100 instead of trapping")
+    func oversizedProgressPercentage() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp", progressCoalescing: .zero)
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":1e100}}}"#)
+        let events = client.lifecycleEvents
+        let first = try await withTimeout(nanoseconds: 2_000_000_000) {
+            for await event in events {
+                if case .progress(let tasks) = event { return tasks }
+            }
+            return []
+        }
+        #expect(first.map(\.percentage) == [100])
         transport.finish()
     }
 }
