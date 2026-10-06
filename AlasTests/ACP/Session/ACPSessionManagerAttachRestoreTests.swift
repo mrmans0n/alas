@@ -4526,6 +4526,56 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(params.value == .string("high"))
     }
 
+    @Test("fresh attach keeps waiting through an unrelated options update for the queued effort", .timeLimit(.minutes(1)))
+    func freshAttachKeepsWaitingPastAnIntermediateOptionsUpdate() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { client.sent.contains { $0.method == "session/new" } }
+        // An unrelated option arrives first; the effort level only after it.
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")]),
+            ])
+        ))
+        try await waitUntil { session.availableConfigOptions.contains { $0.id == "provider" } }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")]),
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("high"))
+    }
+
     @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
     func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

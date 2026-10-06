@@ -7539,15 +7539,28 @@ extension ACPSessionManager {
                 optionsAlreadyRefreshed = session.availableConfigOptionsRevision != optionsRevisionBeforeModelRestore
             }
             // An adapter may also advertise an option (thinking) only after
-            // `session/new`, with or without a model switch; a pending value
-            // no current option accepts waits for that update too.
-            let hasUnacceptedPendingValue = pendingConfigOptionValues[sessionId]?.contains { id, value in
-                !(session.availableConfigOptions.first { $0.id == id }?.acceptsPersistedValue(value) ?? false)
-            } ?? false
-            if (modelSwitched || hasUnacceptedPendingValue), !optionsAlreadyRefreshed,
-               pendingConfigOptionValues[sessionId]?.isEmpty == false {
-                _ = await configOptionsChange(of: session, within: delegatedReasoningRefreshTimeout)
+            // `session/new`, with or without a model switch, and may publish
+            // several updates on the way. A pending value no current option
+            // accepts keeps waiting until some update accepts it or the
+            // deadline passes. A value the old options already accept has no
+            // protocol signal for "the relevant refresh", so after a model
+            // switch it gets one bounded wait for the next update.
+            let hasUnacceptedPendingValue: () -> Bool = { [unowned self] in
+                self.pendingConfigOptionValues[sessionId]?.contains { id, value in
+                    !(session.availableConfigOptions.first { $0.id == id }?.acceptsPersistedValue(value) ?? false)
+                } ?? false
+            }
+            let refreshDeadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
+            var waitOnceAfterSwitch = modelSwitched
+            while !optionsAlreadyRefreshed,
+                  pendingConfigOptionValues[sessionId]?.isEmpty == false,
+                  hasUnacceptedPendingValue() || waitOnceAfterSwitch {
+                let remaining = ContinuousClock.now.duration(to: refreshDeadline)
+                guard remaining > .zero else { break }
+                let changed = await configOptionsChange(of: session, within: remaining)
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+                waitOnceAfterSwitch = false
+                if !changed { break }
             }
             let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
             let userConfigOptionEditRevisionsAtRestoreStart = session.userConfigOptionEditRevisionsSnapshot()
