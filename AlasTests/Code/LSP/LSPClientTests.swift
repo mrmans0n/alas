@@ -27,6 +27,14 @@ final class FakeTransport: LSPTransporting, @unchecked Sendable {
     func deliverFrame(_ json: String) {
         cont.yield(.frame(json.data(using: .utf8)!))
     }
+    func deliverStderr(_ text: String) {
+        cont.yield(.stderr(Data(text.utf8)))
+    }
+    /// Mirrors the live transport: report the exit status, then end the stream.
+    func deliverExit(_ code: Int32) {
+        cont.yield(.exited(code))
+        cont.finish()
+    }
     /// Finish the incoming stream so LSPClient.consume() exits and the
     /// actor's background Task drains. Call at the end of each test.
     func finish() {
@@ -50,8 +58,75 @@ private func withTimeout<T: Sendable>(
     }
 }
 
+enum ExitScenario: String, Sendable, CaseIterable {
+    case serverExits, streamEndsWithoutStatus, exitAfterShutdown
+}
+
+struct OutputTailCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let chunks: [String]
+    let expected: [String]
+    var testDescription: String { name }
+}
+
 @Suite("LSPClient.lifecycle", .serialized)
 struct LSPClientLifecycleTests {
+    @Test("exits are reported with the stderr tail unless the client shut the server down", arguments: ExitScenario.allCases)
+    func exitReporting(_ scenario: ExitScenario) async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "swift", rootURI: "file:///tmp")
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            } else if sent.contains(#""method":"shutdown""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":2,"result":null}"#)
+            }
+        }
+        try await client.initialize()
+        transport.deliverStderr("boot\npanicked at foo\n")
+        switch scenario {
+        case .serverExits: transport.deliverExit(101)
+        case .streamEndsWithoutStatus: transport.finish()
+        case .exitAfterShutdown:
+            await client.shutdown()
+            transport.deliverExit(0)
+        }
+        let events = client.lifecycleEvents
+        let exits = try await withTimeout(nanoseconds: 2_000_000_000) {
+            var collected: [LSPClient.ExitDetail] = []
+            for await event in events {
+                if case .exited(let detail) = event { collected.append(detail) }
+            }
+            return collected
+        }
+        switch scenario {
+        case .serverExits:
+            #expect(exits.map(\.exitCode) == [101])
+            #expect(exits.first?.outputTail == ["boot", "panicked at foo"])
+        case .streamEndsWithoutStatus:
+            #expect(exits.map(\.exitCode) == [nil])
+        case .exitAfterShutdown:
+            #expect(exits.isEmpty)
+        }
+    }
+
+    @Test("output tail keeps the last complete lines within its bounds", arguments: [
+        OutputTailCase(name: "line split across chunks", chunks: ["pan", "icked\nnext\n"], expected: ["panicked", "next"]),
+        OutputTailCase(name: "CRLF and blank lines", chunks: ["a\r\n\r\nb\r\n"], expected: ["a", "b"]),
+        OutputTailCase(name: "unterminated final line", chunks: ["a\nb"], expected: ["a", "b"]),
+        OutputTailCase(name: "last 20 lines", chunks: [(1...25).map { "l\($0)\n" }.joined()], expected: (6...25).map { "l\($0)" }),
+        OutputTailCase(
+            name: "8 KB cap drops oldest lines",
+            chunks: [String(repeating: "x", count: 5000) + "\n" + String(repeating: "y", count: 5000) + "\n"],
+            expected: [String(repeating: "y", count: 5000)]
+        ),
+    ])
+    func outputTail(_ testCase: OutputTailCase) {
+        var tail = LSPOutputTail()
+        for chunk in testCase.chunks { tail.append(Data(chunk.utf8)) }
+        #expect(tail.finish() == testCase.expected)
+    }
+
     @Test("initialize handshake completes when server returns capabilities")
     func handshake() async throws {
         let transport = FakeTransport()

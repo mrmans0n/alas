@@ -38,6 +38,9 @@ actor LSPClient {
     private var progressOrder: [String] = []
     private var progressFlushPending = false
     private var hasExited = false
+    private var outputTail = LSPOutputTail()
+    private var isShuttingDown = false
+    private var startedAt: ContinuousClock.Instant?
 
     let language: String
     let rootURI: String
@@ -202,6 +205,7 @@ actor LSPClient {
 
     func initialize() async throws {
         try transport.start()
+        startedAt = .now
         state = .initializing
         let params = InitializeParams(
             processId: Int(ProcessInfo.processInfo.processIdentifier),
@@ -512,6 +516,7 @@ actor LSPClient {
     }
 
     func shutdown() async {
+        isShuttingDown = true
         stopSemanticRequests()
         cancelInboundRequests()
         // Send the polite handshake only if we ever reached `.ready`. For
@@ -763,16 +768,17 @@ actor LSPClient {
             pending.removeAll()
             for continuation in diagnosticsSubscribers.values { continuation.finish() }
             diagnosticsSubscribers.removeAll()
-            hasExited = true
+            reportExit(code: nil)
             lifecycleContinuation.finish()
         }
         for await event in transport.incoming {
             switch event {
             case .frame(let data):
                 handle(frame: data)
-            case .stderr:
-                continue
-            case .exited:
+            case .stderr(let data):
+                outputTail.append(data)
+            case .exited(let code):
+                reportExit(code: code)
                 state = .dead
                 stopSemanticRequests()
                 cancelInboundRequests()
@@ -784,6 +790,21 @@ actor LSPClient {
                 diagnosticsSubscribers.removeAll()
             }
         }
+    }
+
+    /// Reports the first end of the server process once. Exits the client caused
+    /// (`shutdown()`) are not crashes and emit nothing.
+    private func reportExit(code: Int32?) {
+        guard !hasExited else { return }
+        hasExited = true
+        progressTasks.removeAll()
+        progressOrder.removeAll()
+        guard !isShuttingDown else { return }
+        lifecycleContinuation.yield(.exited(ExitDetail(
+            exitCode: code,
+            uptime: startedAt.map { ContinuousClock.now - $0 },
+            outputTail: outputTail.finish()
+        )))
     }
 
     func handle(frame: Data) {
