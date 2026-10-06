@@ -2111,7 +2111,9 @@ final class ACPSessionRunner {
             session.removeUsageLimitResume()
         }
         if let consumedWake {
-            persistBackgroundWakeAndQueue(rows: markBackgroundWakeDelivered(id: consumedWake.id), consuming: consumedWake)
+            persistBackgroundWakeAndQueue(
+                rows: markBackgroundWakesDelivered(for: consumedWake),
+                consuming: consumedWake)
         } else {
             persistQueue()
         }
@@ -2543,7 +2545,7 @@ final class ACPSessionRunner {
                let current = session.queue.first,
                current.id == stoppedID,
                 current.status == .sending {
-                let wakeRows = markBackgroundWakeDelivered(id: stoppedID)
+                let wakeRows = markBackgroundWakesDelivered(for: current)
                 if current.backgroundTaskWake != nil {
                     persistBackgroundWakeAndQueue(rows: wakeRows, consuming: current)
                 } else {
@@ -3622,7 +3624,7 @@ extension ACPSessionRunner {
                             self.session.normalQueuedTurnIDs.remove(wake.id)
                             self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: wake.id)
                             self.persistBackgroundWakeAndQueue(
-                                rows: self.markBackgroundWakeDelivered(id: wake.id), consuming: wake,
+                                rows: self.markBackgroundWakesDelivered(for: wake), consuming: wake,
                                 acknowledging: steeringAcknowledgement)
                             onPromptFinished?(true)
                             return
@@ -4367,8 +4369,8 @@ extension ACPSessionRunner {
                             ?? recordedUserMessageID
                             ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
                         if let queuedItemId {
-                            let wakeRows = self.markBackgroundWakeDelivered(id: queuedItemId)
                             let completedItem = self.session.queue.first
+                            let wakeRows = completedItem.map { self.markBackgroundWakesDelivered(for: $0) } ?? []
                             self.session.normalQueuedTurnIDs.remove(queuedItemId)
                             self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: queuedItemId)
                             if let completedItem, completedItem.backgroundTaskWake != nil {
@@ -5295,60 +5297,131 @@ extension ACPSessionRunner {
         let reobservedTaskIds = Set(session.backgroundTasks.filter { task in
             task.isActive && task.wakeId.map { persistedWakeIds.contains($0) } == true
         }.map(\.id))
-        let previousQueueCount = session.queue.count
-        session.queue.removeAll { item in
-            guard let taskId = item.backgroundTaskWake else { return false }
-            return reobservedTaskIds.contains(taskId) && item.status == .pending
-                && item.lastError == nil && !item.deliveryUncertain
-        }
-        let pending = session.backgroundTasks.filter { task in
-            guard task.needsWake, let id = task.wakeId, persistedWakeIds.contains(id) else { return false }
-            guard let item = session.queue.first(where: { $0.id == id }) else { return true }
-            return item.status == .pending && item.lastError == nil && !item.deliveryUncertain
-        }
-        guard !pending.isEmpty || session.queue.count != previousQueueCount else { return }
+        let queueChanged = retireReobservedBackgroundWakes(taskIds: reobservedTaskIds)
+        let pending = pendingBackgroundWakeTasks(persistedWakeIds: persistedWakeIds)
+        guard !pending.isEmpty || queueChanged else { return }
         for task in pending {
-            guard let id = task.wakeId else { continue }
-            if let index = session.queue.firstIndex(where: { $0.id == id }) {
-                // Enrich an undispatched wake without moving it in the queue
-                // or changing the identity used for durable delivery.
-                session.queue[index].blocks = [.text(task.wakeText)]
-                continue
-            }
-            // Replace an undispatched observation for this task with the newer
-            // one. A sending/failed/uncertain item retains its own snapshot.
-            session.queue.removeAll { $0.backgroundTaskWake == task.id && $0.status == .pending
-                && $0.lastError == nil && !$0.deliveryUncertain }
-            let insertAt = session.queue.firstIndex {
-                $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: session.usageLimit))
-            } ?? session.queue.endIndex
-            session.queue.insert(.init(id: id, blocks: [.text(task.wakeText)],
-                backgroundTaskWake: task.id, transcriptRecorded: true), at: insertAt)
+            enqueueBackgroundWake(for: task)
         }
         persistQueue(completion: { [weak self] persisted in
             guard let self, self.isConnectionCurrent() else { return }
             if persisted {
                 self.flushQueueIfIdle()
             } else {
-                for task in pending {
-                    if let index = self.session.queue.firstIndex(where: { $0.id == task.wakeId }) {
-                        self.session.queue[index].lastError = "Could not save background work notification; retry to deliver it."
-                    }
-                }
+                self.markBackgroundWakeEnqueueFailed(tasks: pending)
             }
         })
     }
 
-    private func markBackgroundWakeDelivered(id: UUID) -> Set<Int> {
-        guard var task = session.backgroundTasks.first(where: { $0.wakeId == id && !$0.wakeDelivered }) else {
-            // Confirming an older snapshot must preserve newer task facts,
-            // including when their earlier write failed.
-            guard let taskId = session.queue.first(where: { $0.id == id })?.backgroundTaskWake,
-                  let index = session.transcript.toolCallIndex(toolCallId: taskId) else { return [] }
-            return [index]
+    private func retireReobservedBackgroundWakes(taskIds: Set<String>) -> Bool {
+        var changed = false
+        for index in Array(session.queue.indices.reversed()) where session.queue[index].canBatchBackgroundTaskWake {
+            guard session.queue[index].backgroundTaskWakes.contains(where: {
+                taskIds.contains($0.taskId)
+            }) else { continue }
+            var item = session.queue[index]
+            guard item.removeBackgroundTaskWakes(taskIds: taskIds) else { continue }
+            changed = true
+            if item.backgroundTaskWakes.isEmpty {
+                session.queue.remove(at: index)
+            } else {
+                session.queue[index] = item
+            }
         }
-        task.wakeDelivered = true
-        return session.saveBackgroundTask(task)
+        return changed
+    }
+
+    private func pendingBackgroundWakeTasks(persistedWakeIds: Set<UUID>) -> [ACPBackgroundTask] {
+        session.backgroundTasks.filter { task in
+            guard task.needsWake, let id = task.wakeId, persistedWakeIds.contains(id) else { return false }
+            guard let item = session.queue.first(where: {
+                $0.containsBackgroundTaskWake(taskId: task.id, wakeId: id)
+            }) else { return true }
+            return item.canBatchBackgroundTaskWake
+        }
+    }
+
+    private func enqueueBackgroundWake(for task: ACPBackgroundTask) {
+        guard let id = task.wakeId else { return }
+        let block = ACPContentBlock.text(task.wakeText)
+        if let index = session.queue.firstIndex(where: {
+            $0.containsBackgroundTaskWake(taskId: task.id, wakeId: id)
+        }) {
+            _ = session.queue[index].upsertBackgroundTaskWake(
+                taskId: task.id, wakeId: id, block: block)
+            return
+        }
+        removeUndispatchedBackgroundWakes(taskId: task.id)
+        let insertAt = session.queue.firstIndex {
+            $0.status == .pending && ($0.scheduledAt != nil || $0.isHeld(by: session.usageLimit))
+        } ?? session.queue.endIndex
+        if insertAt > session.queue.startIndex,
+           session.queue[insertAt - 1].canBatchBackgroundTaskWake {
+            _ = session.queue[insertAt - 1].upsertBackgroundTaskWake(
+                taskId: task.id, wakeId: id, block: block)
+        } else {
+            session.queue.insert(.init(id: id, blocks: [block],
+                backgroundTaskWake: task.id, transcriptRecorded: true), at: insertAt)
+        }
+    }
+
+    private func removeUndispatchedBackgroundWakes(taskId: String) {
+        for index in Array(session.queue.indices.reversed())
+            where session.queue[index].canBatchBackgroundTaskWake
+                && session.queue[index].backgroundTaskWakes.contains(where: { $0.taskId == taskId }) {
+            var item = session.queue[index]
+            _ = item.removeBackgroundTaskWakes(taskIds: [taskId])
+            if item.backgroundTaskWakes.isEmpty {
+                session.queue.remove(at: index)
+            } else {
+                session.queue[index] = item
+            }
+        }
+    }
+
+    private func markBackgroundWakeEnqueueFailed(tasks: [ACPBackgroundTask]) {
+        for task in tasks {
+            guard let wakeId = task.wakeId,
+                  let index = session.queue.firstIndex(where: {
+                      $0.containsBackgroundTaskWake(taskId: task.id, wakeId: wakeId)
+                  }) else { continue }
+            session.queue[index].lastError =
+                "Could not save background work notification; retry to deliver it."
+        }
+    }
+
+    private func markBackgroundWakesDelivered(for item: QueuedPrompt) -> Set<Int> {
+        var rows: Set<Int> = []
+        for wake in item.backgroundTaskWakes {
+            guard var task = session.backgroundTasks.first(where: { $0.id == wake.taskId }) else { continue }
+            if task.wakeId == wake.wakeId, !task.wakeDelivered {
+                task.wakeDelivered = true
+                rows.formUnion(session.saveBackgroundTask(task))
+            } else if let index = session.transcript.toolCallIndex(toolCallId: task.id) {
+                // Confirming an older snapshot must preserve newer task facts,
+                // including when their earlier write failed.
+                rows.insert(index)
+            }
+        }
+        return rows
+    }
+
+    private func restoreBackgroundWakesAfterFailedConfirmation(_ item: QueuedPrompt) -> Set<Int> {
+        var restoredRows: Set<Int> = []
+        for wake in item.backgroundTaskWakes {
+            guard var task = session.backgroundTasks.first(where: {
+                $0.id == wake.taskId && $0.wakeId == wake.wakeId
+            }) else { continue }
+            task.wakeDelivered = false
+            restoredRows.formUnion(session.saveBackgroundTask(task))
+        }
+        return restoredRows
+    }
+
+    private func removeConfirmedBackgroundWake(_ item: QueuedPrompt) {
+        session.queue.removeAll {
+            $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt
+        }
     }
 
     private func persistBackgroundWakeAndQueue(
@@ -5384,7 +5457,7 @@ extension ACPSessionRunner {
                 self.commitPersistedMessageRows(messages)
                 // Committed delivery survives teardown; a newer retry under
                 // the same wake ID still owns its separate attempt.
-                self.session.queue.removeAll { $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt }
+                self.removeConfirmedBackgroundWake(item)
                 acknowledgements.forEach { $0() }
                 guard self.isConnectionCurrent(), !self.stopped else { return }
                 self.onPromptWorkChanged?()
@@ -5394,13 +5467,10 @@ extension ACPSessionRunner {
                     $0.id == item.id && $0.brokerOperationAttempt == item.brokerOperationAttempt
                 }) else { return }
                 self.session.queue[index].status = .pending
-                self.session.queue[index].lastError = "Could not save background work delivery confirmation. Retry may repeat the notification."
+                self.session.queue[index].lastError =
+                    "Could not save background work delivery confirmation. Retry may repeat the notification."
                 self.session.queue[index].deliveryUncertain = true
-                var restoredRows: Set<Int> = []
-                if var task = self.session.backgroundTasks.first(where: { $0.wakeId == item.id }) {
-                    task.wakeDelivered = false
-                    restoredRows = self.session.saveBackgroundTask(task)
-                }
+                let restoredRows = self.restoreBackgroundWakesAfterFailedConfirmation(item)
                 if deliveredForkContext, var fork = self.session.forkRecord {
                     fork.contextDeliveryPending = true
                     self.session.forkRecord = fork

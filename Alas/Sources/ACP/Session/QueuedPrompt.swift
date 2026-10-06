@@ -2,6 +2,10 @@ import Foundation
 
 struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     enum Status: String, Codable, Equatable, Sendable { case pending, sending }
+    struct BackgroundTaskWake: Codable, Equatable, Sendable {
+        let taskId: String
+        let wakeId: UUID
+    }
 
     let id: UUID
     var blocks: [ACPContentBlock]
@@ -33,7 +37,11 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// Present only for prompts delivered by a direct delegated-session edge.
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
     var delegatedSource: ACPDelegatedPromptSource?
-    let backgroundTaskWake: String?
+    /// The first task remains in the legacy field so older readers continue
+    /// to treat a batched notification as internal. New readers use the
+    /// explicit members to confirm every task atomically.
+    private(set) var backgroundTaskWake: String?
+    private var backgroundTaskWakeBatch: [BackgroundTaskWake]?
     var brokerOperationAttempt: Int
     /// How many times the flusher has dispatched this item. Retries can keep
     /// `brokerOperationAttempt`, so this is what tells transcript evidence
@@ -66,6 +74,59 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// head would block the whole queue.
     var isShownToUser: Bool {
         (delegatedSource == nil && backgroundTaskWake == nil) || lastError != nil || deliveryUncertain
+    }
+    var backgroundTaskWakes: [BackgroundTaskWake] {
+        if let backgroundTaskWakeBatch, !backgroundTaskWakeBatch.isEmpty {
+            return backgroundTaskWakeBatch
+        }
+        guard let backgroundTaskWake else { return [] }
+        return [.init(taskId: backgroundTaskWake, wakeId: id)]
+    }
+
+    var canBatchBackgroundTaskWake: Bool {
+        backgroundTaskWake != nil && status == .pending && lastError == nil && !deliveryUncertain
+    }
+
+    func containsBackgroundTaskWake(taskId: String, wakeId: UUID) -> Bool {
+        backgroundTaskWakes.contains { $0.taskId == taskId && $0.wakeId == wakeId }
+    }
+
+    func containsBackgroundTaskWake(wakeId: UUID) -> Bool {
+        backgroundTaskWakes.contains { $0.wakeId == wakeId }
+    }
+
+    mutating func upsertBackgroundTaskWake(taskId: String, wakeId: UUID, block: ACPContentBlock) -> Bool {
+        var wakes = backgroundTaskWakes
+        if let index = wakes.firstIndex(where: { $0.taskId == taskId && $0.wakeId == wakeId }) {
+            guard blocks.indices.contains(index) else { return false }
+            blocks[index] = block
+        } else {
+            guard backgroundTaskWake != nil else { return false }
+            wakes.append(.init(taskId: taskId, wakeId: wakeId))
+            blocks.append(block)
+        }
+        setBackgroundTaskWakes(wakes)
+        return true
+    }
+
+    @discardableResult
+    mutating func removeBackgroundTaskWakes(taskIds: Set<String>) -> Bool {
+        let wakes = backgroundTaskWakes
+        guard wakes.count == blocks.count else { return false }
+        let kept = wakes.indices.filter { !taskIds.contains(wakes[$0].taskId) }
+        guard kept.count != wakes.count else { return false }
+        blocks = kept.map { blocks[$0] }
+        setBackgroundTaskWakes(kept.map { wakes[$0] })
+        return true
+    }
+
+    private mutating func setBackgroundTaskWakes(_ wakes: [BackgroundTaskWake]) {
+        backgroundTaskWake = wakes.first?.taskId
+        if wakes.count == 1, wakes[0].wakeId == id {
+            backgroundTaskWakeBatch = nil
+        } else {
+            backgroundTaskWakeBatch = wakes.isEmpty ? nil : wakes
+        }
     }
 
     /// Internal task notifications retain their persisted delivery identity.
@@ -101,8 +162,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          deliveryUncertain: Bool = false,
          awaitingInterruptionResume: Bool = false,
          interruptedTurnContinuation: Bool = false,
-         usageLimit: ACPUsageLimit? = nil)
-    {
+         usageLimit: ACPUsageLimit? = nil) {
         self.id = id
         self.blocks = blocks
         self.enqueuedAt = enqueuedAt
@@ -125,6 +185,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, backgroundTaskWake
+        case backgroundTaskWakeBatch
         case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchCount, dispatchedBrokerGeneration, deliveryUncertain
         case awaitingInterruptionResume, interruptedTurnContinuation
         case usageLimit
@@ -141,6 +202,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
         delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
         backgroundTaskWake = try? c.decode(String.self, forKey: .backgroundTaskWake)
+        backgroundTaskWakeBatch = try? c.decode([BackgroundTaskWake].self, forKey: .backgroundTaskWakeBatch)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
         turnStartedAt = try? c.decode(Int64.self, forKey: .turnStartedAt)
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
