@@ -340,7 +340,7 @@ enum ChangeSummaryPolicy {
     /// deterministic field, and no phrasing list could separate "adds tests"
     /// from "was tested".
     private static var testMention: Regex<Substring> {
-        /(?i)\b(?:tests?|tested|testing|untested|specs?|ci|qa|verif\w*|validat\w*)\b/
+        /(?i)\b(?:tests?|tested|testing|untested|specs?|suites?|ci|qa|verif\w*|validat\w*)\b/
     }
     /// Builds, checks, lint, and compilation may be what a change touches,
     /// but not next to an outcome, which would claim a run the model never saw.
@@ -357,7 +357,7 @@ enum ChangeSummaryPolicy {
     /// Benefits are claimed through words like these whatever connects them
     /// ("for", "allowing", "letting"), so the words themselves are rejected.
     private static var benefit: Regex<Substring> {
-        /(?i)\b(?:faster|quicker|easier|safer|simpler|smoother|cleaner|better|improv\w*|efficien\w*|reliab\w*|robust\w*|more (?:secure|stable|readable|maintainable|responsive)|less (?:error-prone|brittle|confusing))\b/
+        /(?i)\b(?:faster|quicker|easier|safer|simpler|smoother|cleaner|better|improv\w*|efficien\w*|reliab\w*|robust\w*|performan\w*|speed(?:s|ier|y)?|latency|optimi[sz]\w*|more (?:secure|stable|readable|maintainable|responsive)|less (?:error-prone|brittle|confusing))\b/
     }
     /// Mentions and URLs become live on code hosts even when escaped, and the
     /// card shows the narrative as plain text. Other Markdown is escaped on copy.
