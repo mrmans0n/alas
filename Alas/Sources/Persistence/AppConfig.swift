@@ -486,6 +486,8 @@ struct AppConfig: Codable, Equatable {
     struct Agents: Codable, Equatable {
         var builtinState: [String: BuiltinAgentState]
         var custom: [AgentDefinition]
+        /// Agents installed from the ACP registry (Settings → Agents).
+        var registry: [ACPRegistryInstalledAgent] = []
         var worktreeAutoLaunch: WorktreeAutoLaunch
         /// Which surface the ⌥⌘T launcher opens on by default —
         /// terminal tab or ACP chat. The user can flip with the
@@ -496,7 +498,7 @@ struct AppConfig: Codable, Equatable {
         var chatFontSize: Int
 
         enum CodingKeys: String, CodingKey {
-            case builtinState, custom, worktreeAutoLaunch, defaultLauncherMode,
+            case builtinState, custom, registry, worktreeAutoLaunch, defaultLauncherMode,
                  chatFontFamily, chatFontSize
         }
     }
@@ -912,6 +914,9 @@ extension AppConfig {
             let custom = (try? agentsContainer.decode(
                 [AgentDefinition].self, forKey: .custom
             )) ?? []
+            let registry = (try? agentsContainer.decode(
+                [ACPRegistryInstalledAgent].self, forKey: .registry
+            )) ?? []
             let autoLaunch = (try? agentsContainer.decode(
                 WorktreeAutoLaunch.self, forKey: .worktreeAutoLaunch
             )) ?? WorktreeAutoLaunch(agentId: nil, useBypassPermissions: false)
@@ -928,6 +933,7 @@ extension AppConfig {
             agents = Agents(
                 builtinState: state,
                 custom: custom,
+                registry: registry,
                 worktreeAutoLaunch: autoLaunch,
                 defaultLauncherMode: defaultMode,
                 chatFontFamily: chatFontFamily,

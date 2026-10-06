@@ -1,0 +1,40 @@
+import Foundation
+
+extension AppState {
+    /// Installs (or updates) `agent` from the ACP registry and adds it to the
+    /// launch catalog. An update keeps the user's enabled choice.
+    func installRegistryAgent(
+        _ agent: ACPRegistryAgent,
+        installer: ACPRegistryInstaller = ACPRegistryInstaller()
+    ) async throws {
+        var record = try await installer.install(agent)
+        if let index = config.agents.registry.firstIndex(where: { $0.registryID == agent.id }) {
+            record.isEnabled = config.agents.registry[index].isEnabled
+            config.agents.registry[index] = record
+        } else {
+            config.agents.registry.append(record)
+        }
+        saveConfig()
+        rescanAgents()
+    }
+
+    func uninstallRegistryAgent(
+        registryID: String,
+        installer: ACPRegistryInstaller = ACPRegistryInstaller()
+    ) async throws {
+        // npm installs can hold large `node_modules` trees; delete off the main actor.
+        try await Task.detached { try installer.uninstall(registryID: registryID) }.value
+        config.agents.registry.removeAll { $0.registryID == registryID }
+        saveConfig()
+        rescanAgents()
+    }
+
+    /// Locally enabled agents offered for `projectId`. SSH projects drop
+    /// registry installs that only exist on this Mac; nil (no single
+    /// project) keeps every enabled agent.
+    func enabledAgents(forProjectId projectId: String?) -> [AgentDefinition] {
+        let enabled = agentRegistry.enabled()
+        guard let projectId, projects.first(where: { $0.id == projectId })?.host != nil else { return enabled }
+        return enabled.filter(\.canRunOnRemoteHost)
+    }
+}

@@ -231,6 +231,12 @@ extension Paths {
     static var acpAdapterUpdatesFile: URL {
         appSupportRoot.appendingPathComponent("acp-adapter-updates.json")
     }
+
+    /// Install root for agents installed from the ACP registry, one
+    /// directory per registry id.
+    static var acpRegistryAgentsDirectory: URL {
+        appSupportRoot.appendingPathComponent("acp-agents", isDirectory: true)
+    }
 }
 
 extension Paths {

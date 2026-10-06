@@ -43,8 +43,8 @@ final class AgentLauncherModel {
     var scrollToSelectionTick: Int = 0
 
     /// Agents visible for the current `mode` after applying the fuzzy
-    /// query. Terminal mode shows every enabled agent; ACP mode shows
-    /// only the subset for which `ACPLaunchCatalog` has a launch spec.
+    /// query. Terminal mode shows every enabled terminal-capable agent; ACP
+    /// mode shows only the subset for which `ACPLaunchCatalog` has a launch spec.
     func rows(enabledAgents: [AgentDefinition], preferredAgentID: String? = nil) -> [AgentDefinition] {
         filtered(orderedPool(enabledAgents: enabledAgents, preferredAgentID: preferredAgentID))
     }
@@ -67,7 +67,7 @@ final class AgentLauncherModel {
     func pool(enabledAgents: [AgentDefinition]) -> [AgentDefinition] {
         switch mode {
         case .terminal:
-            return enabledAgents
+            return enabledAgents.filter(\.supportsTerminal)
         case .acp:
             let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
             return enabledAgents.filter { acpIds.contains($0.id) }

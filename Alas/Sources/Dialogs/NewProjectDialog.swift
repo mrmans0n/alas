@@ -200,7 +200,7 @@ private struct ProjectDialog: View {
                         case .agents:
                             ProjectAgentSettingsView(
                                 scripts: $agentSettings,
-                                agents: state.agentRegistry.agents,
+                                agents: projectAgentChoices,
                                 globalAgentID: state.config.agents.worktreeAutoLaunch.agentId,
                                 globalUseBypass: state.config.agents.worktreeAutoLaunch.useBypassPermissions,
                                 repoDefaultAgentName: repoDefaultAgentName
@@ -381,6 +381,16 @@ private struct ProjectDialog: View {
             repoPath: repoPath,
             agents: state.agentRegistry.agents
         )
+    }
+
+    /// Agents the project settings can pick. An SSH project cannot use a
+    /// registry install that only exists on this Mac.
+    private var projectAgentChoices: [AgentDefinition] {
+        let isRemote = switch mode {
+        case .edit(let project): project.host != nil
+        case .add: location == .remoteSSH
+        }
+        return isRemote ? state.agentRegistry.agents.filter(\.canRunOnRemoteHost) : state.agentRegistry.agents
     }
 
     private var locationFieldLabel: String {

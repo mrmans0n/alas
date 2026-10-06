@@ -219,6 +219,32 @@ struct AppStateRepoIconTests {
         )
     }
 
+    @Test("an SSH project never defaults to a registry agent installed on this Mac")
+    func remoteProjectDropsLocalOnlyRegistryDefault() {
+        let remote = project(path: "/srv/repo", host: "devbox")
+        let state = AppState(store: SeededStore(projects: ProjectsFile(projects: [remote])))
+        let local = ACPRegistryInstalledAgent(
+            registryID: "goose", displayName: "goose", version: "1.0.0",
+            command: "/Users/me/Library/Application Support/Alas/acp-agents/goose/goose",
+            arguments: [], environment: [:], isEnabled: true
+        )
+        let uv = ACPRegistryInstalledAgent(
+            registryID: "fast-agent", displayName: "fast-agent", version: "1.0.0",
+            command: "uvx", arguments: [], environment: [:], isEnabled: true
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [local.agentDefinition, uv.agentDefinition],
+            installedIds: [local.id, uv.id]
+        )
+        let root = URL(fileURLWithPath: remote.path)
+
+        state.config.agents.worktreeAutoLaunch.agentId = local.id
+        #expect(state.defaultAgentID(projectId: remote.id, worktreeRoot: root) == nil)
+        state.config.agents.worktreeAutoLaunch.agentId = uv.id
+        #expect(state.defaultAgentID(projectId: remote.id, worktreeRoot: root) == uv.id)
+    }
+
     @Test("reapproving a declined server refuses a changed config")
     func reapprovalRefusesChangedConfig() throws {
         // The status row is a snapshot of the config the user declined. If the

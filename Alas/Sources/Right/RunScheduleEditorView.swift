@@ -411,7 +411,7 @@ struct RunScheduleEditorView: View {
     }
 
     private var agentPicker: some View {
-        let agents = state.agentRegistry.enabled()
+        let agents = state.enabledAgents(forProjectId: draft.projectID)
         // An agent that has since been disabled or removed is still named,
         // the way a missing script is. Showing "Project default" for it
         // would be a lie: the id stays in the draft and is saved, and the

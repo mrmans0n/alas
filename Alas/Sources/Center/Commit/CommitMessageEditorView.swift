@@ -143,7 +143,7 @@ struct CommitMessageEditorView: View {
                 accessory
             }
             AiSplitButton(
-                availableAgents: agentAvailability.agents,
+                availableAgents: agentAvailability.agents.filter(\.supportsTerminal),
                 selectedToolId: $aiToolId,
                 busy: busy,
                 onGenerate: onGenerate

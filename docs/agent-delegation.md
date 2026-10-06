@@ -83,10 +83,11 @@ Model catalog states:
 | `unsupported` | A live session advertised no model list, and none is remembered. |
 | `unavailable` | The agent is not a valid target for this caller (`available` is `false`). |
 
-Only ACP-capable agents are listed. Custom terminal agents cannot be delegated
-to and are omitted. Alas never fabricates model ids. The catalog comes from
-what agents reported on earlier connections, and the agent stays the authority
-when a session starts.
+Only ACP-capable agents are listed: the built-in chat agents and agents
+installed from the ACP Registry in Settings → Agents (ids `registry-<id>`).
+Custom terminal agents cannot be delegated to and are omitted. Alas never
+fabricates model ids. The catalog comes from what agents reported on earlier
+connections, and the agent stays the authority when a session starts.
 
 ## Choosing the child's model
 

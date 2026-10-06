@@ -14,17 +14,22 @@ enum ACPRemoteLaunch {
         "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
     ]
 
+    /// `environment` is the agent's launch env (`ACPLaunchSpec.extraEnv`);
+    /// sorting keeps the command deterministic.
     static func agentCommand(
         command: String,
         arguments: [String],
+        environment: [String: String] = [:],
         nodeBinDirectory: String? = nil
     ) -> String {
-        let scrub = markerScrub.map { "-u \($0)" }.joined(separator: " ")
-        let argv = ([remoteShellWord(command)] + arguments.map(SSHCommand.shellQuote)).joined(separator: " ")
+        let scrub = markerScrub.map { "-u \($0)" }
+        let pairs = environment.sorted { $0.key < $1.key }
+            .map { SSHCommand.shellQuote("\($0.key)=\($0.value)") }
+        let argv = [remoteShellWord(command)] + arguments.map(SSHCommand.shellQuote)
         let pathPrefix = nodeBinDirectory.map {
             "PATH=\(SSHCommand.shellQuote($0)):\"$PATH\" && export PATH && "
         } ?? ""
-        return "\(pathPrefix)env \(scrub) \(argv)"
+        return pathPrefix + (["env"] + scrub + pairs + argv).joined(separator: " ")
     }
 
     static func channelInvocation(
@@ -32,6 +37,7 @@ enum ACPRemoteLaunch {
         worktreePath: String,
         command: String,
         arguments: [String],
+        environment: [String: String] = [:],
         nodeBinDirectory: String? = nil
     ) -> RemoteExecInvocation {
         RemoteExec.invocation(
@@ -40,6 +46,7 @@ enum ACPRemoteLaunch {
             command: agentCommand(
                 command: command,
                 arguments: arguments,
+                environment: environment,
                 nodeBinDirectory: nodeBinDirectory
             )
         )

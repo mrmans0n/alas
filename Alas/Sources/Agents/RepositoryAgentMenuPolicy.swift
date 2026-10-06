@@ -2,7 +2,7 @@ import Foundation
 
 enum RepositoryAgentMenuPolicy {
     static func directAgents(from availableAgents: [AgentDefinition]) -> [AgentDefinition] {
-        availableAgents
+        availableAgents.filter(\.supportsTerminal)
     }
 
     static func acpAgents(from availableAgents: [AgentDefinition]) -> [AgentDefinition] {

@@ -173,7 +173,8 @@ struct ChangesPane: View {
         Picker("", selection: state.bind(\.changes.aiToolId)) {
             // `agent.isEnabled` is clamped against install detection in
             // AgentRegistry, so every entry here is both enabled and installed.
-            ForEach(state.agentRegistry.agents.filter(\.isEnabled)) { agent in
+            // ACP-only registry agents cannot run prompt mode.
+            ForEach(state.agentRegistry.agents.filter { $0.isEnabled && $0.supportsTerminal }) { agent in
                 Label {
                     Text(agent.displayName)
                 } icon: {

@@ -1,7 +1,9 @@
 import Foundation
+import Synchronization
 
 enum ACPLaunchCatalog {
-    static let specs: [ACPLaunchSpec] = [
+    /// Curated launch specs shipped with Alas.
+    static let builtinSpecs: [ACPLaunchSpec] = [
         // Claude Code via Alas's maintained ACP adapter package. Require the
         // package itself so a PATH binary from a legacy install cannot skip
         // migration; the binary on PATH is `claude-agent-acp`.
@@ -113,7 +115,23 @@ enum ACPLaunchCatalog {
             supportsModeSelection: true),
     ]
 
+    /// Launch specs of agents installed from the ACP registry. Process-wide
+    /// because every ACP surface consults the catalog statically; `AppState`
+    /// republishes it whenever `config.agents.registry` may have changed.
+    private static let registrySpecs = Mutex<[ACPLaunchSpec]>([])
+
+    /// Every launchable ACP agent: the curated built-ins, then registry installs.
+    static var specs: [ACPLaunchSpec] {
+        builtinSpecs + registrySpecs.withLock { $0 }
+    }
+
     static func spec(for agentID: String) -> ACPLaunchSpec? {
-        specs.first { $0.agentID == agentID }
+        if let builtin = builtinSpecs.first(where: { $0.agentID == agentID }) { return builtin }
+        return registrySpecs.withLock { specs in specs.first { $0.agentID == agentID } }
+    }
+
+    static func publishRegistryAgents(_ agents: [ACPRegistryInstalledAgent]) {
+        let specs = agents.map(\.launchSpec)
+        registrySpecs.withLock { $0 = specs }
     }
 }

@@ -69,7 +69,7 @@ extension AppState {
             },
             agents: { [weak self] in
                 guard let self else { return [] }
-                return self.agentRegistry.enabled()
+                return self.enabledAgents(forProjectId: project.id)
                     .filter { ACPLaunchCatalog.spec(for: $0.id) != nil }
                     .map { PluginAgent(id: $0.id, name: $0.displayName) }
             },
@@ -234,6 +234,11 @@ extension AppState {
         // Also catches an unknown id: only a known ACP agent can take the prompt as a message.
         guard ACPLaunchCatalog.spec(for: agentId) != nil else {
             return .rejected(code: -32602, message: "agent \(agentId) cannot take a prompt")
+        }
+        // Reject before the worktree exists: a registry install on this Mac
+        // cannot launch on the project's SSH host.
+        if project.host != nil, agent(id: agentId)?.canRunOnRemoteHost == false {
+            return .rejected(code: -32602, message: "agent \(agentId) is not available on \(project.name)'s host")
         }
         let branch = PluginTaskBranch.name(title: request.title, requested: request.branch)
         let prepared = PreparedWorktreeACPPrompt(
