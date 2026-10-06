@@ -4,6 +4,7 @@ import SwiftUI
 /// of rows with completed / in-progress / pending marks.
 struct ACPPlanChecklist: View {
     let items: [ACPMessage.PlanItem]
+    var isTurnActive = false
     @Environment(\.theme) private var theme
 
     private var done: Int { items.filter { $0.status == "completed" }.count }
@@ -64,9 +65,14 @@ struct ACPPlanChecklist: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(theme.color("add"))
                 .frame(width: 12)
-        case "in_progress":
+        case "in_progress" where isTurnActive:
             Spinner(lineWidth: 1.5, duration: 0.7)
                 .frame(width: 10, height: 10)
+                .frame(width: 12)
+        case "in_progress":
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 10))
+                .foregroundStyle(theme.color("accent"))
                 .frame(width: 12)
         default:
             Circle()

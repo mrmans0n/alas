@@ -973,7 +973,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
-            let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
+            let items = planItems(from: entries)
             // Overwrite the existing plan in place only if it belongs to
             // the current turn (i.e. sits after the latest user prompt).
             // Otherwise append a fresh plan so the previous turn's plan
@@ -1044,6 +1044,51 @@ final class ACPSession: ObservableObject, Identifiable {
             transcript.lastContentTouchIndex = latest
         }
         return touched
+    }
+
+    private struct OMPTodoSnapshot: Decodable {
+        struct Details: Decodable {
+            struct Phase: Decodable {
+                let tasks: [ACPMessage.PlanItem]
+            }
+            let storage: String
+            let phases: [Phase]
+        }
+        let details: Details
+    }
+
+    private func planItems(from entries: [ACPPlanEntry]) -> [ACPMessage.PlanItem] {
+        let incoming = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
+        guard agentId == "omp", !incoming.isEmpty else { return incoming }
+
+        // OMP emits reminders containing only pending/in-progress todos as
+        // replacement plans. Restore the full list only when that reminder
+        // exactly matches the latest successful todo result in this turn.
+        for message in transcript.messages.reversed() {
+            if case .user = message { break }
+            guard case .toolCall(let call) = message,
+                  call.status == "completed",
+                  call.nonEmptyName.map({ $0 == "todo" }) ?? (call.kind == "think") else { continue }
+            guard let rawOutput = call.rawOutput,
+                  let snapshot = try? JSONDecoder().decode(OMPTodoSnapshot.self, from: Data(rawOutput.utf8)),
+                  ["session", "memory"].contains(snapshot.details.storage) else { return incoming }
+            let tasks = snapshot.details.phases.flatMap(\.tasks)
+            guard tasks.count > incoming.count,
+                  tasks.allSatisfy({ ["pending", "in_progress", "completed", "abandoned", "blocked"].contains($0.status) }),
+                  tasks.filter({ $0.status == "pending" || $0.status == "in_progress" }) == incoming else {
+                return incoming
+            }
+            return tasks.map { task in
+                var item = task
+                switch item.status {
+                case "abandoned": item.status = "completed"
+                case "blocked": item.status = "pending"
+                default: break
+                }
+                return item
+            }
+        }
+        return incoming
     }
 
     private func applyContextCompaction(_ update: ACPCompactionUpdate) -> Set<Int> {
