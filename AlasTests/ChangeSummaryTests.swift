@@ -81,52 +81,37 @@ struct ChangeSummaryTests {
         #expect(Self.parse(output, Self.facts()) == nil)
     }
 
-    /// Evidence is a test file plus an issue title; without it the branch
-    /// only touches `Latest.swift`, whose name merely contains "test".
     @Test(arguments: [
-        (#"{"summary": "Adds a picker and covers it with tests."}"#, false, false),
-        (#"{"summary": "Adds a picker and covers it with tests."}"#, true, true),
-        (#"{"summary": "Adds a picker because users lose their place."}"#, false, false),
-        (#"{"summary": "Adds a picker because users lose their place."}"#, true, true),
-        (#"{"summary": "Adds a picker to avoid losing the user's place."}"#, false, false),
-        (#"{"summary": "Adds a picker, and the tests are passing."}"#, true, false),
-        (#"{"summary": "Adds a picker; CI is green."}"#, true, false),
-        (#"{"summary": "Adds a picker and the checks have passed."}"#, true, false),
-        (#"{"summary": "Adds a picker. Tests completed successfully."}"#, true, false),
+        #"{"summary": "Adds a picker and covers it with tests."}"#,
+        #"{"summary": "The picker was tested."}"#,
+        #"{"summary": "Adds a picker, and CI is green."}"#,
+        #"{"summary": "Adds a picker and the checks have passed."}"#,
     ])
-    func testsAndMotivationNeedSupportingEvidence(output: String, withEvidence: Bool, accepted: Bool) {
-        let facts = Self.facts(
-            files: ["Sources/Latest.swift"] + (withEvidence ? ["Tests/PickerTests.swift"] : []),
-            issueTitle: withEvidence ? "Users lose their place when switching branches" : nil
-        )
+    func testsAreNeverNarratedEvenWhenTheBranchChangesThem(output: String) {
+        let facts = Self.facts(files: ["Sources/Picker.swift", "Tests/PickerTests.swift"], issueTitle: "Test the picker")
 
-        #expect((Self.parse(output, facts) != nil) == accepted)
+        #expect(Self.parse(output, facts) == nil)
+    }
+
+    @Test(arguments: [
+        (#"{"summary": "Adds a picker because users lose their place."}"#, "Users lose their place", true),
+        (#"{"summary": "Adds a picker because users lose their place."}"#, nil, false),
+        (#"{"summary": "Adds a picker to avoid losing the user's place."}"#, nil, false),
+        (#"{"summary": "Adds a branch picker so users can switch repositories."}"#, nil, false),
+    ] as [(String, String?, Bool)])
+    func motivationNeedsADescription(output: String, issueTitle: String?, accepted: Bool) {
+        #expect((Self.parse(output, Self.facts(issueTitle: issueTitle)) != nil) == accepted)
     }
 
     @Test
-    func claimsAreCheckedOnlyAgainstEvidenceThePromptCarried() {
-        let sources = (0 ..< 400).map { "Sources/Module\($0)/File\($0).swift" }
-        let packed = Self.facts(files: ["Sources/Picker.swift"] + sources + ["Tests/PickerTests.swift"])
-        let output = #"{"summary": "Adds a picker and covers it with tests."}"#
+    func motivationIsCheckedAgainstOnlyTheDescriptionsThePromptCarried() {
+        // Escaped control characters push both descriptions out of the budget.
+        let control = String(repeating: "\u{1}", count: 1_000)
+        let facts = Self.facts(branch: control, issueTitle: control, commitBody: control)
+        let output = #"{"summary": "Adds a picker because users lose their place."}"#
 
-        #expect(!ChangeSummaryPolicy.request(for: packed).coverage.isComplete)
-        #expect(Self.parse(output, packed) == nil)
-        #expect(Self.parse(output, Self.facts(files: ["Sources/Picker.swift", "Tests/PickerTests.swift"])) != nil)
-    }
-
-    @Test(arguments: [
-        ("Tests/Picker.swift", true),
-        ("AlasTests/EventHolder.swift", true),
-        ("MyAppTests/Fixtures.swift", true),
-        ("AlasTests/PickerTests.swift", true),
-        ("pkg/picker_test.go", true),
-        ("tests_helpers/test_picker.py", true),
-        ("web/picker.spec.ts", true),
-        ("Sources/Latest.swift", false),
-        ("Sources/Contest/Attestation.swift", false),
-    ])
-    func testPathsFollowNamingConventions(path: String, isTest: Bool) {
-        #expect(ChangeSummaryPolicy.isTestPath(path) == isTest)
+        #expect(ChangeSummaryPolicy.request(for: facts).evidence.descriptions.isEmpty)
+        #expect(Self.parse(output, facts) == nil)
     }
 
     @Test(arguments: [
