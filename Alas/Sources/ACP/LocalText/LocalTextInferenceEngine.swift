@@ -67,12 +67,13 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
          load: @escaping @Sendable (URL) async throws -> InjectedEvaluation,
          tokenCount: @escaping @Sendable ([LocalTextMessage]) async throws -> Int = { _ in 0 },
+         release: @escaping @Sendable () -> Void = {},
          supported: @escaping @Sendable () -> Bool = { true },
          clock: Clock = Clock(), observeMemoryPressure: Bool = true) {
         self.acquireLease = acquireLease
         self.load = { directory in
             let injected = try await load(directory)
-            return .init(tokenCount: tokenCount) { candidates, inputTokenLimit, parameters in
+            return .init(tokenCount: tokenCount, evaluate: { candidates, inputTokenLimit, parameters in
                 try await injected(.init(
                     messageCandidates: candidates,
                     inputTokenLimit: inputTokenLimit,
@@ -81,7 +82,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                     prefillStepSize: parameters.prefillStepSize,
                     timeout: .seconds(15)
                 ))
-            }
+            }, release: release)
         }
         self.supported = supported
         self.clock = clock
@@ -353,11 +354,19 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     private static func loadNative(_ directory: URL) async throws -> LoadedModel {
         try Task.checkCancellation()
         defer { MLX.Stream().synchronize() }
-        let container = try await LLMModelFactory.shared.loadContainer(
-            from: directory,
-            using: #huggingFaceTokenizerLoader()
-        )
-        try Task.checkCancellation()
+        let container: ModelContainer
+        do {
+            container = try await LLMModelFactory.shared.loadContainer(
+                from: directory,
+                using: #huggingFaceTokenizerLoader()
+            )
+        } catch {
+            // No LoadedModel will exist to release a partially loaded model's weights.
+            MLX.Memory.clearCache()
+            throw error
+        }
+        // No cancellation check here: a loaded model must reach `evaluation`,
+        // where `run` sees the cancellation and `unload()` releases its cache.
         return .init(
             tokenCount: { messages in
                 try await container.perform { context in
