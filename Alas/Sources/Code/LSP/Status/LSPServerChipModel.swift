@@ -32,8 +32,10 @@ enum LSPServerChipAggregation {
             .sorted { ($0.language, $0.root, $0.id) < ($1.language, $1.root, $1.id) }
     }
 
+    static func isInline(count: Int) -> Bool { count <= inlineLimit }
+
     static func presentation(_ snapshots: [LSPChipSnapshot]) -> Presentation {
-        guard snapshots.count > inlineLimit else { return .inline }
+        guard !isInline(count: snapshots.count) else { return .inline }
         return .summary(
             ready: snapshots.filter { $0.severity == .ready }.count,
             total: snapshots.count,

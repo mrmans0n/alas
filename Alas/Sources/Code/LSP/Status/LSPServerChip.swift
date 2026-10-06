@@ -54,7 +54,7 @@ struct LSPServerChip: View {
         }
         .buttonStyle(.plain)
         .help(state.tooltip)
-        .accessibilityLabel(Text("Language server status: \(state.tooltip)"))
+        .accessibilityLabel(Text("Language server status: \(state.label), \(state.tooltip)"))
         .accessibilityHint(Text("Shows details and actions for this language server"))
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
