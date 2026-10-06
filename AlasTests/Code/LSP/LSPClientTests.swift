@@ -319,4 +319,43 @@ struct LSPClientLifecycleTests {
         _ = try await client.requestDiagnostics(uri: "file:///tmp/x.kt", previousResultId: "prev123")
         transport.finish()
     }
+
+    @Test("work-done progress yields ordered snapshots, ignores malformed updates, and acknowledges create")
+    func workDoneProgress() async throws {
+        let transport = FakeTransport()
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp", progressCoalescing: .zero)
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
+            }
+        }
+        try await client.initialize()
+        #expect((transport.sent.first ?? "").contains(#""window":{"workDoneProgress":true}"#))
+
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":"p1","method":"window/workDoneProgress/create","params":{"token":"idx"}}"#)
+        // Ignored: report for an unknown token, and a progress notification without a value.
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"ghost","value":{"kind":"report","percentage":5}}}"#)
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx"}}"#)
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":0}}}"#)
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"report","message":"412/980","percentage":42}}}"#)
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+
+        let events = client.lifecycleEvents
+        let snapshots = try await withTimeout(nanoseconds: 2_000_000_000) {
+            var collected: [[LSPClient.ProgressTask]] = []
+            for await event in events {
+                if case .progress(let tasks) = event { collected.append(tasks) }
+                if collected.count == 3 { break }
+            }
+            return collected
+        }
+        #expect(snapshots == [
+            [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 0)],
+            [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: "412/980", percentage: 42)],
+            [],
+        ])
+        let ack = transport.sent.first { $0.contains(#""id":"p1""#) } ?? ""
+        #expect(ack.contains(#""result":null"#))
+        transport.finish()
+    }
 }
