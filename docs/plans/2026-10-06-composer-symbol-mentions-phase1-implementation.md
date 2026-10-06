@@ -757,7 +757,7 @@ git commit -m "feat(symbols): extract declarations with tree-sitter tags"
 - Consumes: `SymbolExtractor.symbols(in:relativePath:)`, `LanguageRegistry.supportsSymbols(forPath:)`.
 - Produces:
   - `SymbolSource.read(root: URL, relativePath: String) async -> String?` and `SymbolSource.containedLocalURL(root: URL, relativePath: String) -> URL?`
-  - `actor WorktreeSymbolIndex` with `func updates(root: URL, files: [String]) -> AsyncStream<WorktreeSymbolIndex.Snapshot>` and `func isLoaded(root: URL) -> Bool`
+  - `actor WorktreeSymbolIndex` with `func updates(root: URL, files: [String]?) -> AsyncStream<WorktreeSymbolIndex.Snapshot>` (`nil` files: enumeration failed, replay the cache unchanged) and `func isLoaded(root: URL) -> Bool`
   - `struct WorktreeSymbolIndex.Snapshot: Sendable, Equatable { symbols: [SymbolEntry]; indexedFiles: Int; totalFiles: Int; isComplete: Bool }`
   - `AppState.symbolIndex: WorktreeSymbolIndex`
 
@@ -804,6 +804,11 @@ struct WorktreeSymbolIndexTests {
         try FileManager.default.removeItem(at: root.appendingPathComponent("B.swift"))
         let second = try #require(await lastSnapshot(index.updates(root: root, files: ["A.swift", "C.swift"])))
         #expect(Set(second.symbols.map(\.name)) == ["AlphaRenamed", "Gamma"])
+
+        // A failed `git ls-files` must not wipe what is already indexed.
+        let failed = try #require(await lastSnapshot(index.updates(root: root, files: nil)))
+        #expect(failed.isComplete)
+        #expect(Set(failed.symbols.map(\.name)) == ["AlphaRenamed", "Gamma"])
     }
 
     @Test("files over the size cap are skipped")
@@ -937,8 +942,17 @@ actor WorktreeSymbolIndex {
     /// Streams progress while refreshing `root` against `files` (worktree
     /// relative, from `FileIndex`). Ends after a complete snapshot.
     /// Cancelling the consumer stops parsing; finished files are kept.
-    func updates(root: URL, files: [String]) -> AsyncStream<Snapshot> {
-        AsyncStream { continuation in
+    /// `files: nil` means enumeration failed: replay the cache, change nothing.
+    func updates(root: URL, files: [String]?) -> AsyncStream<Snapshot> {
+        guard let files else {
+            let cached = records[Self.key(root)] ?? [:]
+            let snapshot = Self.snapshot(cached, indexed: cached.count, total: cached.count)
+            return AsyncStream { continuation in
+                continuation.yield(snapshot)
+                continuation.finish()
+            }
+        }
+        return AsyncStream { continuation in
             let task = Task { await self.refresh(root: root, files: files, continuation: continuation) }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -1031,7 +1045,8 @@ And add (near `openFile`):
         Task { [fileIndex, symbolIndex] in
             guard await symbolIndex.isLoaded(root: root) else { return }
             await fileIndex.invalidate(forWorktreePath: root)
-            let files = (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath) ?? []
+            // `try?` without a fallback: a failed enumeration leaves the index alone.
+            let files = (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
             for await _ in await symbolIndex.updates(root: root, files: files) {}
         }
     }
@@ -1552,18 +1567,18 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         #expect(ACPSymbolReference.resolve(target("restore", .method, lines: 3...5), source: nil).found == false)
     }
 
-    @Test("excerpts stop at 400 lines or 32 KB and say how much was cut", arguments: [
-        (String(repeating: "x\n", count: 500), 400, 500),
-        (String(repeating: String(repeating: "y", count: 1_000) + "\n", count: 50), 32, 50),
-        (String(repeating: "z", count: 40_000), 1, 1),
+    @Test("excerpts stay within 400 lines and 32 KB, marker included, and say how much was cut", arguments: [
+        (String(repeating: "x\n", count: 500), 400, 500, "… cut: showing 400 of 500 lines"),
+        (String(repeating: String(repeating: "y", count: 1_000) + "\n", count: 50), 32, 50, "… cut: showing 32 of 50 lines"),
+        (String(repeating: "z", count: 40_000), 1, 1, "… cut: showing 1 of 1 lines, first line shortened"),
     ])
-    func capsExcerpt(declaration: String, shown: Int, total: Int) {
+    func capsExcerpt(declaration: String, shown: Int, total: Int, marker: String) {
         let excerpt = ACPSymbolReference.excerpt(declaration)
         #expect(excerpt.truncated)
         #expect(excerpt.shownLines == shown)
         #expect(excerpt.totalLines == total)
-        #expect(excerpt.text.utf8.count <= ACPSymbolReference.maxExcerptBytes + 80)
-        #expect(excerpt.text.hasSuffix("… cut: showing \(shown) of \(total) lines"))
+        #expect(excerpt.text.utf8.count <= ACPSymbolReference.maxExcerptBytes)
+        #expect(excerpt.text.hasSuffix(marker))
         #expect(!ACPSymbolReference.excerpt("short\n").truncated)
     }
 
@@ -1730,27 +1745,36 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
         return Resolution(target: target, found: true, lineRange: match.lineRange, declaration: declaration)
     }
 
+    /// Room kept for the cut marker, so marker plus code fit the byte cap.
+    private static let markerReserve = 96
+
     static func excerpt(_ declaration: String) -> Excerpt {
         var lines = declaration.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
+        let whole = lines.joined(separator: "\n")
+        if lines.count <= maxExcerptLines, whole.utf8.count <= maxExcerptBytes {
+            return Excerpt(text: whole, shownLines: lines.count, totalLines: lines.count, truncated: false)
+        }
+        let budget = maxExcerptBytes - markerReserve
         var kept: [String] = []
         var bytes = 0
+        var shortened = false
         for line in lines {
             let cost = line.utf8.count + (kept.isEmpty ? 0 : 1)
-            if kept.count == maxExcerptLines || bytes + cost > maxExcerptBytes {
+            if kept.count == maxExcerptLines || bytes + cost > budget {
                 if kept.isEmpty {
                     // One huge line (minified code): cut it to the byte budget.
-                    kept.append(String(decoding: line.utf8.prefix(maxExcerptBytes), as: UTF8.self))
+                    kept.append(String(decoding: line.utf8.prefix(budget), as: UTF8.self))
+                    shortened = true
                 }
                 break
             }
             kept.append(line)
             bytes += cost
         }
-        let truncated = kept.count < lines.count || kept.first.map { $0.utf8.count < (lines.first?.utf8.count ?? 0) } == true
-        var text = kept.joined(separator: "\n")
-        if truncated { text += "\n… cut: showing \(kept.count) of \(lines.count) lines" }
-        return Excerpt(text: text, shownLines: kept.count, totalLines: lines.count, truncated: truncated)
+        let marker = "… cut: showing \(kept.count) of \(lines.count) lines" + (shortened ? ", first line shortened" : "")
+        return Excerpt(text: kept.joined(separator: "\n") + "\n" + marker,
+                       shownLines: kept.count, totalLines: lines.count, truncated: true)
     }
 
     static func referenceText(for resolution: Resolution) -> String {
@@ -1952,7 +1976,8 @@ struct ACPSymbolMentionSource {
         let root = worktree.path
         return ACPSymbolMentionSource(
             index: root.isRemoteAlasPath ? nil : { [state] in
-                let files = (try? await state.fileIndex.entries(forWorktreePath: root))?.map(\.relativePath) ?? []
+                // nil on a failed enumeration: the index replays its cache.
+                let files = (try? await state.fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
                 return await state.symbolIndex.updates(root: root, files: files)
             },
             fileSymbols: { [state] fileQuery in
