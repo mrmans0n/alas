@@ -74,7 +74,10 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         self.hasUncommittedChanges = hasUncommittedChanges
     }
 
-    init(
+    /// Nil when the context was loaded for a different HEAD than the draft
+    /// targets: HEAD moved after the load began, and the facts would describe
+    /// a revision the draft is not about.
+    init?(
         context: ReviewRequestDraftContext,
         base: String,
         branch: String,
@@ -82,10 +85,11 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         runResults: [RunResult],
         issueTitle: String?
     ) {
+        if let loadedHead = context.headSHA, loadedHead != headSHA { return nil }
         self.init(
             base: base,
             branch: branch,
-            headSHA: context.headSHA ?? headSHA,
+            headSHA: headSHA,
             mergeBaseSHA: context.mergeBaseSHA,
             commits: context.commits.map { .init(sha: $0.sha, shortSHA: $0.shortSha, subject: $0.rawSubject) },
             files: context.changedFiles.map {
@@ -129,15 +133,24 @@ struct ChangeSummaryCoverage: Equatable, Sendable {
     let commitCount: Int
     let filesShown: Int
     let fileCount: Int
+    /// Shown subjects and paths cut to their length limit, plus descriptions
+    /// shortened or dropped to fit the budget.
+    var shortenedItems = 0
 
-    var isComplete: Bool { commitsShown == commitCount && filesShown == fileCount }
+    var isComplete: Bool { commitsShown == commitCount && filesShown == fileCount && shortenedItems == 0 }
 
     var disclosure: String? {
         guard !isComplete else { return nil }
         var parts: [String] = []
         if commitsShown < commitCount { parts.append("\(commitsShown) of \(commitCount) commits") }
         if filesShown < fileCount { parts.append("\(filesShown) of \(fileCount) changed files") }
-        return "Drafted from \(parts.joined(separator: " and ")); the rest were omitted."
+        var sentences: [String] = []
+        if !parts.isEmpty { sentences.append("Drafted from \(parts.joined(separator: " and ")); the rest were omitted.") }
+        if shortenedItems > 0 {
+            let noun = shortenedItems == 1 ? "commit subject, file path, or description was" : "commit subjects, file paths, or descriptions were"
+            sentences.append("\(shortenedItems) long \(noun) shortened.")
+        }
+        return sentences.joined(separator: " ")
     }
 }
 
@@ -221,7 +234,8 @@ enum ChangeSummaryPolicy {
         func encode(_ payload: Payload) -> Data { (try? encoder.encode(payload)) ?? Data() }
 
         let subjects = facts.commits.map { String($0.subject.prefix(subjectCharacterLimit)) }
-        let files = prioritized(facts.files).map {
+        let orderedFiles = prioritized(facts.files)
+        let files = orderedFiles.map {
             File(path: String($0.path.suffix(pathCharacterLimit)), status: $0.status,
                  additions: $0.additions, deletions: $0.deletions)
         }
@@ -281,7 +295,12 @@ enum ChangeSummaryPolicy {
                 commitsShown: payload.commitSubjects.count,
                 commitCount: facts.commits.count,
                 filesShown: payload.files.count,
-                fileCount: facts.files.count
+                fileCount: facts.files.count,
+                shortenedItems: facts.commits.prefix(payload.commitSubjects.count)
+                    .filter { $0.subject.count > subjectCharacterLimit }.count
+                    + orderedFiles.prefix(payload.files.count).filter { $0.path.count > pathCharacterLimit }.count
+                    + [(facts.issueTitle, payload.issueTitle), (facts.commitBody, payload.commitBody)]
+                    .filter { original, sent in original != nil && original != sent }.count
             )
         )
     }

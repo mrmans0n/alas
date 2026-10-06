@@ -700,8 +700,7 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var canSummarizeChange: Bool {
-        guard let context, !context.changedFiles.isEmpty, loadedContextKey == contextKey,
-              matchingSnapshot != nil else { return false }
+        guard let context, !context.changedFiles.isEmpty, currentChangeSummaryFacts != nil else { return false }
         return appState.makeChangeSummarizer().isAvailable
     }
 

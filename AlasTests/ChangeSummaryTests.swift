@@ -52,7 +52,42 @@ struct ChangeSummaryTests {
         #expect(request.messages.reduce(0) { $0 + $1.content.utf8.count } <= ChangeSummaryPolicy.inputTokenLimit)
         #expect(payload["commitBody"] == nil)
         #expect(payload["issueTitle"] != nil)
-        #expect(request.coverage.isComplete)
+        #expect(request.coverage.shortenedItems == 2)
+    }
+
+    @Test
+    func longSubjectsAndPathsAreDisclosedAsShortened() {
+        let longPath = "Sources/" + String(repeating: "Nested/", count: 30) + "Picker.swift"
+        let facts = ChangeSummaryFacts(
+            base: "main", branch: "feature/picker", headSHA: Self.head, mergeBaseSHA: Self.mergeBase,
+            commits: [.init(sha: "sha0full", shortSHA: "sha0", subject: String(repeating: "Reword ", count: 30))],
+            files: [.init(path: longPath, status: "M", additions: 1, deletions: 1)],
+            runResults: [], issueTitle: nil, commitBody: nil, hasUncommittedChanges: false
+        )
+
+        let coverage = ChangeSummaryPolicy.request(for: facts).coverage
+
+        #expect(!coverage.isComplete)
+        #expect(coverage.disclosure == "2 long commit subjects, file paths, or descriptions were shortened.")
+    }
+
+    @Test(arguments: [
+        (Self.head, true),
+        (nil, true),
+        ("ffffffffffffffffffffffffffffffffffffffff", false),
+    ] as [(String?, Bool)])
+    func contextLoadedForAnotherHeadYieldsNoFacts(loadedHead: String?, hasFacts: Bool) {
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [], commits: [], changedFiles: [], diff: "", fileDiffsByPath: [:],
+            hasUncommittedChanges: false, headSHA: loadedHead, mergeBaseSHA: Self.mergeBase
+        )
+
+        let facts = ChangeSummaryFacts(
+            context: context, base: "main", branch: "feature/picker", headSHA: Self.head,
+            runResults: [], issueTitle: nil
+        )
+
+        #expect((facts != nil) == hasFacts)
     }
 
     @Test
