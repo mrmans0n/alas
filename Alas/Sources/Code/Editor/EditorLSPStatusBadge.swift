@@ -25,7 +25,7 @@ struct EditorLSPStatusBadge: View {
         }
         .buttonStyle(.plain)
         .help(badge.tooltip)
-        .accessibilityLabel(Text("Language server status: \(badge.tooltip)"))
+        .accessibilityLabel(Text("Language server status: \(badge.label), \(badge.tooltip)"))
         .accessibilityHint(Text("Shows actions for this file's language server"))
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
