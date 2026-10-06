@@ -33,7 +33,7 @@
 
 ## Review Focus
 
-1. A pasted or hand-edited `alas-symbol://` link whose `path` contains `..` or is absolute must be rejected, never read from outside the worktree. Pinned in Task 5.
+1. A pasted or hand-edited `alas-symbol://` link whose `path` contains `..` or is absolute must be rejected, and a tracked symlink that resolves outside the worktree must never be read, by the index or by include-code expansion. Pinned in Tasks 3 and 5.
 2. Source containing non-ASCII characters (emoji, accented identifiers) before a declaration must still give correct line ranges and names. Pinned in Task 2.
 3. A declaration whose body contains a Markdown fence (```` ``` ````) must not break the fenced code block sent to the agent. Pinned in Task 6.
 4. Overloads with the same name and container (Swift `init`, Java overloads) must resolve to the one nearest the stored line, not the first. Pinned in Task 6.
@@ -43,7 +43,6 @@
 
 - **Missing-symbol warning on the composer badge** moves to phase 2. Detecting it needs live re-resolution while the draft sits in the composer, which belongs with the preview's loading. Phase 1 still sends `not found when sent` correctly.
 - **Index refresh triggers:** besides `WorktreeWatcher` change events (only the surfaced worktree runs a watcher), the index also refreshes each time the picker opens. Refresh is stat-based, so this costs a stat per indexed file.
-- **Transcript click** opens the editor at the symbol's first line. The transcript link route has no end-line support; phase 3 replaces this chip anyway.
 
 ## File structure
 
@@ -739,7 +738,7 @@ git commit -m "feat(symbols): extract declarations with tree-sitter tags"
 **Interfaces:**
 - Consumes: `SymbolExtractor.symbols(in:relativePath:)`, `LanguageRegistry.supportsSymbols(forPath:)`.
 - Produces:
-  - `SymbolSource.read(root: URL, relativePath: String) async -> String?`
+  - `SymbolSource.read(root: URL, relativePath: String) async -> String?` and `SymbolSource.containedLocalURL(root: URL, relativePath: String) -> URL?`
   - `actor WorktreeSymbolIndex` with `func updates(root: URL, files: [String]) -> AsyncStream<WorktreeSymbolIndex.Snapshot>` and `func isLoaded(root: URL) -> Bool`
   - `struct WorktreeSymbolIndex.Snapshot: Sendable, Equatable { symbols: [SymbolEntry]; indexedFiles: Int; totalFiles: Int; isComplete: Bool }`
   - `AppState.symbolIndex: WorktreeSymbolIndex`
@@ -802,6 +801,27 @@ struct WorktreeSymbolIndexTests {
         #expect(snapshot.symbols.isEmpty)
         #expect(snapshot.isComplete)
     }
+
+    @Test("symlinks that resolve outside the worktree are neither indexed nor read")
+    func ignoresEscapingSymlinks() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("worktree", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try "struct Secret {}".write(to: outside.appendingPathComponent("Secret.swift"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("Escape.swift"),
+                                                   withDestinationURL: outside.appendingPathComponent("Secret.swift"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked"), withDestinationURL: outside)
+
+        let snapshot = try #require(await lastSnapshot(WorktreeSymbolIndex().updates(
+            root: root, files: ["Escape.swift", "linked/Secret.swift"])))
+        #expect(snapshot.symbols.isEmpty)
+        #expect(await SymbolSource.read(root: root, relativePath: "Escape.swift") == nil)
+        #expect(await SymbolSource.read(root: root, relativePath: "linked/Secret.swift") == nil)
+    }
 }
 ```
 
@@ -823,17 +843,33 @@ enum SymbolSource {
 
     static func read(root: URL, relativePath: String) async -> String? {
         guard isSafeRelativePath(relativePath) else { return nil }
-        let url = root.appendingPathComponent(relativePath)
         if let host = RemoteHostRegistry.shared.host(forPath: root.path) {
-            guard case .file(let data, _) = try? await RemoteFileAccess.read(host: host, path: url.path, maxBytes: maxBytes)
-            else { return nil }
+            // Resolves every component on the host, so an intermediate
+            // symlink cannot escape the worktree either.
+            guard case .ok(let byteSize, let data) = try? await RemotePathContainment.containedResolvedRead(
+                host: host, path: root.appendingPathComponent(relativePath).path,
+                worktreeRoot: root.path, maxBytes: maxBytes),
+                  byteSize <= maxBytes, data.count == byteSize else { return nil }
             return String(data: data, encoding: .utf8)
         }
         return await Task.detached(priority: .userInitiated) {
-            guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxBytes
+            guard let url = containedLocalURL(root: root, relativePath: relativePath),
+                  let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxBytes
             else { return nil }
             return try? String(contentsOf: url, encoding: .utf8)
         }.value
+    }
+
+    /// The file's physical URL when it resolves, symlinks included, to a
+    /// location strictly inside the physical worktree root.
+    static func containedLocalURL(root: URL, relativePath: String) -> URL? {
+        guard isSafeRelativePath(relativePath) else { return nil }
+        let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let resolved = root.appendingPathComponent(relativePath).resolvingSymlinksInPath().standardizedFileURL
+        let components = resolved.pathComponents
+        guard components.count > rootComponents.count,
+              Array(components.prefix(rootComponents.count)) == rootComponents else { return nil }
+        return resolved
     }
 
     /// Worktree-relative, no `..`, not absolute.
@@ -895,16 +931,16 @@ actor WorktreeSymbolIndex {
         let candidates = files.filter { LanguageRegistry.supportsSymbols(forPath: $0) }
         let listed = Set(candidates)
         var current = (records[key] ?? [:]).filter { listed.contains($0.key) }
-        if !current.isEmpty {
-            continuation.yield(Self.snapshot(current, indexed: 0, total: candidates.count))
-        }
+        // Always publish first, so even a small or fully cached worktree
+        // shows "Indexing symbols…" until the stat pass finishes.
+        continuation.yield(Self.snapshot(current, indexed: 0, total: candidates.count))
         let started = Date()
         var processed = 0
         var parsed = 0
         for path in candidates {
             if Task.isCancelled { break }
-            let url = root.appendingPathComponent(path)
-            if let stamp = Self.stamp(of: url) {
+            if let url = SymbolSource.containedLocalURL(root: root, relativePath: path),
+               let stamp = Self.stamp(of: url) {
                 if current[path]?.stamp != stamp {
                     let symbols: [SymbolEntry]
                     if stamp.size > Self.maxFileBytes {
@@ -1626,9 +1662,9 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
         guard let source else { return missing }
         let candidates = SymbolExtractor.symbols(in: source, relativePath: target.path)
             .filter { $0.name == target.name && $0.container == target.container }
-        let sameKind = candidates.filter { $0.kind == target.kind }
-        let pool = sameKind.isEmpty ? candidates : sameKind
-        guard let match = pool.min(by: {
+        // Name, kind, and container must all match: a method replaced by a
+        // same-named property is reported missing, not silently swapped.
+        guard let match = candidates.filter({ $0.kind == target.kind }).min(by: {
             abs($0.lineRange.lowerBound - target.lineRange.lowerBound) < abs($1.lineRange.lowerBound - target.lineRange.lowerBound)
         }) else { return missing }
         let lines = source.components(separatedBy: "\n")
@@ -1789,7 +1825,7 @@ git commit -m "feat(acp): resolve symbol mentions at send time and expand them f
 **Interfaces:**
 - Consumes: Task 3 `AppState.symbolIndex`, `SymbolSource`, Task 4 logic, Task 5 `ACPSymbolReference.Target`/`uri(for:)`.
 - Produces:
-  - `struct ACPSymbolMentionSource { let index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?; let fileSymbols: @Sendable (String) async -> [SymbolEntry] }`
+  - `struct ACPSymbolMentionSource { let index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?; let fileSymbols: @Sendable (_ fileQuery: String) async -> [SymbolEntry] }`
   - `ACPNSTextView.insertSymbolMention(_ entry: SymbolEntry, includeCode: Bool) -> Bool`
 
 This task is UI wiring over tested logic; no new automated test (testing policy). It is verified by the smoke run in Task 10.
@@ -1801,8 +1837,9 @@ This task is UI wiring over tested logic; no new automated test (testing policy)
 struct ACPSymbolMentionSource {
     /// Project-wide index; nil for remote worktrees.
     let index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?
-    /// Symbols of one file, for `File.swift#name`. Works local and remote.
-    let fileSymbols: @Sendable (_ relativePath: String) async -> [SymbolEntry]
+    /// For `File.swift#name`: the symbols of the worktree file that best
+    /// matches `fileQuery`. Works local and remote.
+    let fileSymbols: @Sendable (_ fileQuery: String) async -> [SymbolEntry]
 }
 ```
 
@@ -1816,7 +1853,14 @@ struct ACPSymbolMentionSource {
                 let files = (try? await state.fileIndex.entries(forWorktreePath: root))?.map(\.relativePath) ?? []
                 return await state.symbolIndex.updates(root: root, files: files)
             },
-            fileSymbols: { relativePath in
+            fileSymbols: { [state] fileQuery in
+                // From FileIndex paths, not the picker's file list: that list
+                // drops remote entries, and drill-down is remote's only route.
+                let entries = (try? await state.fileIndex.entries(forWorktreePath: root)) ?? []
+                let urls = entries.map { root.appendingPathComponent($0.relativePath) }
+                guard let best = MentionFuzzy.rank(files: urls, query: fileQuery, limit: 1, relativeTo: root).first
+                else { return [] }
+                let relativePath = String(best.path.dropFirst(root.path.count + 1))
                 guard let source = await SymbolSource.read(root: root, relativePath: relativePath) else { return [] }
                 return SymbolExtractor.symbols(in: source, relativePath: relativePath)
             }
@@ -1923,11 +1967,8 @@ In `.onChange(of: query)` keep `highlight = 0` and call `rescheduleRank(preserve
                         symbolItems = MentionSymbolRanking.rank(symbols, query: text, limit: limit)
                     }
                 case .file(let fileQuery, let symbolQuery):
-                    if let file = MentionFuzzy.rank(files: files.filter { !$0.hasDirectoryPath }, query: fileQuery,
-                                                    limit: 1, relativeTo: root).first,
-                       let fileSymbols {
-                        let relative = String(file.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
-                        symbolItems = MentionSymbolRanking.rank(await fileSymbols(relative), query: symbolQuery, limit: maxDisplay)
+                    if let fileSymbols {
+                        symbolItems = MentionSymbolRanking.rank(await fileSymbols(fileQuery), query: symbolQuery, limit: maxDisplay)
                     }
                 }
             }
@@ -2305,45 +2346,63 @@ git commit -m "feat(acp): draw symbol mentions as kind-icon badges"
 - Modify: `Alas/Sources/ACP/UI/ACPFileChip.swift`
 - Modify: `Alas/Sources/ACP/UI/ACPTranscriptMessageRows.swift:36-47`
 - Modify: `Alas/Sources/ACP/UI/ACPSubagentRowView.swift:236-244`
+- Modify: `Alas/Sources/ACP/UI/ACPTabView.swift:526-541` (`onOpenTranscriptLink`)
 - Modify: `Alas/Sources/ACP/Session/ACPSymbolReference.swift` (link helper)
 - Test: `AlasTests/ACP/Session/ACPSymbolReferenceTests.swift`
 
 **Interfaces:**
-- Consumes: `ACPMessage.Attachment.symbol`, `ACPSymbolReference.target(fromURI:)`, the per-row `\.openURL` (routes to `AppState.transcriptLinkRoute`, which accepts `path:line`).
-- Produces: `FileChip.action: (() -> Void)?`; `ACPSymbolReference.editorLink(for:snapshot:) -> URL?`.
+- Consumes: `ACPMessage.Attachment.symbol`, `ACPSymbolReference.target(fromURI:)`/`uri(for:)`, the per-row `\.openURL` (routes to `ACPTabView`'s `onOpenTranscriptLink`, which knows the worktree).
+- Produces: `FileChip.action: (() -> Void)?`; `ACPSymbolReference.openURL(for:snapshot:) -> URL?`.
+
+The chip opens an `alas-symbol://` URL carrying the sent line range. `ACPTabView` claims that scheme and calls `AppState.openFile` with the worktree id, which handles local and remote worktrees and reveals the full range. `AppState.transcriptLinkRoute` is not used: it only resolves remote paths given as absolute paths.
 
 - [ ] **Step 1: Write the failing test** (add to `ACPSymbolReferenceTests`)
 
 ```swift
-    @Test("transcript links open the sent line, falling back to the inserted line")
-    func editorLink() {
+    @Test("transcript links carry the sent range, falling back to the inserted one")
+    func openURL() throws {
         let target = ACPSymbolReference.Target(path: "Package.swift", name: "a", kind: .function,
-                                               container: nil, lineRange: 4...6, includeCode: false)
-        #expect(ACPSymbolReference.editorLink(for: target, snapshot: nil)?.absoluteString == "./Package.swift:5")
+                                               container: nil, lineRange: 4...6, includeCode: true)
+        let inserted = try #require(ACPSymbolReference.openURL(for: target, snapshot: nil))
+        #expect(ACPSymbolReference.target(fromURI: inserted.absoluteString)?.lineRange == 4...6)
         let snapshot = ACPSymbolSnapshot(lineRange: 9...12, contentHash: "", excerpt: nil, truncated: false, found: true)
-        #expect(ACPSymbolReference.editorLink(for: target, snapshot: snapshot)?.absoluteString == "./Package.swift:10")
+        let sent = try #require(ACPSymbolReference.openURL(for: target, snapshot: snapshot))
+        #expect(ACPSymbolReference.target(fromURI: sent.absoluteString)?.lineRange == 9...12)
     }
 ```
-
-The `./` prefix matters: without it `URL(string: "Package.swift:5")` parses `package.swift` as a URL scheme.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run with `-only-testing AlasTests/ACPSymbolReferenceTests`.
-Expected: build failure, `has no member 'editorLink'`.
+Expected: build failure, `has no member 'openURL'`.
 
 - [ ] **Step 3: Implement**
 
 Append to `enum ACPSymbolReference`:
 
 ```swift
-    /// Relative `./path:line` link that the transcript's `openURL` routes to
-    /// the editor (see `AppState.transcriptLinkRoute`). 1-based line.
-    static func editorLink(for target: Target, snapshot: ACPSymbolSnapshot?) -> URL? {
-        var components = URLComponents()
-        components.path = "./\(target.path):\((snapshot?.lineRange ?? target.lineRange).lowerBound + 1)"
-        return components.url
+    /// URL a transcript chip opens: the symbol's link, moved to the range
+    /// that was sent. `ACPTabView` routes it to the editor.
+    static func openURL(for target: Target, snapshot: ACPSymbolSnapshot?) -> URL? {
+        let sent = Target(path: target.path, name: target.name, kind: target.kind, container: target.container,
+                          lineRange: snapshot?.lineRange ?? target.lineRange, includeCode: target.includeCode)
+        return URL(string: uri(for: sent))
     }
+```
+
+`ACPTabView.swift`, at the top of the `onOpenTranscriptLink: { url in` closure (before the `switch`):
+
+```swift
+                if let target = ACPSymbolReference.target(fromURI: url.absoluteString) {
+                    state.openFile(
+                        relativePath: target.path,
+                        worktreeId: worktree.id,
+                        revealLine: target.lineRange.lowerBound,
+                        revealEndLine: target.lineRange.upperBound,
+                        revealCharacter: 0
+                    )
+                    return true
+                }
 ```
 
 `ACPFileChip.swift`: add `var action: (() -> Void)? = nil` after `iconSystemName`, rename the current `body` to `private var label: some View`, and add:
@@ -2368,7 +2427,7 @@ Append to `enum ACPSymbolReference`:
                                         lines: "\((target.path as NSString).lastPathComponent):\((a.symbol?.lineRange ?? target.lineRange).lowerBound + 1)",
                                         iconSystemName: "curlybraces",
                                         action: {
-                                            if let url = ACPSymbolReference.editorLink(for: target, snapshot: a.symbol) {
+                                            if let url = ACPSymbolReference.openURL(for: target, snapshot: a.symbol) {
                                                 openURL(url)
                                             }
                                         }
@@ -2393,8 +2452,8 @@ Run with `-only-testing AlasTests/ACPSymbolReferenceTests`, then the build comma
 
 ```bash
 git add Alas/Sources/ACP/UI/ACPFileChip.swift Alas/Sources/ACP/UI/ACPTranscriptMessageRows.swift \
-  Alas/Sources/ACP/UI/ACPSubagentRowView.swift Alas/Sources/ACP/Session/ACPSymbolReference.swift \
-  AlasTests/ACP/Session/ACPSymbolReferenceTests.swift
+  Alas/Sources/ACP/UI/ACPSubagentRowView.swift Alas/Sources/ACP/UI/ACPTabView.swift \
+  Alas/Sources/ACP/Session/ACPSymbolReference.swift AlasTests/ACP/Session/ACPSymbolReferenceTests.swift
 git commit -m "feat(acp): open sent symbol mentions from the transcript"
 ```
 
@@ -2429,7 +2488,7 @@ Build and launch the Debug app, open an ACP tab on this Alas worktree, and check
 3. While indexing, the highlighted row does not change under the pointer as results arrive.
 4. ⏎ on `SessionManager…` (or any method) inserts a style A badge; ⌥⏎ inserts the filled badge with `{ } N lines`. Hovering shows `path:start–end`.
 5. `LSPClient.swift#docum` lists that file's symbols only.
-6. Send a prompt with one plain and one code badge to an agent. The transcript shows two `curlybraces` chips; clicking one opens the editor at that line.
+6. Send a prompt with one plain and one code badge to an agent. The transcript shows two `curlybraces` chips; clicking one opens the editor with the symbol's lines revealed. Repeat steps 5–6 on a remote (SSH) worktree: drill-down lists symbols and the chip opens the remote file.
 7. Inspect what the agent received (agent log or ask the agent to quote it): the reference line, and the code as a fence or resource.
 8. In `~/Library/Application Support/Alas/acp-sessions`, the persisted user message's attachments include `symbol` with `found: true` and a 64-character `contentHash`.
 
