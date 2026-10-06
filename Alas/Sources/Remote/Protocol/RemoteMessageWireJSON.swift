@@ -133,6 +133,17 @@ struct RemoteAgentOption: Codable, Equatable, Sendable {
     /// Nil when the sending Mac has never seen this agent's models, or is
     /// older than this field.
     var models: [RemoteModelOption]? = nil
+    /// Projects whose host cannot launch this agent, such as SSH projects
+    /// for an agent installed only on the sending Mac. Nil when it runs
+    /// everywhere, or the sending Mac is older than this field.
+    var unavailableProjectIds: [String]? = nil
+
+    /// Whether pickers should offer this agent for `projectId`; nil means
+    /// the project is not known yet.
+    func isAvailable(inProjectId projectId: String?) -> Bool {
+        guard let projectId else { return true }
+        return unavailableProjectIds?.contains(projectId) != true
+    }
 }
 
 struct RemoteProjectOption: Codable, Equatable, Sendable {

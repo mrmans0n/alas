@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
 
+### 🐛 Fixes
+
+- Resolve uv-based ACP Registry agents at install time so a bad package fails there and the first chat skips the download, and hide agents installed only on this Mac from remote-control pickers for SSH repositories.
+
 ## [0.20.3] - 2026-10-05
 
 ### ✨ Features

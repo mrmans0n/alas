@@ -392,10 +392,7 @@ function handle(msg) {
       break;
     case "agentList":
       createState.agents = msg.agents || [];
-      if (!createState.selectedAgentId || !createState.agents.some(a => a.id === createState.selectedAgentId)) {
-        const preferred = createState.agents.find(a => a.isDefault) || createState.agents[0];
-        createState.selectedAgentId = preferred ? preferred.id : null;
-      }
+      reconcileExistingWorktreeAgent();
       worktreeCreation.reconcileAgents(createState.agents);
       renderCreateSheet();
       break;
@@ -1841,15 +1838,34 @@ function createWorktreeMeta(worktree) {
   return parts.length ? parts : ["clean"];
 }
 
+// Project of the worktree picked in the existing-worktree flow.
+function selectedWorktreeProjectId() {
+  const worktree = createState.worktrees.find(w => w.id === createState.selectedWorktreeId);
+  return worktree ? worktree.projectId || null : null;
+}
+
+// Keeps the existing-worktree agent choice on one that can run in the
+// selected worktree's project, falling back to the default agent.
+function reconcileExistingWorktreeAgent() {
+  const agents = RemoteWorktreeCreation.agentsForProject(createState.agents, selectedWorktreeProjectId());
+  if (createState.selectedAgentId && agents.some(a => a.id === createState.selectedAgentId)) return;
+  const preferred = agents.find(a => a.isDefault) || agents[0];
+  createState.selectedAgentId = preferred ? preferred.id : null;
+}
+
 function renderCreateAgents(creationState, isNewWorktree, busy) {
   const list = $("agent-list");
   list.innerHTML = "";
-  if (createState.agents.length === 0) {
-    list.append(el("div", "create-empty", "No agents available."));
+  const projectId = isNewWorktree ? creationState.projectId : selectedWorktreeProjectId();
+  const agents = RemoteWorktreeCreation.agentsForProject(createState.agents, projectId);
+  if (agents.length === 0) {
+    list.append(el("div", "create-empty", createState.agents.length === 0
+      ? "No agents available."
+      : "No agents can run in this repository."));
     return;
   }
 
-  createState.agents.forEach(agent => {
+  agents.forEach(agent => {
     const row = el("button", "create-row");
     row.type = "button";
     const selectedAgentId = isNewWorktree ? creationState.agentId : createState.selectedAgentId;
@@ -1885,6 +1901,7 @@ function advanceCreateSheet() {
   if (createState.step === "worktree") {
     if (!createState.selectedWorktreeId) return;
     createState.step = "agent";
+    reconcileExistingWorktreeAgent();
     renderCreateSheet();
     return;
   }

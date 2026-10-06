@@ -411,7 +411,6 @@ struct RemoteWebAssetTests {
         #expect(js.contains("createState.worktrees = msg.worktrees || [];"))
         #expect(js.contains("!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)"))
         #expect(js.contains("createState.agents = msg.agents || [];"))
-        #expect(js.contains("!createState.agents.some(a => a.id === createState.selectedAgentId)"))
         #expect(js.contains("!!createState.selectedWorktreeId && !!createState.selectedAgentId"))
         #expect(js.contains("worktrees: [],"))
         #expect(js.contains("agents: [],"))

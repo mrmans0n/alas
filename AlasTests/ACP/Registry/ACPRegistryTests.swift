@@ -228,6 +228,48 @@ struct ACPRegistryTests {
         #expect(record.launchSpec.agentID == "registry-gemini-registry")
     }
 
+    @Test func uvInstallResolvesThePinnedPackageBeforeRecordingTheLaunch() async throws {
+        let root = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resolves = UVResolutionStub()
+        let installer = ACPRegistryInstaller(
+            root: root,
+            platform: "darwin-aarch64",
+            download: { _ in throw URLError(.badURL) },
+            runner: { command, args in
+                #expect(command == "uvx")
+                #expect(args == ["--from", "fast-agent-acp==0.10.1", "python", "-c", "pass"])
+                return await resolves.next()
+            },
+            findExecutable: { $0 == "uvx" ? "/opt/homebrew/bin/uvx" : nil }
+        )
+        let agent = ACPRegistryAgent(
+            id: "fast-agent", name: "fast-agent", version: "0.10.1", description: "d",
+            website: nil, repository: nil,
+            distribution: .init(binary: nil, npx: nil, uvx: .init(
+                package: "fast-agent-acp==0.10.1", args: ["-x"], env: ["FAST_AGENT_MODEL": "codexplan"]
+            ))
+        )
+
+        await #expect(throws: ACPRegistryInstallError.commandFailed("uvx", status: 1, stderr: "No solution found")) {
+            try await installer.install(agent)
+        }
+        let record = try await installer.install(agent)
+
+        #expect(record.command == "uvx")
+        #expect(record.arguments == ["fast-agent-acp==0.10.1", "-x"])
+        #expect(record.environment == ["FAST_AGENT_MODEL": "codexplan"])
+    }
+
+    /// First resolution fails the way uv reports an unknown package; later ones succeed.
+    private actor UVResolutionStub {
+        private var calls = 0
+        func next() -> (status: Int32, stderr: String) {
+            calls += 1
+            return calls == 1 ? (1, "No solution found") : (0, "")
+        }
+    }
+
     // MARK: - Fixtures
 
     private static func agent(

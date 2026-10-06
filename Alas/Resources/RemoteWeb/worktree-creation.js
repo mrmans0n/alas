@@ -69,6 +69,17 @@ function copyValue(value) {
   return value;
 }
 
+// Agents the server can launch in `projectId`. An agent lists the projects
+// whose host cannot run it (`unavailableProjectIds`); an unknown project
+// keeps every agent.
+function agentsForProject(agents, projectId) {
+  if (!Array.isArray(agents)) return [];
+  const usable = agents.filter((agent) => agent && hasText(agent.id));
+  if (!hasText(projectId)) return usable;
+  return usable.filter((agent) =>
+    !(Array.isArray(agent.unavailableProjectIds) && agent.unavailableProjectIds.includes(projectId)));
+}
+
 function isUsableSession(session) {
   return session && typeof session === "object" && !Array.isArray(session) && hasText(session.id);
 }
@@ -92,6 +103,7 @@ function createFlow(sendCommand) {
   const send = typeof sendCommand === "function" ? sendCommand : () => {};
   let state = initialState();
   let branchRequestGeneration = 0;
+  let knownAgents = null; // null until the first agent list arrives
   const subscribers = new Set();
 
   function snapshot() {
@@ -153,6 +165,7 @@ function createFlow(sendCommand) {
       preferredBase: "",
       branchError: "",
       base: preserveBase ? state.base : "",
+      agentId: agentIdAllowedIn(selectedProjectId),
       result: null,
       ...(preserveError ? {} : clearError()),
     });
@@ -202,14 +215,17 @@ function createFlow(sendCommand) {
     return update({ agentId: hasText(agentId) ? agentId : null, ...clearMutableError() });
   }
 
+  // The current agent if it can run in `projectId`, else null. Before any
+  // agent list arrives there is nothing to check against.
+  function agentIdAllowedIn(projectId) {
+    if (!state.agentId || knownAgents === null) return state.agentId;
+    return agentsForProject(knownAgents, projectId).some((agent) => agent.id === state.agentId) ? state.agentId : null;
+  }
+
   function reconcileAgents(agents) {
+    knownAgents = Array.isArray(agents) ? agents : [];
     if (!state.agentId) return false;
-    const availableAgentIds = new Set(
-      Array.isArray(agents)
-        ? agents.filter((agent) => agent && hasText(agent.id)).map((agent) => agent.id)
-        : []
-    );
-    if (availableAgentIds.has(state.agentId)) return false;
+    if (agentIdAllowedIn(state.projectId)) return false;
     update({ agentId: null });
     return true;
   }
@@ -440,4 +456,4 @@ function createFlow(sendCommand) {
   };
 }
 
-globalThis.RemoteWorktreeCreation = { createFlow, initialState, canSubmit, canRetry, isValidBranchName };
+globalThis.RemoteWorktreeCreation = { createFlow, initialState, canSubmit, canRetry, isValidBranchName, agentsForProject };

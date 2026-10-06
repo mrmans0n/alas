@@ -12,7 +12,11 @@ struct NativePeerNewSessionSheet: View {
 
     private var request: NativePeerNewSession? { client.newSession }
     private var worktrees: [RemoteWorktreeOption] { request?.worktrees ?? [] }
-    private var agents: [RemoteAgentOption] { request?.agents ?? [] }
+    /// Agents the peer can launch in the selected worktree's project.
+    private var agents: [RemoteAgentOption] {
+        let projectId = worktrees.first { $0.id == worktreeId }?.projectId
+        return (request?.agents ?? []).filter { $0.isAvailable(inProjectId: projectId) }
+    }
     private var models: [RemoteModelOption] {
         agents.first { $0.id == agentId }?.models ?? []
     }
@@ -39,6 +43,7 @@ struct NativePeerNewSessionSheet: View {
         .onAppear(perform: preselect)
         .onChange(of: request?.worktrees) { preselect() }
         .onChange(of: request?.agents) { preselect() }
+        .onChange(of: worktreeId) { preselect() }
         .onChange(of: agentId) { modelId = nil }
     }
 
@@ -85,7 +90,8 @@ struct NativePeerNewSessionSheet: View {
     private var emptyHint: String? {
         guard let request, !request.isLoading else { return nil }
         if worktrees.isEmpty { return "No worktrees in \(request.repoName) on \(request.peerName)." }
-        if agents.isEmpty { return "No agents are enabled on \(request.peerName)." }
+        if request.agents?.isEmpty ?? true { return "No agents are enabled on \(request.peerName)." }
+        if agents.isEmpty { return "No agents on \(request.peerName) can run in this worktree's repository." }
         return nil
     }
 

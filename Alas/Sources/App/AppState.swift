@@ -15222,13 +15222,16 @@ extension AppState: RemoteSessionsProvider {
     func remoteAgents() -> [RemoteAgentOption] {
         let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
         let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
+        let sshProjectIds = projects.filter { $0.host != nil }.map(\.id)
         return ordered.enumerated().map { index, agent in
             let models = acpModelCatalog.models(for: agent.id)
+            let unavailable = agent.canRunOnRemoteHost ? [] : sshProjectIds
             return RemoteAgentOption(
                 id: agent.id,
                 name: agent.displayName,
                 isDefault: index == 0,
-                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) }
+                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) },
+                unavailableProjectIds: unavailable.isEmpty ? nil : unavailable
             )
         }
     }
