@@ -6,7 +6,7 @@ import AppKit
 struct ACPImageThumbnail: View {
     let fileURL: URL
     /// 1-based position among the message's images, shown as a small corner
-    /// badge so it matches the `` `🖼 N` `` marker `ACPUserMessageImageMarkers`
+    /// badge so it matches the `🖼N` marker `ACPUserMessageImageMarkers`
     /// splices into the bubble's text. `nil` when the message has only one
     /// image — nothing to disambiguate, so no badge.
     var index: Int? = nil

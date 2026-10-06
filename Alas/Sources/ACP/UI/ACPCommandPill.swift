@@ -628,7 +628,7 @@ struct ACPUserMessageText: View {
     /// The raw message text — NOT pre-spliced with image markers. Detecting
     /// the leading command has to run against this first: an image chip
     /// attached before the user typed the command carries no wire text of
-    /// its own but still gets a `` `🖼 …` `` marker spliced in ahead of it,
+    /// its own but still gets a `🖼` marker spliced in ahead of it,
     /// and that marker would otherwise cover up the leading `/` before
     /// `ACPSlashCommand.match` ever saw it.
     let text: String
