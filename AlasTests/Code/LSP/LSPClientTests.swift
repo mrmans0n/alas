@@ -69,6 +69,23 @@ func eventually(_ description: String, _ condition: () -> Bool) async throws {
     try #require(condition(), "Timed out waiting for \(description)")
 }
 
+/// Pulls progress snapshots from a lifecycle stream one at a time.
+/// Invariant: `next()` is only ever awaited sequentially, never concurrently.
+private final class ProgressSnapshots: @unchecked Sendable {
+    private var iterator: AsyncStream<LSPClient.LifecycleEvent>.AsyncIterator
+
+    init(_ events: AsyncStream<LSPClient.LifecycleEvent>) {
+        iterator = events.makeAsyncIterator()
+    }
+
+    func next() async -> [LSPClient.ProgressTask]? {
+        while let event = await iterator.next() {
+            if case .progress(let tasks) = event { return tasks }
+        }
+        return nil
+    }
+}
+
 enum ExitScenario: String, Sendable, CaseIterable {
     case serverExits, streamEndsWithoutStatus, exitAfterShutdown
 }
@@ -436,10 +453,11 @@ struct LSPClientLifecycleTests {
         transport.finish()
     }
 
-    @Test("work-done progress yields ordered snapshots, ignores malformed updates, and acknowledges create")
+    @Test("work-done progress coalesces to the latest valid state, ignores malformed updates, and acknowledges create")
     func workDoneProgress() async throws {
         let transport = FakeTransport()
-        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp", progressCoalescing: .zero)
+        // Production coalescing interval: snapshots are rate limited, not per frame.
+        let client = LSPClient(transport: transport, language: "rust", rootURI: "file:///tmp")
         transport.onSend = { sent in
             if sent.contains(#""method":"initialize""#) {
                 transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}"#)
@@ -447,29 +465,32 @@ struct LSPClientLifecycleTests {
         }
         try await client.initialize()
         #expect((transport.sent.first ?? "").contains(#""window":{"workDoneProgress":true}"#))
+        let snapshots = ProgressSnapshots(client.lifecycleEvents)
 
         transport.deliverFrame(#"{"jsonrpc":"2.0","id":"p1","method":"window/workDoneProgress/create","params":{"token":"idx"}}"#)
-        // Ignored: report for an unknown token, and a progress notification without a value.
-        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"ghost","value":{"kind":"report","percentage":5}}}"#)
-        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx"}}"#)
         transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":0}}}"#)
-        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"report","message":"412/980","percentage":42}}}"#)
-        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+        let begun = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(begun == [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 0)])
 
-        let events = client.lifecycleEvents
-        let snapshots = try await withTimeout(nanoseconds: 2_000_000_000) {
-            var collected: [[LSPClient.ProgressTask]] = []
-            for await event in events {
-                if case .progress(let tasks) = event { collected.append(tasks) }
-                if collected.count == 3 { break }
-            }
-            return collected
+        // Malformed updates while a valid task is active: none may change the task or emit a snapshot.
+        for params in [
+            #"{"token":"idx","value":{"percentage":99}}"#,
+            #"{"token":"idx","value":{"kind":"bogus","percentage":99}}"#,
+            #"{"token":"ghost","value":{"kind":"report","percentage":99}}"#,
+            #"{"token":"idx"}"#,
+            #"{"token":"other","value":{"kind":"begin"}}"#,
+        ] {
+            transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":\#(params)}"#)
         }
-        #expect(snapshots == [
-            [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 0)],
-            [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: "412/980", percentage: 42)],
-            [],
-        ])
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"report","message":"412/980","percentage":42}}}"#)
+        let reported = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(reported == [LSPClient.ProgressTask(token: "idx", title: "Indexing", message: "412/980", percentage: 42)])
+
+        // The next snapshot after `end` is empty: a malformed frame would have queued a stale one first.
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+        let ended = try await withTimeout(nanoseconds: 2_000_000_000) { await snapshots.next() }
+        #expect(ended == [])
+
         let ack = transport.sent.first { $0.contains(#""id":"p1""#) } ?? ""
         #expect(ack.contains(#""result":null"#))
         transport.finish()
