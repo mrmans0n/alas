@@ -60,7 +60,8 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
         else { return nil }
         let parent = components[..<index]
 
-        if parent.suffix(3).elementsEqual([".bun", "install", "global"]) {
+        // `$BUN_INSTALL/install/global`; `BUN_INSTALL` defaults to `~/.bun`.
+        if parent.suffix(2).elementsEqual(["install", "global"]) {
             return .bun(package: package, root: "/" + parent.joined(separator: "/"))
         }
         if parent.last == "lib", parent.count >= 2 {

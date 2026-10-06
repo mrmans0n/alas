@@ -1265,8 +1265,8 @@ private struct ACPSessionView: View {
     /// compute them on cache miss). Silent on failure.
     private func refreshAdapterUpdateState() async {
         guard case .ready = session.setupState else { return }
-        await refreshDetectedAgentUpdateState()
         await refreshManagedAdapterUpdateState()
+        await refreshDetectedAgentUpdateState()
     }
 
     private func refreshDetectedAgentUpdateState() async {

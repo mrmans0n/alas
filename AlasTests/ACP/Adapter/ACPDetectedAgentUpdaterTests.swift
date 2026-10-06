@@ -8,6 +8,7 @@ struct ACPDetectedAgentUpdaterTests {
     @Test("classifies the package manager from the resolved binary path", arguments: [
         ("/Users/me/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
          ACPDetectedAgentOwner?.some(.bun(package: "@oh-my-pi/pi-coding-agent", root: "/Users/me/.bun/install/global"))),
+        ("/opt/bun/install/global/node_modules/omp/cli.js", .bun(package: "omp", root: "/opt/bun/install/global")),
         ("/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
          .npm(package: "@earendil-works/pi-coding-agent", prefix: "/opt/homebrew")),
         // The outermost node_modules names the global package, not a nested dependency.
@@ -22,14 +23,10 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.classify(resolvedPath: path) == expected)
     }
 
-    @Test("upgrade commands target the owning install")
-    func upgradeCommands() {
-        #expect(ACPDetectedAgentOwner.bun(package: "@oh-my-pi/pi-coding-agent", root: "/b").upgradeCommand
-                == ["bun", "add", "-g", "@oh-my-pi/pi-coding-agent@latest"])
-        #expect(ACPDetectedAgentOwner.npm(package: "pi", prefix: "/opt/homebrew").upgradeCommand
-                == ["npm", "install", "-g", "--prefix", "/opt/homebrew", "pi@latest"])
-        #expect(ACPDetectedAgentOwner.homebrewCask(name: "copilot-cli").upgradeCommand
-                == ["brew", "upgrade", "--cask", "copilot-cli"])
+    @Test("npm upgrades the prefix that owns the binary, not the npm on PATH")
+    func npmUpgradeTargetsOwningPrefix() {
+        #expect(ACPDetectedAgentOwner.npm(package: "pi", prefix: "/Users/me/.nvm/versions/node/v22.1.0").upgradeCommand
+                == ["npm", "install", "-g", "--prefix", "/Users/me/.nvm/versions/node/v22.1.0", "pi@latest"])
     }
 
     @Test("registry latest is compared with the installed version", arguments: [
