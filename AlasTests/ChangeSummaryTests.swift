@@ -91,6 +91,7 @@ struct ChangeSummaryTests {
         (#"{"summary": "Adds a picker, and the tests are passing."}"#, true, false),
         (#"{"summary": "Adds a picker; CI is green."}"#, true, false),
         (#"{"summary": "Adds a picker and the checks have passed."}"#, true, false),
+        (#"{"summary": "Adds a picker. Tests completed successfully."}"#, true, false),
     ])
     func testsAndMotivationNeedSupportingEvidence(output: String, withEvidence: Bool, accepted: Bool) {
         let facts = Self.facts(
@@ -153,16 +154,28 @@ struct ChangeSummaryTests {
     }
 
     @Test(arguments: [
-        (Self.head, Self.mergeBase, true),
-        (Self.head, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", false),
-        ("ffffffffffffffffffffffffffffffffffffffff", Self.mergeBase, false),
-        (nil, Self.mergeBase, false),
-    ] as [(String?, String?, Bool)])
-    func copyRequiresTheRepositoryToStillMatchTheSummary(head: String?, mergeBase: String?, matches: Bool) {
+        (Self.head, Self.mergeBase, false, true),
+        (Self.head, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", false, false),
+        ("ffffffffffffffffffffffffffffffffffffffff", Self.mergeBase, false, false),
+        (nil, Self.mergeBase, false, false),
+        (Self.head, Self.mergeBase, true, false),
+        (Self.head, Self.mergeBase, nil, false),
+    ] as [(String?, String?, Bool?, Bool)])
+    func copyRequiresTheRepositoryToStillMatchTheSummary(head: String?, mergeBase: String?, dirty: Bool?, matches: Bool) {
         let facts = Self.facts()
         let draft = ChangeSummaryDraft(narrative: "Adds a picker.", facts: facts, coverage: ChangeSummaryPolicy.request(for: facts).coverage)
+        let repository = ReviewRequestRangeIdentity(head: head, mergeBase: mergeBase, hasUncommittedChanges: dirty)
 
-        #expect(draft.describes(headSHA: head, mergeBaseSHA: mergeBase) == matches)
+        #expect(draft.describes(repository) == matches)
+    }
+
+    @Test
+    func copyNoticesATreeThatWasCleanedAfterDrafting() {
+        let facts = Self.facts(uncommitted: true)
+        let draft = ChangeSummaryDraft(narrative: "Adds a picker.", facts: facts, coverage: ChangeSummaryPolicy.request(for: facts).coverage)
+
+        #expect(draft.describes(.init(head: Self.head, mergeBase: Self.mergeBase, hasUncommittedChanges: true)))
+        #expect(!draft.describes(.init(head: Self.head, mergeBase: Self.mergeBase, hasUncommittedChanges: false)))
     }
 
     @Test

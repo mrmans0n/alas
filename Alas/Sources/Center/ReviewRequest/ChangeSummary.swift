@@ -167,10 +167,13 @@ struct ChangeSummaryDraft: Equatable, Sendable {
         facts == self.facts
     }
 
-    /// The base can advance without anything reloading the branch context,
-    /// so a summary is re-checked against the repository before it is copied.
-    func describes(headSHA: String?, mergeBaseSHA: String?) -> Bool {
-        headSHA == facts.headSHA && mergeBaseSHA == facts.mergeBaseSHA
+    /// The base can advance and the tree can turn dirty or clean without
+    /// anything reloading the branch context, so a summary is re-checked
+    /// against the repository before it is copied.
+    func describes(_ repository: ReviewRequestRangeIdentity) -> Bool {
+        repository.head == facts.headSHA
+            && repository.mergeBase == facts.mergeBaseSHA
+            && repository.hasUncommittedChanges == facts.hasUncommittedChanges
     }
 }
 
@@ -327,6 +330,11 @@ enum ChangeSummaryPolicy {
         /(?i)\b(?:verified|verifies|validated|(?:tests?|checks?|ci|builds?)\s+(?:(?:now|all|still|is|are|was|were|has|have|had|been)\s+)*(?:pass|passes|passed|passing|succeed|succeeds|succeeded|succeeding|green)|(?:fully|thoroughly|well)\s+tested)\b/
     }
     private static var testMention: Regex<Substring> { /(?i)\b(?:tests?|tested|testing|specs?|ci)\b/ }
+    /// Outcome words. Next to a test mention they read as a claim about a
+    /// run the model never saw, so the pair is rejected however it is phrased.
+    private static var outcomeWord: Regex<Substring> {
+        /(?i)\b(?:pass\w*|succe\w*|green|complet\w*|ran|runs?|running|fail\w*|verif\w*|validat\w*|confirm\w*|works?|working)\b/
+    }
     private static var motivation: Regex<Substring> {
         /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up))\b/
     }
@@ -360,7 +368,9 @@ enum ChangeSummaryPolicy {
 
         // Mentioning tests is fine when the change touches them; a reason is
         // fine when a description states one.
-        if summary.firstMatch(of: testMention) != nil, !evidenceMentionsTests(evidence) { return nil }
+        if summary.firstMatch(of: testMention) != nil {
+            guard evidenceMentionsTests(evidence), summary.firstMatch(of: outcomeWord) == nil else { return nil }
+        }
         if summary.firstMatch(of: motivation) != nil, evidence.descriptions.isEmpty { return nil }
         return summary
     }

@@ -722,11 +722,12 @@ struct DraftReviewRequestTabView: View {
         }
     }
 
-    /// The base can move without changing `contextKey`, so confirm HEAD and
-    /// the merge base first; a moved branch reloads and leaves the card stale.
+    /// The base and the working tree can change without changing
+    /// `contextKey`, so confirm them first; a moved branch reloads and leaves
+    /// the card stale.
     private func copyChangeSummary(_ draft: ChangeSummaryDraft) async -> Bool {
         let identity = await git.reviewRequestRangeIdentity(worktreePath: worktreePath, baseRef: tabState.baseBranch)
-        guard draft.describes(headSHA: identity.head, mergeBaseSHA: identity.mergeBase) else {
+        guard draft.describes(identity) else {
             await loadContext()
             return false
         }

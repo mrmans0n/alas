@@ -33,6 +33,12 @@ struct ReviewRequestDraftContext: Equatable {
     }
 }
 
+struct ReviewRequestRangeIdentity: Equatable, Sendable {
+    let head: String?
+    let mergeBase: String?
+    let hasUncommittedChanges: Bool?
+}
+
 extension GitService {
     func reviewRequestDraftContext(worktreePath: URL, baseRef: String) async throws -> ReviewRequestDraftContext {
         let diffRange = "\(baseRef)...HEAD"
@@ -121,14 +127,18 @@ extension GitService {
         )
     }
 
-    /// HEAD and the merge base with `baseRef` as they are now, for checking
-    /// that loaded branch context still describes the repository.
-    func reviewRequestRangeIdentity(worktreePath: URL, baseRef: String) async -> (head: String?, mergeBase: String?) {
+    /// HEAD, the merge base with `baseRef`, and whether the tree is dirty, as
+    /// they are now, for checking that loaded branch context still describes
+    /// the repository. A failed read is nil and matches nothing.
+    func reviewRequestRangeIdentity(worktreePath: URL, baseRef: String) async -> ReviewRequestRangeIdentity {
         async let head = Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        async let status = Process.git(["status", "--porcelain"], cwd: worktreePath)
         async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
         let headSHA = (try? await head).flatMap { $0.exitCode == 0 ? $0.stdout : nil }?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (headSHA, await mergeBase)
+        let dirty = (try? await status).flatMap { $0.exitCode == 0 ? $0.stdout : nil }
+            .map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return ReviewRequestRangeIdentity(head: headSHA, mergeBase: await mergeBase, hasUncommittedChanges: dirty)
     }
 
     private func reviewRequestMergeBase(worktreePath: URL, baseRef: String) async -> String? {
