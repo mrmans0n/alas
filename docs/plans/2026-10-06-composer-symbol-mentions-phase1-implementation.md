@@ -874,6 +874,15 @@ struct WorktreeSymbolIndexTests {
         #expect(snapshot.symbols.isEmpty)
         #expect(await SymbolSource.read(root: root, relativePath: "Escape.swift") == nil)
         #expect(await SymbolSource.read(root: root, relativePath: "linked/Secret.swift") == nil)
+
+        // Git metadata is never read, by path or through an in-tree symlink.
+        let hooks = root.appendingPathComponent(".git/hooks", isDirectory: true)
+        try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+        try "struct Hook {}".write(to: hooks.appendingPathComponent("hook.swift"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("Hook.swift"),
+                                                   withDestinationURL: hooks.appendingPathComponent("hook.swift"))
+        #expect(await SymbolSource.read(root: root, relativePath: ".git/hooks/hook.swift") == nil)
+        #expect(await SymbolSource.read(root: root, relativePath: "Hook.swift") == nil)
     }
 }
 ```
@@ -925,21 +934,24 @@ enum SymbolSource {
     }
 
     /// The file's physical URL when it resolves, symlinks included, to a
-    /// location strictly inside the physical worktree root.
+    /// location strictly inside the physical worktree root and outside
+    /// `.git` (matching `RemotePathContainment` on the remote side).
     static func containedLocalURL(root: URL, relativePath: String) -> URL? {
         guard isSafeRelativePath(relativePath) else { return nil }
         let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
         let resolved = root.appendingPathComponent(relativePath).resolvingSymlinksInPath().standardizedFileURL
         let components = resolved.pathComponents
         guard components.count > rootComponents.count,
-              Array(components.prefix(rootComponents.count)) == rootComponents else { return nil }
+              Array(components.prefix(rootComponents.count)) == rootComponents,
+              !components.dropFirst(rootComponents.count).contains(where: { $0.lowercased() == ".git" })
+        else { return nil }
         return resolved
     }
 
-    /// Worktree-relative, no `..`, not absolute.
+    /// Worktree-relative, no `..`, not absolute, never inside `.git`.
     static func isSafeRelativePath(_ path: String) -> Bool {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~") else { return false }
-        return !path.split(separator: "/").contains("..")
+        return !path.split(separator: "/").contains { $0 == ".." || $0.lowercased() == ".git" }
     }
 }
 ```
@@ -1374,6 +1386,8 @@ struct ACPSymbolReferenceTests {
         "alas-symbol://symbol?path=../secret.swift&name=a&kind=method&start=0&end=0",
         "alas-symbol://symbol?path=/etc/passwd&name=a&kind=method&start=0&end=0",
         "alas-symbol://symbol?path=a/../../b.swift&name=a&kind=method&start=0&end=0",
+        "alas-symbol://symbol?path=.git/hooks/a.swift&name=a&kind=method&start=0&end=0",
+        "alas-symbol://symbol?path=sub/.GIT/a.swift&name=a&kind=method&start=0&end=0",
         "alas-symbol://symbol?path=a.swift&name=a&kind=nonsense&start=0&end=0",
         "alas-symbol://symbol?path=a.swift&name=a&kind=method&start=5&end=2",
         "alas-symbol://symbol?path=a.swift&name=a&kind=method&start=0&end=9223372036854775807",
