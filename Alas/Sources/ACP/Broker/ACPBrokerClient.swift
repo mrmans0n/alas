@@ -668,13 +668,20 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
                 generation: generation,
                 acknowledgedCursor: cursors.0,
                 replayAfterCursor: cursors.1,
-                maxReplayBytes: 1024 * 1024
+                maxReplayBytes: 1024 * 1024,
+                snapshotOnLastPageOnly: true
             ))
             // An in-flight helper call can finish after shutdown. Never let
             // its snapshot or replay revive a terminated connection.
-            guard !isConnectionTerminated() else { return attached.snapshot }
-            guard setSnapshot(attached.snapshot) else { return attached.snapshot }
-            let pendingRequestIds = Set(attached.snapshot.pendingRequests.map(\.requestId))
+            if isConnectionTerminated() {
+                if let snapshot = attached.snapshot { return snapshot }
+                throw CancellationError()
+            }
+            if let snapshot = attached.snapshot, !setSnapshot(snapshot) { return snapshot }
+            // Each page supplies lightweight IDs, so resolved requests can
+            // be filtered without repeating the full pending payloads.
+            let pendingRequestIds = attached.pendingRequestIds.map(Set.init)
+                ?? attached.snapshot.map { Set($0.pendingRequests.map(\.requestId)) }
             for event in attached.events {
                 dispatch(event, pendingRequestIds: pendingRequestIds)
             }
@@ -688,10 +695,13 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
                 await Task.yield()
                 continue
             }
-            for request in attached.snapshot.pendingRequests {
-                dispatchPendingRequest(request, cursor: attached.snapshot.acknowledgedCursor)
+            guard let snapshot = attached.snapshot else {
+                throw ACPClientError.decoding("broker replay ended without a snapshot")
             }
-            return attached.snapshot
+            for request in snapshot.pendingRequests {
+                dispatchPendingRequest(request, cursor: snapshot.acknowledgedCursor)
+            }
+            return snapshot
         }
     }
 

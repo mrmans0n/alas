@@ -636,6 +636,12 @@ impl ACPBrokerState {
         Ok(events)
     }
 
+    pub fn pending_request_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.pending_requests.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
     pub fn snapshot(&self) -> ACPBrokerSnapshot {
         let mut pending_requests: Vec<_> = self.pending_requests.values().cloned().collect();
         pending_requests.sort_by(|lhs, rhs| lhs.request_id.cmp(&rhs.request_id));

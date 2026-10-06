@@ -76,6 +76,7 @@ struct ACPBrokerClientTests {
         let requests = await service.attached
         #expect(requests.map(\.replayAfterCursor?.rawValue) == [0, 1])
         #expect(requests.allSatisfy { $0.acknowledgedCursor.rawValue == 0 })
+        #expect(requests.allSatisfy { $0.snapshotOnLastPageOnly == true })
         #expect(await service.acks.isEmpty)
     }
 
@@ -2204,7 +2205,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         let events = reply.events
         let tail = reply.snapshotJournalTail ?? events.map(\.cursor).max() ?? params.acknowledgedCursor
         return ACPBrokerAttachResult(
-            snapshot: snapshot(
+            snapshot: params.snapshotOnLastPageOnly == true && reply.hasMoreEvents == true ? nil : snapshot(
                 journalTail: tail.rawValue,
                 acknowledgedCursor: params.acknowledgedCursor,
                 pendingRequests: reply.snapshotPendingRequests ?? pendingRequests(from: events),
@@ -2213,7 +2214,8 @@ private actor MockBrokerService: ACPBrokerServicing {
                 cursorTodosByToolCallId: reply.snapshotCursorTodosByToolCallId
             ),
             events: events,
-            hasMoreEvents: reply.hasMoreEvents
+            hasMoreEvents: reply.hasMoreEvents,
+            pendingRequestIds: (reply.snapshotPendingRequests ?? pendingRequests(from: events)).map(\.requestId)
         )
     }
 

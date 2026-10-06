@@ -661,6 +661,7 @@ fn protocol_dtos_use_stable_wire_field_names() {
         acknowledged_cursor: EventCursor::new(0),
         replay_after_cursor: None,
         max_replay_bytes: None,
+        snapshot_on_last_page_only: None,
     });
     let _: AcpRespondParams = round_trip(&AcpRespondParams {
         broker_id: BrokerId::new("local-session"),

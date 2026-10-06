@@ -1770,10 +1770,18 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
                 .replay_after_cursor
                 .unwrap_or(params.acknowledged_cursor),
         );
-    let snapshot = state.broker.snapshot();
+    let has_more_events = replay_cursor < state.broker.journal_tail();
+    // Pending payloads can be unbounded. Clone and send the full snapshot
+    // only on the final page when the client opts into snapshot-free pages.
+    let snapshot = if params.snapshot_on_last_page_only == Some(true) && has_more_events {
+        None
+    } else {
+        Some(state.broker.snapshot())
+    };
     Ok(json!({
-        "hasMoreEvents": replay_cursor < snapshot.journal_tail,
+        "hasMoreEvents": has_more_events,
         "snapshot": snapshot,
+        "pendingRequestIds": state.broker.pending_request_ids(),
         "events": events
     }))
 }
@@ -2703,6 +2711,15 @@ mod tests {
                 .broker
                 .add_adapter_notification("test/update", json!({"text": text}));
         }
+        state
+            .broker
+            .add_pending_request(
+                "write",
+                json!(1),
+                PendingClientRequestKind::File,
+                json!({"method": "fs/write_text_file", "params": {"content": "w".repeat(65536)}}),
+            )
+            .unwrap();
         let mut child = Command::new("/usr/bin/true")
             .stdin(Stdio::piped())
             .spawn()
@@ -2715,12 +2732,12 @@ mod tests {
         };
         let mut cursor = 0;
         let mut seen = Vec::new();
-        while cursor < 3 {
+        while cursor < 4 {
             let attached = broker_attach(
                 &runtime,
                 Some(json!({
                     "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0,
-                    "replayAfterCursor": cursor, "maxReplayBytes": 512
+                    "replayAfterCursor": cursor, "maxReplayBytes": 512, "snapshotOnLastPageOnly": true
                 })),
             )
             .unwrap();
@@ -2732,11 +2749,23 @@ mod tests {
             );
             cursor = events.last().unwrap()["cursor"].as_u64().unwrap();
             seen.push(cursor);
-            assert_eq!(attached["snapshot"]["acknowledgedCursor"], 0);
-            assert_eq!(attached["hasMoreEvents"], cursor < 3);
+            assert_eq!(attached["pendingRequestIds"], json!(["write"]));
+            if cursor < 4 {
+                assert!(
+                    attached["snapshot"].is_null(),
+                    "intermediate pages must not repeat large pending payloads"
+                );
+            } else {
+                assert_eq!(attached["snapshot"]["acknowledgedCursor"], 0);
+                assert_eq!(
+                    attached["snapshot"]["pendingRequests"][0]["payload"]["params"]["content"],
+                    "w".repeat(65536)
+                );
+            }
+            assert_eq!(attached["hasMoreEvents"], cursor < 4);
         }
-        assert_eq!(seen, vec![1, 2, 3]);
-        assert_eq!(lock_runtime(&runtime).broker.replay_after_ack().len(), 3);
+        assert_eq!(seen, vec![1, 2, 3, 4]);
+        assert_eq!(lock_runtime(&runtime).broker.replay_after_ack().len(), 4);
         let legacy = broker_attach(
             &runtime,
             Some(json!({
@@ -2744,7 +2773,8 @@ mod tests {
             })),
         )
         .unwrap();
-        assert_eq!(legacy["events"].as_array().unwrap().len(), 3);
+        assert_eq!(legacy["events"].as_array().unwrap().len(), 4);
+        assert!(legacy["snapshot"].is_object());
     }
 
     #[test]
