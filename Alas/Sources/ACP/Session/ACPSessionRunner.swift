@@ -4149,8 +4149,6 @@ extension ACPSessionRunner {
                 // RPC is sent below, so any agent chunk that follows is genuine
                 // new output — N+1 bubble creation is correct from here on.
                 self.session.allowsStreamingBoundaryCrossing = true
-                // A queued turn is found at launch by its `.sending` row.
-                if queuedItemId == nil { self.setDirectTurnInFlight(true) }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -4252,6 +4250,18 @@ extension ACPSessionRunner {
                 for context in await self.pluginContext?(self.sessionId) ?? [] { privateBlocks.append(.text(context)) }
                 if self.session.readOnlyRestricted { privateBlocks.append(.text(ACPSideQuestion.guidance)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
+                // A queued turn is found at launch by its `.sending` row, saved
+                // before dispatch; a direct one needs its marker saved just as
+                // durably before the prompt can reach the agent. Set after the
+                // preflight work, so an exit during it leaves no stale marker.
+                if queuedItemId == nil {
+                    let markerWrite = await MainActor.run { () -> Task<Void, Never>? in
+                        guard self.activePromptID == promptID else { return nil }
+                        self.setDirectTurnInFlight(true)
+                        return self.persistenceTail
+                    }
+                    await markerWrite?.value
+                }
                 guard await self.hasConfirmedLeaseForSideEffect() else {
                     onDispatchRegistered?()
                     throw CancellationError()
