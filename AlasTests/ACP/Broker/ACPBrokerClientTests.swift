@@ -77,7 +77,6 @@ struct ACPBrokerClientTests {
         #expect(requests.map(\.replayAfterCursor?.rawValue) == [0, 1])
         #expect(requests.allSatisfy { $0.acknowledgedCursor.rawValue == 0 })
         #expect(await service.acks.isEmpty)
-
     }
 
     @Test func detachDuringOpenSuppressesLateStartupCallbacks() async throws {
