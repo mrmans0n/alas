@@ -37,4 +37,21 @@ struct NativePeerNewSession: Identifiable, Equatable {
     static func preselectedAgentId(in agents: [RemoteAgentOption]) -> String? {
         (agents.first(where: \.isDefault) ?? agents.first)?.id
     }
+
+    /// Which of the model and effort chips the sheet shows for an agent: only
+    /// the ones the peer has a remembered list for. With neither, a hint says
+    /// the agent's defaults apply. Nil until an agent is selected.
+    struct ChipVisibility: Equatable {
+        let showsModel: Bool
+        let showsEffort: Bool
+        var showsDefaultsHint: Bool { !showsModel && !showsEffort }
+    }
+
+    static func chipVisibility(for agent: RemoteAgentOption?) -> ChipVisibility? {
+        guard let agent else { return nil }
+        return ChipVisibility(
+            showsModel: !(agent.models ?? []).isEmpty,
+            showsEffort: !(agent.efforts ?? []).isEmpty
+        )
+    }
 }

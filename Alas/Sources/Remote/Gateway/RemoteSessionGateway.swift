@@ -101,8 +101,9 @@ final class RemoteSessionGateway {
                     refreshWorktreeList()
                 }
             }
-        case .createSession(let worktreeId, let agentId, let modelId):
-            let result = await provider.createRemoteSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId)
+        case .createSession(let worktreeId, let agentId, let modelId, let effortId):
+            let result = await provider.createRemoteSession(
+                worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId)
             switch result {
             case .success(let summary):
                 send(.sessionCreated(session: summary))

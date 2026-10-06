@@ -6,15 +6,19 @@ import SwiftUI
 /// optional search (auto-shown when items > 5) and a list of rows. Mirrors
 /// the design's `chat-model` button visual.
 struct ACPSelectChip: View {
+    enum Icon: Equatable {
+        case system(String)
+        /// Full-color artwork, such as an agent logo; drawn untinted.
+        case image(NSImage)
+    }
+
     struct Item: Identifiable, Equatable {
         let id: String
         let name: String
         let description: String?
-        /// SF Symbol shown before the name — currently only populated for
-        /// mode/mode-config-option items carrying `_meta.kind`. Absent for
-        /// every other chip (models, thinking, parameters), which keep
-        /// their existing icon-less look.
-        var iconSystemName: String? = nil
+        /// Shown before the name: mode symbols in the composer, agent logos
+        /// in the peer new-session sheet. Absent for every other chip.
+        var icon: Icon? = nil
     }
 
     let label: String
@@ -39,10 +43,8 @@ struct ACPSelectChip: View {
             // outline at low opacity, accent-tinted (not white) text.
             // Outline-on-fill, not a solid bright pill.
             HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
-                if let icon = items.first(where: { $0.id == selectedId })?.iconSystemName {
-                    Image(systemName: icon)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(accent)
+                if let icon = items.first(where: { $0.id == selectedId })?.icon {
+                    Self.iconView(icon, symbolSize: 9, accent: accent)
                 }
                 Text(label.isEmpty ? placeholder : label)
                     .font(.system(size: 11, weight: .medium))
@@ -79,6 +81,21 @@ struct ACPSelectChip: View {
                 }
             )
             .environment(\.theme, theme)
+        }
+    }
+
+    @ViewBuilder
+    static func iconView(_ icon: Icon, symbolSize: CGFloat, accent: Color) -> some View {
+        switch icon {
+        case .system(let name):
+            Image(systemName: name)
+                .font(.system(size: symbolSize, weight: .semibold))
+                .foregroundStyle(accent)
+        case .image(let image):
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 14, height: 14)
         }
     }
 
@@ -305,10 +322,8 @@ private struct DropdownPanel: View {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
-                        if let icon = item.iconSystemName {
-                            Image(systemName: icon)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(accent)
+                        if let icon = item.icon {
+                            ACPSelectChip.iconView(icon, symbolSize: 10, accent: accent)
                         }
                         Text(item.name)
                             .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))

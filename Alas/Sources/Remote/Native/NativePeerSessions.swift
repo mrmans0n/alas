@@ -244,12 +244,12 @@ final class NativePeerSessions {
         requestNewSessionOptions()
     }
 
-    func createNewSession(worktreeId: String, agentId: String, modelId: String?) {
+    func createNewSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) {
         guard let request = newSession, request.phase != .creating, let downstream else { return }
         newSession?.phase = .creating
         let token = request.id
         let sent = federation.request(
-            .createSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId),
+            .createSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId),
             toPeer: request.serverId, from: downstream
         ) { [weak self] reply in self?.applyNewSessionReply(reply, token: token) }
         if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }

@@ -149,7 +149,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         remoteAgentsCallCount += 1
         return agents
     }
-    func createRemoteSession(worktreeId: String, agentId: String, modelId: String?) async -> RemoteCreateSessionResult {
+    func createRemoteSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) async -> RemoteCreateSessionResult {
         createRequests.append((worktreeId, agentId))
         return createResults["\(worktreeId)|\(agentId)"] ?? .failure("Could not create session.")
     }
