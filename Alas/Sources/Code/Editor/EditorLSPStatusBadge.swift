@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct EditorLSPStatusBadge: View {
+    /// Coarse holder-derived status. Live progress is layered on in this view's
+    /// own body so only the badge re-renders on indexing updates.
     let status: EditorLSPStatus
+    let serverStatus: LSPServerStatus?
     /// When `false`, the override picker is hidden everywhere in the popover.
     /// External editor tabs (SDK files opened via cmd-click) pass `false`
     /// because `EditorBuffer.applyEffectiveLanguageToLSP` bails for
@@ -17,18 +20,20 @@ struct EditorLSPStatusBadge: View {
 
     @State private var popoverOpen: Bool = false
     @State private var resolvedLanguages: [(language: String, displayName: String)] = []
-    @Environment(\.theme) var theme
 
     var body: some View {
-        Button { popoverOpen.toggle() } label: { pill }
-            .buttonStyle(.plain)
-            .help(tooltip)
-            .accessibilityLabel(Text("Language server status: \(tooltip)"))
-            .accessibilityHint(Text("Shows actions for this file's language server"))
-            .accessibilityAddTraits(.isButton)
-            .popover(isPresented: $popoverOpen, arrowEdge: .top) {
-                popoverBody.padding(10).frame(width: 280)
-            }
+        let badge = LSPBadgeState.make(editor: status, phase: serverStatus?.phase)
+        Button { popoverOpen.toggle() } label: {
+            LSPStatusPill(state: badge, isHighlighted: popoverOpen)
+        }
+        .buttonStyle(.plain)
+        .help(badge.tooltip)
+        .accessibilityLabel(Text("Language server status: \(badge.label), \(badge.tooltip)"))
+        .accessibilityHint(Text("Shows actions for this file's language server"))
+        .accessibilityAddTraits(.isButton)
+        .popover(isPresented: $popoverOpen, arrowEdge: .top) {
+            popoverBody.padding(10).frame(width: 280)
+        }
     }
 
     @ViewBuilder
@@ -51,73 +56,15 @@ struct EditorLSPStatusBadge: View {
         }
     }
 
-    private var pill: some View {
-        HStack(spacing: 6) {
-            glyph
-            Text(label)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-muted"))
-            if case .problem = status {
-                Text("!")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(theme.color("warn"))
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(theme.color("bg-2").opacity(popoverOpen ? 1 : 0))
-        .clipShape(Capsule())
-        .contentShape(Capsule())
-    }
-
-    @ViewBuilder
-    private var glyph: some View {
-        switch status {
-        case .ready:
-            Circle().fill(theme.color("add")).frame(width: 7, height: 7).accessibilityHidden(true)
-        case .loading:
-            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 9, height: 9).accessibilityHidden(true)
-        case .problem:
-            Circle().fill(theme.color("warn")).frame(width: 7, height: 7).accessibilityHidden(true)
-        case .noLanguage:
-            Circle().stroke(theme.color("fg-faint"), lineWidth: 1).frame(width: 7, height: 7).accessibilityHidden(true)
-        }
-    }
-
-    private var label: String {
-        switch status {
-        case .ready(let language, _),
-             .loading(let language),
-             .problem(let language, _, _):
-            return language
-        case .noLanguage(let ext):
-            return ext.isEmpty ? "Plain text" : ".\(ext)"
-        }
-    }
-
-    private var tooltip: String {
-        switch status {
-        case .ready(let lang, let cmd): return "\(lang) · \(cmd)"
-        case .loading(let lang): return "\(lang) · starting…"
-        case .problem(let lang, let kind, _):
-            let reason: String
-            switch kind {
-            case .notInstalled: reason = "not installed"
-            case .dead:         reason = "crashed"
-            case .disabled:     reason = "disabled"
-            }
-            return "\(lang) · \(reason)"
-        case .noLanguage: return "No language server"
-        }
-    }
-
     @ViewBuilder
     private var popoverBody: some View {
-        switch status {
+        switch status.refined(by: serverStatus?.phase) {
         case .ready(let lang, let cmd):
             readyBody(language: lang, command: cmd)
         case .loading(let lang):
             loadingBody(language: lang)
+        case .indexing(let lang, _, _, let tasks):
+            indexingBody(language: lang, tasks: tasks)
         case .problem(let lang, let kind, let cmd):
             problemBody(language: lang, kind: kind, command: cmd)
         case .noLanguage(let ext):
@@ -151,6 +98,19 @@ struct EditorLSPStatusBadge: View {
         }
     }
 
+    private func indexingBody(language: String, tasks: [LSPClient.ProgressTask]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(language) · indexing").font(.system(size: 11, weight: .semibold))
+            LSPServerStatusDetail(phase: .indexing(tasks))
+            HStack(spacing: 8) {
+                Button(restartLabel(language: language)) { onRestart()
+                popoverOpen = false }
+                Button("Open settings") { onOpenSettings()
+                popoverOpen = false }
+            }
+        }
+    }
+
     @ViewBuilder
     private func problemBody(language: String, kind: ProblemKind, command: String?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -166,8 +126,11 @@ struct EditorLSPStatusBadge: View {
                 }
                 Divider()
                 overridePicker
-            case .dead:
+            case .dead(let detail):
                 Text("Server crashed.").font(.system(size: 11))
+                if let detail {
+                    LSPServerStatusDetail(phase: .crashed(detail))
+                }
                 HStack {
                     Button(restartLabel(language: language)) { onRestart()
                     popoverOpen = false }

@@ -16,6 +16,7 @@ struct CommitTabView: View {
 
     @State private var reviewSession: DiffReviewLoadedSession?
     @State private var loadingReviewSession = false
+    @State private var lspLeases = LSPServerLeaseSet()
     @State private var reviewSessionError: String?
     @State private var selectedReviewFileID: DiffReviewFileID?
     @State private var railCollapsed = false
@@ -189,6 +190,7 @@ struct CommitTabView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
             AlasButton(title: "Review This Commit", icon: "doc.text.magnifyingglass") {
                 openReviewSession(
                     target: Self.reviewSessionTarget(
@@ -203,6 +205,15 @@ struct CommitTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(theme.color("bg-2"))
+        .lspServerLeases(
+            lspLeases,
+            inputs: LSPServerLeaseSet.inputs(
+                worktreeRoot: worktreePath,
+                relativePaths: reviewSession?.files.map(\.summary.path) ?? [],
+                registry: appState.lsp.activeRegistry
+            ),
+            manager: appState.lsp
+        )
     }
 
     @discardableResult

@@ -112,6 +112,7 @@ struct ReviewTabView: View {
     @Environment(\.theme) private var theme
     @State private var session: ReviewChangesLoadedSession?
     @State private var loadedReviewRequestDiff = false
+    @State private var lspLeases = LSPServerLeaseSet()
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
@@ -395,6 +396,7 @@ struct ReviewTabView: View {
                 }
             }
             Spacer()
+            LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
             if ReviewTabPendingReviewPresentation.showsToolbarFinishButton(
                 canSubmitReview: capabilities.canSubmitReview,
                 hasPendingReviewScope: pendingReview != nil
@@ -446,6 +448,15 @@ struct ReviewTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(theme.color("bg-2"))
+        .lspServerLeases(
+            lspLeases,
+            inputs: LSPServerLeaseSet.inputs(
+                worktreeRoot: worktree.path,
+                relativePaths: session?.files.map(\.summary.path) ?? [],
+                registry: appState.lsp.activeRegistry
+            ),
+            manager: appState.lsp
+        )
     }
 
     private var layoutSwitcher: some View {

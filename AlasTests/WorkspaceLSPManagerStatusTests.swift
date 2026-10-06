@@ -17,7 +17,10 @@ struct WorkspaceLSPManagerStatusTests {
 
     private func manager(
         withFakeEntry language: String = "swift",
-        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil
+        enabled: Bool = true,
+        rootMarkers: [String] = [],
+        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }
     ) -> WorkspaceLSPManager {
         let makeClient = makeClient ?? { _, _, _, language, rootURI, _ in
             readyClient(language: language, rootURI: rootURI)
@@ -29,11 +32,19 @@ struct WorkspaceLSPManagerStatusTests {
                 command: "/usr/bin/true",
                 args: [],
                 env: [:],
-                rootMarkers: [],
-                enabled: true
+                rootMarkers: rootMarkers,
+                enabled: enabled
             )
         ])
-        return WorkspaceLSPManager(
+        return manager(registry: registry, makeClient: makeClient, sleep: sleep)
+    }
+
+    private func manager(
+        registry: LanguageServerRegistry,
+        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }
+    ) -> WorkspaceLSPManager {
+        WorkspaceLSPManager(
             registry: registry,
             makeAvailability: {
                 LanguageServerAvailability(
@@ -43,23 +54,28 @@ struct WorkspaceLSPManagerStatusTests {
                     gatekeeperAssessor: { _ in .allowed }
                 )
             },
-            makeClient: makeClient
+            makeClient: makeClient,
+            sleep: sleep
         )
     }
 
     private func readyClient(language: String, rootURI: String) -> LSPClient {
+        LSPClient(transport: Self.replyingTransport(), language: language, rootURI: rootURI)
+    }
+
+    private static func replyingTransport(repliesToShutdown: Bool = true) -> FakeTransport {
         let transport = FakeTransport()
         transport.onSend = { sent in
-            guard let id = Self.requestId(in: sent) else { return }
+            guard let id = requestId(in: sent) else { return }
             if sent.contains(#""method":"initialize""#) {
                 transport.deliverFrame(
                     #"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{"textDocumentSync":1}}}"#
                 )
-            } else if sent.contains(#""method":"shutdown""#) {
+            } else if repliesToShutdown, sent.contains(#""method":"shutdown""#) {
                 transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
             }
         }
-        return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        return transport
     }
 
     private static func requestId(in json: String) -> Int? {
@@ -650,6 +666,563 @@ struct WorkspaceLSPManagerStatusTests {
         await mgr.closeTemporaryDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
         transport.finish()
+    }
+
+    private static let initializeReply = #"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#
+
+    @Test func crashAfterReadyMarksStatusCrashed() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        #expect(status.phase == .ready)
+        let tick = mgr.stateTick
+
+        transport.deliverStderr("fatal: boom\n")
+        transport.deliverExit(134)
+
+        try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.termination == .exit(134))
+        #expect(detail.outputTail == ["fatal: boom"])
+        #expect(mgr.stateTick > tick)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+    }
+
+    @Test func streamEndWithoutExitStatusMarksStatusCrashed() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        #expect(status.phase == .ready)
+
+        transport.finish()
+
+        try await eventually("crashed phase") { if case .crashed = status.phase { true } else { false } }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.termination == nil)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+    }
+
+    @Test func exitDuringInitializeRecordsExitAndInitializeError() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverStderr("dyld: missing libfoo\n")
+                transport.deliverExit(2)
+            }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let client = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        #expect(client == nil)
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        try await eventually("exit code and initialize error") {
+            guard case .crashed(let detail) = status.phase else { return false }
+            return detail.termination == .exit(2) && detail.initializeError != nil
+        }
+        guard case .crashed(let detail) = status.phase else { return }
+        #expect(detail.outputTail == ["dyld: missing libfoo"])
+    }
+
+    @Test("exit during initialize publishes one merged crash whichever report arrives first", arguments: [true, false])
+    func exitDuringInitializePublishesOnlyTheMergedCrash(exitReportedFirst: Bool) {
+        let status = LSPServerStatus(language: "swift", command: "sourcekit-lsp", root: "/tmp", remoteHost: nil)
+        status.reset()
+        let exit = LSPClient.ExitDetail(termination: .exit(2), uptime: .seconds(1), outputTail: ["dyld: missing libfoo"])
+        let merged = LSPServerStatus.Phase.crashed(.init(
+            termination: .exit(2),
+            uptime: .seconds(1),
+            outputTail: ["dyld: missing libfoo"],
+            initializeError: "transport closed"
+        ))
+
+        var observed = [status.phase]
+        if exitReportedFirst {
+            status.recordExit(exit)
+            observed.append(status.phase)
+            status.recordInitializeFailure("transport closed", exitExpected: true)
+        } else {
+            status.recordInitializeFailure("transport closed", exitExpected: true)
+            observed.append(status.phase)
+            status.recordExit(exit)
+        }
+        observed.append(status.phase)
+
+        #expect(observed.dropLast().allSatisfy { $0 == .starting })
+        #expect(observed.last == merged)
+    }
+
+    @Test func progressAfterReadyShowsIndexingWithoutTickingState() async throws {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) { transport.deliverFrame(Self.initializeReply) }
+        }
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            LSPClient(transport: transport, language: language, rootURI: rootURI, progressCoalescing: .zero)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        let tick = mgr.stateTick
+
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"begin","title":"Indexing","percentage":10}}}"#)
+        let indexing = LSPServerStatus.Phase.indexing([
+            LSPClient.ProgressTask(token: "idx", title: "Indexing", message: nil, percentage: 10)
+        ])
+        try await eventually("indexing") { status.phase == indexing }
+        transport.deliverFrame(#"{"jsonrpc":"2.0","method":"$/progress","params":{"token":"idx","value":{"kind":"end"}}}"#)
+        try await eventually("ready") { status.phase == .ready }
+        #expect(mgr.stateTick == tick)
+        transport.finish()
+    }
+
+    @Test func leaseOutlivesDocumentsAndGraceShutdownIsCancelledByRetaining() async throws {
+        let transport = Self.replyingTransport()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        #expect(first.status === mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(transport.terminateCount == 0)
+
+        first.release()
+        try await eventually("first grace") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        guard case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        #expect(second.status === first.status)
+        gate.fire()
+        second.release()
+        try await eventually("second grace") { gate.requested.count == 2 }
+        #expect(transport.terminateCount == 0)
+
+        gate.fire()
+        try await eventually("grace shutdown") { transport.terminateCount == 1 }
+        transport.finish()
+    }
+
+    @Test func graceStartsOnlyWhenTheLastOfTwoLeasesIsReleased() async throws {
+        let transport = Self.replyingTransport()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift"),
+              case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        try await eventually("ready") { first.status.phase == .ready }
+
+        first.release()
+        first.release()
+        await Task.yield()
+        #expect(gate.requested.isEmpty)
+
+        second.release()
+        try await eventually("grace after the last release") { !gate.requested.isEmpty }
+        await Task.yield()
+        #expect(gate.requested == [WorkspaceLSPManager.idleGrace])
+        #expect(WorkspaceLSPManager.idleGrace == .seconds(120))
+        transport.finish()
+    }
+
+    @Test func restartRespawnsLeaseOnlyServerWithSameStatus() async throws {
+        final class Spawns { var transports: [FakeTransport] = [] }
+        let spawns = Spawns()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+
+        await mgr.restart(status: lease.status)
+
+        #expect(spawns.transports.count == 2)
+        #expect(spawns.transports[0].terminateCount == 1)
+        try await eventually("ready after restart") { lease.status.phase == .ready }
+        #expect(spawns.transports[1].terminateCount == 0)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func restartShowsStartingWhileTheOldServerShutsDown() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            // The first server never answers `shutdown`, so the restart suspends mid-teardown.
+            let transport = Self.replyingTransport(repliesToShutdown: !spawns.transports.isEmpty)
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        try await eventually("ready") { status.phase == .ready }
+        let stuck = spawns.transports[0]
+
+        let restarting = Task { await mgr.restartHolder(forFile: fileURL, worktreeRoot: root, languageId: "swift") }
+        try await eventually("shutdown requested") { stuck.sent.contains { $0.contains(#""method":"shutdown""#) } }
+
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+        #expect(status.phase == .starting)
+
+        let shutdownRequest = try #require(stuck.sent.first { $0.contains(#""method":"shutdown""#) })
+        let shutdownID = try #require(Self.requestId(in: shutdownRequest))
+        stuck.deliverFrame(#"{"jsonrpc":"2.0","id":\#(shutdownID),"result":null}"#)
+        await restarting.value
+        try await eventually("ready after restart") { status.phase == .ready }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func retainReportsDisabledLanguageWithoutSpawning() async {
+        let mgr = manager(enabled: false, makeClient: { _, _, _, language, rootURI, _ in
+            Issue.record("a disabled language must not spawn a server")
+            return readyClient(language: language, rootURI: rootURI)
+        })
+        let result = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        guard case .unavailable(let language, let reason) = result else {
+            Issue.record("expected unavailable")
+            return
+        }
+        #expect(language == "swift")
+        #expect(reason == .disabled)
+    }
+
+    /// Builds a manager whose second spawn runs `spawns.onRespawn`: at that
+    /// moment the previous holder is gone and the replacement is not inserted yet.
+    private func respawnObservingManager(spawns: SpawnLog, gate: GraceGate) -> WorkspaceLSPManager {
+        manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                let transport = Self.replyingTransport()
+                spawns.transports.append(transport)
+                if spawns.transports.count == 2 { spawns.onRespawn?() }
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+    }
+
+    @Test func leaseReleasedWhileRestartRespawnsDoesNotLeakTheServer() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift"),
+              case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        try await eventually("ready") { second.status.phase == .ready }
+        spawns.onRespawn = { first.release() }
+
+        await mgr.restart(status: first.status)
+
+        try #require(spawns.transports.count == 2)
+        try await eventually("ready after restart") { second.status.phase == .ready }
+        #expect(gate.requested.isEmpty)
+        second.release()
+        try await eventually("grace after last release") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("grace shutdown") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func lastLeaseReleasedWhileRestartRespawnsStillGetsGraceShutdown() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+        spawns.onRespawn = { lease.release() }
+
+        await mgr.restart(status: lease.status)
+
+        try #require(spawns.transports.count == 2)
+        try await eventually("grace for the replacement") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("grace shutdown") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseReleasedWhileDeadServerIsDiscardedDoesNotKeepReplacementAlive() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+        spawns.onRespawn = { lease.release() }
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = lease.status.phase { true } else { false } }
+
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        try #require(spawns.transports.count == 2)
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+
+        #expect(spawns.transports[1].terminateCount == 1)
+        #expect(gate.requested.isEmpty)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func retainDuringFinalCloseShutdownGetsAFreshServer() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                // The first server never answers `shutdown`, so the close below suspends mid-teardown.
+                let transport = Self.replyingTransport(repliesToShutdown: !spawns.transports.isEmpty)
+                spawns.transports.append(transport)
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let stuck = spawns.transports[0]
+        let closing = Task { await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift") }
+        try await eventually("shutdown requested") { stuck.sent.contains { $0.contains(#""method":"shutdown""#) } }
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try #require(spawns.transports.count == 2)
+        try await eventually("fresh server ready") { lease.status.phase == .ready }
+
+        let shutdownRequest = try #require(stuck.sent.first { $0.contains(#""method":"shutdown""#) })
+        let shutdownID = try #require(Self.requestId(in: shutdownRequest))
+        stuck.deliverFrame(#"{"jsonrpc":"2.0","id":\#(shutdownID),"result":null}"#)
+        await closing.value
+        #expect(stuck.terminateCount == 1)
+        #expect(spawns.transports[1].terminateCount == 0)
+
+        lease.release()
+        try await eventually("grace for the fresh server") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("fresh server stopped") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseSetDerivesInputsWithoutTouchingDiskAndRetainsOnlyRegularFiles() async throws {
+        let present = "present.swift"
+        try Data().write(to: root.appendingPathComponent(present))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("dir.swift"), withIntermediateDirectories: true)
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let inputs = LSPServerLeaseSet.inputs(
+            worktreeRoot: root,
+            relativePaths: ["missing.swift", "dir.swift", present, "notes.txt"],
+            registry: mgr.activeRegistry
+        )
+        #expect(inputs.map(\.relativePath) == ["missing.swift", "dir.swift", present])
+
+        let leaseSet = LSPServerLeaseSet()
+        await leaseSet.update(inputs: Array(inputs.prefix(2)), manager: mgr)
+        #expect(leaseSet.chips.isEmpty)
+        #expect(spawns.transports.isEmpty)
+
+        await leaseSet.update(inputs: inputs, manager: mgr)
+        #expect(leaseSet.chips.count == 1)
+        #expect(spawns.transports.count == 1)
+        leaseSet.release()
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseSetShowsADisabledChipForAFileOnlyADisabledLanguageClaims() async throws {
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(language: "zig", extensions: ["zig"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: false),
+        ])
+        let mgr = manager(registry: registry, makeClient: { _, _, _, language, rootURI, _ in
+            Issue.record("a disabled language must not spawn a server")
+            return readyClient(language: language, rootURI: rootURI)
+        })
+        let file = "main.zig"
+        try Data().write(to: root.appendingPathComponent(file))
+        let inputs = LSPServerLeaseSet.inputs(worktreeRoot: root, relativePaths: [file], registry: mgr.activeRegistry)
+        #expect(inputs.map(\.language) == ["zig"])
+
+        let leaseSet = LSPServerLeaseSet()
+        await leaseSet.update(inputs: inputs, manager: mgr)
+
+        #expect(leaseSet.chips.count == 1)
+        guard case .unavailable(let language, let reason)? = leaseSet.chips.first else {
+            Issue.record("expected a disabled chip, got \(leaseSet.chips.map(\.id))")
+            return
+        }
+        #expect(language == "zig")
+        #expect(reason == .disabled)
+        leaseSet.release()
+    }
+
+    @Test func leaseResolvesNestedPackageRootFromRootMarkers() async throws {
+        let package = root.appendingPathComponent("Packages/Core", isDirectory: true)
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try Data().write(to: package.appendingPathComponent("Package.swift"))
+        let nestedFile = package.appendingPathComponent("Sources/Core.swift")
+        let spawns = SpawnLog()
+        let mgr = manager(rootMarkers: ["Package.swift"], makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: nestedFile, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        #expect(lease.status.root == package.standardizedFileURL.path)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func restartRespawnsLeaseOnlyServerThroughAnEnabledAlias() async throws {
+        func registry(typescriptEnabled: Bool) -> LanguageServerRegistry {
+            LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(language: "typescript", extensions: ["ts"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: typescriptEnabled),
+                LanguageServerConfig(language: "javascript", extensions: ["js"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true),
+            ])
+        }
+        let spawns = SpawnLog()
+        let mgr = manager(registry: registry(typescriptEnabled: true), makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        // Both aliases resolve to one server: same root, command, args and env.
+        guard case .serving(let typescriptLease) = await mgr.retainServer(worktreeRoot: root, fileURL: root.appendingPathComponent("a.ts"), languageId: "typescript"),
+              case .serving(let javascriptLease) = await mgr.retainServer(worktreeRoot: root, fileURL: root.appendingPathComponent("a.js"), languageId: "javascript")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        #expect(typescriptLease.status === javascriptLease.status)
+        try await eventually("ready") { typescriptLease.status.phase == .ready }
+
+        mgr.updateRegistry(registry(typescriptEnabled: false))
+        await mgr.restart(status: typescriptLease.status)
+
+        #expect(spawns.transports.count == 2)
+        try await eventually("ready after restart") { javascriptLease.status.phase == .ready }
+        #expect(spawns.transports[0].terminateCount == 1)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseOnCrashedHolderWithOpenDocumentsKeepsItAndRestartReopensThem() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "let x = 1\n")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = status.phase { true } else { false } }
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        #expect(spawns.transports.count == 1)
+        #expect(lease.status === status)
+        if case .crashed = lease.status.phase {} else { Issue.record("expected the lease to show the crash, got \(lease.status.phase)") }
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+
+        await mgr.restart(status: lease.status)
+
+        #expect(spawns.transports.count == 2)
+        try await eventually("ready after restart") { status.phase == .ready }
+        let reopened = spawns.transports[1].sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        #expect(reopened.count == 1)
+        #expect(reopened.first?.contains("let x = 1") == true)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .ready)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func releasingLeaseOnCrashedHolderKeepsItWhileDocumentsAreOpen() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = status.phase { true } else { false } }
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        lease.release()
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+        #expect(spawns.transports.count == 1)
+    }
+}
+
+@MainActor
+private final class SpawnLog {
+    var transports: [FakeTransport] = []
+    var onRespawn: (@MainActor () -> Void)?
+}
+
+/// Stands in for `Task.sleep` in the idle-grace timer: records requested
+/// durations and suspends until `fire()`.
+@MainActor
+private final class GraceGate {
+    private(set) var requested: [Duration] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func sleep(_ duration: Duration) async {
+        requested.append(duration)
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func fire() {
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 }
 

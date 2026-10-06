@@ -10,6 +10,38 @@ actor LSPClient {
     }
     private static let shutdownTimeoutNanoseconds: UInt64 = 2_000_000_000
 
+    struct ProgressTask: Sendable, Equatable {
+        let token: String
+        let title: String
+        var message: String?
+        var percentage: Int?
+    }
+
+    struct ExitDetail: Sendable, Equatable {
+        /// `nil` when the transport closed without reporting how the process ended.
+        let termination: SpawnedProcess.Termination?
+        let uptime: Duration?
+        let outputTail: [String]
+    }
+
+    enum LifecycleEvent: Sendable, Equatable {
+        case progress([ProgressTask])
+        case exited(ExitDetail)
+    }
+
+    /// Lifecycle events for `WorkspaceLSPManager`, its only consumer. Created in
+    /// `init` so events raised before the manager starts iterating are buffered.
+    nonisolated let lifecycleEvents: AsyncStream<LifecycleEvent>
+    private let lifecycleContinuation: AsyncStream<LifecycleEvent>.Continuation
+    private let progressCoalescing: Duration
+    private var progressTasks: [String: ProgressTask] = [:]
+    private var progressOrder: [String] = []
+    private var progressFlushPending = false
+    private var hasExited = false
+    private var outputTail = LSPOutputTail()
+    private var isShuttingDown = false
+    private var startedAt: ContinuousClock.Instant?
+
     let language: String
     let rootURI: String
     private let transport: LSPTransporting
@@ -140,10 +172,14 @@ actor LSPClient {
         semanticSubscribers.removeAll()
     }
 
-    init(transport: LSPTransporting, language: String, rootURI: String) {
+    init(transport: LSPTransporting, language: String, rootURI: String, progressCoalescing: Duration = .milliseconds(100)) {
         self.transport = transport
         self.language = language
         self.rootURI = rootURI
+        self.progressCoalescing = progressCoalescing
+        let (events, continuation) = AsyncStream.makeStream(of: LifecycleEvent.self)
+        self.lifecycleEvents = events
+        self.lifecycleContinuation = continuation
         Task { await self.consume() }
     }
 
@@ -169,6 +205,7 @@ actor LSPClient {
 
     func initialize() async throws {
         try transport.start()
+        startedAt = .now
         state = .initializing
         let params = InitializeParams(
             processId: Int(ProcessInfo.processInfo.processIdentifier),
@@ -479,6 +516,7 @@ actor LSPClient {
     }
 
     func shutdown() async {
+        isShuttingDown = true
         stopSemanticRequests()
         cancelInboundRequests()
         // Send the polite handshake only if we ever reached `.ready`. For
@@ -704,7 +742,7 @@ actor LSPClient {
         }
         let rootUri = try jsonString(params.rootUri)
         let json = """
-        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":true,"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[1]},"resolveSupport":{"properties":["documentation","detail","additionalTextEdits","command"]}},"contextSupport":true,"completionList":{"itemDefaults":["commitCharacters","editRange","insertTextFormat","insertTextMode","data"]}},"signatureHelp":{"dynamicRegistration":false,"contextSupport":true,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"activeParameterSupport":true,"parameterInformation":{"labelOffsetSupport":true}}}}}}}
+        {"jsonrpc":"2.0","id":\(idString),"method":"initialize","params":{"processId":\(params.processId),"rootUri":\(rootUri),"capabilities":{"window":{"workDoneProgress":true},"general":{"positionEncodings":["utf-16"]},"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]},"definition":{},"documentSymbol":{"hierarchicalDocumentSymbolSupport":true},"publishDiagnostics":{},"formatting":{"dynamicRegistration":false},"rangeFormatting":{"dynamicRegistration":false},"rename":{"dynamicRegistration":false,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"completion":{"dynamicRegistration":false,"completionItem":{"documentationFormat":["markdown","plaintext"],"snippetSupport":true,"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[1]},"resolveSupport":{"properties":["documentation","detail","additionalTextEdits","command"]}},"contextSupport":true,"completionList":{"itemDefaults":["commitCharacters","editRange","insertTextFormat","insertTextMode","data"]}},"signatureHelp":{"dynamicRegistration":false,"contextSupport":true,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"activeParameterSupport":true,"parameterInformation":{"labelOffsetSupport":true}}}}}}}
         """
         let workspace = #""workspace":{"applyEdit":true,"configuration":true,"workspaceEdit":{"documentChanges":true,"resourceOperations":["create","rename","delete"],"changeAnnotationSupport":{"groupsOnLabel":false}},"executeCommand":{"dynamicRegistration":false}},"#
         let actions = #""codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source","source.organizeImports"]}},"isPreferredSupport":true,"disabledSupport":true,"dataSupport":true,"resolveSupport":{"properties":["edit","command"]}},"#
@@ -730,14 +768,17 @@ actor LSPClient {
             pending.removeAll()
             for continuation in diagnosticsSubscribers.values { continuation.finish() }
             diagnosticsSubscribers.removeAll()
+            reportExit(termination: nil)
+            lifecycleContinuation.finish()
         }
         for await event in transport.incoming {
             switch event {
             case .frame(let data):
                 handle(frame: data)
-            case .stderr:
-                continue
-            case .exited:
+            case .stderr(let data):
+                outputTail.append(data)
+            case .exited(let termination):
+                reportExit(termination: termination)
                 state = .dead
                 stopSemanticRequests()
                 cancelInboundRequests()
@@ -749,6 +790,21 @@ actor LSPClient {
                 diagnosticsSubscribers.removeAll()
             }
         }
+    }
+
+    /// Reports the first end of the server process once. Exits the client caused
+    /// (`shutdown()`) are not crashes and emit nothing.
+    private func reportExit(termination: SpawnedProcess.Termination?) {
+        guard !hasExited else { return }
+        hasExited = true
+        progressTasks.removeAll()
+        progressOrder.removeAll()
+        guard !isShuttingDown else { return }
+        lifecycleContinuation.yield(.exited(ExitDetail(
+            termination: termination,
+            uptime: startedAt.map { ContinuousClock.now - $0 },
+            outputTail: outputTail.finish()
+        )))
     }
 
     func handle(frame: Data) {
@@ -795,18 +851,21 @@ actor LSPClient {
                let rawID = try? value["params"]?["id"]?.encodedData(), let id = try? JSONDecoder().decode(LSPID.self, from: rawID) {
                 cancelInboundRequest(id)
             }
+            if method == "$/progress", let params = value["params"] {
+                handleProgress(params)
+            }
             return
         }
 
         guard let id = env.id else { return }
+        if method == "window/workDoneProgress/create" {
+            // Tokens are registered lazily on `begin`; the server only needs the ack.
+            acknowledge(id)
+            return
+        }
         if method == "workspace/semanticTokens/refresh" || method == "workspace/inlayHint/refresh" {
-            let idValue: LSPJSONValue
-            switch id { case .int(let number): idValue = .number(String(number))
-            case .string(let string): idValue = .string(string) }
             // Acknowledge before waking consumers. Never await highlighting here.
-            if let reply = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": .null]).encodedData() {
-                try? send(reply)
-            }
+            acknowledge(id)
             let subscribers = method == "workspace/inlayHint/refresh" ? inlaySubscribers : semanticSubscribers
             for subscriber in subscribers.values { subscriber.yield(()) }
             return
@@ -852,6 +911,80 @@ actor LSPClient {
                 try? send(data)
             }
         }
+    }
+
+    private func acknowledge(_ id: LSPID) {
+        let idValue: LSPJSONValue
+        switch id {
+        case .int(let number): idValue = .number(String(number))
+        case .string(let string): idValue = .string(string)
+        }
+        if let reply = try? LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": idValue, "result": .null]).encodedData() {
+            try? send(reply)
+        }
+    }
+
+    private func handleProgress(_ params: LSPJSONValue) {
+        guard let token = Self.progressToken(params["token"]),
+              let value = params["value"],
+              let kind = value["kind"]?.stringValue
+        else { return }
+        switch kind {
+        case "begin":
+            guard let title = value["title"]?.stringValue else { return }
+            progressOrder.removeAll { $0 == token }
+            progressOrder.append(token)
+            progressTasks[token] = ProgressTask(
+                token: token,
+                title: title,
+                message: value["message"]?.stringValue,
+                percentage: Self.progressPercentage(value["percentage"])
+            )
+        case "report":
+            guard var task = progressTasks[token] else { return }
+            if let message = value["message"]?.stringValue { task.message = message }
+            if let percentage = Self.progressPercentage(value["percentage"]) { task.percentage = percentage }
+            progressTasks[token] = task
+        case "end":
+            guard progressTasks.removeValue(forKey: token) != nil else { return }
+            progressOrder.removeAll { $0 == token }
+        default:
+            return
+        }
+        scheduleProgressSnapshot()
+    }
+
+    private func scheduleProgressSnapshot() {
+        guard progressCoalescing > .zero else {
+            emitProgressSnapshot()
+            return
+        }
+        guard !progressFlushPending else { return }
+        progressFlushPending = true
+        let delay = progressCoalescing
+        Task {
+            try? await Task.sleep(for: delay)
+            self.emitProgressSnapshot()
+        }
+    }
+
+    private func emitProgressSnapshot() {
+        progressFlushPending = false
+        guard !hasExited else { return }
+        lifecycleContinuation.yield(.progress(progressOrder.compactMap { progressTasks[$0] }))
+    }
+
+    private static func progressToken(_ value: LSPJSONValue?) -> String? {
+        switch value {
+        case .string(let token)?: return token
+        case .number(let token)?: return token
+        default: return nil
+        }
+    }
+
+    private static func progressPercentage(_ value: LSPJSONValue?) -> Int? {
+        guard case .number(let raw)? = value, let number = Double(raw), number.isFinite else { return nil }
+        return Int(min(max(number.rounded(), 0), 100))
     }
 
     private func sendErrorResponse(id: LSPID, code: Int, message: String) throws {

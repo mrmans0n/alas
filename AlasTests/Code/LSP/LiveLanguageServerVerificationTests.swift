@@ -249,7 +249,7 @@ private final class RecordingTransport: LSPTransporting, @unchecked Sendable {
                     lock.withLock { recorded.append(["stderr": String(decoding: data, as: UTF8.self)]) }
                     recordTrace("stderr", data: data)
                 } else if case .exited(let status) = event {
-                    recordTrace("exit", data: Data(String(status).utf8))
+                    recordTrace("exit", data: Data(String(describing: status).utf8))
                 }
                 continuation.yield(event)
             }
