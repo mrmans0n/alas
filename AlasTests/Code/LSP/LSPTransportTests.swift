@@ -20,6 +20,43 @@ struct LSPTransportFramingTests {
         #expect(throws: (any Error).self) { try transport.send(Data(#"{"jsonrpc":"2.0","method":"probe"}"#.utf8)) }
     }
 
+    @Test("draining a pipe returns what is buffered without waiting for the writer to close")
+    func drainBufferedDoesNotWaitForEOF() throws {
+        let pipe = Pipe()
+        defer { try? pipe.fileHandleForWriting.close() }
+        try pipe.fileHandleForWriting.write(contentsOf: Data("fatal\n".utf8))
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+
+        // The write end stays open, as it does when a descendant holds stderr.
+        #expect(String(decoding: LSPTransport.drainBuffered(descriptor: descriptor), as: UTF8.self) == "fatal\n")
+        #expect(LSPTransport.drainBuffered(descriptor: descriptor).isEmpty)
+    }
+
+    @Test("stderr written just before a server exits arrives before the exit event")
+    func stderrPrecedesExit() async throws {
+        for iteration in 0 ..< 20 {
+            let transport = LSPTransport(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "printf 'fatal\\n' >&2; exit 3"], environment: nil)
+            try transport.start()
+            var stderr = Data()
+            var exitCode: Int32?
+            var stderrAfterExit = false
+            for await event in transport.incoming {
+                switch event {
+                case .stderr(let data):
+                    if exitCode != nil { stderrAfterExit = true }
+                    stderr.append(data)
+                case .exited(let code):
+                    exitCode = code
+                case .frame:
+                    break
+                }
+            }
+            #expect(exitCode == 3, "iteration \(iteration)")
+            #expect(String(decoding: stderr, as: UTF8.self) == "fatal\n", "iteration \(iteration)")
+            #expect(!stderrAfterExit, "iteration \(iteration)")
+        }
+    }
+
     @Test("decodes a single frame")
     func singleFrame() async throws {
         let body = #"{"jsonrpc":"2.0","id":1,"result":null}"#

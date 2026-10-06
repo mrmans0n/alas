@@ -41,6 +41,13 @@ final class LSPTransport: @unchecked Sendable {
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private let refreshLock = NSLock()
+    /// Serializes stderr reads, so the termination drain cannot overtake a
+    /// readability callback that already read bytes but has not yielded them.
+    /// Guards `stderrDrained`.
+    private let stderrLock = NSLock()
+    /// Set by the drain, which leaves the descriptor non-blocking: a callback
+    /// that was already queued must not read it again.
+    private var stderrDrained = false
     private var continuation: AsyncStream<Incoming>.Continuation?
     /// Set once the termination handler fires. We can't rely on
     /// `process.isRunning` after that — the OS may reuse the root pid
@@ -95,9 +102,13 @@ final class LSPTransport: @unchecked Sendable {
             for f in frames { self.continuation?.yield(.frame(f)) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let self else { return }
+            self.stderrLock.lock()
+            defer { self.stderrLock.unlock() }
+            guard !self.stderrDrained else { return }
             let data = handle.availableData
             if data.isEmpty { return }
-            self?.continuation?.yield(.stderr(data))
+            self.continuation?.yield(.stderr(data))
         }
         // The child leads its own process group from the spawn, so signals
         // from `terminate()` reach the whole tree via `kill(-pid, …)`.
@@ -122,6 +133,7 @@ final class LSPTransport: @unchecked Sendable {
             for d in Self.currentlyMatching(cachedTargets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
+            self.drainStderr()
             self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
@@ -129,6 +141,43 @@ final class LSPTransport: @unchecked Sendable {
         startDescendantForkObserver(for: process.pid)
         refreshOrphanSet()
         startDescendantTracker()
+    }
+
+    /// The readability callback is asynchronous to the exit: a message written
+    /// just before the child died can still be sitting in the pipe when the
+    /// exit is reported. Yield it first, so the client's stderr tail is
+    /// complete when it records the exit. Reads only what is already buffered:
+    /// a descendant may still hold the write end open, so waiting for EOF
+    /// could block forever.
+    private func drainStderr() {
+        stderr.fileHandleForReading.readabilityHandler = nil
+        stderrLock.lock()
+        defer { stderrLock.unlock() }
+        stderrDrained = true
+        let drained = Self.drainBuffered(descriptor: stderr.fileHandleForReading.fileDescriptor)
+        if !drained.isEmpty { continuation?.yield(.stderr(drained)) }
+    }
+
+    /// Reads what is buffered on `descriptor` and returns at once, even when
+    /// another process still holds the write end open. Leaves the descriptor
+    /// non-blocking. The client keeps only a short tail, so a flood from a
+    /// surviving descendant is not worth reading past `limit`.
+    static func drainBuffered(descriptor: Int32, limit: Int = 256 * 1024) -> Data {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return Data() }
+        var drained = Data()
+        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
+        while drained.count < limit {
+            let count = Darwin.read(descriptor, &chunk, chunk.count)
+            if count > 0 {
+                drained.append(chunk, count: count)
+            } else if count < 0, errno == EINTR {
+                continue
+            } else {
+                break
+            }
+        }
+        return drained
     }
 
     /// Writes a JSON-RPC body framed with `Content-Length`. Header and body
