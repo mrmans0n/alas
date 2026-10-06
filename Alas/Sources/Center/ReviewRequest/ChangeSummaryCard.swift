@@ -123,9 +123,11 @@ struct ChangeSummaryCard: View {
     }
 
     private static func factsLine(_ facts: ChangeSummaryFacts) -> String {
-        let runs = facts.runResults.isEmpty
-            ? "no run results"
-            : facts.runResults.map { "\($0.scriptName) \($0.outcomeLabel)" }.joined(separator: ", ")
+        let runs = switch facts.runResults {
+        case nil: "run results unavailable"
+        case let results? where results.isEmpty: "no run results"
+        case let results?: results.map { "\($0.scriptName) \($0.outcomeLabel)" }.joined(separator: ", ")
+        }
         return "\(facts.commits.count) commits · \(facts.files.count) files · +\(facts.additions) −\(facts.deletions) · \(runs)"
     }
 }

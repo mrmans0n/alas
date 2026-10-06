@@ -52,14 +52,14 @@ struct ChangeSummaryTests {
         #expect(request.messages.reduce(0) { $0 + $1.content.utf8.count } <= ChangeSummaryPolicy.inputTokenLimit)
         #expect(payload["commitBody"] == nil)
         #expect(payload["issueTitle"] != nil)
-        #expect(request.coverage.shortenedItems == 2)
+        #expect(request.coverage.shortenedItems == 3)
     }
 
     @Test
-    func longSubjectsAndPathsAreDisclosedAsShortened() {
+    func longSubjectsPathsAndRefsAreDisclosedAsShortened() {
         let longPath = "Sources/" + String(repeating: "Nested/", count: 30) + "Picker.swift"
         let facts = ChangeSummaryFacts(
-            base: "main", branch: "feature/picker", headSHA: Self.head, mergeBaseSHA: Self.mergeBase,
+            base: "main", branch: String(repeating: "feature-", count: 30), headSHA: Self.head, mergeBaseSHA: Self.mergeBase,
             commits: [.init(sha: "sha0full", shortSHA: "sha0", subject: String(repeating: "Reword ", count: 30))],
             files: [.init(path: longPath, status: "M", additions: 1, deletions: 1)],
             runResults: [], issueTitle: nil, commitBody: nil, hasUncommittedChanges: false
@@ -68,7 +68,7 @@ struct ChangeSummaryTests {
         let coverage = ChangeSummaryPolicy.request(for: facts).coverage
 
         #expect(!coverage.isComplete)
-        #expect(coverage.disclosure == "2 long commit subjects, file paths, or descriptions were shortened.")
+        #expect(coverage.disclosure == "3 long commit subjects, file paths, descriptions, or refs were shortened.")
     }
 
     @Test(arguments: [
@@ -104,6 +104,7 @@ struct ChangeSummaryTests {
         #"{"summary": "- Adds a picker."}"#,
         #"{"summary": "One. Two. Three. Four."}"#,
         #"{"summary": "Adds a picker introduced in a1b2c3d."}"#,
+        #"{"summary": "Adds a picker introduced in A1B2C3D."}"#,
         #"{"summary": "Adds a picker across 12 files."}"#,
         #"{"summary": "Updates two files to add a picker."}"#,
         #"{"summary": "Performs a 20-file refactor of the picker."}"#,
@@ -196,13 +197,15 @@ struct ChangeSummaryTests {
         unpersisted.status = .finished(.failed(exitCode: 2))
         unpersisted.finishedAt = Date(timeIntervalSince1970: 300)
 
-        let runs = ChangeSummaryFacts.latestRuns(history: history, records: [rerun, unpersisted])
+        let runs = (ChangeSummaryFacts.latestRuns(history: history, records: [rerun, unpersisted]) ?? [])
             .sorted { $0.scriptName < $1.scriptName }
 
         #expect(runs == [
             .init(scriptName: "lint", outcome: .failed(exitCode: 2), finishedAt: Date(timeIntervalSince1970: 300)),
             .init(scriptName: "test", outcome: .succeeded, finishedAt: Date(timeIntervalSince1970: 200)),
         ])
+        // Unreadable history is unknown, never "no runs".
+        #expect(ChangeSummaryFacts.latestRuns(history: nil, records: [unpersisted]) == nil)
     }
 
     @Test

@@ -41,8 +41,9 @@ struct ChangeSummaryFacts: Equatable, Sendable {
     let commits: [Commit]
     let files: [File]
     /// Latest finished run of each script in the worktree. Runs are not tied
-    /// to a commit, so they are reported with their finish time.
-    let runResults: [RunResult]
+    /// to a commit, so they are reported with their finish time. Nil when run
+    /// history could not be read, so "none" is never claimed without knowing.
+    let runResults: [RunResult]?
     let issueTitle: String?
     let commitBody: String?
     let hasUncommittedChanges: Bool
@@ -57,7 +58,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         mergeBaseSHA: String?,
         commits: [Commit],
         files: [File],
-        runResults: [RunResult],
+        runResults: [RunResult]?,
         issueTitle: String?,
         commitBody: String?,
         hasUncommittedChanges: Bool
@@ -68,7 +69,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         self.mergeBaseSHA = mergeBaseSHA
         self.commits = commits
         self.files = files
-        self.runResults = runResults.sorted { ($0.scriptName, $0.finishedAt) < ($1.scriptName, $1.finishedAt) }
+        self.runResults = runResults?.sorted { ($0.scriptName, $0.finishedAt) < ($1.scriptName, $1.finishedAt) }
         self.issueTitle = Self.nonEmpty(issueTitle)
         self.commitBody = Self.nonEmpty(commitBody)
         self.hasUncommittedChanges = hasUncommittedChanges
@@ -82,7 +83,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         base: String,
         branch: String,
         headSHA: String,
-        runResults: [RunResult],
+        runResults: [RunResult]?,
         issueTitle: String?
     ) {
         if let loadedHead = context.headSHA, loadedHead != headSHA { return nil }
@@ -105,7 +106,8 @@ struct ChangeSummaryFacts: Equatable, Sendable {
     /// The latest finished run of each script: durable history, plus any
     /// completion still only in memory. A rerun in progress keeps reporting
     /// the run before it, and history survives an app restart.
-    static func latestRuns(history: [RunHistorySummary], records: [RunRecord]) -> [RunResult] {
+    static func latestRuns(history: [RunHistorySummary]?, records: [RunRecord]) -> [RunResult]? {
+        guard let history else { return nil }
         var latest: [String: RunResult] = [:]
         func offer(_ scriptKey: String, _ result: RunResult) {
             if let current = latest[scriptKey], current.finishedAt >= result.finishedAt { return }
@@ -134,7 +136,7 @@ struct ChangeSummaryCoverage: Equatable, Sendable {
     let filesShown: Int
     let fileCount: Int
     /// Shown subjects and paths cut to their length limit, plus descriptions
-    /// shortened or dropped to fit the budget.
+    /// and refs shortened or dropped to fit the budget.
     var shortenedItems = 0
 
     var isComplete: Bool { commitsShown == commitCount && filesShown == fileCount && shortenedItems == 0 }
@@ -147,7 +149,9 @@ struct ChangeSummaryCoverage: Equatable, Sendable {
         var sentences: [String] = []
         if !parts.isEmpty { sentences.append("Drafted from \(parts.joined(separator: " and ")); the rest were omitted.") }
         if shortenedItems > 0 {
-            let noun = shortenedItems == 1 ? "commit subject, file path, or description was" : "commit subjects, file paths, or descriptions were"
+            let noun = shortenedItems == 1
+                ? "commit subject, file path, description, or ref was"
+                : "commit subjects, file paths, descriptions, or refs were"
             sentences.append("\(shortenedItems) long \(noun) shortened.")
         }
         return sentences.joined(separator: " ")
@@ -299,7 +303,8 @@ enum ChangeSummaryPolicy {
                 shortenedItems: facts.commits.prefix(payload.commitSubjects.count)
                     .filter { $0.subject.count > subjectCharacterLimit }.count
                     + orderedFiles.prefix(payload.files.count).filter { $0.path.count > pathCharacterLimit }.count
-                    + [(facts.issueTitle, payload.issueTitle), (facts.commitBody, payload.commitBody)]
+                    + [(facts.issueTitle, payload.issueTitle), (facts.commitBody, payload.commitBody),
+                       (facts.branch, payload.branch), (facts.base, payload.base)]
                     .filter { original, sent in original != nil && original != sent }.count
             )
         )
@@ -357,7 +362,7 @@ enum ChangeSummaryPolicy {
     /// Mentions and URLs become live on code hosts even when escaped, and the
     /// card shows the narrative as plain text. Other Markdown is escaped on copy.
     private static var markup: Regex<Substring> { /(?i)(?:^|[^\w])@[\w-]|\b(?:https?|ftp|mailto):|\bwww\./ }
-    private static var commitHash: Regex<Substring> { /\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
+    private static var commitHash: Regex<Substring> { /(?i)\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
         /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)[\s-]+(?:[\w-]+\s+){0,2}(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
     }
@@ -419,13 +424,15 @@ enum ChangeSummaryPolicy {
             "- Commits: \(facts.commits.count)",
             "- Files changed: \(facts.files.count) (+\(facts.additions) −\(facts.deletions))",
         ]
-        if facts.runResults.isEmpty {
+        if let runResults = facts.runResults, runResults.isEmpty {
             lines.append("- Run results: none recorded in this worktree")
-        } else {
-            let results = facts.runResults.map {
+        } else if let runResults = facts.runResults {
+            let results = runResults.map {
                 "\(codeSpan($0.scriptName)) \($0.outcomeLabel) at \(dateFormatter($0.finishedAt))"
             }
             lines.append("- Latest run results in this worktree (not tied to a commit): \(results.joined(separator: "; "))")
+        } else {
+            lines.append("- Run results: unavailable; Alas could not read run history")
         }
         if facts.hasUncommittedChanges { lines.append("- Uncommitted changes were present and are not included") }
 

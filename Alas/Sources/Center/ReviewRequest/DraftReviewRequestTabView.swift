@@ -36,7 +36,8 @@ struct DraftReviewRequestTabView: View {
     @State private var changeSummaryVisible = false
     @State private var changeSummaryDraft: ChangeSummaryDraft?
     @State private var changeSummaryTask: Task<Void, Never>?
-    @State private var runHistory: [RunHistorySummary] = []
+    /// Nil until loaded, or when history cannot be read.
+    @State private var runHistory: [RunHistorySummary]?
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
@@ -743,12 +744,13 @@ struct DraftReviewRequestTabView: View {
     /// Completed runs survive restarts and reruns only in durable history.
     /// A run that just finished may still be on its way there.
     private func loadRunHistory() async {
-        guard let store = appState.runHistoryStore else { return }
+        guard let store = appState.runHistoryStore else {
+            runHistory = nil
+            return
+        }
         await appState.flushRunHistoryPersistence(worktreeID: worktreeId)
         let limit = RunHistoryStore.defaultMaximumEntriesPerWorktree
-        if let page = try? await store.page(worktreeID: worktreeId, offset: 0, limit: limit) {
-            runHistory = page.entries
-        }
+        runHistory = (try? await store.page(worktreeID: worktreeId, offset: 0, limit: limit))?.entries
     }
 
     private func cancelChangeSummary() {
