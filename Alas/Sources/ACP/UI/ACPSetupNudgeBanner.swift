@@ -3,6 +3,9 @@ import SwiftUI
 enum ACPSetupNudgeMode: Equatable {
     case install
     case update(current: String, latest: String)
+    /// Update for an agent CLI Alas detected but did not install; `manager`
+    /// names the package manager that runs the upgrade.
+    case agentUpdate(current: String, latest: String, manager: String)
 }
 
 /// Kept out of the SwiftUI struct so tests can call it without a view hierarchy.
@@ -18,6 +21,8 @@ enum ACPSetupNudgeBannerCopy {
             return "\(agentDisplayName) requires the ACP adapter to be installed\(target)."
         case .update(let current, let latest):
             return "\(agentDisplayName) adapter update\(target) available (\(current) → \(latest))."
+        case .agentUpdate(let current, let latest, let manager):
+            return "\(agentDisplayName) update available (\(current) → \(latest)) via \(manager)."
         }
     }
 
@@ -32,6 +37,8 @@ enum ACPSetupNudgeBannerCopy {
             return "\(agentDisplayName) adapter installed\(target) — connecting…"
         case .update:
             return "\(agentDisplayName) adapter updated\(target) — reconnecting…"
+        case .agentUpdate:
+            return "\(agentDisplayName) updated — reconnecting…"
         }
     }
 
@@ -44,13 +51,14 @@ enum ACPSetupNudgeBannerCopy {
         switch mode {
         case .install: return "Installing \(agentDisplayName) adapter\(target)…"
         case .update:  return "Updating \(agentDisplayName) adapter\(target)…"
+        case .agentUpdate(_, _, let manager): return "Updating \(agentDisplayName) with \(manager)…"
         }
     }
 
     static func errorMessage(mode: ACPSetupNudgeMode, detail: String) -> String {
         switch mode {
         case .install: return "Install failed: \(detail)"
-        case .update:  return "Update failed: \(detail)"
+        case .update, .agentUpdate: return "Update failed: \(detail)"
         }
     }
 
@@ -58,7 +66,7 @@ enum ACPSetupNudgeBannerCopy {
         if errored { return "Retry" }
         switch mode {
         case .install: return "Install"
-        case .update:  return "Update"
+        case .update, .agentUpdate: return "Update"
         }
     }
 }

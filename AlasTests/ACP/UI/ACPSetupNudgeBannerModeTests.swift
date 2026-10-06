@@ -53,6 +53,17 @@ struct ACPSetupNudgeBannerModeTests {
         #expect(copy == "Claude Code adapter update available (1.0.0 → 1.1.0).")
     }
 
+    @Test("agent update copy names the CLI and its package manager, not an adapter")
+    func agentUpdateCopy() {
+        let mode = ACPSetupNudgeMode.agentUpdate(current: "18.2.11", latest: "18.6.3", manager: "Bun")
+        #expect(ACPSetupNudgeBannerCopy.idleMessage(mode: mode, agentDisplayName: "Oh My Pi")
+                == "Oh My Pi update available (18.2.11 → 18.6.3) via Bun.")
+        #expect(ACPSetupNudgeBannerCopy.installingMessage(mode: mode, agentDisplayName: "Oh My Pi")
+                == "Updating Oh My Pi with Bun…")
+        #expect(ACPSetupNudgeBannerCopy.installedMessage(mode: mode, agentDisplayName: "Oh My Pi")
+                == "Oh My Pi updated — reconnecting…")
+    }
+
     @Test("install mode installed copy")
     func installInstalledCopy() {
         let copy = ACPSetupNudgeBannerCopy.installedMessage(
