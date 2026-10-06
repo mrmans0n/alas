@@ -59,7 +59,7 @@ struct ChangeSummaryTests {
     func parseAcceptsOneBoundedParagraph() {
         let output = #" {"summary": " Adds a branch picker to the remote sheet and remembers the last choice. "} "#
 
-        #expect(Self.parse(output, Self.facts()) == "Adds a branch picker to the remote sheet and remembers the last choice.")
+        #expect(ChangeSummaryPolicy.parse(output) == "Adds a branch picker to the remote sheet and remembers the last choice.")
     }
 
     @Test(arguments: [
@@ -74,44 +74,18 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds a picker; the change was verified locally."}"#,
         #"{"summary": "Adds a picker and the build passes."}"#,
         #"{"summary": "The build completed successfully."}"#,
-        #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
-        "Adds a picker.",
-    ])
-    func parseRejectsOutputOutsideTheContract(output: String) {
-        #expect(Self.parse(output, Self.facts()) == nil)
-    }
-
-    @Test(arguments: [
+        #"{"summary": "Adds a branch picker because users are losing data."}"#,
         #"{"summary": "Adds a picker and covers it with tests."}"#,
         #"{"summary": "The picker was tested."}"#,
         #"{"summary": "Adds a picker, and CI is green."}"#,
         #"{"summary": "Adds a picker and the checks have passed."}"#,
+        #"{"summary": "Adds a picker to avoid losing the user's place."}"#,
+        #"{"summary": "Adds a branch picker so users can switch repositories."}"#,
+        #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
+        "Adds a picker.",
     ])
-    func testsAreNeverNarratedEvenWhenTheBranchChangesThem(output: String) {
-        let facts = Self.facts(files: ["Sources/Picker.swift", "Tests/PickerTests.swift"], issueTitle: "Test the picker")
-
-        #expect(Self.parse(output, facts) == nil)
-    }
-
-    @Test(arguments: [
-        (#"{"summary": "Adds a picker because users lose their place."}"#, "Users lose their place", true),
-        (#"{"summary": "Adds a picker because users lose their place."}"#, nil, false),
-        (#"{"summary": "Adds a picker to avoid losing the user's place."}"#, nil, false),
-        (#"{"summary": "Adds a branch picker so users can switch repositories."}"#, nil, false),
-    ] as [(String, String?, Bool)])
-    func motivationNeedsADescription(output: String, issueTitle: String?, accepted: Bool) {
-        #expect((Self.parse(output, Self.facts(issueTitle: issueTitle)) != nil) == accepted)
-    }
-
-    @Test
-    func motivationIsCheckedAgainstOnlyTheDescriptionsThePromptCarried() {
-        // Escaped control characters push both descriptions out of the budget.
-        let control = String(repeating: "\u{1}", count: 1_000)
-        let facts = Self.facts(branch: control, issueTitle: control, commitBody: control)
-        let output = #"{"summary": "Adds a picker because users lose their place."}"#
-
-        #expect(ChangeSummaryPolicy.request(for: facts).evidence.descriptions.isEmpty)
-        #expect(Self.parse(output, facts) == nil)
+    func parseRejectsOutputOutsideTheContract(output: String) {
+        #expect(ChangeSummaryPolicy.parse(output) == nil)
     }
 
     @Test(arguments: [
@@ -248,10 +222,6 @@ struct ChangeSummaryTests {
 
     static func run(_ outcome: RunOutcome) -> ChangeSummaryFacts.RunResult {
         .init(scriptName: "test", outcome: outcome, finishedAt: Date(timeIntervalSince1970: 1_000))
-    }
-
-    static func parse(_ output: String, _ facts: ChangeSummaryFacts) -> String? {
-        ChangeSummaryPolicy.parse(output, evidence: ChangeSummaryPolicy.request(for: facts).evidence)
     }
 
     static func historyEntry(id: String, script: String, outcome: RunOutcome, at seconds: TimeInterval) -> RunHistorySummary {

@@ -297,6 +297,7 @@ struct DraftReviewRequestTabView: View {
                         draft: changeSummaryDraft,
                         currentFacts: currentChangeSummaryFacts
                     ),
+                    canSummarize: canSummarizeChange,
                     onSummarize: summarizeChange,
                     onCopy: copyChangeSummary,
                     onCancel: cancelChangeSummary,
@@ -699,7 +700,8 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var canSummarizeChange: Bool {
-        guard let context, !context.changedFiles.isEmpty, loadedContextKey == contextKey else { return false }
+        guard let context, !context.changedFiles.isEmpty, loadedContextKey == contextKey,
+              matchingSnapshot != nil else { return false }
         return appState.makeChangeSummarizer().isAvailable
     }
 
@@ -725,21 +727,25 @@ struct DraftReviewRequestTabView: View {
     /// The base and the working tree can change without changing
     /// `contextKey`, so confirm them first; a moved branch reloads and leaves
     /// the card stale.
+    /// Git is read after the last other suspension so nothing can move
+    /// between the check and the copy.
     private func copyChangeSummary(_ draft: ChangeSummaryDraft) async -> Bool {
+        await loadRunHistory()
         let identity = await git.reviewRequestRangeIdentity(worktreePath: worktreePath, baseRef: tabState.baseBranch)
         guard draft.describes(identity) else {
             await loadContext()
             return false
         }
-        await loadRunHistory()
         guard draft.isCurrent(for: currentChangeSummaryFacts) else { return false }
         Clipboard.copy(ChangeSummaryPolicy.markdown(for: draft))
         return true
     }
 
     /// Completed runs survive restarts and reruns only in durable history.
+    /// A run that just finished may still be on its way there.
     private func loadRunHistory() async {
         guard let store = appState.runHistoryStore else { return }
+        await appState.flushRunHistoryPersistence(worktreeID: worktreeId)
         let limit = RunHistoryStore.defaultMaximumEntriesPerWorktree
         if let page = try? await store.page(worktreeID: worktreeId, offset: 0, limit: limit) {
             runHistory = page.entries

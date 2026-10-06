@@ -23,6 +23,8 @@ enum ChangeSummaryPhase: Equatable {
 /// way the text leaves the card; it never fills the title or description.
 struct ChangeSummaryCard: View {
     let phase: ChangeSummaryPhase
+    /// False while the branch is loading or no longer matches the draft.
+    let canSummarize: Bool
     let onSummarize: () -> Void
     /// Copies the summary after re-checking the repository; false when the
     /// branch moved and the summary went stale instead.
@@ -80,6 +82,7 @@ struct ChangeSummaryCard: View {
             .help("Copy the summary and change facts as Markdown")
         case .failed, .stale:
             AlasButton(title: "Summarize Again", icon: "arrow.clockwise", action: onSummarize)
+                .disabled(!canSummarize)
         }
     }
 
