@@ -28,4 +28,13 @@ extension AppState {
         saveConfig()
         rescanAgents()
     }
+
+    /// Locally enabled agents offered for `projectId`. SSH projects drop
+    /// registry installs that only exist on this Mac; nil (no single
+    /// project) keeps every enabled agent.
+    func enabledAgents(forProjectId projectId: String?) -> [AgentDefinition] {
+        let enabled = agentRegistry.enabled()
+        guard let projectId, projects.first(where: { $0.id == projectId })?.host != nil else { return enabled }
+        return enabled.filter(\.canRunOnRemoteHost)
+    }
 }
