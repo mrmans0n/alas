@@ -8,6 +8,8 @@ struct ReviewRequestDraftContext: Equatable {
     let fileDiffsByPath: [String: String]
     let hasUncommittedChanges: Bool
     let singleCommitBody: String?
+    /// The HEAD commit every read was pinned to.
+    let headSHA: String?
     /// Where the branch forks from the base, or nil when Git finds none. The
     /// branch diff and commit list change exactly when this or HEAD moves.
     let mergeBaseSHA: String?
@@ -20,6 +22,7 @@ struct ReviewRequestDraftContext: Equatable {
         fileDiffsByPath: [String: String],
         hasUncommittedChanges: Bool,
         singleCommitBody: String? = nil,
+        headSHA: String? = nil,
         mergeBaseSHA: String? = nil
     ) {
         self.commitSubjects = commitSubjects
@@ -29,6 +32,7 @@ struct ReviewRequestDraftContext: Equatable {
         self.fileDiffsByPath = fileDiffsByPath
         self.hasUncommittedChanges = hasUncommittedChanges
         self.singleCommitBody = singleCommitBody
+        self.headSHA = headSHA
         self.mergeBaseSHA = mergeBaseSHA
     }
 }
@@ -41,13 +45,18 @@ struct ReviewRequestRangeIdentity: Equatable, Sendable {
 
 extension GitService {
     func reviewRequestDraftContext(worktreePath: URL, baseRef: String) async throws -> ReviewRequestDraftContext {
-        let diffRange = "\(baseRef)...HEAD"
+        // Every read below uses these commits, so a ref that moves mid-load
+        // cannot mix two ranges into one context.
+        let base = try await reviewRequestCommit(baseRef, worktreePath: worktreePath)
+        let head = try await reviewRequestCommit("HEAD", worktreePath: worktreePath)
+        let diffRange = "\(base)...\(head)"
+        let logRange = "\(base)..\(head)"
         async let subjectsResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=format:%s"],
+            ["log", logRange, "--pretty=format:%s"],
             cwd: worktreePath
         )
         async let commitsResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
+            ["log", logRange, "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
             cwd: worktreePath
         )
         async let diffResult = Process.git(
@@ -66,9 +75,9 @@ extension GitService {
             ["status", "--porcelain"],
             cwd: worktreePath
         )
-        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
+        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
         async let commitBodyResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=format:%b"],
+            ["log", logRange, "--pretty=format:%b"],
             cwd: worktreePath
         )
 
@@ -123,6 +132,7 @@ extension GitService {
             fileDiffsByPath: fileDiffsByPath,
             hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             singleCommitBody: singleCommitBody,
+            headSHA: head,
             mergeBaseSHA: await mergeBase
         )
     }
@@ -153,8 +163,14 @@ extension GitService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func reviewRequestMergeBase(worktreePath: URL, baseRef: String) async -> String? {
-        guard let result = try? await Process.git(["merge-base", baseRef, "HEAD"], cwd: worktreePath),
+    private func reviewRequestCommit(_ ref: String, worktreePath: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", "--verify", "\(ref)^{commit}"], cwd: worktreePath)
+        try Self.assertReviewRequestSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func reviewRequestMergeBase(worktreePath: URL, baseRef: String, headRef: String = "HEAD") async -> String? {
+        guard let result = try? await Process.git(["merge-base", baseRef, headRef], cwd: worktreePath),
               result.exitCode == 0 else { return nil }
         let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return sha.isEmpty ? nil : sha

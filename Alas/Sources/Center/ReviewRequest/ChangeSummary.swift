@@ -85,7 +85,7 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         self.init(
             base: base,
             branch: branch,
-            headSHA: headSHA,
+            headSHA: context.headSHA ?? headSHA,
             mergeBaseSHA: context.mergeBaseSHA,
             commits: context.commits.map { .init(sha: $0.sha, shortSHA: $0.shortSha, subject: $0.rawSubject) },
             files: context.changedFiles.map {
