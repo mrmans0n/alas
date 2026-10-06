@@ -2,14 +2,45 @@ import Testing
 import Foundation
 @testable import Alas
 
-@MainActor
+struct EditorPhaseCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let documentStatus: WorkspaceLSPManager.DocumentStatus
+    let phase: LSPServerStatus.Phase
+    let expected: EditorLSPStatus
+    nonisolated var testDescription: String { name }
+}
+
+private let indexingTasks = [
+    LSPClient.ProgressTask(token: "a", title: "Indexing", message: "40/100", percentage: 40),
+    LSPClient.ProgressTask(token: "b", title: "Building", message: nil, percentage: 10),
+]
+private let crash = LSPServerStatus.CrashDetail(exitCode: 11, uptime: .seconds(3), outputTail: ["segfault"], initializeError: nil)
+
+private let editorPhaseCases = [
+    EditorPhaseCase(
+        name: "ready holder still indexing reports the least-advanced percentage",
+        documentStatus: .ready,
+        phase: .indexing(indexingTasks),
+        expected: .indexing(language: "swift", command: "sourcekit-lsp", percentage: 10, tasks: indexingTasks)
+    ),
+    EditorPhaseCase(
+        name: "dead holder carries crash detail",
+        documentStatus: .dead,
+        phase: .crashed(crash),
+        expected: .problem(language: "swift", kind: .dead(crash), command: "sourcekit-lsp")
+    ),
+]
+
 @Suite("EditorLSPStatusResolver")
+@MainActor
 struct EditorLSPStatusResolverTests {
     struct FakeManager: EditorLSPStatusResolver.ManagerProbe {
         var status: WorkspaceLSPManager.DocumentStatus = .none
+        var phase: LSPServerStatus.Phase? = nil
         func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus {
             status
         }
+        func serverPhase(forFile fileURL: URL, worktreeRoot: URL) -> LSPServerStatus.Phase? { phase }
     }
 
     struct FakeAvailability: EditorLSPStatusResolver.AvailabilityProbe {
@@ -133,7 +164,7 @@ struct EditorLSPStatusResolverTests {
             registry: FakeRegistry(languageByExt: ["swift": "swift"])
         )
         let result = r.resolve(absolutePath: swiftFile.path, override: nil, worktreeRoot: root)
-        #expect(result == .problem(language: "swift", kind: .dead, command: "sourcekit-lsp"))
+        #expect(result == .problem(language: "swift", kind: .dead(nil), command: "sourcekit-lsp"))
     }
 
     /// Regression guard for the `case nil` arm of the resolver. The override
@@ -149,5 +180,18 @@ struct EditorLSPStatusResolverTests {
         )
         let result = r.resolve(absolutePath: swiftFile.path, override: "unknown", worktreeRoot: root)
         #expect(result == .problem(language: "unknown", kind: .disabled, command: nil))
+    }
+
+    @Test("server phase refines ready and dead holders", arguments: editorPhaseCases)
+    func serverPhaseRefinesStatus(_ testCase: EditorPhaseCase) {
+        let r = resolver(
+            manager: FakeManager(status: testCase.documentStatus, phase: testCase.phase),
+            availability: FakeAvailability(
+                statusByLanguage: ["swift": .available],
+                commandByLanguage: ["swift": "sourcekit-lsp"]
+            ),
+            registry: FakeRegistry(languageByExt: ["swift": "swift"])
+        )
+        #expect(r.resolve(absolutePath: swiftFile.path, override: nil, worktreeRoot: root) == testCase.expected)
     }
 }

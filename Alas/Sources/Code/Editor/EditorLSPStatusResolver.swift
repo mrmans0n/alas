@@ -11,6 +11,8 @@ struct EditorLSPStatusResolver {
     protocol ManagerProbe {
         @MainActor
         func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus
+        @MainActor
+        func serverPhase(forFile fileURL: URL, worktreeRoot: URL) -> LSPServerStatus.Phase?
     }
 
     protocol AvailabilityProbe {
@@ -52,9 +54,20 @@ struct EditorLSPStatusResolver {
             case .none, .loading:
                 return .loading(language: language)
             case .ready:
+                if case .indexing(let tasks)? = manager.serverPhase(forFile: fileURL, worktreeRoot: worktreeRoot) {
+                    return .indexing(
+                        language: language,
+                        command: command ?? "",
+                        percentage: LSPProgressSummary.percentage(tasks),
+                        tasks: tasks
+                    )
+                }
                 return .ready(language: language, command: command ?? "")
             case .dead:
-                return .problem(language: language, kind: .dead, command: command)
+                if case .crashed(let detail)? = manager.serverPhase(forFile: fileURL, worktreeRoot: worktreeRoot) {
+                    return .problem(language: language, kind: .dead(detail), command: command)
+                }
+                return .problem(language: language, kind: .dead(nil), command: command)
             }
         case nil:
             // Language is mentioned somewhere (override) but the registry has
