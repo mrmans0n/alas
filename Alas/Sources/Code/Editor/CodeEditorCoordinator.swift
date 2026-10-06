@@ -88,6 +88,7 @@ final class CodeEditorCoordinator {
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
     private var hasPendingDidChange = false
+    private var lspDidChangeDelivery: Task<Void, Never>?
     private var pendingTextEdits: [EditorTextEdit] = []
     private let highlightSession = TreeSitterHighlighter.Session()
 
@@ -1172,14 +1173,20 @@ final class CodeEditorCoordinator {
 
     private func notifyLSPDidChange(edits: [EditorTextEdit]? = nil) {
         guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
+        let delivery = deliverLSPDidChange(payload)
         Task { [weak self] in
-            await self?.sendLSPDidChange(payload, awaitPullDiagnostics: true)
+            await self?.sendLSPDidChange(payload, delivery: delivery, awaitPullDiagnostics: true)
         }
     }
 
     private func flushPendingLSPDidChangeForCompletion() async {
         didChangeTask?.cancel()
-        guard hasPendingDidChange else { return }
+        guard hasPendingDidChange else {
+            // The debounced didChange may already be on its way; a request
+            // synchronized before the server version moves would be stale.
+            await lspDidChangeDelivery?.value
+            return
+        }
 
         hasPendingDidChange = false
         if let theme = currentTheme {
@@ -1188,7 +1195,7 @@ final class CodeEditorCoordinator {
         let edits = pendingTextEdits
         pendingTextEdits.removeAll()
         guard let payload = makeLSPDidChangePayload(edits: edits) else { return }
-        await sendLSPDidChange(payload, awaitPullDiagnostics: false)
+        await sendLSPDidChange(payload, delivery: deliverLSPDidChange(payload), awaitPullDiagnostics: false)
     }
 
     private func flushPendingLSPDidChangeForSignatureHelp() async {
@@ -1210,14 +1217,26 @@ final class CodeEditorCoordinator {
         )
     }
 
-    private func sendLSPDidChange(_ payload: LSPDidChangePayload, awaitPullDiagnostics: Bool) async {
-        await appState.lsp.didChange(
-            worktreeRoot: payload.worktreeRoot,
-            fileURL: payload.fileURL,
-            languageId: payload.language,
-            text: payload.text,
-            edits: payload.edits
-        )
+    /// Starts delivery synchronously and chains it behind the previous one,
+    /// so the flush can await every didChange the server has not seen yet.
+    private func deliverLSPDidChange(_ payload: LSPDidChangePayload) -> Task<Void, Never> {
+        let previous = lspDidChangeDelivery
+        let delivery = Task { [lsp = appState.lsp] in
+            await previous?.value
+            await lsp.didChange(
+                worktreeRoot: payload.worktreeRoot,
+                fileURL: payload.fileURL,
+                languageId: payload.language,
+                text: payload.text,
+                edits: payload.edits
+            )
+        }
+        lspDidChangeDelivery = delivery
+        return delivery
+    }
+
+    private func sendLSPDidChange(_ payload: LSPDidChangePayload, delivery: Task<Void, Never>, awaitPullDiagnostics: Bool) async {
+        await delivery.value
         guard currentRoot == payload.worktreeRoot,
               currentRelativePath == payload.relativePath,
               currentLanguage == payload.language else { return }

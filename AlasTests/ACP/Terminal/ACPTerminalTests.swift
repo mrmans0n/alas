@@ -392,7 +392,9 @@ struct ACPTerminalTests {
         t.release()
         _ = await t.waitForExit()
         #expect(t.buffer.count <= ACPTerminal.internalBufferCap)
-        #expect(footprintGrowth < 32 * 1024 * 1024)
+        // The footprint is process-wide, so tests running in parallel add
+        // tens of MiB of noise; without backpressure it grows by over 1 GiB.
+        #expect(footprintGrowth < 256 * 1024 * 1024)
     }
 
     @Test("display refresh action coalesces chunks to display rate")

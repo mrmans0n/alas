@@ -31,6 +31,17 @@ final class EditorInlayLayout {
         }
     }
 
+    /// Kept for the process lifetime: measuring with a fresh font per call
+    /// can abort in CoreText (see `ACPMentionChipMetrics.labelFont`).
+    private static var labelFonts: [CGFloat: NSFont] = [:]
+
+    private static func labelFont(ofSize size: CGFloat) -> NSFont {
+        if let font = labelFonts[size] { return font }
+        let font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        labelFonts[size] = font
+        return font
+    }
+
     private var current: Bool {
         isCurrent() && textView?.displayAdapter?.buffer.editGeneration == revision
     }
@@ -69,7 +80,7 @@ final class EditorInlayLayout {
     func replace(_ values: [LSPInlayHint], covering: [NSRange]? = nil, revision: Int, settings: InlayHintSettings) throws {
         guard let view = textView, let adapter = view.displayAdapter, adapter.buffer.editGeneration == revision else { return }
         let fontSize = max(8, (view.font?.pointSize ?? 13) - 2)
-        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let font = Self.labelFont(ofSize: fontSize)
         let height = ceil(font.ascender - font.descender + font.leading)
         let padding = (" " as NSString).size(withAttributes: [.font: font]).width
         let starts = adapter.sourceLineStarts
