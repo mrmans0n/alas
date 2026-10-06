@@ -21,6 +21,8 @@ enum ChangeSummaryPhase: Equatable {
 
 /// On-device change summary for a draft review request. Copying is the only
 /// way the text leaves the card; it never fills the title or description.
+/// The narrative is not selectable, so the staleness check and facts that
+/// Copy adds cannot be bypassed.
 struct ChangeSummaryCard: View {
     let phase: ChangeSummaryPhase
     /// False while the branch is loading or no longer matches the draft.
@@ -102,7 +104,6 @@ struct ChangeSummaryCard: View {
             Text(draft.narrative)
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg"))
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let disclosure = draft.coverage.disclosure {
                 Text(disclosure)
