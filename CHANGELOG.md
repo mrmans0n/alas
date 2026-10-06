@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Browse, search, and install agents from the official ACP Registry in Settings → Agents; installed agents join the chat launch catalog alongside the curated built-ins (#1749).
+- Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
 
 ### 🐛 Fixes
 

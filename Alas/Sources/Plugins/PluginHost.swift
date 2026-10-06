@@ -1410,7 +1410,7 @@ final class PluginHost {
                 return .violation("plugin sent a malformed decorations/set")
             }
             let outcome = PluginDecorations.apply(
-                params, to: decorations, commands: Set(manifest.commands.map(\.id)),
+                params, to: decorations, commands: Set(manifest.commands.map(\.id)), api: manifest.api,
                 inProject: { key in
                     key.slot == .repoRow
                         ? key.target == project.id

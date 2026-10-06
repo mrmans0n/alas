@@ -72,6 +72,7 @@ enum PluginDecorations {
         _ params: PluginDecorationSetParams,
         to current: [PluginDecorationKey: [PluginDecoration]],
         commands: Set<String>,
+        api: Int,
         inProject: (PluginDecorationKey) -> Bool
     ) -> Outcome {
         guard let slot = PluginDecorationSlot(rawValue: params.slot) else {
@@ -88,7 +89,7 @@ enum PluginDecorations {
         for item in params.items.prefix(maxItems) {
             var tone: PluginViewNode.Tone?
             if let name = item.tone {
-                guard let parsed = PluginViewNode.Tone(rawValue: name) else {
+                guard let parsed = PluginViewNode.Tone(rawValue: name), parsed.api <= api else {
                     return .violation("plugin sent decorations/set with unknown tone \(name)")
                 }
                 tone = parsed
@@ -137,6 +138,7 @@ extension PluginViewNode.Tone {
         case .accent: "accent"
         case .warn: "warn"
         case .danger: "del"  // the theme has no "danger" key; "del" is its red
+        case .success: "add"  // and "add" its green
         }
     }
 }
