@@ -815,15 +815,19 @@ struct RemoteProtocolTests {
     @Test func creationOptionsCarryOptionalMetadataAndDecodeWithoutIt() throws {
         let agent = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true,
                                       models: [RemoteModelOption(id: "opus", name: "Opus")],
-                                      efforts: [RemoteEffortOption(id: "high", name: "High")])
+                                      efforts: [RemoteEffortOption(id: "high", name: "High")],
+                                      unavailableProjectIds: ["ssh-project"])
         #expect(try roundTrip(agent) == agent)
+        #expect(!agent.isAvailable(inProjectId: "ssh-project"))
+        #expect(agent.isAvailable(inProjectId: "local-project"))
         let legacyAgent = try JSONDecoder().decode(
             RemoteAgentOption.self, from: Data(#"{"id":"claude","name":"Claude","isDefault":true}"#.utf8))
         #expect(legacyAgent.models == nil)
         #expect(legacyAgent.efforts == nil)
+        #expect(legacyAgent.isAvailable(inProjectId: "ssh-project"))
         let legacyJSON = String(decoding: try JSONEncoder().encode(legacyAgent), as: UTF8.self)
-        #expect(!legacyJSON.contains("models"))
-        #expect(!legacyJSON.contains("efforts"))
+        #expect(!legacyJSON.contains("models") && !legacyJSON.contains("efforts")
+            && !legacyJSON.contains("unavailableProjectIds"))
 
         let legacyWorktree = try JSONDecoder().decode(RemoteWorktreeOption.self, from: Data(#"""
         {"id":"wt1","projectName":"alas","worktreeName":"a","branch":"b","path":"/p","metricsAvailable":false,

@@ -39,7 +39,9 @@ enum ACPRegistryInstallError: LocalizedError, Equatable {
 ///
 /// - binary: download, verify the optional SHA-256, extract, run `cmd`.
 /// - npm: `npm install --prefix <dir> <package>`, run the package's bin.
-/// - uv: nothing to install; `uvx` fetches the pinned package on launch.
+/// - uv: launch through `uvx`, which keeps the agent runnable on SSH hosts.
+///   Install resolves the pinned package into uv's cache so a bad spec fails
+///   here and the first chat skips the download.
 ///
 /// Each install is staged next to its destination and swapped in only after
 /// it produced an executable, so a failed update keeps the working install.
@@ -90,6 +92,9 @@ struct ACPRegistryInstaller: Sendable {
             environment = package.env ?? [:]
         case .uvx(let package):
             guard findExecutable("uvx") != nil else { throw ACPRegistryInstallError.uvNotFound }
+            // Builds the same cached environment `uvx <package>` launches,
+            // without starting the agent.
+            try await run("uvx", ["--from", package.package, "python", "-c", "pass"])
             try uninstall(registryID: agent.id)
             command = "uvx"
             arguments = [package.package] + (package.args ?? [])

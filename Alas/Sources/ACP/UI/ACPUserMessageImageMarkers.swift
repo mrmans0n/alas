@@ -1,16 +1,16 @@
 import Foundation
 
-/// Splices a small inline-code tag into a user message's text at each image
-/// attachment's captured position, and a pasted-text marker in place of each
+/// Splices a 🖼 marker into a user message's text at each image attachment's
+/// captured position, and a pasted-text marker in place of each
 /// pasted span, so the transcript bubble shows *something*
 /// where the image chip sat instead of an empty gap — image chips contribute
 /// no text of their own (see `ACPInputField.Coordinator.extract`), and the
 /// image itself renders separately as a thumbnail above the bubble.
 enum ACPUserMessageImageMarkers {
-    /// Returns `text` with a `` `🖼 …` `` marker inserted at each image
-    /// attachment's `textOffset`, and each valid pasted span replaced by
-    /// `ACPPastedTextChip.marker(label:)`. A single image gets an unnumbered
-    /// `` `🖼 image` `` marker; two or more get `` `🖼 1` ``, `` `🖼 2` ``, …,
+    /// Returns `text` with a `🖼` marker inserted at each image attachment's
+    /// `textOffset`, and each valid pasted span replaced by
+    /// `ACPPastedTextChip.marker(label:)`. A single image gets a bare `🖼`
+    /// marker; two or more get `🖼1`, `🖼2`, …,
     /// numbered by position among ALL image attachments (in attachment-array
     /// order) — the same order `UserMessageRow` renders their thumbnails in.
     ///
@@ -19,8 +19,10 @@ enum ACPUserMessageImageMarkers {
     /// falls inside a span moves to the span's end. `offsetAdjustment`
     /// (characters) and `utf16OffsetAdjustment` (UTF-16 units) re-anchor
     /// offsets captured against the full message when the caller renders
-    /// only part of it. An invalid span set is ignored as a whole. `text`
-    /// is returned unchanged when there is nothing to splice.
+    /// only part of it. An invalid span set is ignored as a whole. An image
+    /// marker gets a space on each side that touches a non-whitespace
+    /// character. `text` is returned unchanged when there is nothing to
+    /// splice.
     static func displayText(
         text: String,
         attachments: [ACPMessage.Attachment],
@@ -38,6 +40,7 @@ enum ACPUserMessageImageMarkers {
             let location: Int
             let length: Int
             let replacement: String
+            let isImage: Bool
         }
         let source = text as NSString
         let needsNumbering = images.count > 1
@@ -51,8 +54,8 @@ enum ACPUserMessageImageMarkers {
             if let span = spans.first(where: { $0.utf16Offset < location && location < NSMaxRange($0.utf16Range) }) {
                 location = NSMaxRange(span.utf16Range)
             }
-            let label = needsNumbering ? "🖼 \(position + 1)" : "🖼 image"
-            return Edit(location: location, length: 0, replacement: "`\(label)`")
+            let label = needsNumbering ? "🖼\(position + 1)" : "🖼"
+            return Edit(location: location, length: 0, replacement: label, isImage: true)
         }
         edits += spans.map { span in
             Edit(
@@ -60,7 +63,8 @@ enum ACPUserMessageImageMarkers {
                 length: span.utf16Length,
                 replacement: ACPPastedTextChip.marker(label: ACPPastedTextPolicy.label(
                     ordinal: span.ordinal, content: source.substring(with: span.utf16Range)
-                ))
+                )),
+                isImage: false
             )
         }
         // Zero-length image inserts sort ahead of a span starting at the same
@@ -69,6 +73,14 @@ enum ACPUserMessageImageMarkers {
         edits.sort { ($0.location, $0.length) < ($1.location, $1.length) }
         var result = ""
         var cursor = 0
+        // Set after an image marker, so whatever follows it is spaced off.
+        var spaceNext = false
+        func append(_ piece: String) {
+            guard !piece.isEmpty else { return }
+            if spaceNext, piece.first?.isWhitespace == false { result += " " }
+            spaceNext = false
+            result += piece
+        }
         // Typed text can carry the private-use delimiters too (they can be
         // pasted), so they are replaced here: only markers built below may
         // become chips.
@@ -79,11 +91,13 @@ enum ACPUserMessageImageMarkers {
                 .replacingOccurrences(of: "\u{E001}", with: "\u{FFFD}")
         }
         for edit in edits {
-            append(typed(source.substring(with: NSRange(location: cursor, length: edit.location - cursor))), to: &result)
-            append(edit.replacement, to: &result)
+            append(typed(source.substring(with: NSRange(location: cursor, length: edit.location - cursor))))
+            if edit.isImage, result.last?.isWhitespace == false { spaceNext = true }
+            append(edit.replacement)
+            spaceNext = edit.isImage
             cursor = edit.location + edit.length
         }
-        append(typed(source.substring(from: cursor)), to: &result)
+        append(typed(source.substring(from: cursor)))
         return result
     }
 
@@ -103,23 +117,5 @@ enum ACPUserMessageImageMarkers {
             shifted.append(ACPPastedTextSpan(ordinal: span.ordinal, utf16Offset: offset, utf16Length: span.utf16Length))
         }
         return ACPPastedTextContents(text: text, spans: shifted)?.spans ?? []
-    }
-
-    /// Appends `piece` to `result`, inserting a single separating space
-    /// first if `result` ends and `piece` begins with a backtick. Two
-    /// backtick-delimited spans placed directly against each other — a
-    /// marker next to pre-existing inline code in the original text, or two
-    /// markers sharing an offset — form one contiguous run of backticks.
-    /// Markdown's code-span rule matches a closer only to an opener of the
-    /// SAME run length, so a 2-backtick run in the middle doesn't close
-    /// either neighboring single-backtick span; the parser instead treats
-    /// the whole stretch as one merged/corrupted span. The separating space
-    /// keeps each backtick run isolated to its own span.
-    private static func append(_ piece: String, to result: inout String) {
-        guard !piece.isEmpty else { return }
-        if result.hasSuffix("`"), piece.hasPrefix("`") {
-            result += " "
-        }
-        result += piece
     }
 }

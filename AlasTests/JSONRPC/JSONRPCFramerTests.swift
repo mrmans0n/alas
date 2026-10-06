@@ -47,4 +47,36 @@ struct JSONRPCFramerTests {
         let expected = "Content-Length: \(body.count)\r\n\r\n".data(using: .utf8)! + body
         #expect(framed == expected)
     }
+
+    @Test("newline frames preserve partial tails, CRLF and empty lines", arguments: [1, 2, 7, 64])
+    func newlineFramesAcrossChunks(chunkSize: Int) {
+        var framer = JSONRPCNewlineFramer()
+        let input = Data("\n\r\n{\"a\":1}\r\n{\"b\":2}\npartial".utf8)
+        var frames: [Data] = []
+        for offset in stride(from: 0, to: input.count, by: chunkSize) {
+            framer.append(input[offset..<min(offset + chunkSize, input.count)])
+            frames += framer.drainFrames()
+        }
+        #expect(frames == [Data(#"{"a":1}"#.utf8), Data(#"{"b":2}"#.utf8)])
+        #expect(framer.drainFrames().isEmpty)
+        framer.append(Data(" tail\r\nnext\n".utf8))
+        #expect(framer.drainFrames() == [Data("partial tail".utf8), Data("next".utf8)])
+    }
+
+    @Test("large newline frames drain without rescanning every previous chunk")
+    func largeNewlineFrameMakesProgress() {
+        var framer = JSONRPCNewlineFramer()
+        let chunk = Data(repeating: 120, count: 16 * 1024)
+        let started = ContinuousClock.now
+        for _ in 0..<512 {
+            framer.append(chunk)
+            #expect(framer.drainFrames().isEmpty)
+        }
+        framer.append([10])
+        let frames = framer.drainFrames()
+        #expect(frames == [Data(repeating: 120, count: 8 * 1024 * 1024)])
+        // Linear parsing takes milliseconds; the original rescan takes seconds
+        // even in an optimized build. Leave headroom for loaded CI machines.
+        #expect(started.duration(to: .now) < .seconds(4))
+    }
 }

@@ -163,6 +163,6 @@ struct ACPCommandPillTests {
             attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 0)],
             offsetAdjustment: -consumed
         )
-        #expect(rest == "`🖼 image`the parser")
+        #expect(rest == "🖼 the parser")
     }
 }

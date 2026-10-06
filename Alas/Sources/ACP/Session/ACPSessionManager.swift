@@ -2495,6 +2495,7 @@ final class ACPSessionManager: ObservableObject {
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
         session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
+        session.directTurnInFlight = result.row.directTurnInFlight
         let queueChangedAtRestore = session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
@@ -2566,10 +2567,12 @@ final class ACPSessionManager: ObservableObject {
         // is also held now. Left stored as `.sending`, enabling the setting
         // before the next launch would resend a prompt that may already have
         // been delivered.
+        let heldDirectTurn = session.directTurnInFlight && !continueInterruptedSessions()
         let heldInterruption = !continueInterruptedSessions() && session.consumeInterruptedTurns(resume: false)
         if queueChangedAtRestore || heldInterruption {
             persistQueue(for: session)
         }
+        if heldDirectTurn { persistDirectTurnInFlight(for: session) }
         self.recent = result.recent
         scheduleBackfillIfNeeded(olderMessages: Array(messages.prefix(tailStart)),
                                  sessionId: session.id, session: session)
@@ -3377,6 +3380,24 @@ final class ACPSessionManager: ObservableObject {
                 items: items,
                 fence: fence
             )
+        }
+    }
+
+    /// Persist `session.directTurnInFlight` through the same writer as
+    /// `persistQueue(for:)`, so a continuation queued for the turn is saved
+    /// before its marker is cleared.
+    private func persistDirectTurnInFlight(for session: ACPSession) {
+        guard !isMirror(sessionId: session.id) else { return }
+        let sessionId = session.id
+        if !hasManagerQueuePersistence(sessionId: sessionId),
+           let runner = runners[sessionId] {
+            runner.persistDirectTurnInFlight()
+            return
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        let inFlight = session.directTurnInFlight
+        enqueuePersistence { persistence in
+            _ = try await persistence.setDirectTurnInFlight(sessionId: sessionId, inFlight: inFlight, fence: fence)
         }
     }
 
@@ -7611,9 +7632,11 @@ extension ACPSessionManager {
             if session.queue.contains(where: { $0.status == .sending }) {
                 session.restoreQueue(session.queue, markLegacySendingUncertain: true)
             }
+            let consumedDirectTurn = session.directTurnInFlight
             if session.consumeInterruptedTurns(resume: continueInterruptedSessions()) {
                 persistQueue(for: session)
             }
+            if consumedDirectTurn { persistDirectTurnInFlight(for: session) }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }

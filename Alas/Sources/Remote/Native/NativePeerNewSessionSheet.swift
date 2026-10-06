@@ -19,7 +19,12 @@ struct NativePeerNewSessionSheet: View {
 
     private var request: NativePeerNewSession? { client.newSession }
     private var peerName: String { request?.peerName ?? "peer" }
-    private var selectedAgent: RemoteAgentOption? { request?.agents?.first { $0.id == agentId } }
+    /// Agents the peer can launch in the selected worktree's project.
+    private var agents: [RemoteAgentOption] {
+        let projectId = request?.worktrees?.first { $0.id == worktreeId }?.projectId
+        return (request?.agents ?? []).filter { $0.isAvailable(inProjectId: projectId) }
+    }
+    private var selectedAgent: RemoteAgentOption? { agents.first { $0.id == agentId } }
     private var visibility: NativePeerNewSession.ChipVisibility? {
         NativePeerNewSession.chipVisibility(for: selectedAgent)
     }
@@ -45,6 +50,7 @@ struct NativePeerNewSessionSheet: View {
         .onAppear(perform: preselect)
         .onChange(of: request?.worktrees) { preselect() }
         .onChange(of: request?.agents) { preselect() }
+        .onChange(of: worktreeId) { preselect() }
         .onChange(of: agentId) {
             modelId = nil
             effortId = nil
@@ -63,7 +69,7 @@ struct NativePeerNewSessionSheet: View {
         DialogField(label: "Agent") {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    if let agents = request?.agents {
+                    if request?.agents != nil {
                         agentChip(agents)
                         if let selectedAgent, visibility?.showsModel == true {
                             modelChip(selectedAgent.models ?? [])
@@ -182,13 +188,14 @@ struct NativePeerNewSessionSheet: View {
     private var emptyHint: String? {
         guard let request, !request.isLoading else { return nil }
         if request.worktrees?.isEmpty == true { return "No worktrees in \(request.repoName) on \(request.peerName)." }
-        if request.agents?.isEmpty == true { return "No agents are enabled on \(request.peerName)." }
+        if request.agents?.isEmpty ?? true { return "No agents are enabled on \(request.peerName)." }
+        if agents.isEmpty { return "No agents on \(request.peerName) can run in this worktree's repository." }
         return nil
     }
 
     private func preselect() {
         let worktrees = request?.worktrees ?? []
-        let agents = request?.agents ?? []
+        // After a worktree change the filtered list reflects its project.
         if worktreeId == nil || !worktrees.contains(where: { $0.id == worktreeId }) {
             worktreeId = NativePeerNewSession.preselectedWorktreeId(
                 in: worktrees, selectedWorktreeId: client.newSessionDefaultWorktreeId

@@ -973,7 +973,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
-            let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
+            let items = planItems(from: entries)
             // Overwrite the existing plan in place only if it belongs to
             // the current turn (i.e. sits after the latest user prompt).
             // Otherwise append a fresh plan so the previous turn's plan
@@ -1044,6 +1044,51 @@ final class ACPSession: ObservableObject, Identifiable {
             transcript.lastContentTouchIndex = latest
         }
         return touched
+    }
+
+    private struct OMPTodoSnapshot: Decodable {
+        struct Details: Decodable {
+            struct Phase: Decodable {
+                let tasks: [ACPMessage.PlanItem]
+            }
+            let storage: String
+            let phases: [Phase]
+        }
+        let details: Details
+    }
+
+    private func planItems(from entries: [ACPPlanEntry]) -> [ACPMessage.PlanItem] {
+        let incoming = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
+        guard agentId == "omp", !incoming.isEmpty else { return incoming }
+
+        // OMP emits reminders containing only pending/in-progress todos as
+        // replacement plans. Restore the full list only when that reminder
+        // exactly matches the latest successful todo result in this turn.
+        for message in transcript.messages.reversed() {
+            if case .user = message { break }
+            guard case .toolCall(let call) = message,
+                  call.status == "completed",
+                  call.nonEmptyName.map({ $0 == "todo" }) ?? (call.kind == "think") else { continue }
+            guard let rawOutput = call.rawOutput,
+                  let snapshot = try? JSONDecoder().decode(OMPTodoSnapshot.self, from: Data(rawOutput.utf8)),
+                  ["session", "memory"].contains(snapshot.details.storage) else { return incoming }
+            let tasks = snapshot.details.phases.flatMap(\.tasks)
+            guard tasks.count > incoming.count,
+                  tasks.allSatisfy({ ["pending", "in_progress", "completed", "abandoned", "blocked"].contains($0.status) }),
+                  tasks.filter({ $0.status == "pending" || $0.status == "in_progress" }) == incoming else {
+                return incoming
+            }
+            return tasks.map { task in
+                var item = task
+                switch item.status {
+                case "abandoned": item.status = "completed"
+                case "blocked": item.status = "pending"
+                default: break
+                }
+                return item
+            }
+        }
+        return incoming
     }
 
     private func applyContextCompaction(_ update: ACPCompactionUpdate) -> Set<Int> {
@@ -2807,6 +2852,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Whether the "Continue interrupted sessions after restart" setting is on.
     var continuesInterruptedTurns: @MainActor () -> Bool = { false }
 
+    /// A turn sent directly, not through the queue, is in flight. Set when its
+    /// prompt starts and cleared when any turn completes; persisted so a
+    /// launch can find a turn the app exited during, which leaves no queue row.
+    var directTurnInFlight = false
+
     private func enqueueInterruptedTurnContinuation() {
         let insertAt = queue.firstIndex { $0.status == .pending } ?? queue.endIndex
         queue.insert(
@@ -2821,7 +2871,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// agent had started answering after hydration gets a continue prompt at
     /// the head of the queue. Without it they stay held for an explicit Retry.
     /// A turn the stored transcript already showed answered was handled when
-    /// it was dropped.
+    /// it was dropped. An interrupted direct turn is consumed the same way:
+    /// continued with `resume`, otherwise forgotten. Callers persist
+    /// `directTurnInFlight` when it was set.
     ///
     /// Returns whether the queue needs persisting: true whenever an
     /// interruption was recorded, even when held, because restoring rewrote
@@ -2831,7 +2883,8 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func consumeInterruptedTurns(resume: Bool) -> Bool {
         let itemIDs = Set(queue.filter(\.awaitingInterruptionResume).map(\.id))
-        var answeredTurn = false
+        var answeredTurn = directTurnInFlight && !queue.contains(where: \.isInterruptedTurnContinuation)
+        directTurnInFlight = false
         for index in queue.indices { queue[index].awaitingInterruptionResume = false }
         guard resume else {
             // A continuation queued while the setting was on is Alas's own, not

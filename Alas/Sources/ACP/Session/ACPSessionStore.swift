@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 24
+    static let targetSchemaVersion = 25
     let path: String
     let db: SQLiteDatabase
 
@@ -51,6 +51,7 @@ final class ACPSessionStore {
         if current < 22 { try createReplicaSchema() }
         if current < 23 { try migrate_to_v23() }
         if current < 24 { try migrate_to_v24() }
+        if current < 25 { try migrate_to_v25() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -79,6 +80,19 @@ final class ACPSessionStore {
         let columns = try db.query("PRAGMA table_info(sessions)")
         if !columns.contains(where: { ($0["name"] as? String) == "usage_limit" }) {
             try db.exec("ALTER TABLE sessions ADD COLUMN usage_limit TEXT")
+        }
+        try db.exec("DROP TRIGGER IF EXISTS replica_sessions_update")
+        try createReplicaSchema()
+    }
+
+    /// Durable `ACPSession.directTurnInFlight`: a turn sent from an idle
+    /// composer leaves no queue row, so launch recovery needs this marker to
+    /// find it. Only `setDirectTurnInFlight` writes it. The replica metadata
+    /// trigger is recreated so another Mac taking over the session sees it.
+    private func migrate_to_v25() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        if !columns.contains(where: { ($0["name"] as? String) == "direct_turn_in_flight" }) {
+            try db.exec("ALTER TABLE sessions ADD COLUMN direct_turn_in_flight INTEGER NOT NULL DEFAULT 0")
         }
         try db.exec("DROP TRIGGER IF EXISTS replica_sessions_update")
         try createReplicaSchema()
@@ -396,6 +410,8 @@ struct ACPSessionRow: Equatable, Sendable {
     var mcpPreambleSent: Bool = false
     /// Written only by `setUsageLimit`; upserts keep the stored value.
     var usageLimit: ACPUsageLimit? = nil
+    /// Written only by `setDirectTurnInFlight`; upserts keep the stored value.
+    var directTurnInFlight: Bool = false
     var authStatus: ACPAuthStatus? = nil
     var currentModel: String?
     var currentMode: String?
@@ -756,6 +772,13 @@ extension ACPSessionStore {
     func setUsageLimit(sessionId: String, limit: ACPUsageLimit?) throws {
         let json = try limit.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
         try db.exec("UPDATE sessions SET usage_limit = ? WHERE id = ?", bindings: [json, sessionId])
+    }
+
+    func setDirectTurnInFlight(sessionId: String, inFlight: Bool) throws {
+        try db.exec(
+            "UPDATE sessions SET direct_turn_in_flight = ? WHERE id = ?",
+            bindings: [inFlight ? 1 : 0, sessionId]
+        )
     }
 
     /// Persists the latest `_auth/status_update`, so an app restart can
@@ -1262,6 +1285,7 @@ extension ACPSessionStore {
             usageLimit: (r["usage_limit"] as? String).flatMap {
                 try? JSONDecoder().decode(ACPUsageLimit.self, from: Data($0.utf8))
             },
+            directTurnInFlight: ((r["direct_turn_in_flight"] as? Int64) ?? 0) != 0,
             authStatus: (r["auth_status"] as? String).flatMap {
                 try? JSONDecoder().decode(ACPAuthStatus.self, from: Data($0.utf8))
             },
@@ -1324,14 +1348,18 @@ extension ACPSessionStore {
     }
 
     /// Sessions whose queue still holds a prompt that was in flight when the
-    /// app last exited, or the continuation queued for one, so the turn may
-    /// need to be continued.
+    /// app last exited, or the continuation queued for one, or whose directly
+    /// sent turn was in flight, so the turn may need to be continued.
     func interruptedQueueSessionIds() throws -> [String] {
-        try queueSessionIds {
+        let queued = try queueSessionIds {
             $0.status == .sending
                 || $0.isInterruptedTurnContinuation
                 || ($0.awaitingInterruptionResume && $0.deliveryUncertain)
         }
+        let direct = try db.query(
+            "SELECT id FROM sessions WHERE direct_turn_in_flight = 1 AND archived = 0"
+        ).compactMap { $0["id"] as? String }
+        return queued + direct.filter { !queued.contains($0) }
     }
 
     private func queueSessionIds(where matches: (QueuedPrompt) -> Bool) throws -> [String] {

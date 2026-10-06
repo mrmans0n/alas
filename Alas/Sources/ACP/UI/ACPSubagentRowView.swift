@@ -157,13 +157,18 @@ struct ACPSubagentRowView: View {
                         isStreaming: true,
                         lastContentTouchIndex: run.lastContentTouchIndex)
                     : nil
+                let currentTurnUserIndex = run.messages.lastIndex {
+                    if case .user = $0 { return true }
+                    return false
+                } ?? -1
                 ForEach(Array(run.messages.enumerated()), id: \.element.rowViewIdentity) { index, message in
                     ACPSubagentMessageRow(
                         stableId: "\(descriptor.subagentSessionId)#\(message.stableId)",
                         message: message,
                         typography: typography,
                         trustedImageRoot: trustedImageRoot,
-                        isLiveNarration: index == liveIndex)
+                        isLiveNarration: index == liveIndex,
+                        isTurnActive: run.isRunning && index > currentTurnUserIndex)
                 }
             }
             .padding(.leading, 2)
@@ -181,6 +186,7 @@ private struct ACPSubagentMessageRow: View {
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
     let isLiveNarration: Bool
+    let isTurnActive: Bool
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -196,7 +202,7 @@ private struct ACPSubagentMessageRow: View {
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(_, let items):
-            ACPPlanChecklist(items: items)
+            ACPPlanChecklist(items: items, isTurnActive: isTurnActive)
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }

@@ -175,6 +175,25 @@ struct ACPSessionPersistenceTests {
         #expect(try await reader.loadComposerDraftRecord(sessionId: target.id)?.draft == draft)
     }
 
+    @Test("a direct turn in flight on the writer is found at launch on the Mac that takes over")
+    func replicaCarriesDirectTurnInFlight() async throws {
+        let writer = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await writer.upsertSession(row(id: "writer"))
+        try await writer.enableReplicaExport(sessionId: "writer", recordId: "record")
+        if let initial = try await writer.replicaChanges(sessionId: "writer", limit: 256) {
+            try await writer.acknowledgeReplicaChanges(sessionId: "writer", export: initial)
+        }
+        #expect(try await writer.setDirectTurnInFlight(sessionId: "writer", inFlight: true, fence: nil))
+        let exported = try #require(try await writer.replicaChanges(sessionId: "writer", limit: 256))
+        let reader = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await reader.upsertSession(row(id: "reader"))
+        let entries = exported.entries.map { RemoteSessionReplicaEntry(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 1) }
+        try await reader.stageReplicaPage(sessionId: "reader", recordId: "record", page: .init(cutoffRevision: 1, entries: entries, nextPageToken: nil))
+        _ = try await reader.commitReplicaImport(importGuard: .init(sessionId: "reader", expectedLocalFence: nil))
+
+        #expect(try await reader.interruptedQueueSessionIds() == ["reader"])
+    }
+
     @Test("acknowledging an older publication retains a newer streamed row")
     func replicaAcknowledgementRetainsNewerChange() async throws {
         let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)

@@ -18,9 +18,13 @@ struct ACPPlanPill: View {
     /// trigger stays visibly tied to the surface it opened.
     private var isLit: Bool { hovering || popoverOpen }
 
+    private var isTurnActive: Bool {
+        transcript.streamingState == .sending || transcript.streamingState == .streaming
+    }
+
     var body: some View {
         Group {
-            if let state = ACPPlanPillState(items: transcript.currentPlan) {
+            if let state = ACPPlanPillState(items: transcript.currentPlan, isTurnActive: isTurnActive) {
                 pill(state: state)
             }
         }
@@ -68,7 +72,7 @@ struct ACPPlanPill: View {
         .accessibilityLabel(state.accessibilityLabel)
         .popover(isPresented: $popoverOpen, arrowEdge: .top) {
             if let items = transcript.currentPlan, !items.isEmpty {
-                ACPPlanChecklist(items: items)
+                ACPPlanChecklist(items: items, isTurnActive: isTurnActive)
                     .frame(width: 320)
             }
         }
