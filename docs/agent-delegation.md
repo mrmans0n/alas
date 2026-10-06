@@ -172,7 +172,8 @@ only where Alas has verified a control:
 | OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
 | Pi | Pi has no built-in subagent tool; extensions add them. Removes the tools of known Pi subagent extensions (`subagent`, `bg_wait`, and `subagent_supervisor` from `pi-subagents`) by starting Pi through an Alas wrapper that adds `--exclude-tools` (see below). Tools from other extensions are not affected. Your Pi settings and any `PI_ACP_PI_COMMAND` you set are kept. Local sessions only: a remote Pi session with the option on fails to start. |
 | Antigravity | Sends `_meta.agy.disabledTools: ["start_subagent"]` on every session request, which removes `invoke_subagent`, `define_subagent`, `manage_subagents`, and `send_message` from the model's tool list. Your Antigravity settings are not changed. Requires `antigravity-acp` 1.3.0 or later. |
-| Cursor, Gemini, Copilot | Unavailable until a control is verified. |
+| Copilot | Starts `copilot --acp` with `--excluded-tools=task,list_agents,read_agent,write_agent`, which removes those four tools from the model's tool list for new and loaded sessions. Other Copilot tools and Alas's MCP tools stay available. Exclusions in the agent's extra arguments are kept. Copilot ignores every exclusion while `--available-tools` is set, so Alas also removes the four tools from any allowlist there; if nothing would be left, the session fails to start, because Copilot treats an empty allowlist as every tool. An allowlist also hides Alas's own tools unless it lists `alas`. Works on local and remote hosts. Requires Copilot 1.0.76 or later. |
+| Cursor, Gemini | Unavailable until a control is verified. |
 | Custom agents | Unavailable. |
 
 When it applies:
@@ -184,8 +185,9 @@ When it applies:
 - Alas checks the adapter before sending any session request. If it does not
   identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
   (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex),
-  `OpenCode` 1.18.33 or later and below 2.0, `oh-my-pi` 18.2.11 or later (OMP), or `pi-acp`
-  0.0.34 or later (Pi), the session fails to start instead of running
+  `OpenCode` 1.18.33 or later and below 2.0, `oh-my-pi` 18.2.11 or later (OMP), `pi-acp`
+  0.0.34 or later (Pi), `antigravity-acp` 1.3.0 or later (Antigravity), or
+  `Copilot` 1.0.76 or later (Copilot), the session fails to start instead of running
   unenforced.
 - The OMP overlay is a single owner-only file,
   `~/Library/Application Support/Alas/acp-launch-overlays/omp-native-subagents-off.yml`.
