@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Show language server status in diff and review toolbars and keep loading badges up through indexing, with progress and crash details on click.
+
 ## [0.20.4] - 2026-10-06
 
 ### ✨ Features
