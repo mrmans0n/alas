@@ -80,7 +80,7 @@ struct AgentsPane: View {
                         AlasToggle(on: state.bind(\.harness.acpAutoResumeAfterUsageLimit))
                     }
                     SettingsRow(name: "Continue interrupted sessions after restart",
-                                desc: "When a crash, update, or reboot ends a turn that was sent from the queue, ask the agent to continue it on the next launch and resend queued messages whose delivery could not be confirmed. Messages sent directly to an idle chat are not recovered.") {
+                                desc: "When a crash, update, or reboot ends a turn, ask the agent to continue it on the next launch and resend queued messages whose delivery could not be confirmed.") {
                         AlasToggle(on: state.bind(\.harness.acpContinueInterruptedSessions))
                     }
                     SettingsRow(name: "Alas MCP transport",

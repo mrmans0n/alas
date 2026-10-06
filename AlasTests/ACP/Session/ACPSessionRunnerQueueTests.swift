@@ -722,6 +722,33 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadMessages(sessionId: "s").map(\.kind) == [thought ? "thought" : "agent", "user", thought ? "thought" : "agent"])
     }
 
+    @Test("a direct send invalidated while its in-flight marker saves is not left marked")
+    func invalidatedDirectSendClearsInFlightMarker() async throws {
+        let saving = QueueTestGate()
+        let release = QueueTestGate()
+        let (runner, mock, session, store) = try mkRunner()
+        defer { runner.stop()
+        Task { await release.open() } }
+        var paused = false
+        runner.beforePersistenceForTesting = {
+            if !paused, session.directTurnInFlight {
+                paused = true
+                await saving.open()
+                await release.wait()
+            }
+        }
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(blocks: [.text("hello")], intent: .auto)
+        await saving.wait()
+        runner.invalidateActivePrompt()
+        await release.open()
+        try await waitUntil { !session.directTurnInFlight }
+        await runner.flushPersistence()
+
+        #expect(try store.loadSession(id: "s")?.directTurnInFlight == false)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("forced steering keeps the saved prompt when recovery persistence fails")
     func forcedSteeringKeepsSavedPromptUntilRecoveryCommit() async throws {
         let (runner, mock, session, store) = try mkRunner()

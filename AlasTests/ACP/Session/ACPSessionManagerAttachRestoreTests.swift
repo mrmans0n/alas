@@ -1583,6 +1583,66 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadQueue(sessionId: "local").isEmpty)
     }
 
+    @Test("a direct send is found at launch only while its turn is in flight", arguments: [true, false])
+    func directSendIsInterruptedOnlyWhileInFlight(succeeds: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-direct")
+        let (outcome, finish) = AsyncStream<Bool>.makeStream()
+        client.scriptAsync(method: "session/prompt") { _ in
+            for await ok in outcome {
+                guard ok else { throw JSONRPCError(code: -32000, message: "boom", data: nil) }
+                return Data("null".utf8)
+            }
+            throw CancellationError()
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(id: "direct", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
+        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+        await manager.flushAllPersistence()
+        // An app exit now leaves no queue row, only the marker.
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+        #expect(try store.interruptedQueueSessionIds() == [session.id])
+
+        finish.yield(succeeds)
+        try await waitUntil { session.transcript.streamingState == .idle && !session.directTurnInFlight }
+        await manager.flushAllPersistence()
+        #expect(try store.interruptedQueueSessionIds().isEmpty)
+    }
+
+    @Test("a direct send interrupted by a restart is continued only with the setting on", arguments: [true, false])
+    func interruptedDirectSendIsContinuedAtLaunch(settingOn: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try appendMessage(.user(id: UUID(), text: "migrate", attachments: []), to: store, seq: 0)
+        try store.setDirectTurnInFlight(sessionId: "local", inFlight: true)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-existing")
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-existing")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client, continueInterruptedSessions: settingOn)
+
+        if settingOn {
+            #expect(await manager.bootstrapInterruptedQueueSessions() == ["local"])
+            try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+            let prompt = try #require(client.sent.compactMap { $0.params as? ACPSessionPromptParams }.first)
+            #expect(prompt.prompt.contains(.text(ACPSession.interruptedTurnContinueText)))
+        } else {
+            #expect(await manager.bootstrapInterruptedQueueSessions().isEmpty)
+            _ = manager.placeholderSession(id: "local")
+            await manager.hydrateIfNeeded(id: "local")
+        }
+        await manager.flushAllPersistence()
+
+        #expect(try store.interruptedQueueSessionIds().isEmpty)
+        if !settingOn { #expect(!client.sent.contains { $0.method == "session/prompt" }) }
+    }
+
     @Test("bootstrap defers future scheduled queues until deadline")
     func bootstrapDefersFutureScheduledQueuesUntilDeadline() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5747,12 +5807,14 @@ struct ACPSessionManagerAttachRestoreTests {
         client: ACPMockClient,
         mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
-        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil
+        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+        continueInterruptedSessions: Bool = false
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            continueInterruptedSessions: { continueInterruptedSessions },
             onQueueChanged: onQueueChanged,
             onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
