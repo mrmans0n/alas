@@ -1611,6 +1611,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         (String(repeating: "x\n", count: 500), 400, 500, "… cut: showing 400 of 500 lines"),
         (String(repeating: String(repeating: "y", count: 1_000) + "\n", count: 50), 32, 50, "… cut: showing 32 of 50 lines"),
         (String(repeating: "z", count: 40_000), 1, 1, "… cut: showing 1 of 1 lines, first line shortened"),
+        (String(repeating: "€", count: 12_000), 1, 1, "… cut: showing 1 of 1 lines, first line shortened"),
     ])
     func capsExcerpt(declaration: String, shown: Int, total: Int, marker: String) {
         let excerpt = ACPSymbolReference.excerpt(declaration)
@@ -1619,6 +1620,7 @@ git commit -m "feat(acp): add symbol mention links and sent-symbol snapshots"
         #expect(excerpt.totalLines == total)
         #expect(excerpt.text.utf8.count <= ACPSymbolReference.maxExcerptBytes)
         #expect(excerpt.text.hasSuffix(marker))
+        #expect(!excerpt.text.contains("\u{FFFD}"), "cuts land on scalar boundaries, never mid-character")
         #expect(!ACPSymbolReference.excerpt("short\n").truncated)
     }
 
@@ -1808,7 +1810,17 @@ Expected: build failure, `type 'ACPSymbolReference' has no member 'resolve'`.
             if kept.count == maxExcerptLines || bytes + cost > budget {
                 if kept.isEmpty {
                     // One huge line (minified code): cut it to the byte budget.
-                    kept.append(String(decoding: line.utf8.prefix(budget), as: UTF8.self))
+                    // One huge line (minified code): cut it to the byte
+                    // budget on a scalar boundary, never mid-character.
+                    var cut = String.UnicodeScalarView()
+                    var used = 0
+                    for scalar in line.unicodeScalars {
+                        let width = UTF8.width(scalar)
+                        if used + width > budget { break }
+                        cut.append(scalar)
+                        used += width
+                    }
+                    kept.append(String(cut))
                     shortened = true
                 }
                 break
@@ -2126,8 +2138,6 @@ In `.onChange(of: query)` keep `highlight = 0` and call `rescheduleRank(preserve
             ? []
             : MentionSessionRanking.rank(sessions, query: q).map(MentionPickerItem.session)
         let fileSymbols = symbolMentions?.fileSymbols
-        let previous = ranked.indices.contains(highlight) ? ranked[highlight] : nil
-        let previousIndex = highlight
         rankTask = Task.detached(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: 16_000_000)
             if Task.isCancelled { return }
@@ -2160,9 +2170,13 @@ In `.onChange(of: query)` keep `highlight = 0` and call `rescheduleRank(preserve
             let items = sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
             await MainActor.run {
                 guard rankGeneration == gen else { return }
+                // Read the live highlight here, not before the await: the
+                // user may have moved it while ranking or a drill-down read ran.
+                let current = ranked.indices.contains(highlight) ? ranked[highlight] : nil
+                let currentIndex = highlight
                 ranked = items
                 if preserveHighlight {
-                    highlight = MentionPickerNavigation.index(preserving: previous, fallback: previousIndex, in: items)
+                    highlight = MentionPickerNavigation.index(preserving: current, fallback: currentIndex, in: items)
                 }
             }
         }
