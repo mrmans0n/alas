@@ -1055,9 +1055,10 @@ struct NativePeerSessionsTests {
         #expect(client.newSession?.worktrees?.map(\.id) == ["w1"])
         #expect(client.newSession?.isLoading == false)
 
-        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: "opus")
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: "opus", effortId: "high")
         #expect(client.newSession?.phase == .creating)
-        #expect(links.sent(to: "B").last == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus"))
+        #expect(links.sent(to: "B").last
+            == .createSession(worktreeId: "w1", agentId: "claude", modelId: "opus", effortId: "high"))
 
         links.receive(.sessionCreated(session: projectRow("new")), from: "B")
         #expect(client.newSession == nil)
@@ -1068,7 +1069,7 @@ struct NativePeerSessionsTests {
     @Test func aRefusedCreateKeepsTheSheetWithTheReason() {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)
-        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil, effortId: nil)
         links.receive(.createSessionFailed(message: "Agent is no longer available."), from: "B")
         #expect(client.newSession?.phase == .failed("Agent is no longer available."))
     }
@@ -1106,6 +1107,26 @@ struct NativePeerSessionsTests {
                                            .init(id: "claude", name: "Claude", isDefault: true)]
         #expect(NativePeerNewSession.preselectedAgentId(in: agents) == "claude")
         #expect(NativePeerNewSession.preselectedAgentId(in: Array(agents.prefix(1))) == "codex")
+    }
+
+    @Test(arguments: [
+        (true, true, true, true, false),
+        (true, false, true, false, false),
+        (false, true, false, true, false),
+        (false, false, false, false, true),  // nothing remembered: chips hidden, hint shown
+    ] as [(Bool, Bool, Bool, Bool, Bool)])
+    func newSessionShowsOnlyTheChipsThePeerRemembers(
+        hasModels: Bool, hasEfforts: Bool, showsModel: Bool, showsEffort: Bool, showsHint: Bool
+    ) throws {
+        let agent = RemoteAgentOption(
+            id: "claude", name: "Claude", isDefault: true,
+            models: hasModels ? [RemoteModelOption(id: "opus", name: "Opus")] : nil,
+            efforts: hasEfforts ? [RemoteEffortOption(id: "high", name: "High")] : nil)
+        let visibility = try #require(NativePeerNewSession.chipVisibility(for: agent))
+        #expect(visibility.showsModel == showsModel)
+        #expect(visibility.showsEffort == showsEffort)
+        #expect(visibility.showsDefaultsHint == showsHint)
+        #expect(NativePeerNewSession.chipVisibility(for: nil) == nil)
     }
 
     @Test func newSessionSheetRecoversWhenThePeerComesBack() {
@@ -1147,7 +1168,7 @@ struct NativePeerSessionsTests {
         links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
         let peer = client.snapshot.groups[0]
         client.beginNewSession(peer: peer, repo: peer.repos(ordering: .lastUpdateDesc)[0])
-        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil, effortId: nil)
         #expect(client.newSession?.phase == .creating)
 
         peerState = "offline"
@@ -1167,7 +1188,7 @@ struct NativePeerSessionsTests {
     func aCreatedSessionDoesNotStealSelectionAfterTheUserNavigates(to destination: String?) {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)
-        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil)
+        client.createNewSession(worktreeId: "w1", agentId: "claude", modelId: nil, effortId: nil)
         links.receive(.sessionCreated(session: projectRow("new")), from: "B")
         if let destination { client.select(destination) } else { client.clearSelection() }
         links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")

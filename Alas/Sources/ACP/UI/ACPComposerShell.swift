@@ -1187,7 +1187,7 @@ struct ACPComposer: View {
             items: spec.options.map {
                 ACPSelectChip.Item(
                     id: $0.id, name: $0.name, description: $0.description,
-                    iconSystemName: $0.kind?.iconSystemName)
+                    icon: $0.kind.map { .system($0.iconSystemName) })
             },
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,

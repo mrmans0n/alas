@@ -69,7 +69,7 @@ enum RemoteClientMessage: Equatable, Sendable {
     case listProjects
     case listBranches(projectId: String)
     case createWorktreeSession(projectId: String, base: String, branch: String, agentId: String)
-    case createSession(worktreeId: String, agentId: String, modelId: String? = nil)
+    case createSession(worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
@@ -115,7 +115,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -140,7 +140,8 @@ extension RemoteClientMessage: Codable {
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
                 agentId: try c.decode(String.self, forKey: .agentId),
-                modelId: try c.decodeIfPresent(String.self, forKey: .modelId))
+                modelId: try c.decodeIfPresent(String.self, forKey: .modelId),
+                effortId: try c.decodeIfPresent(String.self, forKey: .effortId))
         case "subscribe": self = .subscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "unsubscribe": self = .unsubscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "permissionDecision":
@@ -280,11 +281,12 @@ extension RemoteClientMessage: Codable {
             try c.encode(base, forKey: .base)
             try c.encode(branch, forKey: .branch)
             try c.encode(agentId, forKey: .agentId)
-        case .createSession(let worktreeId, let agentId, let modelId):
+        case .createSession(let worktreeId, let agentId, let modelId, let effortId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)
             try c.encode(agentId, forKey: .agentId)
             try c.encodeIfPresent(modelId, forKey: .modelId)
+            try c.encodeIfPresent(effortId, forKey: .effortId)
         case .subscribe(let s): try c.encode("subscribe", forKey: .type)
         try c.encode(s, forKey: .sessionId)
         case .unsubscribe(let s): try c.encode("unsubscribe", forKey: .type)

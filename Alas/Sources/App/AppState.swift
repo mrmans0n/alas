@@ -13142,12 +13142,8 @@ final class AppState {
             onSessionEnded: { [weak self] sessionId in
                 self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
-            onModelsObserved: { [weak self] agentId, host, models in
-                self?.acpModelCatalog.record(
-                    agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
-                    host: host
-                )
+            onChipsObserved: { [weak self] agentId, host, chips in
+                self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,
@@ -13534,12 +13530,8 @@ final class AppState {
             clearMCPRegistration: { [weak self] sessionId in
                 self?.mcpRegistrationRegistry.clear(sessionId: sessionId)
             },
-            onModelsObserved: { [weak self] agentId, host, models in
-                self?.acpModelCatalog.record(
-                    agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
-                    host: host
-                )
+            onChipsObserved: { [weak self] agentId, host, chips in
+                self?.recordObservedChips(agentId: agentId, host: host, chips: chips)
             }
         )
         manager.remoteServerIdProvider = { [weak self] in
@@ -15219,21 +15211,34 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    private func recordObservedChips(agentId: String, host: String?, chips: ACPChipState) {
+        acpModelCatalog.record(
+            agentID: agentId,
+            models: (chips.models?.options ?? []).map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+            host: host
+        )
+        acpModelCatalog.recordEffort(agentID: agentId, thinking: chips.thinking)
+    }
+
     func remoteAgents() -> [RemoteAgentOption] {
         let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
         let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
         return ordered.enumerated().map { index, agent in
             let models = acpModelCatalog.models(for: agent.id)
+            let efforts = acpModelCatalog.efforts(for: agent.id)?.levels ?? []
             return RemoteAgentOption(
                 id: agent.id,
                 name: agent.displayName,
                 isDefault: index == 0,
-                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) }
+                models: models.isEmpty ? nil : models.map { RemoteModelOption(id: $0.id, name: $0.name) },
+                efforts: efforts.isEmpty ? nil : efforts.map { RemoteEffortOption(id: $0.id, name: $0.name) }
             )
         }
     }
 
-    func createRemoteSession(worktreeId: String, agentId: String, modelId: String? = nil) async -> RemoteCreateSessionResult {
+    func createRemoteSession(
+        worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil
+    ) async -> RemoteCreateSessionResult {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
               projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
         else {
@@ -15266,6 +15271,16 @@ extension AppState: RemoteSessionsProvider {
         // there; creation never fails over the model.
         if let modelId {
             manager.pendingModel[session.id] = modelId
+        }
+        // Applied by `attach` after the model; a level the agent no longer
+        // offers is skipped there. Creation never fails over the effort.
+        if let effortId {
+            if let effort = acpModelCatalog.efforts(for: agent.id) {
+                manager.queueInitialConfigOption(
+                    for: session.id, configId: effort.configId, value: .string(effortId))
+            } else {
+                Self.logger.warning("Ignoring requested effort for \(agent.id, privacy: .public): no remembered thinking levels")
+            }
         }
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)

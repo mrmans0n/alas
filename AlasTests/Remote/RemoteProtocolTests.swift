@@ -802,22 +802,28 @@ struct RemoteProtocolTests {
         #expect(decoded == msg)
     }
 
-    @Test(arguments: [nil, "opus"] as [String?])
-    func createSessionCarriesAnOptionalModel(modelId: String?) throws {
-        let message = RemoteClientMessage.createSession(worktreeId: "wt1", agentId: "claude", modelId: modelId)
+    @Test(arguments: [(nil, nil), ("opus", nil), (nil, "high"), ("opus", "high")] as [(String?, String?)])
+    func createSessionCarriesAnOptionalModelAndEffort(modelId: String?, effortId: String?) throws {
+        let message = RemoteClientMessage.createSession(
+            worktreeId: "wt1", agentId: "claude", modelId: modelId, effortId: effortId)
         #expect(try roundTrip(message) == message)
         let json = String(decoding: try JSONEncoder().encode(message), as: UTF8.self)
         #expect(json.contains("modelId") == (modelId != nil))
+        #expect(json.contains("effortId") == (effortId != nil))
     }
 
     @Test func creationOptionsCarryOptionalMetadataAndDecodeWithoutIt() throws {
         let agent = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true,
-                                      models: [RemoteModelOption(id: "opus", name: "Opus")])
+                                      models: [RemoteModelOption(id: "opus", name: "Opus")],
+                                      efforts: [RemoteEffortOption(id: "high", name: "High")])
         #expect(try roundTrip(agent) == agent)
         let legacyAgent = try JSONDecoder().decode(
             RemoteAgentOption.self, from: Data(#"{"id":"claude","name":"Claude","isDefault":true}"#.utf8))
         #expect(legacyAgent.models == nil)
-        #expect(!String(decoding: try JSONEncoder().encode(legacyAgent), as: UTF8.self).contains("models"))
+        #expect(legacyAgent.efforts == nil)
+        let legacyJSON = String(decoding: try JSONEncoder().encode(legacyAgent), as: UTF8.self)
+        #expect(!legacyJSON.contains("models"))
+        #expect(!legacyJSON.contains("efforts"))
 
         let legacyWorktree = try JSONDecoder().decode(RemoteWorktreeOption.self, from: Data(#"""
         {"id":"wt1","projectName":"alas","worktreeName":"a","branch":"b","path":"/p","metricsAvailable":false,
