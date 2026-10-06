@@ -327,7 +327,12 @@ enum ChangeSummaryPolicy {
     /// Whether a description supports a stated reason cannot be checked, so
     /// the narrative never gives one.
     private static var motivation: Regex<Substring> {
-        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always)|so\s+(?:\w+\s+){0,3}(?:don't|doesn't|won't|can't)|for (?:faster|better|quicker|easier|safer|simpler|smoother|improved|more|less|fewer)|enabling|making (?:it|things|them) (?:easier|faster|possible|simpler|safer))\b/
+        /(?i)\b(?:because|so that|in order to|due to|to (?:avoid|prevent|ensure|make sure|reduce|improve|fix|address|speed up)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always)|so\s+(?:\w+\s+){0,3}(?:don't|doesn't|won't|can't)|enabling|making (?:it|things|them) possible)\b/
+    }
+    /// Benefits are claimed through words like these whatever connects them
+    /// ("for", "allowing", "letting"), so the words themselves are rejected.
+    private static var benefit: Regex<Substring> {
+        /(?i)\b(?:faster|quicker|easier|safer|simpler|smoother|cleaner|better|improv\w*|efficien\w*|reliab\w*|robust\w*|more (?:secure|stable|readable|maintainable|responsive)|less (?:error-prone|brittle|confusing))\b/
     }
     /// Links, images, and HTML would become live when pasted into a
     /// description, and the card shows the narrative as plain text.
@@ -359,6 +364,7 @@ enum ChangeSummaryPolicy {
               summary.firstMatch(of: commitHash) == nil,
               summary.firstMatch(of: restatedCount) == nil,
               summary.firstMatch(of: motivation) == nil,
+              summary.firstMatch(of: benefit) == nil,
               summary.firstMatch(of: markup) == nil
         else { return nil }
 

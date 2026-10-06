@@ -82,6 +82,8 @@ struct ChangeSummaryTests {
         #"{"summary": "Adds a picker to avoid losing the user's place."}"#,
         #"{"summary": "Adds a branch picker so users can switch repositories."}"#,
         #"{"summary": "Adds caching for faster responses."}"#,
+        #"{"summary": "Adds caching, allowing faster responses."}"#,
+        #"{"summary": "Reworks the picker, letting it load more reliably."}"#,
         #"{"summary": "Adds a picker, see [docs](https://example.invalid)."}"#,
         #"{"summary": "Adds a picker <img src=x>."}"#,
         #"{"summary": "Adds token ghp_abcdefghijklmnopqrstuvwxyz0123456789."}"#,
