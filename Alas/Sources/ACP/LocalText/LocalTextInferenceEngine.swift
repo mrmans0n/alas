@@ -27,6 +27,8 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     private struct LoadedModel: Sendable {
         let tokenCount: @Sendable ([LocalTextMessage]) async throws -> Int
         let evaluate: Evaluation
+        /// Runs after the model is dropped. Must not capture the model.
+        var release: @Sendable () -> Void = {}
     }
 
     private struct Job {
@@ -310,7 +312,9 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     private func unload() {
         idleTask?.cancel()
         idleTask = nil
+        let release = evaluation?.release
         evaluation = nil
+        release?()
         lease?.close()
         lease = nil
     }
@@ -436,7 +440,10 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                         }
                     } onCancel: { worker.cancel() }
                 }
-            }
+            },
+            // MLX parks freed weights in its buffer cache (capped near device
+            // memory), so dropping the model alone keeps ~3 GB of GPU memory.
+            release: { MLX.Memory.clearCache() }
         )
     }
 
