@@ -75,9 +75,19 @@ enum ExitScenario: String, Sendable, CaseIterable {
 
 struct OutputTailCase: Sendable, CustomTestStringConvertible {
     let name: String
-    let chunks: [String]
+    let chunks: [Data]
     let expected: [String]
     var testDescription: String { name }
+
+    init(name: String, chunks: [Data], expected: [String]) {
+        self.name = name
+        self.chunks = chunks
+        self.expected = expected
+    }
+
+    init(name: String, chunks: [String], expected: [String]) {
+        self.init(name: name, chunks: chunks.map { Data($0.utf8) }, expected: expected)
+    }
 }
 
 @Suite("LSPClient.lifecycle", .serialized)
@@ -131,10 +141,30 @@ struct LSPClientLifecycleTests {
             chunks: [String(repeating: "x", count: 5000) + "\n" + String(repeating: "y", count: 5000) + "\n"],
             expected: [String(repeating: "y", count: 5000)]
         ),
+        OutputTailCase(
+            name: "multibyte scalar split across chunks",
+            chunks: [Data([0x61, 0xE2, 0x82]), Data([0xAC, 0x62, 0x0A])],
+            expected: ["a€b"]
+        ),
+        OutputTailCase(
+            name: "100 KB unterminated line keeps its last 8 KB",
+            chunks: [Data(repeating: UInt8(ascii: "x"), count: 100_000)],
+            expected: [String(repeating: "x", count: 8192)]
+        ),
+        OutputTailCase(
+            name: "unterminated line grown over many chunks keeps its last 8 KB",
+            chunks: Array(repeating: Data(repeating: UInt8(ascii: "x"), count: 1000), count: 100),
+            expected: [String(repeating: "x", count: 8192)]
+        ),
+        OutputTailCase(
+            name: "cap does not cut a scalar in half",
+            chunks: [Data(String(repeating: "€", count: 4000).utf8)],
+            expected: [String(repeating: "€", count: 2730)]
+        ),
     ])
     func outputTail(_ testCase: OutputTailCase) {
         var tail = LSPOutputTail()
-        for chunk in testCase.chunks { tail.append(Data(chunk.utf8)) }
+        for chunk in testCase.chunks { tail.append(chunk) }
         #expect(tail.finish() == testCase.expected)
     }
 
