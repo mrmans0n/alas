@@ -4576,6 +4576,28 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(params.value == .string("high"))
     }
 
+    @Test("losing the writer lease discards the queued initial config options")
+    func losingTheWriterLeaseDiscardsQueuedInitialConfigOptions() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        try store.seizeLease(
+            sessionId: "local",
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(manager.pendingConfigOptionValues[session.id] == nil)
+    }
+
     @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
     func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

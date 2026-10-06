@@ -5893,6 +5893,9 @@ extension ACPSessionManager {
         guard acquiredLease else {
             let discardedModelSelection = pendingModel.removeValue(forKey: sessionId) != nil
             let discardedModeSelection = pendingMode.removeValue(forKey: sessionId) != nil
+            // Queued config values belong to the same discarded creation request;
+            // a later takeover must not apply them to a running session.
+            pendingConfigOptionValues.removeValue(forKey: sessionId)
             if discardedModelSelection {
                 session.currentModel = persistedRows[sessionId]?.currentModel
             }
