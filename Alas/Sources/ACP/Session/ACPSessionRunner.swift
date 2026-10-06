@@ -1915,6 +1915,8 @@ final class ACPSessionRunner {
     private func emitTurnCompleted(
         _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
     ) {
+        // Whatever ended, no directly sent turn is left running.
+        setDirectTurnInFlight(false)
         if case .failed(let message) = result {
             session.turnFailure = message
         } else {
@@ -3014,6 +3016,25 @@ extension ACPSessionRunner {
         let limit = session.usageLimit
         enqueuePersistence { persistence in
             _ = try await persistence.setUsageLimit(sessionId: sessionId, limit: limit, fence: fence)
+        }
+    }
+
+    /// Mirror `session.directTurnInFlight` onto the session row, on the same
+    /// pipeline as `persistQueue` so a continuation queued for the turn is
+    /// saved before its marker is cleared.
+    func setDirectTurnInFlight(_ inFlight: Bool) {
+        guard session.directTurnInFlight != inFlight else { return }
+        session.directTurnInFlight = inFlight
+        persistDirectTurnInFlight()
+    }
+
+    func persistDirectTurnInFlight() {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        let inFlight = session.directTurnInFlight
+        enqueuePersistence { persistence in
+            _ = try await persistence.setDirectTurnInFlight(sessionId: sessionId, inFlight: inFlight, fence: fence)
         }
     }
 
@@ -4128,6 +4149,8 @@ extension ACPSessionRunner {
                 // RPC is sent below, so any agent chunk that follows is genuine
                 // new output — N+1 bubble creation is correct from here on.
                 self.session.allowsStreamingBoundaryCrossing = true
+                // A queued turn is found at launch by its `.sending` row.
+                if queuedItemId == nil { self.setDirectTurnInFlight(true) }
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we

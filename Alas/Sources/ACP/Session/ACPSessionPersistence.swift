@@ -218,6 +218,14 @@ actor ACPSessionPersistence {
         return true
     }
 
+    func setDirectTurnInFlight(sessionId: String, inFlight: Bool, fence: ACPSessionLeaseFence?) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.setDirectTurnInFlight(sessionId: sessionId, inFlight: inFlight) }
+        if let fence { return try store.withLeaseFence(fence, operation) != nil }
+        try operation()
+        return true
+    }
+
     func setAuthStatus(sessionId: String, status: ACPAuthStatus?) throws {
         try openedStore().setAuthStatus(sessionId: sessionId, status: status)
     }
