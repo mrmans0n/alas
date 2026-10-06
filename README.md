@@ -75,11 +75,12 @@ respond when it needs you.
   and work through your review comments. Before delegating, agents can list
   which agents and models are available
   ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex,
-  OpenCode, OMP, and Pi, **Settings → Agents → Disable native subagents** removes
+  OpenCode, OMP, Pi, Antigravity, and Copilot, **Settings → Agents → Disable native subagents** removes
   the agent's own subagent tool (Claude's Agent/Task and Workflow tools, plus
   SendMessage and ListAgents, which reach other Claude Code sessions; Codex's
   multi-agent tools; OpenCode 1.x's task tool; OMP's task tool and eval `agent()`;
   the tools of known Pi subagent extensions, starting with `pi-subagents`;
+  Antigravity's subagent tools; Copilot's task and agent tools;
   Codex, OpenCode, OMP, and Pi in local sessions only) so it delegates through Alas
   child sessions instead. It applies to sessions created after you change it,
   does not stop subagents already running, and is not a sandbox
