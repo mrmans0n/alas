@@ -12,7 +12,7 @@ struct ACPPlanPillState: Equatable {
 
     /// Returns nil for a missing or empty plan — the view layer treats
     /// nil as "render no pill at all".
-    init?(items: [ACPMessage.PlanItem]?) {
+    init?(items: [ACPMessage.PlanItem]?, isTurnActive: Bool = true) {
         guard let items, !items.isEmpty else { return nil }
         self.total = items.count
         self.done = items.filter { $0.status == "completed" }.count
@@ -20,7 +20,7 @@ struct ACPPlanPillState: Equatable {
         if let inProgressIndex = items.firstIndex(where: { $0.status == "in_progress" }) {
             self.progress = inProgressIndex + 1
             self.currentStep = items[inProgressIndex].content
-            self.isAnimating = true
+            self.isAnimating = isTurnActive
         } else {
             self.progress = done
             if done == total {

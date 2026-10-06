@@ -6,14 +6,9 @@ import Testing
 struct ACPPlanPillStateTests {
     private typealias Item = ACPMessage.PlanItem
 
-    @Test("nil for missing items")
-    func nilForMissing() {
-        #expect(ACPPlanPillState(items: nil) == nil)
-    }
-
-    @Test("nil for empty items array")
-    func nilForEmpty() {
-        #expect(ACPPlanPillState(items: []) == nil)
+    @Test("missing and empty plans have no task control", arguments: [nil, []] as [[Item]?])
+    func nilForMissingOrEmpty(items: [ACPMessage.PlanItem]?) {
+        #expect(ACPPlanPillState(items: items) == nil)
     }
 
     @Test("closing for a missing plan stays closed when the next plan arrives")
@@ -31,19 +26,19 @@ struct ACPPlanPillStateTests {
         ) == false)
     }
 
-    @Test("in_progress step drives current step and turns animation on")
-    func inProgressDrivesEverything() {
+    @Test("unfinished task animation follows turn activity", arguments: [true, false])
+    func inProgressDrivesEverything(isTurnActive: Bool) {
         let items: [Item] = [
             .init(content: "Read code",    status: "completed"),
             .init(content: "Sketch design",status: "completed"),
             .init(content: "Implement",    status: "in_progress"),
             .init(content: "Test",         status: "pending")
         ]
-        let state = ACPPlanPillState(items: items)
+        let state = ACPPlanPillState(items: items, isTurnActive: isTurnActive)
         #expect(state?.done == 2)
         #expect(state?.total == 4)
         #expect(state?.currentStep == "Implement")
-        #expect(state?.isAnimating == true)
+        #expect(state?.isAnimating == isTurnActive)
     }
 
     @Test("all pending — first pending becomes current, animation off")

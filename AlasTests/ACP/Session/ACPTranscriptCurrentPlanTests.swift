@@ -5,8 +5,103 @@ import Testing
 @MainActor
 @Suite("ACPTranscript.currentPlan")
 struct ACPTranscriptCurrentPlanTests {
-    private func makeSession() -> ACPSession {
-        ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+    private func makeSession(agentId: String = "claude") -> ACPSession {
+        ACPSession(id: "s1", agentId: agentId, worktreeId: "wt", title: "t")
+    }
+
+    @Test("only matching OMP reminders retain the full todo snapshot", arguments: ["omp", "codex"], [true, false])
+    func reminderRetainsCanonicalTodosOnlyForOMP(agentId: String, matchesSnapshot: Bool) throws {
+        let session = makeSession(agentId: agentId)
+        let snapshot = try JSONDecoder().decode(AnyCodable.self, from: Data(#"""
+            {"details":{"storage":"session","op":"done","phases":[{"name":"Work","tasks":[
+                {"content":"Implement","status":"completed"},
+                {"content":"Old approach","status":"abandoned"},
+                {"content":"Credentials","status":"blocked"},
+                {"content":"Review","status":"in_progress"}
+            ]}]}}
+            """#.utf8))
+        let fullPlan: [ACPPlanEntry] = [
+            .init(content: "Implement", priority: "medium", status: "completed"),
+            .init(content: "Old approach", priority: "medium", status: "completed"),
+            .init(content: "Credentials", priority: "medium", status: "pending"),
+            .init(content: "Review", priority: "medium", status: "in_progress")
+        ]
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.toolCall(.init(
+            toolCallId: "todo", title: "Update the checklist", kind: "think", status: "in_progress")))
+        session.apply(.toolCallUpdate(.init(toolCallId: "todo", status: "completed", rawOutput: snapshot)))
+        session.apply(.plan(fullPlan))
+        let reminder = matchesSnapshot ? fullPlan[3] : ACPPlanEntry(
+            content: "Different work", priority: "medium", status: "in_progress")
+        session.apply(.plan([reminder]))
+
+        let expected = agentId == "omp" && matchesSnapshot ? fullPlan : [reminder]
+        #expect(session.transcript.currentPlan == expected.map {
+            ACPMessage.PlanItem(content: $0.content, status: $0.status)
+        })
+    }
+
+    @Test("OMP accepts todo removals and plan clearing", arguments: [false, true])
+    func deliberateTodoRemovalReplacesThePlan(clear: Bool) throws {
+        let session = makeSession(agentId: "omp")
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.plan([
+            .init(content: "Implement", priority: "medium", status: "completed"),
+            .init(content: "Review", priority: "medium", status: "in_progress")
+        ]))
+        let taskJSON = clear ? "[]" : #"[{"content":"Review","status":"in_progress"}]"#
+        let snapshot = try JSONDecoder().decode(AnyCodable.self, from: Data("""
+            {"details":{"storage":"session","op":"rm","phases":[{"name":"Work","tasks":\(taskJSON)}]}}
+            """.utf8))
+        session.apply(.toolCall(.init(
+            toolCallId: "remove", title: "Remove tasks", kind: "think", status: "completed", rawOutput: snapshot)))
+        let entries: [ACPPlanEntry] = clear ? [] : [
+            .init(content: "Review", priority: "medium", status: "in_progress")
+        ]
+        session.apply(.plan(entries))
+
+        #expect(session.transcript.currentPlan == entries.map {
+            ACPMessage.PlanItem(content: $0.content, status: $0.status)
+        })
+    }
+
+    @Test("OMP does not restore completed tasks from an earlier turn")
+    func earlierTodoSnapshotDoesNotOverrideNewTurn() throws {
+        let session = makeSession(agentId: "omp")
+        let snapshot = try JSONDecoder().decode(AnyCodable.self, from: Data(#"""
+            {"details":{"storage":"session","phases":[{"tasks":[
+                {"content":"Implement","status":"completed"},
+                {"content":"Review","status":"in_progress"}
+            ]}]}}
+            """#.utf8))
+        session.apply(.toolCall(.init(
+            toolCallId: "old-todo", title: "todo", kind: "think", status: "completed", rawOutput: snapshot)))
+        session.apply(.userMessageChunk(.text("Review")))
+        session.apply(.plan([.init(content: "Review", priority: "medium", status: "in_progress")]))
+
+        #expect(session.transcript.currentPlan == [.init(content: "Review", status: "in_progress")])
+    }
+
+    @Test("OMP does not fall back to an older todo result when the latest is unusable", arguments: [
+        "{}",
+        #"{"details":{"storage":"unknown","phases":[{"tasks":[{"content":"Review","status":"in_progress"}]}]}}"#,
+        #"{"details":{"storage":"session","phases":[{"tasks":[{"content":"Implement","status":"unknown"},{"content":"Review","status":"in_progress"}]}]}}"#
+    ])
+    func unusableLatestTodoDoesNotReviveOldTasks(rawOutput: String) {
+        let session = makeSession(agentId: "omp")
+        session.transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "Go", attachments: []),
+            .toolCall(.init(toolCallId: "old", title: "todo", kind: "think", status: "completed", rawOutput: #"""
+                {"details":{"storage":"session","phases":[{"tasks":[
+                    {"content":"Implement","status":"completed"},{"content":"Review","status":"in_progress"}
+                ]}]}}
+                """#)),
+            .toolCall(.init(
+                toolCallId: "latest", title: "todo", kind: "think", status: "completed", rawOutput: rawOutput))
+        ])
+        session.apply(.plan([.init(content: "Review", priority: "medium", status: "in_progress")]))
+
+        #expect(session.transcript.currentPlan == [.init(content: "Review", status: "in_progress")])
     }
 
     @Test("returns nil when no plan message has arrived")

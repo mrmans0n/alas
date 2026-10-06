@@ -207,14 +207,20 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 return false
             } ?? 0
             let isTurnActive = host.transcript.streamingState != "idle"
+            let isPlanActive = host.transcript.streamingState == "sending"
+                || host.transcript.streamingState == "streaming"
             for renderRow in rows {
                 let indices: [Int]
                 switch renderRow {
                 case .message(let row):
-                    specs.append(messageSpec(messages[row.index], inGroup: false, host: host))
+                    specs.append(messageSpec(
+                        messages[row.index], inGroup: false,
+                        isPlanActive: isPlanActive && row.index >= currentTurnUserIndex, host: host))
                     indices = [row.index]
                 case .toolCallGroupMember(let row, _):
-                    specs.append(messageSpec(messages[row.index], inGroup: true, host: host))
+                    specs.append(messageSpec(
+                        messages[row.index], inGroup: true,
+                        isPlanActive: isPlanActive && row.index >= currentTurnUserIndex, host: host))
                     indices = [row.index]
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                     specs.append(groupHeaderSpec(group, proxies: proxies, host: host))
@@ -241,13 +247,15 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         private struct MessageTokenInputs: Equatable {
             let row: NativePeerRow
             let inGroup: Bool
+            let isPlanActive: Bool
             let typography: ACPChatTypography
         }
 
         private func messageSpec(
-            _ message: RemoteWireMessage, inGroup: Bool, host: NativePeerTranscriptScroller
+            _ message: RemoteWireMessage, inGroup: Bool, isPlanActive: Bool, host: NativePeerTranscriptScroller
         ) -> ACPTranscriptRowSpec {
             let row = rowCache.row(for: message)
+            let isPlanActive = if case .plan = row { isPlanActive } else { false }
             // A thought renders from its streaming buffer, which republishes
             // on its own; rebuilding the row per chunk would only re-measure.
             let tokenRow: NativePeerRow = if case .thought = row { .thought("") } else { row }
@@ -256,14 +264,16 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             return ACPTranscriptRowSpec(
                 id: stableId,
                 equalityToken: Self.token(
-                    MessageTokenInputs(row: tokenRow, inGroup: inGroup, typography: host.typography),
+                    MessageTokenInputs(
+                        row: tokenRow, inGroup: inGroup, isPlanActive: isPlanActive, typography: host.typography),
                     host: host
                 ),
                 build: {
                     Self.wrap(host: host) {
                         let content = NativePeerRowView(
                             row: row, stableId: stableId, rowCache: rowCache,
-                            contentMaxWidth: host.contentMaxWidth, typography: host.typography
+                            contentMaxWidth: host.contentMaxWidth, typography: host.typography,
+                            isPlanActive: isPlanActive
                         )
                         if inGroup {
                             ACPToolCallGroupMemberRow { content }
@@ -479,6 +489,7 @@ private struct NativePeerRowView: View {
     let rowCache: NativePeerRowCache
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
+    let isPlanActive: Bool
 
     var body: some View {
         switch row {
@@ -506,7 +517,7 @@ private struct NativePeerRowView: View {
             // to open; the card still shows the inline hunk.
             ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(let items):
-            ACPPlanChecklist(items: items)
+            ACPPlanChecklist(items: items, isTurnActive: isPlanActive)
         case .systemNotice(let text):
             ACPSystemNoticeView(text: text)
         }
