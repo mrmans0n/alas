@@ -61,7 +61,7 @@ tree-sitter-objc = "3.0.2"
 # No Perl grammar here on purpose: tree-sitter-perl 1.1.2 (the only version
 # ever published) is a broken publish — its bindings `include_str!` a
 # `queries/` directory the package does not ship, so the crate cannot compile.
-tree-sitter-php = "0.24.2"
+tree-sitter-php = "0.25.0"
 tree-sitter-powershell = "0.26.4"
 tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
