@@ -50,6 +50,36 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: expectedCursor))
     }
 
+    @Test func pagedReplayDeliversLaterUpdatesWhileEarlierUpdatesRemainUnacknowledged() async throws {
+        let service = MockBrokerService()
+        for (cursor, text) in [(UInt64(1), "first"), (UInt64(2), "second")] {
+            await service.enqueueAttach(events: [
+                .init(cursor: .init(rawValue: cursor), kind: .adapterNotification(
+                    method: "session/update", params: .object([
+                        "sessionId": .string("remote-session-1"),
+                        "update": .object([
+                            "sessionUpdate": .string("agent_message_chunk"),
+                            "content": .object(["type": .string("text"), "text": .string(text)])
+                        ])
+                    ])
+                ))
+            ], snapshotJournalTail: .init(rawValue: 2), hasMoreEvents: cursor == 1)
+        }
+        let client = makeClient(service: service)
+        defer { Task { await client.shutdown() } }
+        try await client.start()
+
+        let first = try await nextUpdate(from: client.incomingUpdates)
+        let second = try await nextUpdate(from: client.incomingUpdates)
+        #expect(first.update == .agentMessageChunk(.init(content: .text("first"))))
+        #expect(second.update == .agentMessageChunk(.init(content: .text("second"))))
+        let requests = await service.attached
+        #expect(requests.map(\.replayAfterCursor?.rawValue) == [0, 1])
+        #expect(requests.allSatisfy { $0.acknowledgedCursor.rawValue == 0 })
+        #expect(await service.acks.isEmpty)
+
+    }
+
     @Test func detachDuringOpenSuppressesLateStartupCallbacks() async throws {
         let service = GatedOpenBrokerService()
         await service.base.setOpenSnapshotTurnState(.sending)
@@ -2087,6 +2117,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         events: [ACPBrokerEvent],
         snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
         snapshotJournalTail: ACPBrokerEventCursor? = nil,
+        hasMoreEvents: Bool? = nil,
         snapshotOperations: [ACPBrokerOperationSnapshot] = [],
         snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
         turnState: ACPBrokerTurnState = .idle,
@@ -2097,6 +2128,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             events: events,
             snapshotPendingRequests: snapshotPendingRequests,
             snapshotJournalTail: snapshotJournalTail,
+            hasMoreEvents: hasMoreEvents,
             snapshotOperations: snapshotOperations,
             snapshotCursorTodosByToolCallId: snapshotCursorTodosByToolCallId,
             turnState: turnState,
@@ -2181,7 +2213,8 @@ private actor MockBrokerService: ACPBrokerServicing {
                 turnState: reply.turnState,
                 cursorTodosByToolCallId: reply.snapshotCursorTodosByToolCallId
             ),
-            events: events
+            events: events,
+            hasMoreEvents: reply.hasMoreEvents
         )
     }
 
@@ -2294,6 +2327,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     private struct AttachReply {
         let events: [ACPBrokerEvent]
         let snapshotPendingRequests: [ACPBrokerPendingRequest]?
+        let hasMoreEvents: Bool?
         let snapshotJournalTail: ACPBrokerEventCursor?
         let snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]?
         let snapshotOperations: [ACPBrokerOperationSnapshot]
@@ -2305,6 +2339,7 @@ private actor MockBrokerService: ACPBrokerServicing {
             events: [ACPBrokerEvent],
             snapshotPendingRequests: [ACPBrokerPendingRequest]? = nil,
             snapshotJournalTail: ACPBrokerEventCursor? = nil,
+        hasMoreEvents: Bool? = nil,
             snapshotOperations: [ACPBrokerOperationSnapshot] = [],
             snapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:],
             turnState: ACPBrokerTurnState = .idle,
@@ -2313,6 +2348,7 @@ private actor MockBrokerService: ACPBrokerServicing {
         ) {
             self.events = events
             self.snapshotPendingRequests = snapshotPendingRequests
+            self.hasMoreEvents = hasMoreEvents
             self.snapshotJournalTail = snapshotJournalTail
             self.snapshotOperations = snapshotOperations
             self.snapshotCursorTodosByToolCallId = snapshotCursorTodosByToolCallId

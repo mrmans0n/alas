@@ -1755,10 +1755,25 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
     ensure_generation(&state, params.generation)?;
     let events = state
         .broker
-        .replay_after(params.acknowledged_cursor)
+        .replay_batch_after(
+            params
+                .replay_after_cursor
+                .unwrap_or(params.acknowledged_cursor),
+            params.max_replay_bytes,
+        )
         .map_err(domain_error)?;
+    let replay_cursor = events
+        .last()
+        .map(|event| event.cursor)
+        .unwrap_or(
+            params
+                .replay_after_cursor
+                .unwrap_or(params.acknowledged_cursor),
+        );
+    let snapshot = state.broker.snapshot();
     Ok(json!({
-        "snapshot": state.broker.snapshot(),
+        "hasMoreEvents": replay_cursor < snapshot.journal_tail,
+        "snapshot": snapshot,
         "events": events
     }))
 }
@@ -2679,6 +2694,58 @@ fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attach_pages_progress_without_acknowledging_or_dropping_large_events() {
+        let mut state = steering_runtime_state();
+        for text in ["x".repeat(64), "y".repeat(4096), "z".repeat(64)] {
+            state
+                .broker
+                .add_adapter_notification("test/update", json!({"text": text}));
+        }
+        let mut child = Command::new("/usr/bin/true")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        child.wait().unwrap();
+        let runtime = Runtime {
+            state: Arc::new((Mutex::new(state), Condvar::new())),
+            adapter_stdin: Arc::new(Mutex::new(stdin)),
+        };
+        let mut cursor = 0;
+        let mut seen = Vec::new();
+        while cursor < 3 {
+            let attached = broker_attach(
+                &runtime,
+                Some(json!({
+                    "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0,
+                    "replayAfterCursor": cursor, "maxReplayBytes": 512
+                })),
+            )
+            .unwrap();
+            let events = attached["events"].as_array().unwrap();
+            assert_eq!(
+                events.len(),
+                1,
+                "one event fits each page, including the oversized event"
+            );
+            cursor = events.last().unwrap()["cursor"].as_u64().unwrap();
+            seen.push(cursor);
+            assert_eq!(attached["snapshot"]["acknowledgedCursor"], 0);
+            assert_eq!(attached["hasMoreEvents"], cursor < 3);
+        }
+        assert_eq!(seen, vec![1, 2, 3]);
+        assert_eq!(lock_runtime(&runtime).broker.replay_after_ack().len(), 3);
+        let legacy = broker_attach(
+            &runtime,
+            Some(json!({
+                "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0
+            })),
+        )
+        .unwrap();
+        assert_eq!(legacy["events"].as_array().unwrap().len(), 3);
+    }
 
     #[test]
     fn untracked_started_turn_holds_queue_for_explicit_recovery() {

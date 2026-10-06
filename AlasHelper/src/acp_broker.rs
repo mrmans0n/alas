@@ -600,18 +600,40 @@ impl ACPBrokerState {
     }
 
     pub fn replay_after(&self, cursor: EventCursor) -> Result<Vec<BrokerEvent>, BrokerError> {
+        self.replay_batch_after(cursor, None)
+    }
+
+    /// The byte budget is soft: an oversized first event must still be
+    /// delivered so replay always progresses without dropping journal data.
+    pub fn replay_batch_after(
+        &self,
+        cursor: EventCursor,
+        max_bytes: Option<usize>,
+    ) -> Result<Vec<BrokerEvent>, BrokerError> {
         if cursor > self.journal_tail() {
             return Err(BrokerError::new(
                 BrokerErrorKind::CursorBeyondJournalTail,
                 "replay cursor is beyond the journal tail",
             ));
         }
-        Ok(self
-            .journal
-            .iter()
-            .filter(|event| event.cursor > cursor)
-            .cloned()
-            .collect())
+        let mut events = Vec::new();
+        let mut bytes = 0usize;
+        for event in self.journal.iter().filter(|event| event.cursor > cursor) {
+            if let Some(limit) = max_bytes {
+                let size = serde_json::to_vec(event)
+                    .expect("broker events contain only serializable JSON")
+                    .len();
+                if !events.is_empty() && bytes.saturating_add(size) > limit {
+                    break;
+                }
+                bytes = bytes.saturating_add(size);
+            }
+            events.push(event.clone());
+            if max_bytes.is_some_and(|limit| bytes >= limit) {
+                break;
+            }
+        }
+        Ok(events)
     }
 
     pub fn snapshot(&self) -> ACPBrokerSnapshot {

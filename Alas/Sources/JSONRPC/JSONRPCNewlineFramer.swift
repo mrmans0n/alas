@@ -4,6 +4,7 @@ import Foundation
 /// Used by ACP, which sends one JSON object per line on stdout/stdin.
 struct JSONRPCNewlineFramer {
     private var buffer = Data()
+    private var scannedBytes = 0
 
     mutating func append<S: Sequence>(_ bytes: S) where S.Element == UInt8 {
         buffer.append(contentsOf: bytes)
@@ -11,14 +12,27 @@ struct JSONRPCNewlineFramer {
 
     mutating func drainFrames() -> [Data] {
         var out: [Data] = []
-        while let nl = buffer.firstIndex(of: 0x0A) {
-            let line = buffer[buffer.startIndex..<nl]
-            buffer.removeSubrange(buffer.startIndex...nl)
-            // Trim trailing \r if present (CRLF), and skip empty lines.
-            var trimmed = line
-            if trimmed.last == 0x0D { trimmed = trimmed.dropLast() }
-            if !trimmed.isEmpty { out.append(Data(trimmed)) }
+        var consumedBytes = 0
+        buffer.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            var searchStart = scannedBytes
+            while let newline = bytes[searchStart...].firstIndex(of: 0x0A) {
+                var end = newline
+                if end > consumedBytes, bytes[end - 1] == 0x0D { end -= 1 }
+                if end > consumedBytes {
+                    out.append(Data(bytes[consumedBytes..<end]))
+                }
+                consumedBytes = newline + 1
+                searchStart = consumedBytes
+            }
         }
+        if consumedBytes == buffer.count {
+            buffer = Data()
+        } else if consumedBytes > 0 {
+            buffer.removeFirst(consumedBytes)
+        }
+        // The remaining partial line has already been searched. Only scan
+        // newly appended bytes next time, even when the line spans many reads.
+        scannedBytes = buffer.count
         return out
     }
 
