@@ -849,12 +849,32 @@ struct WorktreeSymbolIndexTests {
             .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        #expect(SymbolSource.readBounded(directory) == nil)
+        #expect(SymbolSource.readBounded(directory, within: directory.deletingLastPathComponent()) == nil)
 
         // A blocking open on a FIFO with no writer would hang forever.
         let fifo = directory.appendingPathComponent("Pipe.swift")
         #expect(mkfifo(fifo.path, 0o644) == 0)
-        #expect(SymbolSource.readBounded(fifo) == nil)
+        #expect(SymbolSource.readBounded(fifo, within: directory) == nil)
+    }
+
+    @Test("containment is checked on the opened file, not only on the path checked earlier")
+    func readBoundedChecksOpenedFile() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-symbols-\(UUID().uuidString)", isDirectory: true)
+        let root = base.appendingPathComponent("worktree", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let outside = base.appendingPathComponent("Secret.swift")
+        try "struct Secret {}".write(to: outside, atomically: true, encoding: .utf8)
+        let inside = root.appendingPathComponent("A.swift")
+        try "struct A {}".write(to: inside, atomically: true, encoding: .utf8)
+        #expect(SymbolSource.readBounded(inside, within: root) == "struct A {}")
+
+        // Simulates a swap after `containedLocalURL` approved the path: the
+        // same path now opens a file outside the worktree.
+        try FileManager.default.removeItem(at: inside)
+        try FileManager.default.createSymbolicLink(at: inside, withDestinationURL: outside)
+        #expect(SymbolSource.readBounded(inside, within: root) == nil)
     }
 
     @Test("files over the size cap are skipped")
@@ -932,20 +952,24 @@ enum SymbolSource {
         }
         return await Task.detached(priority: .userInitiated) {
             guard let url = containedLocalURL(root: root, relativePath: relativePath) else { return nil }
-            return readBounded(url)
+            return readBounded(url, within: root)
         }.value
     }
 
-    /// Reads at most `maxBytes + 1` bytes of a regular file, so a file that
-    /// grew past the cap is rejected instead of read whole. Opens
-    /// non-blocking and checks the descriptor, so a FIFO or device never
-    /// stalls ranking or prompt dispatch.
-    static func readBounded(_ url: URL) -> String? {
+    /// Reads at most `maxBytes + 1` bytes of a regular file inside `root`.
+    /// - Non-blocking open plus `fstat`, so a FIFO or device never stalls.
+    /// - Containment is re-checked on the opened descriptor's physical path
+    ///   (`F_GETPATH`), so a file or directory swapped for a symlink after
+    ///   `containedLocalURL` approved the path is still rejected.
+    /// - A file that grew past the cap is rejected instead of read whole.
+    static func readBounded(_ url: URL, within root: URL) -> String? {
         let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { return nil }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var info = stat()
-        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              let opened = openedPath(descriptor),
+              isContained(URL(fileURLWithPath: opened), in: root) else { return nil }
         // A throwing read is a failure (nil), never an empty file: an empty
         // result would be indexed with the current stamp and never retried.
         let data: Data
@@ -954,19 +978,29 @@ enum SymbolSource {
         return String(data: data, encoding: .utf8)
     }
 
+    private static func openedPath(_ descriptor: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &buffer) != -1 else { return nil }
+        return String(cString: buffer)
+    }
+
     /// The file's physical URL when it resolves, symlinks included, to a
     /// location strictly inside the physical worktree root and outside
     /// `.git` (matching `RemotePathContainment` on the remote side).
     static func containedLocalURL(root: URL, relativePath: String) -> URL? {
         guard isSafeRelativePath(relativePath) else { return nil }
-        let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
         let resolved = root.appendingPathComponent(relativePath).resolvingSymlinksInPath().standardizedFileURL
-        let components = resolved.pathComponents
-        guard components.count > rootComponents.count,
-              Array(components.prefix(rootComponents.count)) == rootComponents,
-              !components.dropFirst(rootComponents.count).contains(where: { $0.lowercased() == ".git" })
-        else { return nil }
-        return resolved
+        return isContained(resolved, in: root) ? resolved : nil
+    }
+
+    /// `physical` (already resolved) lies strictly inside `root`'s physical
+    /// path and has no `.git` component below it.
+    private static func isContained(_ physical: URL, in root: URL) -> Bool {
+        let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let components = physical.standardizedFileURL.pathComponents
+        return components.count > rootComponents.count
+            && Array(components.prefix(rootComponents.count)) == rootComponents
+            && !components.dropFirst(rootComponents.count).contains(where: { $0.lowercased() == ".git" })
     }
 
     /// Worktree-relative, no `..`, not absolute, never inside `.git`.
@@ -1050,7 +1084,7 @@ actor WorktreeSymbolIndex {
                 if current[path]?.stamp != stamp {
                     if stamp.size > Self.maxFileBytes {
                         current[path] = Record(stamp: stamp, symbols: [])
-                    } else if let source = SymbolSource.readBounded(url) {
+                    } else if let source = SymbolSource.readBounded(url, within: root) {
                         current[path] = Record(stamp: stamp, symbols: SymbolExtractor.symbols(in: source, relativePath: path))
                         parsed += 1
                     }
