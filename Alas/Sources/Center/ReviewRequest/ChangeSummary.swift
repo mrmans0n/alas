@@ -15,6 +15,8 @@ struct ChangeSummaryFacts: Equatable, Sendable {
         let status: String
         let additions: Int
         let deletions: Int
+        /// Git reports no line counts for binary files; their zeros are unknown.
+        var isBinary = false
     }
 
     struct RunResult: Equatable, Sendable {
@@ -50,6 +52,14 @@ struct ChangeSummaryFacts: Equatable, Sendable {
 
     var additions: Int { files.reduce(0) { $0 + $1.additions } }
     var deletions: Int { files.reduce(0) { $0 + $1.deletions } }
+    var binaryFileCount: Int { files.filter(\.isBinary).count }
+
+    /// Line totals, labelled when binary files contribute none.
+    var lineStatistics: String {
+        let binary = binaryFileCount
+        let suffix = binary == 0 ? "" : "; \(binary) binary \(binary == 1 ? "file" : "files") without line counts"
+        return "+\(additions) −\(deletions)\(suffix)"
+    }
 
     init(
         base: String,
@@ -94,13 +104,20 @@ struct ChangeSummaryFacts: Equatable, Sendable {
             mergeBaseSHA: context.mergeBaseSHA,
             commits: context.commits.map { .init(sha: $0.sha, shortSHA: $0.shortSha, subject: $0.rawSubject) },
             files: context.changedFiles.map {
-                .init(path: $0.path, status: $0.status, additions: $0.add, deletions: $0.del)
+                .init(path: $0.path, status: $0.status, additions: $0.add, deletions: $0.del,
+                      isBinary: Self.isBinaryDiff(context.fileDiffsByPath[$0.path]))
             },
             runResults: runResults,
             issueTitle: issueTitle,
             commitBody: context.singleCommitBody,
             hasUncommittedChanges: context.hasUncommittedChanges
         )
+    }
+
+    /// `git diff` replaces a binary file's hunks with one of these lines.
+    static func isBinaryDiff(_ diff: String?) -> Bool {
+        guard let diff else { return false }
+        return diff.split(separator: "\n").contains { $0.hasPrefix("Binary files ") || $0 == "GIT binary patch" }
     }
 
     /// The latest finished run of each script: durable history, plus any
@@ -219,8 +236,9 @@ enum ChangeSummaryPolicy {
         struct File: Encodable {
             let path: String
             let status: String
-            let additions: Int
-            let deletions: Int
+            let additions: Int?
+            let deletions: Int?
+            let binary: Bool?
         }
         struct Payload: Encodable {
             var branch: String
@@ -241,7 +259,8 @@ enum ChangeSummaryPolicy {
         let orderedFiles = prioritized(facts.files)
         let files = orderedFiles.map {
             File(path: String($0.path.suffix(pathCharacterLimit)), status: $0.status,
-                 additions: $0.additions, deletions: $0.deletions)
+                 additions: $0.isBinary ? nil : $0.additions, deletions: $0.isBinary ? nil : $0.deletions,
+                 binary: $0.isBinary ? true : nil)
         }
         var payload = Payload(
             branch: prefix(facts.branch, utf8Bytes: refByteLimit),
@@ -422,7 +441,7 @@ enum ChangeSummaryPolicy {
             "- Range: \(codeSpan("\(facts.base)...\(facts.branch)")) at `\(facts.headSHA.prefix(7))`"
                 + (facts.mergeBaseSHA.map { " (merge base `\($0.prefix(7))`)" } ?? ""),
             "- Commits: \(facts.commits.count)",
-            "- Files changed: \(facts.files.count) (+\(facts.additions) −\(facts.deletions))",
+            "- Files changed: \(facts.files.count) (\(facts.lineStatistics))",
         ]
         if let runResults = facts.runResults, runResults.isEmpty {
             lines.append("- Run results: none recorded in this worktree")

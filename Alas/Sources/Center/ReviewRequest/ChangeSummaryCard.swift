@@ -128,6 +128,6 @@ struct ChangeSummaryCard: View {
         case let results? where results.isEmpty: "no run results"
         case let results?: results.map { "\($0.scriptName) \($0.outcomeLabel)" }.joined(separator: ", ")
         }
-        return "\(facts.commits.count) commits · \(facts.files.count) files · +\(facts.additions) −\(facts.deletions) · \(runs)"
+        return "\(facts.commits.count) commits · \(facts.files.count) files · \(facts.lineStatistics) · \(runs)"
     }
 }
