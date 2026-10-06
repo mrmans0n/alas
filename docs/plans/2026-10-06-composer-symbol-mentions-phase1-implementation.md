@@ -382,12 +382,17 @@ struct SymbolExtractorTests {
             def storage_to_text(self, value):
                 return value
 
+            @staticmethod
+            def build():
+                pass
+
         def main():
             pass
         """, symbols: [
-            ("Converter", .class, nil, 0, 2),
+            ("Converter", .class, nil, 0, 6),
             ("storage_to_text", .method, "Converter", 1, 2),
-            ("main", .function, nil, 4, 5),
+            ("build", .method, "Converter", 4, 6),
+            ("main", .function, nil, 8, 9),
         ]),
         Expected(path: "server.go", source: """
         package main
@@ -683,13 +688,20 @@ enum SymbolExtractor {
     /// Nearest declaration above the name, never past the captured
     /// definition node. Swift tags capture a method's whole class as the
     /// definition, so the walk must stop at the first declaration instead.
+    /// Decorator wrappers (Python `decorated_definition`) are then included:
+    /// `@property` or a route decorator is part of the declaration.
     private static func declarationNode(from name: Node, limit: Node) -> Node {
         var current = name.parent
+        var found = limit
         while let node = current {
-            if isDeclaration(node) || node.range == limit.range { return node }
+            if isDeclaration(node) || node.range == limit.range {
+                found = node
+                break
+            }
             current = node.parent
         }
-        return limit
+        while let parent = found.parent, parent.nodeType == "decorated_definition" { found = parent }
+        return found
     }
 
     private static func containerName(of declaration: Node, text: NSString) -> String? {
