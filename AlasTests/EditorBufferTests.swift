@@ -990,12 +990,13 @@ struct EditorBufferTests {
         let oldURL = try writeFile(root, "a.swift", "let value = 1\n")
         let newURL = root.appendingPathComponent("nested/b.swift")
         let store = EditorBufferStore(rootOverride: tempWorktree())
-        let transport = FakeTransport()
-        transport.onSend = { sent in
-            if sent.contains(#""method":"initialize""#) {
-                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
-            }
+        // A real spawn gets its own process; the rename closes the old document
+        // and opens the new one while the first server is still shutting down.
+        final class Spawns {
+            var transports: [FakeTransport] = []
+            var sent: [String] { transports.flatMap(\.sent) }
         }
+        let spawns = Spawns()
         let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: "swift",
@@ -1007,7 +1008,14 @@ struct EditorBufferTests {
                 enabled: true
             )
         ]), makeClient: { _, _, _, language, rootURI, _ in
-            LSPClient(transport: transport, language: language, rootURI: rootURI)
+            let transport = FakeTransport()
+            transport.onSend = { sent in
+                if sent.contains(#""method":"initialize""#) {
+                    transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+                }
+            }
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
         })
         let buffer = EditorBuffer(
             worktreeRoot: root,
@@ -1018,7 +1026,7 @@ struct EditorBufferTests {
             lsp: lsp
         )
         await buffer.awaitLoadForTesting()
-        for _ in 0..<20 where !transport.sent.contains(where: { $0.contains(#""method":"textDocument/didOpen""#) }) {
+        for _ in 0..<20 where !spawns.sent.contains(where: { $0.contains(#""method":"textDocument/didOpen""#) }) {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         buffer.storage.replaceCharacters(in: NSRange(location: 4, length: 5), with: "edited")
@@ -1026,17 +1034,17 @@ struct EditorBufferTests {
         try FileManager.default.moveItem(at: oldURL, to: newURL)
 
         buffer.finishMoveLookupForTest(movedRelativePath: "nested/b.swift", missingRelativePath: "a.swift")
-        for _ in 0..<20 where transport.sent.filter({ $0.contains(#""method":"textDocument/didOpen""#) }).count < 2 {
+        for _ in 0..<20 where spawns.sent.filter({ $0.contains(#""method":"textDocument/didOpen""#) }).count < 2 {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
 
-        let didOpen = transport.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        let didOpen = spawns.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
         #expect(didOpen.count == 2)
         #expect(didOpen.last?.contains("nested/b.swift") == true)
         #expect(didOpen.last?.contains(#""text":"let edited = 1\n""#) == true)
-        #expect(transport.sent.filter { $0.contains(#""method":"textDocument/didClose""#) }.count == 1)
+        #expect(spawns.sent.filter { $0.contains(#""method":"textDocument/didClose""#) }.count == 1)
         buffer.close(persistDirtySnapshot: false)
-        transport.finish()
+        spawns.transports.forEach { $0.finish() }
     }
 
     @Test func externalRenameFollowsHiddenFiles() async throws {

@@ -54,7 +54,7 @@ struct WorkspaceLSPManagerStatusTests {
         LSPClient(transport: Self.replyingTransport(), language: language, rootURI: rootURI)
     }
 
-    private static func replyingTransport() -> FakeTransport {
+    private static func replyingTransport(repliesToShutdown: Bool = true) -> FakeTransport {
         let transport = FakeTransport()
         transport.onSend = { sent in
             guard let id = requestId(in: sent) else { return }
@@ -62,7 +62,7 @@ struct WorkspaceLSPManagerStatusTests {
                 transport.deliverFrame(
                     #"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{"textDocumentSync":1}}}"#
                 )
-            } else if sent.contains(#""method":"shutdown""#) {
+            } else if repliesToShutdown, sent.contains(#""method":"shutdown""#) {
                 transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
             }
         }
@@ -821,6 +821,131 @@ struct WorkspaceLSPManagerStatusTests {
         #expect(language == "swift")
         #expect(reason == .disabled)
     }
+
+    /// Builds a manager whose second spawn runs `spawns.onRespawn`: at that
+    /// moment the previous holder is gone and the replacement is not inserted yet.
+    private func respawnObservingManager(spawns: SpawnLog, gate: GraceGate) -> WorkspaceLSPManager {
+        manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                let transport = Self.replyingTransport()
+                spawns.transports.append(transport)
+                if spawns.transports.count == 2 { spawns.onRespawn?() }
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+    }
+
+    @Test func leaseReleasedWhileRestartRespawnsDoesNotLeakTheServer() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let first) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift"),
+              case .serving(let second) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        else {
+            Issue.record("expected two leases")
+            return
+        }
+        try await eventually("ready") { second.status.phase == .ready }
+        spawns.onRespawn = { first.release() }
+
+        await mgr.restart(status: first.status)
+
+        try #require(spawns.transports.count == 2)
+        try await eventually("ready after restart") { second.status.phase == .ready }
+        #expect(gate.requested.isEmpty)
+        second.release()
+        try await eventually("grace after last release") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("grace shutdown") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func lastLeaseReleasedWhileRestartRespawnsStillGetsGraceShutdown() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+        spawns.onRespawn = { lease.release() }
+
+        await mgr.restart(status: lease.status)
+
+        try #require(spawns.transports.count == 2)
+        try await eventually("grace for the replacement") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("grace shutdown") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func leaseReleasedWhileDeadServerIsDiscardedDoesNotKeepReplacementAlive() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = respawnObservingManager(spawns: spawns, gate: gate)
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try await eventually("ready") { lease.status.phase == .ready }
+        spawns.onRespawn = { lease.release() }
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = lease.status.phase { true } else { false } }
+
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        try #require(spawns.transports.count == 2)
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+
+        #expect(spawns.transports[1].terminateCount == 1)
+        #expect(gate.requested.isEmpty)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func retainDuringFinalCloseShutdownGetsAFreshServer() async throws {
+        let spawns = SpawnLog()
+        let gate = GraceGate()
+        let mgr = manager(
+            makeClient: { _, _, _, language, rootURI, _ in
+                // The first server never answers `shutdown`, so the close below suspends mid-teardown.
+                let transport = Self.replyingTransport(repliesToShutdown: !spawns.transports.isEmpty)
+                spawns.transports.append(transport)
+                return LSPClient(transport: transport, language: language, rootURI: rootURI)
+            },
+            sleep: { await gate.sleep($0) }
+        )
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let stuck = spawns.transports[0]
+        let closing = Task { await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift") }
+        try await eventually("shutdown requested") { stuck.sent.contains { $0.contains(#""method":"shutdown""#) } }
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+        try #require(spawns.transports.count == 2)
+        try await eventually("fresh server ready") { lease.status.phase == .ready }
+
+        let shutdownRequest = try #require(stuck.sent.first { $0.contains(#""method":"shutdown""#) })
+        let shutdownID = try #require(Self.requestId(in: shutdownRequest))
+        stuck.deliverFrame(#"{"jsonrpc":"2.0","id":\#(shutdownID),"result":null}"#)
+        await closing.value
+        #expect(stuck.terminateCount == 1)
+        #expect(spawns.transports[1].terminateCount == 0)
+
+        lease.release()
+        try await eventually("grace for the fresh server") { gate.requested == [WorkspaceLSPManager.idleGrace] }
+        gate.fire()
+        try await eventually("fresh server stopped") { spawns.transports[1].terminateCount == 1 }
+        spawns.transports.forEach { $0.finish() }
+    }
+}
+
+@MainActor
+private final class SpawnLog {
+    var transports: [FakeTransport] = []
+    var onRespawn: (@MainActor () -> Void)?
 }
 
 /// Stands in for `Task.sleep` in the idle-grace timer: records requested

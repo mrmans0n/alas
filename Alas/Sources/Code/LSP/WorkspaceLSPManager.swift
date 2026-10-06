@@ -93,8 +93,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // triggered the restart.
         var languagesByURI: [String: String]
         var lifeState: HolderLifeState
-        /// Panes keeping this server warm without an open document (`LSPServerLease`).
-        var leaseCount: Int
     }
 
     private enum DocumentOwnership {
@@ -125,6 +123,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// Bumped on every registry replacement so lease owners rebuild.
     private(set) var registryGeneration = 0
     @ObservationIgnored private var graceTasks: [Key: Task<Void, Never>] = [:]
+    /// Live `LSPServerLease` IDs per server key, never holding an empty set.
+    /// Kept apart from `holders` so a release that lands while the holder is
+    /// being replaced (restart, dead-client respawn) is never lost, and so
+    /// leases stay attached to whichever holder currently serves the key.
+    @ObservationIgnored private var leaseIDsByKey: [Key: Set<UUID>] = [:]
     private let sleep: @Sendable (Duration) async throws -> Void
 
     /// Bumping counter that lets `@Observable` consumers (the status badge)
@@ -291,9 +294,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // the holder). If our spawned client is no longer the live
             // one, just walk away. If it is and the whole holder is
             // refless, shut it down once.
-            if let cur = holders[key], cur.client === client, isUnreferenced(cur) {
-                await client.shutdown()
-                removeHolder(key)
+            if let cur = holders[key], cur.client === client, isUnreferenced(cur, key: key) {
+                await detachAndShutdown(key, client: client)
             }
             return nil
         }
@@ -350,6 +352,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     private enum HolderClaim {
         case document(uri: String, text: String, ownership: DocumentOwnership)
+        /// No document: only ensures a live holder exists. The lease itself is
+        /// recorded by id in `leaseIDsByKey`.
         case lease
     }
 
@@ -383,19 +387,18 @@ final class WorkspaceLSPManager: DocumentFormatter {
         claim: HolderClaim
     ) async -> ClaimResult {
         // A dead client would silently drop hover/diagnostics until every tab
-        // closed. Drop it (identity-checked across the await) and respawn; its
-        // leases move to the replacement. The status object is kept.
-        var carriedLeases = 0
+        // closed. Drop it (identity-checked across the await) and respawn. The
+        // status object is kept, and so are leases: they are tracked by id per
+        // key, not on the holder.
         if let existing = holders[key] {
             let dead = await existing.client.state == .dead
             if dead, let cur = holders[key], cur.client === existing.client {
-                carriedLeases = cur.leaseCount
                 holders.removeValue(forKey: key)
                 bumpStateTick()
             }
         }
         if let existing = holders[key] {
-            let replace = applyClaim(claim, key: key, to: existing, carriedLeases: carriedLeases)
+            let replace = applyClaim(claim, key: key, to: existing)
             return .claimed(client: existing.client, ready: existing.ready, isFirstOpener: false, shouldReplaceTemporaryText: replace)
         }
         if case .document(let uri, _, let ownership) = claim {
@@ -430,7 +433,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             return .unavailable(unavailable)
         }
         if let existing = holders[key] {
-            let replace = applyClaim(claim, key: key, to: existing, carriedLeases: carriedLeases)
+            let replace = applyClaim(claim, key: key, to: existing)
             return .claimed(client: existing.client, ready: existing.ready, isFirstOpener: false, shouldReplaceTemporaryText: replace)
         }
         let spawn = Self.resolveSpawn(
@@ -465,42 +468,35 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 return false
             }
         }
-        holders[key] = Self.newHolder(client: newClient, ready: task, claim: claim, carriedLeases: carriedLeases)
+        holders[key] = Self.newHolder(client: newClient, ready: task, claim: claim)
         bumpStateTick()
         return .claimed(client: newClient, ready: task, isFirstOpener: true, shouldReplaceTemporaryText: false)
     }
 
     /// Adds `claim` to `existing` and cancels a pending idle shutdown. Returns
     /// whether an editor open must replace temporary diff text already sent.
-    private func applyClaim(_ claim: HolderClaim, key: Key, to existing: Holder, carriedLeases: Int) -> Bool {
+    private func applyClaim(_ claim: HolderClaim, key: Key, to existing: Holder) -> Bool {
         cancelGraceShutdown(key)
+        guard case .document(let uri, let text, let ownership) = claim else { return false }
         var shouldReplaceTemporaryText = false
-        var holder = existing
-        switch claim {
-        case .document(let uri, let text, let ownership):
-            var refs = existing.refsByURI
-            refs[uri, default: 0] += 1
-            var temporaryRefs = existing.temporaryRefsByURI
-            if ownership == .temporary {
-                temporaryRefs[uri, default: 0] += 1
-            } else if existing.openedURIs.contains(uri),
-                      normalRefCount(forURI: uri, in: existing) == 0,
-                      (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
-                shouldReplaceTemporaryText = true
-            }
-            // Record this open's text as the latest pending: if `didOpen` hasn't
-            // been sent yet, whichever awaiter wakes first reads this value
-            // rather than text captured by an earlier call.
-            holder = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs, temporaryRefs: temporaryRefs, ownership: ownership)
-        case .lease:
-            holder.leaseCount += 1
+        var refs = existing.refsByURI
+        refs[uri, default: 0] += 1
+        var temporaryRefs = existing.temporaryRefsByURI
+        if ownership == .temporary {
+            temporaryRefs[uri, default: 0] += 1
+        } else if existing.openedURIs.contains(uri),
+                  normalRefCount(forURI: uri, in: existing) == 0,
+                  (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
+            shouldReplaceTemporaryText = true
         }
-        holder.leaseCount += carriedLeases
-        holders[key] = holder
+        // Record this open's text as the latest pending: if `didOpen` hasn't
+        // been sent yet, whichever awaiter wakes first reads this value
+        // rather than text captured by an earlier call.
+        holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs, temporaryRefs: temporaryRefs, ownership: ownership)
         return shouldReplaceTemporaryText
     }
 
-    private static func newHolder(client: LSPClient, ready: Task<Bool, Never>, claim: HolderClaim, carriedLeases: Int) -> Holder {
+    private static func newHolder(client: LSPClient, ready: Task<Bool, Never>, claim: HolderClaim) -> Holder {
         switch claim {
         case .document(let uri, let text, let ownership):
             return Holder(
@@ -515,8 +511,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 pendingOpenText: [uri: text],
                 texts: [:],
                 languagesByURI: [:],
-                lifeState: .starting,
-                leaseCount: carriedLeases
+                lifeState: .starting
             )
         case .lease:
             return Holder(
@@ -531,14 +526,40 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 pendingOpenText: [:],
                 texts: [:],
                 languagesByURI: [:],
-                lifeState: .starting,
-                leaseCount: carriedLeases + 1
+                lifeState: .starting
             )
         }
     }
 
-    private func isUnreferenced(_ holder: Holder) -> Bool {
-        holder.refsByURI.isEmpty && holder.leaseCount == 0
+    /// No open document and no live lease keep this holder's server wanted.
+    private func isUnreferenced(_ holder: Holder, key: Key) -> Bool {
+        holder.refsByURI.isEmpty && leaseIDsByKey[key] == nil
+    }
+
+    /// Removes the holder in the same synchronous step that found it
+    /// unreferenced, then stops its server. A document or lease claimed while
+    /// the shutdown is suspended spawns a fresh server instead of attaching to
+    /// this dying one.
+    private func detachAndShutdown(_ key: Key, client: LSPClient) async {
+        removeHolder(key)
+        await client.shutdown()
+    }
+
+    /// A freshly spawned server nobody is waiting on must not outlive a failed `initialize`.
+    private func reapOnInitializeFailure(_ client: LSPClient, ready: Task<Bool, Never>) {
+        Task { if !(await ready.value) { await client.shutdown() } }
+    }
+
+    /// Retires `holder` after it may have lost its last lease: a dead server
+    /// goes at once, a live one waits out the idle grace.
+    private func settleIfUnreferenced(_ holder: Holder, key: Key) {
+        guard isUnreferenced(holder, key: key) else { return }
+        if holder.lifeState == .dead {
+            removeHolder(key)
+            Task { await holder.client.shutdown() }
+        } else {
+            scheduleGraceShutdown(key: key, client: holder.client)
+        }
     }
 
     private func cancelGraceShutdown(_ key: Key) {
@@ -636,7 +657,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // restart. Once the last user-intent ref is released, sweep the
         // dead entry — otherwise repeated open-then-close attempts on a
         // misconfigured server would accumulate stale holders.
-        if holder.lifeState == .dead, isUnreferenced(holder) {
+        if holder.lifeState == .dead, isUnreferenced(holder, key: key) {
             removeHolder(key)
             return
         }
@@ -670,9 +691,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
 
         // Shut down the server if no files remain on it.
-        if let c = holders[key], isUnreferenced(c) {
-            await c.client.shutdown()
-            removeHolder(key)
+        if let c = holders[key], isUnreferenced(c, key: key) {
+            await detachAndShutdown(key, client: c.client)
         }
     }
 
@@ -988,16 +1008,20 @@ final class WorkspaceLSPManager: DocumentFormatter {
         }
         let target = await resolveKey(entry: entry, worktreeRoot: worktreeRoot, fileURL: fileURL)
         let key = target.key
+        // Record the lease before claiming so no teardown can see the holder
+        // as unreferenced while the claim is suspended. Nothing can release
+        // this id until the lease object exists below.
+        let id = UUID()
+        leaseIDsByKey[key, default: []].insert(id)
         switch await claimHolder(key: key, entry: entry, lspRoot: target.lspRoot, remoteHost: target.remoteHost, languageId: languageId, claim: .lease) {
         case .claimed(let client, let ready, let isFirstOpener, _):
-            if isFirstOpener {
-                Task { if !(await ready.value) { await client.shutdown() } }
-            }
+            if isFirstOpener { reapOnInitializeFailure(client, ready: ready) }
             guard let status = statuses[key] else {
                 preconditionFailure("a claimed holder always has a status")
             }
-            return .serving(LSPServerLease(status: status) { [weak self] in self?.releaseLease(key: key) })
+            return .serving(LSPServerLease(status: status) { [weak self] in self?.releaseLease(key: key, id: id) })
         case .unavailable(let reason):
+            releaseLease(key: key, id: id)
             return .unavailable(language: entry.language, reason: reason)
         case .abandoned:
             preconditionFailure("lease claims are never abandoned")
@@ -1012,17 +1036,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         await restartHolder(key: key, existing: existing, language: existing.client.language)
     }
 
-    private func releaseLease(key: Key) {
-        guard var holder = holders[key], holder.leaseCount > 0 else { return }
-        holder.leaseCount -= 1
-        holders[key] = holder
-        guard isUnreferenced(holder) else { return }
-        if holder.lifeState == .dead {
-            removeHolder(key)
-            Task { await holder.client.shutdown() }
-            return
-        }
-        scheduleGraceShutdown(key: key, client: holder.client)
+    private func releaseLease(key: Key, id: UUID) {
+        // Forget the lease before looking for its holder: the holder is absent
+        // mid-restart and mid-respawn, and the release must still count.
+        guard leaseIDsByKey[key]?.remove(id) != nil else { return }
+        if leaseIDsByKey[key]?.isEmpty == true { leaseIDsByKey.removeValue(forKey: key) }
+        guard let holder = holders[key] else { return }
+        settleIfUnreferenced(holder, key: key)
     }
 
     /// Keeps an unreferenced server alive for `idleGrace` so switching tabs
@@ -1033,11 +1053,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
         graceTasks[key] = Task { [weak self] in
             do { try await sleep(Self.idleGrace) } catch { return }
             guard let self, !Task.isCancelled,
-                  let cur = self.holders[key], cur.client === client, self.isUnreferenced(cur)
+                  let cur = self.holders[key], cur.client === client, self.isUnreferenced(cur, key: key)
             else { return }
             self.graceTasks[key] = nil
-            self.removeHolder(key)
-            await client.shutdown()
+            await self.detachAndShutdown(key, client: client)
         }
     }
 
@@ -1106,7 +1125,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // Per-URI languageId is honored on shared servers
         // (typescript-language-server serves typescript / typescriptreact /
         // javascript / javascriptreact under one binary).
-        let leaseCount: Int
         let refsToReopen: [String: Int]
         let temporaryRefsToReopen: [String: Int]
         let temporaryTextsToReopen: [String: String]
@@ -1118,7 +1136,6 @@ final class WorkspaceLSPManager: DocumentFormatter {
             temporaryTextsToReopen = cur.temporaryTextsByURI
             textsByURI = cur.texts.merging(cur.pendingOpenText) { current, _ in current }
             languagesByURI = cur.languagesByURI
-            leaseCount = cur.leaseCount
             holders.removeValue(forKey: key)
             bumpStateTick()
             statuses[key]?.reset()
@@ -1145,13 +1162,16 @@ final class WorkspaceLSPManager: DocumentFormatter {
             }
         }
 
-        if leaseCount > 0, let entry = registry.entry(forLanguage: language) {
-            for _ in 0 ..< leaseCount {
-                let result = await claimHolder(key: key, entry: entry, lspRoot: reopenRoot, remoteHost: key.host, languageId: language, claim: .lease)
-                if case .claimed(let client, let ready, true, _) = result {
-                    Task { if !(await ready.value) { await client.shutdown() } }
-                }
+        // Leases outlive the holder they were taken against. Reopened documents
+        // respawn a holder when there are any; a lease-only server needs its
+        // own. Only claim when none exists: `claimHolder` would discard a dead
+        // holder, and with it the documents just reopened onto it.
+        if holders[key] == nil, leaseIDsByKey[key] != nil, let entry = registry.entry(forLanguage: language) {
+            if case .claimed(let client, let ready, true, _) = await claimHolder(key: key, entry: entry, lspRoot: reopenRoot, remoteHost: key.host, languageId: language, claim: .lease) {
+                reapOnInitializeFailure(client, ready: ready)
             }
+            // The last lease may have been released while the replacement spawned.
+            if let holder = holders[key] { settleIfUnreferenced(holder, key: key) }
         }
 
         if holders[key] == nil {
@@ -1273,8 +1293,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
             pendingOpenText: pending,
             texts: holder.texts,
             languagesByURI: holder.languagesByURI,
-            lifeState: holder.lifeState,
-            leaseCount: holder.leaseCount
+            lifeState: holder.lifeState
         )
     }
 
@@ -1494,9 +1513,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // skip teardown when in-worktree refs are still present. If the
         // external doc was the last reference, the holder must be cleaned up
         // to avoid leaking the LSP process until app exit.
-        if let c = holders[key], isUnreferenced(c) {
-            await c.client.shutdown()
-            removeHolder(key)
+        if let c = holders[key], isUnreferenced(c, key: key) {
+            await detachAndShutdown(key, client: c.client)
         }
     }
 
