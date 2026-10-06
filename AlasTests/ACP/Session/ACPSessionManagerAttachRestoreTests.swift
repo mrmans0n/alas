@@ -4576,6 +4576,58 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(params.value == .string("high"))
     }
 
+    @Test("fresh attach still waits for an unadvertised effort after an unrelated early refresh", .timeLimit(.minutes(1)))
+    func freshAttachWaitsForEffortAfterAnUnrelatedEarlyRefresh() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil, agentId: "claude", currentModel: nil))
+        let medium = ACPConfigOptionItem(id: "medium", name: "Medium")
+        let high = ACPConfigOptionItem(id: "high", name: "High")
+        let provider = ACPConfigOption(id: "provider", name: "Provider", currentValue: "a", options: [.init(id: "a", name: "A")])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ],
+                availableModes: [],
+                currentModel: "sonnet",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        // An unrelated option shows up before the switch is acknowledged.
+        client.script(method: "session/set_model") { _ in
+            client.emit(.init(sessionId: "remote-new", update: .sessionConfigOptionsUpdate([provider])))
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client, delegatedReasoningRefreshTimeout: .seconds(30))
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingModel[session.id] = "opus"
+        manager.queueInitialConfigOption(for: session.id, configId: "effort", value: .string("high"))
+        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+
+        try await waitUntil { session.currentModel == "opus" }
+        client.emit(.init(
+            sessionId: "remote-new",
+            update: .sessionConfigOptionsUpdate([
+                provider,
+                ACPConfigOption(id: "effort", name: "Thinking", currentValue: "medium", options: [medium, high]),
+            ])
+        ))
+        await attachTask.value
+
+        let params = try #require(client.sent.last { $0.method == "session/set_config_option" }?.params
+            as? ACPSessionSetConfigOptionParams)
+        #expect(params.configId == "effort")
+        #expect(params.value == .string("high"))
+    }
+
     @Test("losing the writer lease discards the queued initial config options")
     func losingTheWriterLeaseDiscardsQueuedInitialConfigOptions() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

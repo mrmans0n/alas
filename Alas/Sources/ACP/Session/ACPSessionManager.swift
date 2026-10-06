@@ -7554,9 +7554,8 @@ extension ACPSessionManager {
                 } ?? false
             }
             let refreshDeadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
-            var waitOnceAfterSwitch = modelSwitched
-            while !optionsAlreadyRefreshed,
-                  pendingConfigOptionValues[sessionId]?.isEmpty == false,
+            var waitOnceAfterSwitch = modelSwitched && !optionsAlreadyRefreshed
+            while pendingConfigOptionValues[sessionId]?.isEmpty == false,
                   hasUnacceptedPendingValue() || waitOnceAfterSwitch {
                 let remaining = ContinuousClock.now.duration(to: refreshDeadline)
                 guard remaining > .zero else { break }
