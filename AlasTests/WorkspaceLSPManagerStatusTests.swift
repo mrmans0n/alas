@@ -1031,6 +1031,63 @@ struct WorkspaceLSPManagerStatusTests {
         #expect(spawns.transports[0].terminateCount == 1)
         spawns.transports.forEach { $0.finish() }
     }
+
+    @Test func leaseOnCrashedHolderWithOpenDocumentsKeepsItAndRestartReopensThem() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "let x = 1\n")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = status.phase { true } else { false } }
+
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        #expect(spawns.transports.count == 1)
+        #expect(lease.status === status)
+        if case .crashed = lease.status.phase {} else { Issue.record("expected the lease to show the crash, got \(lease.status.phase)") }
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+
+        await mgr.restart(status: lease.status)
+
+        #expect(spawns.transports.count == 2)
+        try await eventually("ready after restart") { status.phase == .ready }
+        let reopened = spawns.transports[1].sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        #expect(reopened.count == 1)
+        #expect(reopened.first?.contains("let x = 1") == true)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .ready)
+        spawns.transports.forEach { $0.finish() }
+    }
+
+    @Test func releasingLeaseOnCrashedHolderKeepsItWhileDocumentsAreOpen() async throws {
+        let spawns = SpawnLog()
+        let mgr = manager(makeClient: { _, _, _, language, rootURI, _ in
+            let transport = Self.replyingTransport()
+            spawns.transports.append(transport)
+            return LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        let status = try #require(mgr.serverStatus(forFile: fileURL, worktreeRoot: root))
+        spawns.transports[0].deliverExit(1)
+        try await eventually("crashed") { if case .crashed = status.phase { true } else { false } }
+        guard case .serving(let lease) = await mgr.retainServer(worktreeRoot: root, fileURL: fileURL, languageId: "swift") else {
+            Issue.record("expected a lease")
+            return
+        }
+
+        lease.release()
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .dead)
+
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+        #expect(spawns.transports.count == 1)
+    }
 }
 
 @MainActor

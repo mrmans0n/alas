@@ -410,9 +410,15 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // closed. Drop it (identity-checked across the await) and respawn. The
         // status object is kept, and so are leases: they are tracked by id per
         // key, not on the holder.
+        //
+        // A lease must not do that to a dead holder that still has open
+        // documents: the respawn would forget them, and no editor would reopen
+        // on the new server. The lease attaches to the dead holder, whose
+        // status keeps showing the crash, and the explicit restart reopens the
+        // documents.
         if let existing = holders[key] {
             let dead = await existing.client.state == .dead
-            if dead, let cur = holders[key], cur.client === existing.client {
+            if dead, let cur = holders[key], cur.client === existing.client, !Self.keepsDeadHolder(cur, for: claim) {
                 holders.removeValue(forKey: key)
                 bumpStateTick()
             }
@@ -491,6 +497,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
         holders[key] = Self.newHolder(client: newClient, ready: task, claim: claim)
         bumpStateTick()
         return .claimed(client: newClient, ready: task, isFirstOpener: true, shouldReplaceTemporaryText: false)
+    }
+
+    private static func keepsDeadHolder(_ holder: Holder, for claim: HolderClaim) -> Bool {
+        guard case .lease = claim else { return false }
+        return !holder.refsByURI.isEmpty
     }
 
     /// Adds `claim` to `existing` and cancels a pending idle shutdown. Returns
