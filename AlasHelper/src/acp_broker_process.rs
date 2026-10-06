@@ -1753,12 +1753,32 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
     let params: AcpAttachParams = decode(params)?;
     let state = lock_runtime(runtime);
     ensure_generation(&state, params.generation)?;
+    // An ack may prune the journal before the client records its new cursor.
+    // A stale concurrent attach must still recognize an exhausted replay.
+    let replay_after = params
+        .replay_after_cursor
+        .unwrap_or(params.acknowledged_cursor)
+        .max(state.broker.acknowledged_cursor());
     let events = state
         .broker
-        .replay_after(params.acknowledged_cursor)
+        .replay_batch_after(replay_after, params.max_replay_bytes)
         .map_err(domain_error)?;
+    let replay_cursor = events
+        .last()
+        .map(|event| event.cursor)
+        .unwrap_or(replay_after);
+    let has_more_events = replay_cursor < state.broker.journal_tail();
+    // Pending payloads can be unbounded. Clone and send the full snapshot
+    // only on the final page when the client opts into snapshot-free pages.
+    let snapshot = if params.snapshot_on_last_page_only == Some(true) && has_more_events {
+        None
+    } else {
+        Some(state.broker.snapshot())
+    };
     Ok(json!({
-        "snapshot": state.broker.snapshot(),
+        "hasMoreEvents": has_more_events,
+        "snapshot": snapshot,
+        "pendingRequestIds": state.broker.pending_request_ids(),
         "events": events
     }))
 }
@@ -2679,6 +2699,108 @@ fn broker_error(code: i64, message: impl Into<String>) -> AcpBrokerProcessError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attach_pages_progress_without_acknowledging_or_dropping_large_events() {
+        let mut state = steering_runtime_state();
+        for text in ["x".repeat(64), "y".repeat(4096), "z".repeat(64)] {
+            state
+                .broker
+                .add_adapter_notification("test/update", json!({"text": text}));
+        }
+        state
+            .broker
+            .add_pending_request(
+                "write",
+                json!(1),
+                PendingClientRequestKind::File,
+                json!({"method": "fs/write_text_file", "params": {"content": "w".repeat(65536)}}),
+            )
+            .unwrap();
+        let mut child = Command::new("/usr/bin/true")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        child.wait().unwrap();
+        let runtime = Runtime {
+            state: Arc::new((Mutex::new(state), Condvar::new())),
+            adapter_stdin: Arc::new(Mutex::new(stdin)),
+        };
+        let mut cursor = 0;
+        let mut seen = Vec::new();
+        while cursor < 4 {
+            let attached = broker_attach(
+                &runtime,
+                Some(json!({
+                    "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0,
+                    "replayAfterCursor": cursor, "maxReplayBytes": 512, "snapshotOnLastPageOnly": true
+                })),
+            )
+            .unwrap();
+            let events = attached["events"].as_array().unwrap();
+            assert_eq!(
+                events.len(),
+                1,
+                "one event fits each page, including the oversized event"
+            );
+            cursor = events.last().unwrap()["cursor"].as_u64().unwrap();
+            seen.push(cursor);
+            assert_eq!(attached["pendingRequestIds"], json!(["write"]));
+            if cursor < 4 {
+                assert!(
+                    attached["snapshot"].is_null(),
+                    "intermediate pages must not repeat large pending payloads"
+                );
+            } else {
+                assert_eq!(attached["snapshot"]["acknowledgedCursor"], 0);
+                assert_eq!(
+                    attached["snapshot"]["pendingRequests"][0]["payload"]["params"]["content"],
+                    "w".repeat(65536)
+                );
+            }
+            assert_eq!(attached["hasMoreEvents"], cursor < 4);
+        }
+        assert_eq!(seen, vec![1, 2, 3, 4]);
+        assert_eq!(lock_runtime(&runtime).broker.replay_after_ack().len(), 4);
+        let legacy = broker_attach(
+            &runtime,
+            Some(json!({
+                "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0
+            })),
+        )
+        .unwrap();
+        assert_eq!(legacy["events"].as_array().unwrap().len(), 4);
+        assert!(legacy["snapshot"].is_object());
+    }
+
+    #[test]
+    fn stale_attach_cursor_returns_snapshot_after_journal_pruning() {
+        let mut state = steering_runtime_state();
+        let tail = state.broker.add_adapter_notification("test/update", json!({}));
+        state.broker.ack(tail).unwrap();
+        let mut child = Command::new("/usr/bin/true")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        child.wait().unwrap();
+        let runtime = Runtime {
+            state: Arc::new((Mutex::new(state), Condvar::new())),
+            adapter_stdin: Arc::new(Mutex::new(stdin)),
+        };
+        let attached = broker_attach(
+            &runtime,
+            Some(json!({
+                "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0,
+                "replayAfterCursor": 0, "maxReplayBytes": 512, "snapshotOnLastPageOnly": true
+            })),
+        )
+        .unwrap();
+        assert_eq!(attached["events"], json!([]));
+        assert_eq!(attached["hasMoreEvents"], false);
+        assert_eq!(attached["snapshot"]["acknowledgedCursor"], 1);
+    }
 
     #[test]
     fn untracked_started_turn_holds_queue_for_explicit_recovery() {

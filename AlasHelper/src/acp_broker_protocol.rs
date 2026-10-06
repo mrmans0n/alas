@@ -29,6 +29,12 @@ pub struct AcpAttachParams {
     pub broker_id: BrokerId,
     pub generation: BrokerGeneration,
     pub acknowledged_cursor: EventCursor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_after_cursor: Option<EventCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_replay_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_on_last_page_only: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

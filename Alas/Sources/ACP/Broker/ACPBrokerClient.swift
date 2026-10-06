@@ -110,6 +110,9 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     private let stateLock = NSLock()
     private var generation: ACPBrokerGeneration?
     private var acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
+    // Delivery can advance while consumers retain earlier durable events.
+    // Only acknowledgedCursor is persisted or sent to acp/ack.
+    private var replayCursor = ACPBrokerEventCursor(rawValue: 0)
     private var initializeResult: ACPBrokerJSONValue?
     private var remoteSessionResult: ACPBrokerJSONValue?
     private var nextOperationIndex = 0
@@ -655,39 +658,51 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     @discardableResult
     private func attachAndReplay() async throws -> ACPBrokerSnapshot {
         let generation = try currentGeneration()
-        let cursor = currentAcknowledgedCursor()
-        guard !isConnectionTerminated() else { throw CancellationError() }
-        let attached = try await service.attach(ACPBrokerAttachParams(
-            brokerId: brokerId,
-            generation: generation,
-            acknowledgedCursor: cursor
-        ))
-        // The connection may have ended (`adapter/exit`, `shutdown()`,
-        // `detach()`) while this specific `service.attach()` call was in
-        // flight on some OTHER task — the helper RPC isn't cancellation-
-        // aware, so e.g. a foreground `send()` that just observed the exit
-        // (and cancelled the background poller) can't stop the poller's own
-        // already-in-flight call from resolving with a stale, pre-exit
-        // snapshot. Applying it now would fire `onTurnStateChanged` /
-        // `onDurableStateChanged` — plain closures, not gated by
-        // `finishStreams()`'s stream `finish()` calls — with stale data for
-        // a connection every caller already believes is torn down
-        // (`ACPSessionManager`'s handler mutates the session and can flip a
-        // disconnected session's streaming state back to live). Once
-        // terminated, no attach response may be applied, no matter which
-        // task's in-flight call it arrives from.
-        guard !isConnectionTerminated() else {
-            return attached.snapshot
+        while true {
+            let cursors = stateLock.withLock {
+                (acknowledgedCursor, max(acknowledgedCursor, replayCursor))
+            }
+            guard !isConnectionTerminated() else { throw CancellationError() }
+            let attached = try await service.attach(ACPBrokerAttachParams(
+                brokerId: brokerId,
+                generation: generation,
+                acknowledgedCursor: cursors.0,
+                replayAfterCursor: cursors.1,
+                maxReplayBytes: 1024 * 1024,
+                snapshotOnLastPageOnly: true
+            ))
+            // An in-flight helper call can finish after shutdown. Never let
+            // its snapshot or replay revive a terminated connection.
+            if isConnectionTerminated() {
+                if let snapshot = attached.snapshot { return snapshot }
+                throw CancellationError()
+            }
+            if let snapshot = attached.snapshot, !setSnapshot(snapshot) { return snapshot }
+            // Each page supplies lightweight IDs, so resolved requests can
+            // be filtered without repeating the full pending payloads.
+            let pendingRequestIds = attached.pendingRequestIds.map(Set.init)
+                ?? attached.snapshot.map { Set($0.pendingRequests.map(\.requestId)) }
+            for event in attached.events {
+                dispatch(event, pendingRequestIds: pendingRequestIds)
+            }
+            // Publish the delivery cursor only after the entire page has
+            // been dispatched, so overlapping replay calls cannot skip it.
+            if let last = attached.events.last?.cursor {
+                stateLock.withLock { replayCursor = max(replayCursor, last) }
+            }
+            if attached.hasMoreEvents == true,
+               let last = attached.events.last?.cursor, last > cursors.1 {
+                await Task.yield()
+                continue
+            }
+            guard let snapshot = attached.snapshot else {
+                throw ACPClientError.decoding("broker replay ended without a snapshot")
+            }
+            for request in snapshot.pendingRequests {
+                dispatchPendingRequest(request, cursor: snapshot.acknowledgedCursor)
+            }
+            return snapshot
         }
-        guard setSnapshot(attached.snapshot) else { return attached.snapshot }
-        let pendingRequestIds = Set(attached.snapshot.pendingRequests.map(\.requestId))
-        for event in attached.events {
-            dispatch(event, pendingRequestIds: pendingRequestIds)
-        }
-        for request in attached.snapshot.pendingRequests {
-            dispatchPendingRequest(request, cursor: attached.snapshot.acknowledgedCursor)
-        }
-        return attached.snapshot
     }
 
     private func isConnectionTerminated() -> Bool {
@@ -1322,6 +1337,7 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     private func resetAcknowledgedCursor() {
         stateLock.lock()
         acknowledgedCursor = ACPBrokerEventCursor(rawValue: 0)
+        replayCursor = ACPBrokerEventCursor(rawValue: 0)
         stateLock.unlock()
     }
 

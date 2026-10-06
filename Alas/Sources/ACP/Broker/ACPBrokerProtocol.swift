@@ -348,11 +348,16 @@ struct ACPBrokerAttachParams: Codable, Equatable, Sendable {
     let brokerId: ACPBrokerID
     let generation: ACPBrokerGeneration
     let acknowledgedCursor: ACPBrokerEventCursor
+    var replayAfterCursor: ACPBrokerEventCursor? = nil
+    var maxReplayBytes: Int? = nil
+    var snapshotOnLastPageOnly: Bool? = nil
 }
 
 struct ACPBrokerAttachResult: Codable, Equatable, Sendable {
-    let snapshot: ACPBrokerSnapshot
+    let snapshot: ACPBrokerSnapshot?
     let events: [ACPBrokerEvent]
+    var hasMoreEvents: Bool? = nil
+    var pendingRequestIds: [String]? = nil
 }
 
 struct ACPBrokerSendParams: Codable, Equatable, Sendable {
