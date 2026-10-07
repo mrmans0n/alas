@@ -414,7 +414,7 @@ struct ACPMarkdownText: View {
     /// A line that is nothing but `![alt](source)`, optionally with a
     /// `"title"` or a `<bracketed source>`. Images mid-sentence stay inline.
     private static func matchImage(_ line: String) -> (alt: String, source: String)? {
-        guard let match = line.wholeMatch(of: /!\[([^\]]*)\]\((.+)\)/) else { return nil }
+        guard let match = line.wholeMatch(of: /!\[([^\]]*)\]\((<[^>]*>[^)]*|[^)<][^)]*)\)/) else { return nil }
         var source = match.2.trimmingCharacters(in: .whitespaces)
         if source.hasSuffix("\""), let quote = source.dropLast().lastIndex(of: "\""),
            quote > source.startIndex, source[source.index(before: quote)] == " " {

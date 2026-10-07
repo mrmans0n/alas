@@ -86,9 +86,12 @@ struct ACPMarkdownBlockCacheTests {
         ])
     }
 
-    @Test("an image mid-sentence stays inline paragraph text")
-    func inlineImageStaysParagraph() {
-        #expect(ACPMarkdownText.parse("see ![a](b.png) here") == [.paragraph("see ![a](b.png) here")])
+    @Test("an image sharing its line with other content stays paragraph text", arguments: [
+        "see ![a](b.png) here",
+        "![a](a.png) ![b](b.png)",
+    ])
+    func inlineImageStaysParagraph(line: String) {
+        #expect(ACPMarkdownText.parse(line) == [.paragraph(line)])
     }
 
     @Test("blank line inside an unclosed tilde fence does NOT promote stable blocks")
