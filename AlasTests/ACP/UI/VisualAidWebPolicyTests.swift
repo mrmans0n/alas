@@ -93,3 +93,44 @@ struct VisualAidWebPolicyTests {
         #expect(lru.admit(b).isEmpty)
     }
 }
+
+extension VisualAidWebPolicyTests {
+    /// `@MainActor` on this test only: WKWebView needs the main thread.
+    @MainActor
+    @Test("WebRTC is gone from the page and from every about:blank or srcdoc child frame")
+    func webRTCIsRemovedInEveryFrame() async throws {
+        let page = VisualAidWebPage(
+            visualID: UUID(),
+            html: #"<p>probe</p><iframe id="static"></iframe><iframe id="doc" srcdoc="<p>x</p>"></iframe>"#,
+            theme: try Theme.loadBundled(id: "cool-slate"))
+        defer { page.close() }
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while page.status != .ready {
+            try #require(page.status == .loading && ContinuousClock.now < deadline, "page never became ready: \(page.status)")
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let probe = """
+        (() => {
+          const dynamic = document.createElement('iframe');
+          document.body.appendChild(dynamic);
+          const typeOf = w => w ? [typeof w.RTCPeerConnection, typeof w.webkitRTCPeerConnection].join('/') : 'no-window';
+          return {
+            main: typeOf(window),
+            static: typeOf(document.getElementById('static').contentWindow),
+            srcdoc: typeOf(document.getElementById('doc').contentWindow),
+            dynamic: typeOf(dynamic.contentWindow),
+          };
+        })()
+        """
+        let result = try await page.webView.evaluateJavaScript(probe, in: nil, contentWorld: .page)
+        let types = try #require(result as? [String: String])
+        #expect(types == [
+            "main": "undefined/undefined",
+            "static": "undefined/undefined",
+            "srcdoc": "undefined/undefined",
+            "dynamic": "undefined/undefined",
+        ])
+    }
+}

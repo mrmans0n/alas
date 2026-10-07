@@ -52,6 +52,12 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         configuration.preferences.isElementFullscreenEnabled = false
         configuration.preferences.isFraudulentWebsiteWarningEnabled = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
+        // WebKit skips user scripts in srcdoc frames, so the lockdown script alone
+        // leaves `RTCPeerConnection` in them; switch WebRTC off at the engine too.
+        let peerConnectionSetter = NSSelectorFromString("_setPeerConnectionEnabled:")
+        if configuration.preferences.responds(to: peerConnectionSetter) {
+            configuration.preferences.setValue(false, forKey: "peerConnectionEnabled")
+        }
         webView = WKWebView(frame: .zero, configuration: configuration)
         #if DEBUG
         webView.isInspectable = true
@@ -61,7 +67,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         let controller = configuration.userContentController
         controller.addUserScript(WKUserScript(
             source: VisualAidWebPolicy.pageLockdownScript,
-            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+            injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
         controller.addUserScript(WKUserScript(
             source: VisualAidWebPolicy.bridgeScript,
             injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Self.bridgeWorld))
