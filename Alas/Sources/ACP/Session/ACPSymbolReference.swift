@@ -140,7 +140,7 @@ enum ACPSymbolReference {
             let excerpt = target.includeCode ? declaration.map(Self.excerpt) : nil
             expansion.snapshots[uri] = ACPSymbolSnapshot(
                 lineRange: resolution.lineRange,
-                contentHash: declaration.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() } ?? "",
+                contentHash: declaration.map(Self.contentHash(of:)) ?? "",
                 excerpt: excerpt?.text, truncated: excerpt?.truncated ?? false, found: resolution.found)
             let reference = referenceText(for: resolution)
             guard let code = excerpt?.text else {
@@ -159,6 +159,12 @@ enum ACPSymbolReference {
             expansion.replacements[uri] = [.text("\(reference)\n\n\(fence)\(language)\n\(code)\n\(fence)")]
         }
         return expansion
+    }
+
+    /// SHA-256 (hex) of a full declaration, as stored in `ACPSymbolSnapshot.contentHash`.
+    /// Stamping a snapshot and judging live code against one both use it.
+    static func contentHash(of declaration: String) -> String {
+        SHA256.hash(data: Data(declaration.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     static func resolve(_ target: Target, source: String?) -> Resolution {

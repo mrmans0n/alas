@@ -305,6 +305,13 @@ struct WorkspaceStoreTests {
         )
     }
 
+    @Test(arguments: [WorkspaceStoreError.recoveryRequired, .checkpointRecoveryBlocksRemoval])
+    func storeErrorsSurfaceReadableMessages(error: WorkspaceStoreError) {
+        // Without a description the alert read "Alas.WorkspaceStoreError error 0."
+        #expect(error.localizedDescription.contains("error") == false)
+        #expect(WorkspaceStoreError.checkpointRecoveryBlocksRemoval != .recoveryRequired)
+    }
+
     private func removeWorkspaceFiles(near url: URL) {
         let directory = url.deletingLastPathComponent()
         let prefix = url.lastPathComponent

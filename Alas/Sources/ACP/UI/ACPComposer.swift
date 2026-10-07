@@ -75,6 +75,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
+        context.coordinator.startSymbolPresenceObservers()
         dropRouter.attach(textView)
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .URL, .png, .tiff])
@@ -214,6 +215,8 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.cancelSymbolPresenceCheck()
+            coordinator.stopSymbolPresenceObservers()
             tv.clearNextPromptPresentation()
             tv.onNextPromptStateChange(.init())
             tv.onNextPromptStateChange = { _ in }
@@ -300,6 +303,33 @@ struct ACPInputField: NSViewRepresentable {
         var promptSuggestions: [ACPPromptSuggestion] = []
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
         private var upstreamObservations: Set<AnyCancellable> = []
+        private var presenceObservers: [NSObjectProtocol] = []
+
+        /// Rechecks symbol badges when Alas becomes the active app or this
+        /// composer's window becomes key: the files may have changed meanwhile.
+        func startSymbolPresenceObservers() {
+            guard presenceObservers.isEmpty else { return }
+            let center = NotificationCenter.default
+            presenceObservers = [
+                center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { (self?.textView as? ACPNSTextView)?.recheckSymbolPresence() }
+                },
+                center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
+                    let keyWindow = (note.object as? NSWindow).map(ObjectIdentifier.init)
+                    MainActor.assumeIsolated {
+                        guard let textView = self?.textView as? ACPNSTextView,
+                              keyWindow != nil, keyWindow == textView.window.map(ObjectIdentifier.init) else { return }
+                        textView.recheckSymbolPresence()
+                    }
+                },
+            ]
+        }
+
+        func stopSymbolPresenceObservers() {
+            presenceObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            presenceObservers.removeAll()
+        }
+
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
@@ -674,6 +704,7 @@ struct ACPInputField: NSViewRepresentable {
             restoringDraft = false
             lastSyncedDraft = Self.draft(from: storage)
             lastAppliedComposerDraft = draft
+            (textView as? ACPNSTextView)?.recheckSymbolPresence()
         }
 
         /// Swaps the reference-chip store. Chips existing text once the
@@ -1163,6 +1194,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private var slashStart: Int = -1
     private var mentionPanel: ACPMentionPanel?
     private var mentionStart: Int = -1
+    private var symbolPresenceTask: Task<Void, Never>?
 
     private var baseTypingAttributes: [NSAttributedString.Key: Any] {
         [
@@ -2509,6 +2541,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             insertText(fragment, replacementRange: replacementRange)
         }
         typingAttributes = attrs
+        recheckSymbolPresence()
         return true
     }
 
@@ -2733,6 +2766,65 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return urls.compactMap { ACPSessionReference.sessionId(fromURI: $0.absoluteString) }
     }
 
+    /// Distinct symbol-link URIs of the badges in the text.
+    private func symbolBadgeURIs() -> [String] {
+        guard let textStorage else { return [] }
+        var uris: [String] = []
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, _, _ in
+            guard let chip = value as? ACPMentionChipAttachment, chip.attachmentCell is ACPSymbolChipCell,
+                  !uris.contains(chip.uri) else { return }
+            uris.append(chip.uri)
+        }
+        return uris
+    }
+
+    /// Looks again for each symbol badge's declaration and marks the ones that
+    /// are gone. A newer check replaces an older one still in flight.
+    func recheckSymbolPresence() {
+        symbolPresenceTask?.cancel()
+        let uris = symbolBadgeURIs()
+        // Without symbol mentions (a workspace checkout) the runner resolves
+        // symbol paths against another root than this composer's, so a check
+        // here would judge the wrong files.
+        guard !uris.isEmpty, let coordinator, coordinator.symbolMentions != nil else {
+            symbolPresenceTask = nil
+            return
+        }
+        let root = coordinator.worktreeRoot
+        symbolPresenceTask = Task { [weak self] in
+            let missing = await ACPSymbolPresence.missing(among: uris, worktreeRoot: root)
+            guard !Task.isCancelled, let self else { return }
+            self.applySymbolPresence(missing: missing)
+        }
+    }
+
+    func cancelSymbolPresenceCheck() {
+        symbolPresenceTask?.cancel()
+        symbolPresenceTask = nil
+    }
+
+    /// Applies by URI to the badges now in the text, so a result for a draft
+    /// that has since changed cannot flag the wrong badge. The warning changes
+    /// a badge's width, so layout is invalidated, not only display.
+    private func applySymbolPresence(missing: Set<String>) {
+        guard let textStorage, let layoutManager else { return }
+        var changed = false
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
+            guard let chip = value as? ACPMentionChipAttachment,
+                  let cell = chip.attachmentCell as? ACPSymbolChipCell else { return }
+            let isMissing = missing.contains(chip.uri)
+            guard cell.isMissing != isMissing else { return }
+            cell.isMissing = isMissing
+            layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            layoutManager.invalidateDisplay(forCharacterRange: range)
+            changed = true
+        }
+        if changed {
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
     @discardableResult
     func insertMention(_ url: URL) -> Bool {
         insertMention(displayName: url.lastPathComponent, uri: url.absoluteString)
@@ -2746,7 +2838,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
     @discardableResult
     func insertSymbolMention(_ entry: SymbolEntry, includeCode: Bool) -> Bool {
         let target = ACPSymbolReference.Target(entry: entry, includeCode: includeCode)
-        return insertMention(displayName: target.displayName, uri: ACPSymbolReference.uri(for: target))
+        let inserted = insertMention(displayName: target.displayName, uri: ACPSymbolReference.uri(for: target))
+        if inserted { recheckSymbolPresence() }
+        return inserted
     }
 
     @discardableResult

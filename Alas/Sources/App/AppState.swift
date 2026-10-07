@@ -2811,6 +2811,24 @@ final class AppState {
         }
     }
 
+    /// Opens a Workspace checkout focused on one member, switching to a Space
+    /// that shows the Workspace when the active one does not.
+    func openWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID) {
+        guard workspacesManager.canMutate,
+              let checkout = workspacesManager.checkout(id: checkoutID)
+        else { return }
+        if let workspaceID = checkout.workspaceID {
+            let reference = SpaceMemberReference.workspace(workspaceID)
+            let activeMembers = spacesManager.space(id: spacesManager.activeSpaceId)?.members ?? []
+            if !activeMembers.contains(reference),
+               let space = spacesManager.spaces.first(where: { $0.members?.contains(reference) == true }) {
+                _ = switchToSpace(id: space.id)
+            }
+        }
+        selectWorkspaceCheckout(id: checkoutID)
+        focusWorkspaceCheckoutMember(id: memberID)
+    }
+
     func openWorkspaceCheckoutSearchResult(
         relativePath: String,
         worktreeId: String,
@@ -4407,7 +4425,7 @@ final class AppState {
 
     private func requireCheckpointWorktreeRemovalAllowedAfterDiscovery(_ worktree: Worktree) async throws {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            throw WorkspaceStoreError.recoveryRequired
+            throw WorkspaceStoreError.checkpointRecoveryBlocksRemoval
         }
     }
 

@@ -44,8 +44,17 @@ enum ACPSymbolHoverPreview {
                       shownLines: shown, hiddenLines: lineRange.count - shown)
     }
 
+    /// The stored excerpt of a sent snapshot as a preview window, numbered from
+    /// the sent range. Nil when the code was not sent.
+    static func sentWindow(from snapshot: ACPSymbolSnapshot) -> Window? {
+        guard let excerpt = snapshot.excerpt else { return nil }
+        return window(declaration: excerpt, startLine: snapshot.lineRange.lowerBound)
+    }
+
     enum Loaded: Equatable, Sendable {
-        case found(lineRange: ClosedRange<Int>, window: Window)
+        /// `contentHash` is `ACPSymbolReference.contentHash(of:)` over the full
+        /// declaration, not the capped window.
+        case found(lineRange: ClosedRange<Int>, window: Window, contentHash: String)
         case missing
     }
 
@@ -57,7 +66,8 @@ enum ACPSymbolHoverPreview {
         let resolution = ACPSymbolReference.resolve(target, source: source)
         guard resolution.found, let declaration = resolution.declaration else { return .missing }
         return .found(lineRange: resolution.lineRange,
-                      window: window(declaration: declaration, startLine: resolution.lineRange.lowerBound))
+                      window: window(declaration: declaration, startLine: resolution.lineRange.lowerBound),
+                      contentHash: ACPSymbolReference.contentHash(of: declaration))
     }
 }
 
@@ -120,7 +130,7 @@ final class ACPSymbolHoverModel: ObservableObject {
     func apply(_ loaded: ACPSymbolHoverPreview.Loaded, theme: Theme?, animated: Bool = false) {
         let next: State
         var range = lineRange
-        if case .found(let foundRange, let window) = loaded {
+        if case .found(let foundRange, let window, _) = loaded {
             let highlighted: NSAttributedString = if let theme {
                 ACPCodeBlockHighlighter.attributedString(
                     code: window.text, language: ACPCodeLanguage.highlighterExtension(forPath: target.path),
@@ -201,21 +211,31 @@ final class ACPSymbolHoverCache {
     }
 }
 
-struct ACPSymbolHoverCard: View {
+struct ACPSymbolHoverCard<Accessory: View>: View {
     @ObservedObject var model: ACPSymbolHoverModel
     /// Tallest the code area may get before it scrolls.
     let maxCodeHeight: CGFloat
+    /// Shown between the header and the code.
+    let accessory: Accessory
 
-    private static let minWidth: CGFloat = 340
-    private static let maxWidth: CGFloat = 640
-    private static let padding: CGFloat = 12
-    private static let gutterSpacing: CGFloat = 10
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat, @ViewBuilder accessory: () -> Accessory) {
+        self.model = model
+        self.maxCodeHeight = maxCodeHeight
+        self.accessory = accessory()
+    }
+
+    // Computed, not stored: a generic type cannot hold stored statics.
+    private static var minWidth: CGFloat { 340 }
+    private static var maxWidth: CGFloat { 640 }
+    private static var padding: CGFloat { 12 }
+    private static var gutterSpacing: CGFloat { 10 }
     /// Skeleton bar widths, as fractions of the code area, cycled per line.
-    private static let skeletonWidths: [CGFloat] = [0.58, 0.82, 0.46, 0.72, 0.9, 0.52, 0.36, 0.68]
+    private static var skeletonWidths: [CGFloat] { [0.58, 0.82, 0.46, 0.72, 0.9, 0.52, 0.36, 0.68] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            accessory
             switch model.state {
             case .loading(let frame):
                 codeArea(frame) { viewportWidth in skeleton(frame, viewportWidth: viewportWidth) }
@@ -321,5 +341,11 @@ struct ACPSymbolHoverCard: View {
                 .fixedSize()
                 .frame(minWidth: viewportWidth, alignment: .leading)
         }
+    }
+}
+
+extension ACPSymbolHoverCard where Accessory == EmptyView {
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat) {
+        self.init(model: model, maxCodeHeight: maxCodeHeight) { EmptyView() }
     }
 }
