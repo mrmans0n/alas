@@ -720,7 +720,9 @@ fn simple_preview_tool(name: &str, description: &str) -> Value {
 }
 
 fn is_workspace_tool(name: &str) -> bool {
-    name.starts_with("workspace_") || name.starts_with("preview_") || name == "session_read"
+    name.starts_with("workspace_")
+        || name.starts_with("preview_")
+        || matches!(name, "session_read" | "visual_show")
 }
 
 /// Translate a tool call into the CLI command it mirrors. Relative `open`
@@ -2654,6 +2656,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "visual_show",
                 "session_read",
                 "preview_list",
                 "preview_open",
@@ -2762,6 +2765,24 @@ mod tests {
         )
         .unwrap();
         assert!(preview_open.get("error").is_none());
+
+        let visual = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"visual_show","arguments":{"title":"Pick","html":"<p>hi</p>"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert!(matches!(command, Command::VisualShow { title, .. } if title == "Pick"));
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![r#"{"visual_id":"v1"}"#.into()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(visual.get("error").is_none());
     }
 
     #[test]
@@ -2868,6 +2889,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"workspace_list"));
         assert!(names.contains(&"preview_capture"));
+        assert!(names.contains(&"visual_show"));
         assert!(!names.contains(&"open"));
     }
 

@@ -60,8 +60,10 @@ flowchart LR
 ### MCP tool
 
 `visual_show` lives in `all_tool_definitions()` in
-`AlasCLI/crates/alas/src/mcp.rs` and is available to root and delegated
-sessions.
+`AlasCLI/crates/alas/src/mcp.rs` and is available to root, delegated, and
+Workspace Checkout sessions. Workspace-only mode (`ALAS_MCP_WORKSPACE_ONLY=1`)
+lists it next to `session_read` and the preview tools: it only writes to the
+caller's own transcript and touches no repository.
 
 Arguments:
 

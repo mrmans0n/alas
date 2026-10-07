@@ -116,7 +116,8 @@ results remain untrusted application data.
 The built-in Alas server's `visual_show` tool shows an HTML visual inline in an
 ACP session's transcript: a UI prototype, layout, diagram, or side-by-side
 comparison. It is an MCP tool only, has no `alas` CLI command, and applies to
-ACP sessions. The phone client does not show visuals yet.
+ACP sessions, including Workspace Checkout sessions. The phone client does not
+show visuals yet.
 
 | Argument | Meaning |
 |---|---|
