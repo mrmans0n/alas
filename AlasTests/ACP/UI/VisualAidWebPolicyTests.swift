@@ -82,14 +82,14 @@ struct VisualAidWebPolicyTests {
         #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("form-action 'none'"))
     }
 
-    @Test("a question visual's links stay dead until it is answered or dismissed", arguments: [
-        (false, false, true),
-        (false, true, true),
-        (true, false, false),
-        (true, true, true),
+    @Test("a question visual's links stay dead until it is answered, and a dismissal does not unlock them", arguments: [
+        (false, ACPVisualAid.Answer?.none, true),
+        (true, ACPVisualAid.Answer?.none, false),
+        (true, .dismissed(at: Date(timeIntervalSince1970: 0)), false),
+        (true, .answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 0)), true),
     ])
-    func externalLinksWaitForTheAnswer(hasQuestion: Bool, answered: Bool, allowed: Bool) {
-        #expect(VisualAidWebPolicy.allowsExternalLinks(hasQuestion: hasQuestion, answered: answered) == allowed)
+    func externalLinksWaitForTheAnswer(hasQuestion: Bool, answer: ACPVisualAid.Answer?, allowed: Bool) {
+        #expect(VisualAidWebPolicy.allowsExternalLinks(hasQuestion: hasQuestion, answer: answer) == allowed)
     }
 
     @Test("only the loading rules let https resources in; the locked rules keep the scheme, data and blob")

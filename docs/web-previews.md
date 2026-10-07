@@ -130,7 +130,8 @@ may load from https URLs while the page loads; `fetch`, XHR, WebSockets, and
 WebRTC are blocked. A visual with a `question` is not clickable until it has
 loaded (or 10 seconds have passed), and from then on it can load nothing, so
 page script cannot send out the user's choices before they submit. Links in a
-question visual do nothing until the question is answered or dismissed.
+question visual do nothing until the question is answered, and stay off if it
+is dismissed.
 
 With a `question`, elements carrying `data-choice="<option id>"` select that
 option when clicked, and the answer card appears under the visual. The tool

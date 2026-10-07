@@ -266,9 +266,10 @@ reach. It reports three things to the app:
 - trusted clicks on links, which Alas opens in the default browser when they
   are `https`. `externalLinksEnabled` gates every such open, the bridge click
   and `window.open` alike through one function. The card turns it off while the
-  visual has a question without an answer, since the browser request would
+  visual has a question that is not answered, since the browser request would
   disclose the user's choice before they submit. Links in a question visual do
-  nothing until the question is answered or dismissed.
+  nothing until the question is answered; dismissing it keeps them off, because
+  a dismissal sends nothing and must not let a link carry the choice out.
 
 The app calls back into the same world to mark the selected `data-choice`
 elements (`selected` class) and to push theme variables when the theme

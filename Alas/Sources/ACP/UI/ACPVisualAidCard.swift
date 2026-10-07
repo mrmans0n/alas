@@ -177,7 +177,7 @@ struct ACPVisualAidCard: View {
     private func installChoiceHandler() {
         guard let page else { return }
         page.externalLinksEnabled = VisualAidWebPolicy.allowsExternalLinks(
-            hasQuestion: visual.question != nil, answered: visual.answer != nil)
+            hasQuestion: visual.question != nil, answer: visual.answer)
         guard visual.answer == nil, let form else {
             page.onChoice = { _ in }
             return

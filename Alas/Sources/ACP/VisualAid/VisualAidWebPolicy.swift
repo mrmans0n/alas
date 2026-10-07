@@ -43,10 +43,13 @@ enum VisualAidWebPolicy {
     /// hold `didFinish` open forever with a request that never answers.
     static let networkLockDeadline: Duration = .seconds(10)
 
-    /// A question visual's links stay dead until the question is answered or dismissed; a click would
-    /// otherwise put the page's URL, and any choice encoded in it, in front of the browser first.
-    static func allowsExternalLinks(hasQuestion: Bool, answered: Bool) -> Bool {
-        !hasQuestion || answered
+    /// A question visual's links stay dead until the question is answered: a click would otherwise put the
+    /// page's URL, and any choice encoded in it, in front of the browser first. A dismissal sends nothing,
+    /// so it must not unlock them either.
+    static func allowsExternalLinks(hasQuestion: Bool, answer: ACPVisualAid.Answer?) -> Bool {
+        guard hasQuestion else { return true }
+        if case .answered = answer { return true }
+        return false
     }
 
     static func documentURL(visualID: UUID) -> URL {
