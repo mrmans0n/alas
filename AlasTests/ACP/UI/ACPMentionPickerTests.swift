@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -302,6 +303,72 @@ struct ACPMentionPickerTests {
         #expect(MentionScope.offered(symbols: false, sessions: true) == [.all, .files, .sessions])
         #expect(MentionScope.offered(symbols: true, sessions: false) == [.all, .files, .symbols])
         #expect(MentionScope.offered(symbols: false, sessions: false).isEmpty)
+    }
+
+    @Test("⇥ and ⇧⇥ cycle through the offered scopes, wrapping and skipping hidden ones", arguments: [
+        (MentionScope.all, 1, MentionScope.offered(symbols: true, sessions: true), MentionScope.files),
+        (.sessions, 1, MentionScope.offered(symbols: true, sessions: true), .all),
+        (.all, -1, MentionScope.offered(symbols: true, sessions: true), .sessions),
+        (.symbols, -1, MentionScope.offered(symbols: true, sessions: true), .files),
+        (.files, 1, MentionScope.offered(symbols: false, sessions: true), .sessions),
+        (.sessions, -1, MentionScope.offered(symbols: false, sessions: true), .files),
+        (.symbols, 1, MentionScope.offered(symbols: true, sessions: false), .all),
+        (.all, 1, MentionScope.offered(symbols: false, sessions: false), .all),
+    ])
+    func cyclesScopes(from: MentionScope, offset: Int, offered: [MentionScope], expected: MentionScope) {
+        #expect(from.cycled(by: offset, in: offered) == expected)
+    }
+
+    @Test("the panel routes ↑ ↓ esc ⇥ ⇧⇥ ⏎ ⌥⏎ to the picker and leaves other keys to the field", arguments: [
+        (UInt16(126), UInt(0), MentionPickerKey?.some(.up)),
+        (125, NSEvent.ModifierFlags([.numericPad, .function]).rawValue, .down),
+        (53, 0, .cancel),
+        (48, 0, .nextScope),
+        (48, NSEvent.ModifierFlags.shift.rawValue, .previousScope),
+        (36, 0, .insert(includeCode: false)),
+        (76, NSEvent.ModifierFlags.option.rawValue, .insert(includeCode: true)),
+        (36, NSEvent.ModifierFlags.command.rawValue, nil),
+        (126, NSEvent.ModifierFlags.shift.rawValue, nil),
+        (0, 0, nil),
+    ])
+    func routesPickerKeys(keyCode: UInt16, modifiers: UInt, expected: MentionPickerKey?) {
+        #expect(MentionPickerKey(keyCode: keyCode, modifiers: NSEvent.ModifierFlags(rawValue: modifiers)) == expected)
+    }
+
+    @Test("the panel opens below the caret, flips above without room, and stays on screen", arguments: [
+        // Room below: top-left at the caret.
+        (NSRect(x: 100, y: 600, width: 1, height: 16), NSPoint(x: 100, y: 160)),
+        // No room below: flipped above the caret.
+        (NSRect(x: 100, y: 200, width: 1, height: 16), NSPoint(x: 100, y: 216)),
+        // Near the right edge: shifted left to fit.
+        (NSRect(x: 900, y: 600, width: 1, height: 16), NSPoint(x: 440, y: 160)),
+        // Room neither way: clamped to the visible frame.
+        (NSRect(x: 100, y: 400, width: 1, height: 16), NSPoint(x: 100, y: 360)),
+    ])
+    func placesPanel(caret: NSRect, expected: NSPoint) {
+        let visible = NSRect(x: 0, y: 0, width: 1000, height: 800)
+        let origin = PickerPanelPlacement.origin(size: NSSize(width: 560, height: 440), caret: caret, visibleFrame: visible)
+        #expect(origin == expected)
+    }
+
+    // @MainActor: opens a real NSPanel; key window and first responder are
+    // AppKit main-thread-only state.
+    @Test("the search field takes focus when the panel opens with scope tabs")
+    @MainActor func focusesSearchFieldOnOpen() async throws {
+        let panel = ACPMentionPanel(
+            worktreeRoot: URL(fileURLWithPath: "/tmp/project"),
+            filesProvider: { [] },
+            symbolMentions: ACPSymbolMentionSource(index: nil, fileSymbols: { _ in [] }),
+            onPick: { _ in })
+        defer { panel.close() }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !(panel.firstResponder is NSTextView), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The field editor is first responder only while the field is edited.
+        #expect(panel.firstResponder is NSTextView)
     }
 
     @Test("new results keep the highlighted item when it is still listed")

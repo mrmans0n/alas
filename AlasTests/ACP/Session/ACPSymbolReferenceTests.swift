@@ -159,4 +159,82 @@ struct ACPSymbolReferenceTests {
         let sent = try #require(ACPSymbolReference.openURL(for: target, snapshot: snapshot))
         #expect(ACPSymbolReference.target(fromURI: sent.absoluteString)?.lineRange == 9...12)
     }
+
+    @Test("the hover preview numbers lines from the declaration's 1-based start")
+    func hoverWindowNumbering() {
+        let window = ACPSymbolHoverPreview.window(declaration: "func a() {\r\n    b()\r\n}", startLine: 98)
+        #expect(window.text == "func a() {\n    b()\n}")
+        #expect(window.firstLineNumber == 99)
+        #expect(window.lineNumbers == "99\n100\n101")
+        #expect(window.gutterDigits == 3)
+        #expect(window.hiddenLines == 0)
+    }
+
+    @Test("the hover preview caps long declarations and long lines")
+    func hoverWindowCaps() {
+        let declaration = (0..<45).map { $0 == 0 ? String(repeating: "x", count: 12) : "line \($0)" }
+            .joined(separator: "\n")
+        let window = ACPSymbolHoverPreview.window(declaration: declaration, startLine: 0, maxLines: 40, maxColumns: 10)
+        #expect(window.shownLines == 40)
+        #expect(window.hiddenLines == 5)
+        #expect(window.text.hasPrefix(String(repeating: "x", count: 10) + "…\nline 1\n"))
+        #expect(window.text.hasSuffix("\nline 39"))
+        #expect(window.lineNumbers.hasSuffix("\n40"))
+    }
+
+    // @MainActor: ACPSymbolHoverModel is main-actor UI state.
+    @Test("the hover preview opens at the height the loaded code takes", arguments: [5, 100])
+    @MainActor func hoverReservesLoadedHeight(lines: Int) {
+        let target = ACPSymbolReference.Target(path: "a.swift", name: "a", kind: .function, container: nil,
+                                               lineRange: 10...(9 + lines), includeCode: false)
+        let model = ACPSymbolHoverModel(target: target, typography: .default)
+        guard case .loading(let reserved) = model.state else {
+            Issue.record("expected the loading state")
+            return
+        }
+        let declaration = (0..<lines).map { "line \($0)" }.joined(separator: "\n")
+        model.apply(.found(lineRange: target.lineRange,
+                           window: ACPSymbolHoverPreview.window(declaration: declaration, startLine: 10)), theme: nil)
+        guard case .found(let rendered) = model.state else {
+            Issue.record("expected the found state")
+            return
+        }
+        #expect(rendered.frame.codeHeight == reserved.codeHeight)
+        #expect(rendered.frame.lineNumbers == reserved.lineNumbers)
+        #expect(rendered.frame.hiddenLines == reserved.hiddenLines)
+    }
+
+    private static func hoverTarget(_ name: String, includeCode: Bool = false) -> ACPSymbolReference.Target {
+        ACPSymbolReference.Target(path: "a.swift", name: name, kind: .function, container: nil,
+                                  lineRange: 0...0, includeCode: includeCode)
+    }
+
+    private static func hoverFound(_ text: String) -> ACPSymbolHoverPreview.Loaded {
+        .found(lineRange: 0...0, window: ACPSymbolHoverPreview.window(declaration: text, startLine: 0))
+    }
+
+    // @MainActor: ACPSymbolHoverCache is main-actor UI state.
+    @Test("the hover cache evicts the least recently read preview, whichever badge reads it")
+    @MainActor func hoverCacheEviction() {
+        let cache = ACPSymbolHoverCache(capacity: 2)
+        let root = URL(fileURLWithPath: "/tmp/project")
+        cache.store(Self.hoverFound("a"), root: root, target: Self.hoverTarget("a"))
+        cache.store(Self.hoverFound("b"), root: root, target: Self.hoverTarget("b"))
+        #expect(cache.loaded(root: root, target: Self.hoverTarget("a", includeCode: true)) == Self.hoverFound("a"))
+        cache.store(Self.hoverFound("c"), root: root, target: Self.hoverTarget("c"))
+        #expect(cache.loaded(root: root, target: Self.hoverTarget("b")) == nil)
+        #expect(cache.loaded(root: root, target: Self.hoverTarget("a")) == Self.hoverFound("a"))
+        #expect(cache.loaded(root: root, target: Self.hoverTarget("c")) == Self.hoverFound("c"))
+        #expect(cache.loaded(root: URL(fileURLWithPath: "/tmp/other"), target: Self.hoverTarget("c")) == nil)
+    }
+
+    // @MainActor: ACPSymbolHoverCache is main-actor UI state.
+    @Test("a symbol that goes missing drops its cached hover preview")
+    @MainActor func hoverCacheDropsMissing() {
+        let cache = ACPSymbolHoverCache()
+        let root = URL(fileURLWithPath: "/tmp/project")
+        cache.store(Self.hoverFound("a"), root: root, target: Self.hoverTarget("a"))
+        cache.store(.missing, root: root, target: Self.hoverTarget("a"))
+        #expect(cache.loaded(root: root, target: Self.hoverTarget("a")) == nil)
+    }
 }

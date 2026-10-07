@@ -30,6 +30,14 @@ enum MentionScope: Int, CaseIterable, Identifiable {
         guard symbols || sessions else { return [] }
         return allCases.filter { ($0 != .symbols || symbols) && ($0 != .sessions || sessions) }
     }
+
+    /// The scope ⇥ (`offset` 1) or ⇧⇥ (-1) selects: the next offered one,
+    /// wrapping around. Stays put when no scopes are offered.
+    func cycled(by offset: Int, in offered: [MentionScope]) -> MentionScope {
+        guard let index = offered.firstIndex(of: self) else { return offered.first ?? self }
+        let count = offered.count
+        return offered[((index + offset) % count + count) % count]
+    }
 }
 
 enum MentionSymbolQuery: Equatable {

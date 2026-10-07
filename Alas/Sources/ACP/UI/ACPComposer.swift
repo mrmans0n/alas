@@ -2814,7 +2814,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private func positionAndShow(_ panel: NSPanel, makeKey: Bool = true) {
         guard let window = self.window else { return }
         let caretRect = firstRect(forCharacterRange: selectedRange(), actualRange: nil)
-        panel.setFrameTopLeftPoint(NSPoint(x: caretRect.minX, y: caretRect.minY))
+        let origin = PickerPanelPlacement.origin(
+            size: panel.frame.size, caret: caretRect, visibleFrame: window.screen?.visibleFrame)
+        panel.setFrameOrigin(origin)
         window.addChildWindow(panel, ordered: .above)
         if makeKey {
             panel.makeKeyAndOrderFront(nil)
@@ -2824,10 +2826,27 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 }
 
+/// Where a composer picker panel opens: below the caret, left-aligned with
+/// it, moved to stay on screen.
+enum PickerPanelPlacement {
+    /// `caret` and `visibleFrame` are in screen coordinates. Without room
+    /// below the caret the panel flips above it; one that fits neither way
+    /// is clamped to the visible frame.
+    static func origin(size: NSSize, caret: NSRect, visibleFrame: NSRect?) -> NSPoint {
+        var origin = NSPoint(x: caret.minX, y: caret.minY - size.height)
+        guard let visible = visibleFrame else { return origin }
+        if origin.y < visible.minY { origin.y = caret.maxY }
+        origin.y = max(visible.minY, min(origin.y, visible.maxY - size.height))
+        origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
+        return origin
+    }
+}
+
 /// Glass NSPanel hosting the SwiftUI fuzzy file picker. Floats above
 /// the composer when the user types '@'.
 final class ACPMentionPanel: NSPanel {
     private var host: NSView?
+    private let link = MentionPickerPanelLink()
 
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
@@ -2838,8 +2857,10 @@ final class ACPMentionPanel: NSPanel {
          onPickSymbol: @escaping (SymbolEntry, Bool) -> Void = { _, _ in },
          onCancel: @escaping () -> Void = {}) {
         super.init(
-            contentRect: .init(x: 0, y: 0, width: 440, height: 330),
-            styleMask: [.borderless, .nonactivatingPanel, .titled, .fullSizeContentView],
+            contentRect: NSRect(origin: .zero, size: ACPMentionPickerView.panelSize),
+            // Borderless, not titled: a titlebar would inset the hosted
+            // picker by its safe area.
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -2847,8 +2868,6 @@ final class ACPMentionPanel: NSPanel {
         self.hasShadow = true
         self.backgroundColor = .clear
         self.isOpaque = false
-        self.titleVisibility = .hidden
-        self.titlebarAppearsTransparent = true
         self.hidesOnDeactivate = true
 
         let host = NSHostingView(rootView: ACPMentionPickerView(
@@ -2871,12 +2890,34 @@ final class ACPMentionPanel: NSPanel {
                 self?.close()
                 onCancel()
             },
-            filesProvider: filesProvider
+            filesProvider: filesProvider,
+            panelLink: link
         ))
-        host.frame = contentView?.bounds ?? .init(x: 0, y: 0, width: 440, height: 330)
+        host.safeAreaRegions = []
+        host.frame = contentView?.bounds ?? NSRect(origin: .zero, size: ACPMentionPickerView.panelSize)
         host.autoresizingMask = [.width, .height]
         contentView?.addSubview(host)
         self.host = host
+    }
+
+    /// Focus lands in the search field each time the panel becomes key.
+    /// The panel usually becomes key before the picker view appears; the
+    /// link holds the request until then.
+    override func becomeKey() {
+        super.becomeKey()
+        link.focusSearch()
+    }
+
+    /// Picker keys reach the picker before the search field's editor; text
+    /// still being composed in an input method keeps them.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           (firstResponder as? NSTextView)?.hasMarkedText() != true,
+           let key = MentionPickerKey(keyCode: event.keyCode, modifiers: event.modifierFlags),
+           link.handle(key) {
+            return
+        }
+        super.sendEvent(event)
     }
 
     /// Closing alone keeps the SwiftUI view in the window, so its

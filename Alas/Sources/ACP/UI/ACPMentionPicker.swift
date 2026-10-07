@@ -37,6 +37,10 @@ struct ACPMentionPickerView: View {
     var onPickSymbol: (SymbolEntry, Bool) -> Void = { _, _ in }
     let onCancel: () -> Void
     let filesProvider: (@Sendable () async -> [URL])?
+    let panelLink: MentionPickerPanelLink
+
+    /// The picker's size; `ACPMentionPanel` opens at it.
+    static let panelSize = CGSize(width: 560, height: 440)
 
     @Environment(\.theme) private var theme
     @State private var query: String = ""
@@ -68,9 +72,10 @@ struct ACPMentionPickerView: View {
             scopeBar
             Divider().background(theme.color("line"))
             list
+                .frame(maxHeight: .infinity)
             footer
         }
-        .frame(width: 440, height: 330)
+        .frame(width: Self.panelSize.width, height: Self.panelSize.height, alignment: .top)
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
@@ -78,13 +83,16 @@ struct ACPMentionPickerView: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
+        .defaultFocus($searchFocused, true)
         .onAppear {
+            panelLink.attach(keys: { handleKey($0) }, focus: { searchFocused = true })
             populateSessions()
             populateFiles()
             populateSymbols()
         }
         .onDisappear {
             isClosed = true
+            panelLink.detach()
             symbolTask?.cancel()
             symbolTask = nil
             rankTask?.cancel()
@@ -115,8 +123,6 @@ struct ACPMentionPickerView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
-                .onAppear { searchFocused = true }
-                .onKeyPress { press in handleKey(press) }
                 .onChange(of: query) { _, _ in
                     scrollOnHighlightChange = false
                     highlight = 0
@@ -129,6 +135,7 @@ struct ACPMentionPickerView: View {
                         .foregroundStyle(theme.color("fg-faint"))
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
@@ -141,11 +148,7 @@ struct ACPMentionPickerView: View {
             HStack(spacing: 4) {
                 ForEach(Array(scopes.enumerated()), id: \.element) { index, item in
                     let number = index + 1
-                    Button {
-                        scope = item
-                        highlight = 0
-                        rescheduleRank(preserveHighlight: false)
-                    } label: {
+                    Button { select(item) } label: {
                         Text(item.title)
                             .font(.system(size: 10.5, weight: .medium))
                             .padding(.horizontal, 7).padding(.vertical, 2)
@@ -154,6 +157,7 @@ struct ACPMentionPickerView: View {
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
                     .help("\(item.title) (⌘\(number))")
                 }
@@ -175,7 +179,9 @@ struct ACPMentionPickerView: View {
         case nil where symbolMentions?.index == nil && scope == .symbols:
             "Project symbols aren't indexed on remote worktrees. Type File.swift#name."
         case nil:
-            "⏎ insert · ⌥⏎ insert with code · File.swift#name"
+            offeredScopes.isEmpty
+                ? "⏎ insert · ⌥⏎ insert with code · File.swift#name"
+                : "⏎ insert · ⌥⏎ insert with code · ⇥ next scope · File.swift#name"
         }
         if let text {
             Divider().background(theme.color("line"))
@@ -358,33 +364,39 @@ struct ACPMentionPickerView: View {
         }
     }
 
-    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        switch press.key {
-        case .escape:
+    private func handleKey(_ key: MentionPickerKey) {
+        switch key {
+        case .cancel:
             onCancel()
-            return .handled
-        case .upArrow:
+        case .up:
             moveHighlight(by: -1)
-            return .handled
-        case .downArrow:
+        case .down:
             moveHighlight(by: 1)
-            return .handled
-        case .return, .tab:
-            guard ranked.indices.contains(highlight) else { return .handled }
-            switch ranked[highlight] {
-            case .session(let session):
-                onPickSession(session)
-            case .symbol(let symbol):
-                onPickSymbol(symbol, press.key == .return && press.modifiers.contains(.option))
-            case .file(let file) where press.key == .tab && isAbsoluteQuery && file.hasDirectoryPath:
+        case .nextScope:
+            // Absolute-path browsing keeps ⇥ for entering the highlighted folder.
+            if isAbsoluteQuery, ranked.indices.contains(highlight),
+               case .file(let file) = ranked[highlight], file.hasDirectoryPath {
                 query = MentionAbsolutePath.query(entering: file)
-            case .file(let file):
-                onPick(file)
+            } else {
+                select(scope.cycled(by: 1, in: offeredScopes))
             }
-            return .handled
-        default:
-            return .ignored
+        case .previousScope:
+            select(scope.cycled(by: -1, in: offeredScopes))
+        case .insert(let includeCode):
+            guard ranked.indices.contains(highlight) else { return }
+            switch ranked[highlight] {
+            case .session(let session): onPickSession(session)
+            case .symbol(let symbol): onPickSymbol(symbol, includeCode)
+            case .file(let file): onPick(file)
+            }
         }
+    }
+
+    private func select(_ next: MentionScope) {
+        guard next != scope else { return }
+        scope = next
+        highlight = 0
+        rescheduleRank(preserveHighlight: false)
     }
 
     private func moveHighlight(by offset: Int) {
@@ -542,6 +554,72 @@ enum MentionPickerNavigation {
     static func index(preserving item: MentionPickerItem?, fallback: Int, in items: [MentionPickerItem]) -> Int {
         if let item, let index = items.firstIndex(of: item) { return index }
         return move(from: fallback, by: 0, count: items.count)
+    }
+}
+
+/// Keys `ACPMentionPanel` hands the picker before the search field's
+/// editor sees them: the editor would take ⇥ to move focus, ⏎ to submit,
+/// and ↑/↓ to move its caret.
+enum MentionPickerKey: Equatable {
+    case up, down, cancel, nextScope, previousScope
+    case insert(includeCode: Bool)
+
+    /// nil leaves the key to the search field.
+    init?(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        let modifiers = modifiers.intersection([.shift, .control, .option, .command])
+        switch keyCode {
+        case 126 where modifiers.isEmpty: self = .up
+        case 125 where modifiers.isEmpty: self = .down
+        case 53 where modifiers.isEmpty: self = .cancel
+        case 48 where modifiers.isEmpty: self = .nextScope
+        case 48 where modifiers == .shift: self = .previousScope
+        case 36, 76:
+            guard modifiers.isEmpty || modifiers == .option else { return nil }
+            self = .insert(includeCode: modifiers == .option)
+        default: return nil
+        }
+    }
+}
+
+/// What `ACPMentionPanel` forwards to the picker view it hosts.
+@MainActor
+final class MentionPickerPanelLink {
+    private var keyHandler: ((MentionPickerKey) -> Void)?
+    private var focusHandler: (() -> Void)?
+    private var focusPending = false
+
+    /// Called from the view's `onAppear`. SwiftUI drops a focus change made
+    /// there once the picker has other buttons, such as the scope tabs, so a
+    /// pending focus request runs on the next main-queue turn.
+    func attach(keys: @escaping (MentionPickerKey) -> Void, focus: @escaping () -> Void) {
+        keyHandler = keys
+        focusHandler = focus
+        if focusPending {
+            focusPending = false
+            DispatchQueue.main.async { [weak self] in self?.focusHandler?() }
+        }
+    }
+
+    func detach() {
+        keyHandler = nil
+        focusHandler = nil
+    }
+
+    /// False until the view attaches, leaving the key to AppKit.
+    func handle(_ key: MentionPickerKey) -> Bool {
+        guard let keyHandler else { return false }
+        keyHandler(key)
+        return true
+    }
+
+    /// The panel became key: focus the search field now, or once the view
+    /// attaches if it has not appeared yet.
+    func focusSearch() {
+        if let focusHandler {
+            focusHandler()
+        } else {
+            focusPending = true
+        }
     }
 }
 
