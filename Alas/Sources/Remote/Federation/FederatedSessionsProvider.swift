@@ -115,13 +115,15 @@ final class FederatedSessionsProvider {
     /// The unscoped requests a client can aim at one peer. Their replies carry
     /// no request id, so each kind is answered in the order it was asked.
     private enum PeerRequestKind: Hashable {
-        case agents, worktrees, create
+        case agents, worktrees, branches, create, createWorktree
 
         init?(request: RemoteClientMessage) {
             switch request {
             case .listAgents: self = .agents
             case .listWorktrees: self = .worktrees
+            case .listBranches: self = .branches
             case .createSession: self = .create
+            case .createWorktreeSession: self = .createWorktree
             default: return nil
             }
         }
@@ -130,7 +132,9 @@ final class FederatedSessionsProvider {
             switch reply {
             case .agentList: self = .agents
             case .worktreeList: self = .worktrees
+            case .branchList, .branchListFailed: self = .branches
             case .sessionCreated, .createSessionFailed: self = .create
+            case .worktreeSessionCreated, .worktreeSessionCreationFailed: self = .createWorktree
             default: return nil
             }
         }
@@ -272,7 +276,8 @@ final class FederatedSessionsProvider {
 
     /// Sends an unscoped request to one peer and hands its reply to `reply`
     /// only. Returns false when the message is not one of `listAgents`,
-    /// `listWorktrees`, `createSession`, or the peer does not carry sessions.
+    /// `listWorktrees`, `listBranches`, `createSession`,
+    /// `createWorktreeSession`, or the peer does not carry sessions.
     func request(_ message: RemoteClientMessage, toPeer serverId: String,
                  from downstream: FederatedDownstream,
                  reply: @escaping @MainActor (RemoteServerMessage) -> Void) -> Bool {
@@ -360,10 +365,17 @@ final class FederatedSessionsProvider {
             comparisonRequests = comparisonRequests.filter { !$0.key.sessionId.hasPrefix(prefix) }
             for key in Array(peerRequests.keys) where key.serverId == serverId {
                 let pending = peerRequests.removeValue(forKey: key) ?? []
-                guard key.kind == .create else { continue }
-                for request in pending {
-                    request.reply?(.createSessionFailed(message: Self.peerUnavailableMessage))
+                let failure: RemoteServerMessage
+                switch key.kind {
+                case .create:
+                    failure = .createSessionFailed(message: Self.peerUnavailableMessage)
+                case .createWorktree:
+                    failure = .worktreeSessionCreationFailed(
+                        stage: .worktree, message: Self.peerUnavailableMessage, worktreeId: nil)
+                case .agents, .worktrees, .branches:
+                    continue
                 }
+                for request in pending { request.reply?(failure) }
             }
         }
         for serverId in current.keys where previous[serverId] == nil {
@@ -481,9 +493,12 @@ final class FederatedSessionsProvider {
         } else {
             peerRequests[key] = nil
         }
-        if case .sessionCreated(let summary) = message {
+        switch message {
+        case .sessionCreated(let summary):
             completed.reply?(.sessionCreated(session: summary.namespaced(under: peer)))
-        } else {
+        case .worktreeSessionCreated(let summary):
+            completed.reply?(.worktreeSessionCreated(session: summary.namespaced(under: peer)))
+        default:
             completed.reply?(message)
         }
     }

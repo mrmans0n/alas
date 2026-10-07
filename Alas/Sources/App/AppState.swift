@@ -15320,7 +15320,9 @@ extension AppState: RemoteSessionsProvider {
         projectId: String,
         base: String,
         branch: String,
-        agentId: String
+        agentId: String,
+        modelId: String? = nil,
+        effortId: String? = nil
     ) async -> RemoteCreateWorktreeSessionResult {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(
@@ -15386,7 +15388,8 @@ extension AppState: RemoteSessionsProvider {
             let sessionResult = if let remoteSessionCreator {
                 await remoteSessionCreator(worktree.id, agentId)
             } else {
-                await createRemoteSession(worktreeId: worktree.id, agentId: agentId, modelId: nil)
+                await createRemoteSession(
+                    worktreeId: worktree.id, agentId: agentId, modelId: modelId, effortId: effortId)
             }
             return Self.remoteWorktreeSessionResult(
                 worktree: worktree,

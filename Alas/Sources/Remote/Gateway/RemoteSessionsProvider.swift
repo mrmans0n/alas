@@ -14,7 +14,9 @@ protocol RemoteSessionsProvider: AnyObject {
         projectId: String,
         base: String,
         branch: String,
-        agentId: String
+        agentId: String,
+        modelId: String?,
+        effortId: String?
     ) async -> RemoteCreateWorktreeSessionResult
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?

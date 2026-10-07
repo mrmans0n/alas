@@ -255,6 +255,22 @@ final class NativePeerSessions {
         if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
     }
 
+    /// Asks the peer to create a worktree from `base` and start the session
+    /// in it, as one request.
+    func createNewWorktreeSession(base: String, branch: String, agentId: String, modelId: String?, effortId: String?) {
+        guard let request = newSession, request.phase != .creating, let projectId = request.projectId,
+              let downstream else { return }
+        newSession?.phase = .creating
+        let token = request.id
+        let sent = federation.request(
+            .createWorktreeSession(
+                projectId: projectId, base: base, branch: branch, agentId: agentId,
+                modelId: modelId, effortId: effortId),
+            toPeer: request.serverId, from: downstream
+        ) { [weak self] reply in self?.applyNewSessionReply(reply, token: token) }
+        if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
+    }
+
     func cancelNewSession() {
         newSession = nil
     }
@@ -268,7 +284,9 @@ final class NativePeerSessions {
     private func requestNewSessionOptions() {
         guard let request = newSession, let downstream else { return }
         let token = request.id
-        let sent = [RemoteClientMessage.listWorktrees, .listAgents].allSatisfy { message in
+        var messages: [RemoteClientMessage] = [.listWorktrees, .listAgents]
+        if let projectId = request.projectId { messages.append(.listBranches(projectId: projectId)) }
+        let sent = messages.allSatisfy { message in
             federation.request(message, toPeer: request.serverId, from: downstream) { [weak self] reply in
                 self?.applyNewSessionReply(reply, token: token)
             }
@@ -285,9 +303,22 @@ final class NativePeerSessions {
             )
         case .agentList(let agents):
             newSession?.agents = agents
+        case .branchList(let projectId, let names, let preferredBase) where projectId == request.projectId:
+            newSession?.branches = .loaded(names: names, preferredBase: preferredBase)
+        case .branchListFailed(let projectId, let message) where projectId == request.projectId:
+            newSession?.branches = .failed(message)
         case .createSessionFailed(let message):
             newSession?.phase = .failed(message)
-        case .sessionCreated(let summary):
+        case .worktreeSessionCreationFailed(_, let message, let worktreeId):
+            newSession?.phase = .failed(message)
+            // The worktree exists without its session: list it, so the sheet
+            // can offer it instead of creating a second one.
+            guard let worktreeId, let downstream else { return }
+            newSession?.recoveredWorktreeId = worktreeId
+            _ = federation.request(.listWorktrees, toPeer: request.serverId, from: downstream) { [weak self] reply in
+                self?.applyNewSessionReply(reply, token: token)
+            }
+        case .sessionCreated(let summary), .worktreeSessionCreated(let summary):
             newSession = nil
             pendingCreatedSessionId = summary.id
             refresh()

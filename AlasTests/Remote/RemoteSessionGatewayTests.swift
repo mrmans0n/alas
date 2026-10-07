@@ -157,7 +157,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         projectId: String,
         base: String,
         branch: String,
-        agentId: String
+        agentId: String,
+        modelId: String?,
+        effortId: String?
     ) async -> RemoteCreateWorktreeSessionResult {
         createWorktreeSessionRequests.append((projectId, base, branch, agentId))
         return createWorktreeSessionResult
