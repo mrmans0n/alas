@@ -180,8 +180,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     /// Shuts the network for a question visual: the locked rules go in before the loading rules come out,
     /// so there is no moment without a block-all list. False when the locked rules are unavailable (fails
     /// closed with `.sandboxFailed`); idempotent, and a no-op once closed or for visuals without a question.
+    /// Internal so tests can lock at a moment they choose instead of racing the deadline.
     @discardableResult
-    private func lockNetwork() -> Bool {
+    func lockNetwork() -> Bool {
         guard locksNetworkAfterLoad, !isClosed else { return true }
         guard !isLocked else { return true }
         guard let loadingRules, let lockedRules else {
@@ -199,6 +200,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         if hasCommitted { webView.stopLoading() }
         isLocked = true
         webView.blocksInteraction = false
+        // Cancelling the stalled loads means no `didFinish` will follow, so a committed page is ready now.
+        if hasCommitted, status == .loading { markReady() }
         return true
     }
 
@@ -207,9 +210,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         let deadline = networkLockDeadline
         lockDeadline = Task { [weak self] in
             try? await Task.sleep(for: deadline)
-            guard !Task.isCancelled, let self, lockNetwork() else { return }
-            // Cancelling the stalled loads means no `didFinish` will follow, so a committed page is ready now.
-            if hasCommitted, status == .loading { markReady() }
+            guard !Task.isCancelled else { return }
+            self?.lockNetwork()
         }
     }
 
@@ -283,6 +285,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !isClosed else { return }
         if locksNetworkAfterLoad, !lockNetwork() { return }
+        // Locking marks a committed page ready itself; `didFinish` then has nothing left to do.
+        guard status != .ready else { return }
         markReady()
     }
 

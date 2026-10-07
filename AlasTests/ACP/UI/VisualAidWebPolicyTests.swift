@@ -197,11 +197,11 @@ extension VisualAidWebPolicyTests {
         let page = VisualAidWebPage(
             visualID: UUID(), html: #"<p>q</p><img src="https://127.0.0.1:\#(port)/hang">"#,
             theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: true,
-            networkLockDeadline: .seconds(2))
+            networkLockDeadline: .seconds(3600))
         defer { page.close() }
         page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         func wait(_ what: String, until condition: () -> Bool) async throws {
             while !condition() {
                 try #require(ContinuousClock.now < deadline, "timed out waiting for \(what); status \(page.status)")
@@ -209,10 +209,11 @@ extension VisualAidWebPolicyTests {
             }
         }
         try await wait("the image request to reach the server") { server.accepted == 1 }
-        try #require(!page.isLocked, "the request must still be in flight when the page locks")
-        try await wait("the lock") { page.isLocked }
+        // The deadline never fires here: the lock is driven once the request is known to be in flight.
+        try #require(page.lockNetwork())
         try await wait("the outstanding connection to be cancelled") { server.closed == 1 }
-        try await waitUntilReady(page)
+        #expect(page.isLocked)
+        #expect(page.status == .ready)
         #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
         // The bridge script still ran once the stalled load was cancelled, so selection mirroring works.
         let bridge = try await page.webView.evaluateJavaScript(

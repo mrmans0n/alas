@@ -252,8 +252,8 @@ sets `isLocked`. The deadline matters because agent HTML can hold `didFinish`
 open forever with a request that never answers. Locking also calls
 `stopLoading()` once the document has committed, so every load still in flight
 is cancelled and cannot be used as a channel afterwards (the locked rules only
-refuse new requests); a lock from the deadline then marks the page `.ready`
-itself, because no `didFinish` follows a cancelled load. The locked list is
+refuse new requests); the lock then marks a committed page `.ready` itself,
+because no `didFinish` follows a cancelled load. The locked list is
 compiled before the document loads; if it fails to compile the page fails closed
 (`.sandboxFailed`). Until the lock, the web view is a `VisualAidWKWebView`
 whose `hitTest` returns nil, so no click reaches the page, and `onChoice` and
