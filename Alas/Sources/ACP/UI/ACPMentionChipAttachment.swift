@@ -14,8 +14,11 @@ final class ACPMentionChipAttachment: NSTextAttachment {
         self.displayName = displayName
         self.uri = uri
         super.init(data: nil, ofType: nil)
-        let cell = ACPMentionChipCell(displayName: displayName)
-        self.attachmentCell = cell
+        if let target = ACPSymbolReference.target(fromURI: uri) {
+            self.attachmentCell = ACPSymbolChipCell(target: target)
+        } else {
+            self.attachmentCell = ACPMentionChipCell(displayName: displayName)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -136,12 +139,21 @@ final class ACPFileMentionHoverController {
             let url = URL(string: next.uri)
             let isFile = url?.isFileURL == true
             let sessionId = ACPSessionReference.sessionId(fromURI: next.uri)
+            let symbol = ACPSymbolReference.target(fromURI: next.uri)
+            let location: String = if let symbol {
+                "\(symbol.path):\(symbol.lineRange.lowerBound + 1)–\(symbol.lineRange.upperBound + 1)"
+                    + (symbol.includeCode ? " · code included" : "")
+            } else if let sessionId {
+                "Agent session \(sessionId)"
+            } else {
+                isFile ? (url?.path ?? next.uri) : next.uri
+            }
             let hosting = NSHostingController(
                 rootView: ACPFileMentionHoverCard(
                     name: attachment.displayName,
-                    location: sessionId.map { "Agent session \($0)" }
-                        ?? (isFile ? (url?.path ?? next.uri) : next.uri),
-                    systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
+                    location: location,
+                    systemImage: symbol != nil ? "curlybraces"
+                        : sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
                 )
             )
             hosting.sizingOptions = [.preferredContentSize]

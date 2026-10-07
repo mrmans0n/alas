@@ -94,6 +94,9 @@ const PROTO_HIGHLIGHTS: &str = include_str!("../queries/proto/highlights.scm");
 const GRAPHQL_HIGHLIGHTS: &str = include_str!("../queries/graphql/highlights.scm");
 const GROOVY_HIGHLIGHTS: &str = include_str!("../queries/groovy/highlights.scm");
 
+/// tree-sitter-kotlin-ng ships no tags query; this one is maintained by Alas.
+const KOTLIN_TAGS: &str = include_str!("../queries/kotlin/tags.scm");
+
 /// These crates' queries are the local consts above, so nothing else here
 /// references the crates themselves and the linker is free to drop their
 /// objects — leaving `tree_sitter_hcl`,
@@ -161,9 +164,10 @@ static LANGUAGES: &[(&str, LanguageFn)] = &[
     ("zig", tree_sitter_zig),
 ];
 
-/// Highlight queries, keyed by language id. `javascript_jsx` is the JSX
-/// overlay upstream ships beside the base JavaScript query; Alas merges it in
-/// for `.jsx`/`.tsx`. TypeScript and TSX share one upstream query file.
+/// Highlight queries keyed by language id, plus symbol tags queries keyed by
+/// `<language>.tags`. `javascript_jsx` is the JSX overlay upstream ships beside
+/// the base JavaScript query; Alas merges it in for `.jsx`/`.tsx`. TypeScript
+/// and TSX share one upstream highlight file and one upstream tags file.
 static QUERIES: &[(&str, &str)] = &[
     ("bash", tree_sitter_bash::HIGHLIGHT_QUERY),
     ("c", tree_sitter_c::HIGHLIGHT_QUERY),
@@ -212,6 +216,15 @@ static QUERIES: &[(&str, &str)] = &[
     ("xml", tree_sitter_xml::XML_HIGHLIGHT_QUERY),
     ("yaml", tree_sitter_yaml::HIGHLIGHTS_QUERY),
     ("zig", tree_sitter_zig::HIGHLIGHTS_QUERY),
+    ("swift.tags", tree_sitter_swift::TAGS_QUERY),
+    ("javascript.tags", tree_sitter_javascript::TAGS_QUERY),
+    ("typescript.tags", tree_sitter_typescript::TAGS_QUERY),
+    ("tsx.tags", tree_sitter_typescript::TAGS_QUERY),
+    ("python.tags", tree_sitter_python::TAGS_QUERY),
+    ("go.tags", tree_sitter_go::TAGS_QUERY),
+    ("rust.tags", tree_sitter_rust::TAGS_QUERY),
+    ("java.tags", tree_sitter_java::TAGS_QUERY),
+    ("kotlin.tags", KOTLIN_TAGS),
 ];
 
 /// Returns the `TSLanguage *` for `id`, or null when `id` is unknown.
@@ -229,8 +242,8 @@ pub unsafe extern "C" fn alas_ts_language(id: *const c_char) -> *const c_void {
     }
 }
 
-/// Returns the highlight query for `id` and writes its byte length to
-/// `out_len`, or null when `id` has no query. The bytes are static UTF-8 and
+/// Returns the query for `id` (a highlight query, or a `<language>.tags`
+/// symbol query) and writes its byte length to `out_len`, or null when `id` has no query. The bytes are static UTF-8 and
 /// are *not* NUL-terminated — always read exactly `out_len` bytes.
 ///
 /// # Safety
@@ -523,5 +536,97 @@ mod tests {
             assert!(alas_ts_query(std::ptr::null(), std::ptr::null_mut()).is_null());
         }
     }
-}
 
+    /// Tags ids and the grammar each compiles against. TypeScript and TSX
+    /// inherit JavaScript's tags the way their highlight queries do, so the
+    /// Swift side merges `javascript.tags` in front of theirs.
+    const TAG_QUERIES: &[(&str, &str, &[&str])] = &[
+        ("swift.tags", "swift", &["swift.tags"]),
+        ("javascript.tags", "javascript", &["javascript.tags"]),
+        ("typescript.tags", "typescript", &["javascript.tags", "typescript.tags"]),
+        ("tsx.tags", "tsx", &["javascript.tags", "tsx.tags"]),
+        ("python.tags", "python", &["python.tags"]),
+        ("go.tags", "go", &["go.tags"]),
+        ("rust.tags", "rust", &["rust.tags"]),
+        ("java.tags", "java", &["java.tags"]),
+        ("kotlin.tags", "kotlin", &["kotlin.tags"]),
+    ];
+
+    #[test]
+    fn every_tags_query_compiles_against_its_grammar() {
+        for (id, language_id, parts) in TAG_QUERIES {
+            assert!(query(id).is_some(), "{id} is not registered");
+            let combined = parts
+                .iter()
+                .map(|part| query(part).unwrap_or_else(|| panic!("{part} has no query")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (_, entry) = LANGUAGES
+                .iter()
+                .find(|(name, _)| name == language_id)
+                .unwrap_or_else(|| panic!("{language_id} is not a registered language"));
+            let compiled = tree_sitter::Query::new(&language_handle(*entry), &combined)
+                .unwrap_or_else(|error| panic!("{id} does not compile: {error:?}"));
+            assert!(
+                compiled.capture_names().iter().any(|name| *name == "name"),
+                "{id} never captures @name"
+            );
+            assert!(
+                compiled.capture_names().iter().any(|name| name.starts_with("definition.")),
+                "{id} captures no @definition.*"
+            );
+        }
+    }
+
+    #[test]
+    fn kotlin_tags_capture_top_level_and_member_declarations_only() {
+        use tree_sitter::StreamingIterator;
+        let source = r#"
+            interface Greeter { fun greet(): String }
+            class Hello(private val name: String) : Greeter {
+                val prefix = "Hello, "
+                override fun greet(): String {
+                    val local = prefix + name
+                    return local
+                }
+            }
+            object Registry { fun all(): List<Greeter> = emptyList() }
+            val topLevel = 1
+        "#;
+        let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let query = tree_sitter::Query::new(&language, KOTLIN_TAGS).unwrap();
+        let names = query.capture_names();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut found: Vec<(String, String)> = Vec::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        while let Some(m) = matches.next() {
+            let name = m.captures.iter().find(|c| names[c.index as usize] == "name");
+            let kind = m.captures.iter().find(|c| names[c.index as usize].starts_with("definition."));
+            if let (Some(name), Some(kind)) = (name, kind) {
+                found.push((
+                    name.node.utf8_text(source.as_bytes()).unwrap().to_string(),
+                    names[kind.index as usize].to_string(),
+                ));
+            }
+        }
+        found.sort();
+        let mut expected: Vec<(String, String)> = [
+            ("Greeter", "definition.interface"),
+            ("greet", "definition.function"),
+            ("Hello", "definition.class"),
+            ("prefix", "definition.property"),
+            ("greet", "definition.function"),
+            ("Registry", "definition.class"),
+            ("all", "definition.function"),
+            ("topLevel", "definition.property"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        expected.sort();
+        assert_eq!(found, expected, "`local` and constructor params must not be tagged");
+    }
+}

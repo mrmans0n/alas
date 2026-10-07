@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let users find project symbols through the composer's `@` picker, insert them as style A badges, and send the agent a reference (optionally with the declaration's code), with a snapshot stored on the sent message.
+**Goal:** Let users find project symbols through the composer's `@` picker, insert them as code-token badges, and send the agent a reference (optionally with the declaration's code), with a snapshot stored on the sent message.
 
 **Architecture:** Tree-sitter tag queries in `ThirdParty/treesitter-pack` feed a Swift `SymbolExtractor`. A `WorktreeSymbolIndex` actor indexes local worktrees lazily from `FileIndex`'s file list. Symbol mentions travel the existing mention pipeline as `alas-symbol://` links. At send time `ACPSymbolReference` re-finds each symbol, stores an `ACPSymbolSnapshot` on the recorded attachment, and replaces the link on the wire with reference text and optional code.
 
@@ -25,7 +25,7 @@
 - Not found at send: last known location, marked `not found when sent`.
 - `ACPMessage.Attachment.symbol` is optional and excluded from `==`/`hash(into:)`.
 - Picker scopes: All, Files, Symbols, Sessions; ⌘1–⌘4 select a scope; ⇥ keeps its current meaning; ⏎ inserts; ⌥⏎ inserts with "Include code" on.
-- Badge style A: kind icon, container dimmed, name in code font; filled variant with `{ } N lines` when code is included.
+- Badge: code-token pill. Kind icon, container in the type color, name in its kind's color, code font; kind colors darkened on the light theme. With code included: 2 pt accent edge, accent border, trailing `N lines` segment (`400+ lines` past the cap).
 - Phase 1 transcript: sent symbols render as `FileChip` labeled with the qualified name; clicking opens the editor at the symbol.
 - Tests use Swift Testing (`import Testing`), follow `AGENTS.md` testing policy, and run focused with `-only-testing`.
 - After adding Swift files, run `xcodegen` and commit `Alas.xcodeproj/project.pbxproj` with the sources.
@@ -61,7 +61,7 @@
 | `Alas/Sources/ACP/UI/ACPMentionPicker.swift` | Symbol rows, scope chips, headers, footer, ⌥⏎. |
 | `Alas/Sources/ACP/UI/ACPComposer.swift` | Panel size, symbol provider plumbing, `insertSymbolMention`. |
 | `Alas/Sources/ACP/UI/ACPComposerShell.swift`, `ACPTabView.swift` | Pass `ACPSymbolMentionSource` down. |
-| `Alas/Sources/ACP/UI/ACPSymbolChipCell.swift` (new) | Style A badge cell. |
+| `Alas/Sources/ACP/UI/ACPSymbolChipCell.swift` (new) | Code-token badge cell. |
 | `Alas/Sources/ACP/UI/ACPMentionChipAttachment.swift` | Choose the symbol cell for symbol URIs; symbol hover text. |
 | `Alas/Sources/ACP/Session/ACPSymbolReference.swift` (new) | URI format, snapshot type, resolution, wire replacement. |
 | `Alas/Sources/ACP/Session/ACPMessage.swift` | `Attachment.symbol`. |
@@ -769,7 +769,7 @@ git commit -m "feat(symbols): extract declarations with tree-sitter tags"
 - Consumes: `SymbolExtractor.symbols(in:relativePath:)`, `LanguageRegistry.supportsSymbols(forPath:)`.
 - Produces:
   - `SymbolSource.read(root: URL, relativePath: String) async -> String?` and `SymbolSource.containedLocalURL(root: URL, relativePath: String) -> URL?`
-  - `actor WorktreeSymbolIndex` with `func updates(root: URL, files: [String]?) -> AsyncStream<WorktreeSymbolIndex.Snapshot>` (`nil` files: enumeration failed, replay the cache unchanged) and `func isLoaded(root: URL) -> Bool`
+  - `actor WorktreeSymbolIndex` with `func updates(root: URL, files: @escaping @Sendable () async -> [String]?) -> AsyncStream<WorktreeSymbolIndex.Snapshot>` (`files` lists the worktree inside the refresh, so a newer request supersedes an older one still listing; `nil`: enumeration failed, replay the cache unchanged), `func refreshIfLoaded(root:files:)`, `func remove(root: URL)`, and `func isLoaded(root: URL) -> Bool`
   - `struct WorktreeSymbolIndex.Snapshot: Sendable, Equatable { symbols: [SymbolEntry]; indexedFiles: Int; totalFiles: Int; isComplete: Bool }`
   - `AppState.symbolIndex: WorktreeSymbolIndex`
 
@@ -2102,9 +2102,10 @@ struct ACPSymbolMentionSource {
             index: root.isRemoteAlasPath ? nil : { [state] in
                 // Fresh listing on every open, like the file provider does;
                 // nil on a failed enumeration: the index replays its cache.
-                await state.fileIndex.invalidate(forWorktreePath: root)
-                let files = (try? await state.fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
-                return await state.symbolIndex.updates(root: root, files: files)
+                await state.symbolIndex.updates(root: root) { [fileIndex = state.fileIndex] in
+                    await fileIndex.invalidate(forWorktreePath: root)
+                    return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+                }
             },
             fileSymbols: { [state] fileQuery in
                 // From FileIndex paths, not the picker's file list: that list
@@ -2421,7 +2422,7 @@ git commit -m "feat(acp): offer project symbols in the @ picker"
 
 ---
 
-### Task 8: Style A badge and hover text
+### Task 8: Code-token badge and hover text
 
 **Files:**
 - Modify: `Alas/Sources/ACP/UI/ACPSymbolChipCell.swift` (created in Task 7 with the `SymbolKind` color extension)
@@ -2429,7 +2430,7 @@ git commit -m "feat(acp): offer project symbols in the @ picker"
 
 **Interfaces:**
 - Consumes: `ACPSymbolReference.target(fromURI:)`, `ACPMentionChipMetrics`.
-- Produces: `SymbolKind.badgeForeground`, `SymbolKind.badgeBackground` (`NSColor`); `ACPSymbolChipCell(target:)`.
+- Produces: `SymbolKind.badgeForeground`, `SymbolKind.badgeBackground`, `SymbolKind.badgeLabelColor` (`NSColor`); `ACPSymbolChipCell(target:)`.
 
 Drawing only; no automated test (testing policy). Verified in Task 10.
 
@@ -2451,15 +2452,31 @@ extension SymbolKind {
     }
 
     var badgeBackground: NSColor { badgeForeground.withAlphaComponent(0.2) }
+
+    /// Text color for a name of this kind on the badge: the kind color,
+    /// darkened on the light theme so it keeps its contrast.
+    var badgeLabelColor: NSColor {
+        .appearanceAware(
+            dark: badgeForeground,
+            light: badgeForeground.blended(withFraction: 0.45, of: .black) ?? badgeForeground
+        )
+    }
 }
 
-/// Style A symbol badge: kind icon, dimmed container, name in the code font,
-/// and `{ } N lines` with a filled background when code is included.
+/// Code-token symbol badge: kind icon, container in the type color, and name
+/// in its kind's color on a dark code-style pill. With code included, an
+/// accent edge on the left and a trailing `N lines` segment.
 final class ACPSymbolChipCell: NSTextAttachmentCell {
     let target: ACPSymbolReference.Target
     private static let iconSize: CGFloat = 13
     private static let iconFont = NSFont.systemFont(ofSize: 8.5, weight: .bold)
-    private static let codeFont = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .medium)
+    private static let countFont = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
+    private static let pillFill = NSColor.appearanceAware(
+        dark: NSColor.black.withAlphaComponent(0.28), light: NSColor.black.withAlphaComponent(0.05)
+    )
+    private static let countFill = NSColor.appearanceAware(
+        dark: NSColor.white.withAlphaComponent(0.04), light: NSColor.black.withAlphaComponent(0.04)
+    )
 
     init(target: ACPSymbolReference.Target) {
         self.target = target
@@ -2469,23 +2486,27 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
 
     private var containerText: String { target.container.map { $0 + "." } ?? "" }
     private var nameText: String { target.kind.isCallable ? target.name + "()" : target.name }
-    private var codeText: String? {
+    private var countText: String? {
         guard target.includeCode else { return nil }
         let count = target.lineRange.count
         return count > ACPSymbolReference.maxExcerptLines
-            ? "{ } \(ACPSymbolReference.maxExcerptLines)+ lines"
-            : "{ } \(count) line\(count == 1 ? "" : "s")"
+            ? "\(ACPSymbolReference.maxExcerptLines)+ lines"
+            : "\(count) line\(count == 1 ? "" : "s")"
     }
+    /// Width of the accent edge drawn when code is included.
+    private var edgeWidth: CGFloat { target.includeCode ? 2 : 0 }
 
     private func width(_ text: String, _ font: NSFont) -> CGFloat {
         ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
+    private func countSegmentWidth(_ text: String) -> CGFloat { 10 + width(text, Self.countFont) }
+
     override var cellSize: NSSize {
-        var total = 4 + Self.iconSize + 5
-        total += width(containerText + nameText, ACPMentionChipMetrics.labelFont)
-        if let codeText { total += 6 + width(codeText, Self.codeFont) }
-        return NSSize(width: total + 7, height: ACPMentionChipMetrics.height)
+        var total = edgeWidth + 4 + Self.iconSize + 5
+        total += width(containerText + nameText, ACPMentionChipMetrics.labelFont) + 6
+        if let countText { total += countSegmentWidth(countText) }
+        return NSSize(width: total, height: ACPMentionChipMetrics.height)
     }
 
     override func cellBaselineOffset() -> NSPoint { NSPoint(x: 0, y: ACPMentionChipMetrics.baselineOffset) }
@@ -2502,14 +2523,35 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
     override func draw(withFrame frame: NSRect, in controlView: NSView?) {
         let accent = NSColor.controlAccentColor
         let pill = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
-        accent.withAlphaComponent(target.includeCode ? 0.3 : 0.14).setFill()
+        Self.pillFill.setFill()
         pill.fill()
-        accent.withAlphaComponent(target.includeCode ? 0.9 : 0.45).setStroke()
+
+        // Edge and count segment are clipped to the pill's rounded corners.
+        NSGraphicsContext.saveGraphicsState()
+        pill.addClip()
+        if target.includeCode {
+            accent.setFill()
+            NSRect(x: frame.minX, y: frame.minY, width: edgeWidth, height: frame.height).fill()
+        }
+        if let countText {
+            let segment = NSRect(x: frame.maxX - countSegmentWidth(countText), y: frame.minY,
+                                 width: countSegmentWidth(countText), height: frame.height)
+            Self.countFill.setFill()
+            segment.fill()
+            NSColor.separatorColor.setFill()
+            NSRect(x: segment.minX, y: frame.minY, width: 0.5, height: frame.height).fill()
+            let attrs: [NSAttributedString.Key: Any] = [.font: Self.countFont, .foregroundColor: NSColor.secondaryLabelColor]
+            let size = (countText as NSString).size(withAttributes: attrs)
+            (countText as NSString).draw(at: NSPoint(x: segment.minX + 5, y: frame.midY - size.height / 2), withAttributes: attrs)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        (target.includeCode ? accent.withAlphaComponent(0.6) : NSColor.separatorColor).setStroke()
         pill.lineWidth = 0.75
         pill.stroke()
 
-        var x = frame.minX + 4
-        let iconRect = NSRect(x: x, y: frame.midY - Self.iconSize / 2, width: Self.iconSize, height: Self.iconSize)
+        let iconRect = NSRect(x: frame.minX + edgeWidth + 4, y: frame.midY - Self.iconSize / 2,
+                              width: Self.iconSize, height: Self.iconSize)
         target.kind.badgeBackground.setFill()
         NSBezierPath(roundedRect: iconRect, xRadius: 3, yRadius: 3).fill()
         let letter = target.kind.badgeLetter as NSString
@@ -2517,30 +2559,18 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
         let letterSize = letter.size(withAttributes: letterAttrs)
         letter.draw(at: NSPoint(x: iconRect.midX - letterSize.width / 2, y: iconRect.midY - letterSize.height / 2),
                     withAttributes: letterAttrs)
-        x = iconRect.maxX + 5
 
+        var x = iconRect.maxX + 5
         let labelY = ACPMentionChipMetrics.labelOriginY(in: frame)
-        let label = accent.chipLabelColor
-        let dim: [NSAttributedString.Key: Any] = [.font: ACPMentionChipMetrics.labelFont, .foregroundColor: label.withAlphaComponent(0.6)]
-        let strong: [NSAttributedString.Key: Any] = [.font: ACPMentionChipMetrics.labelFont, .foregroundColor: label]
-        (containerText as NSString).draw(at: NSPoint(x: x, y: labelY), withAttributes: dim)
+        let container: [NSAttributedString.Key: Any] = [
+            .font: ACPMentionChipMetrics.labelFont, .foregroundColor: SymbolKind.class.badgeLabelColor,
+        ]
+        let name: [NSAttributedString.Key: Any] = [
+            .font: ACPMentionChipMetrics.labelFont, .foregroundColor: target.kind.badgeLabelColor,
+        ]
+        (containerText as NSString).draw(at: NSPoint(x: x, y: labelY), withAttributes: container)
         x += width(containerText, ACPMentionChipMetrics.labelFont)
-        (nameText as NSString).draw(at: NSPoint(x: x, y: labelY), withAttributes: strong)
-        x += width(nameText, ACPMentionChipMetrics.labelFont)
-
-        if let codeText {
-            x += 3
-            accent.withAlphaComponent(0.6).setStroke()
-            let divider = NSBezierPath()
-            divider.move(to: NSPoint(x: x, y: frame.minY + 4))
-            divider.line(to: NSPoint(x: x, y: frame.maxY - 4))
-            divider.lineWidth = 0.5
-            divider.stroke()
-            x += 3
-            let attrs: [NSAttributedString.Key: Any] = [.font: Self.codeFont, .foregroundColor: label]
-            let size = (codeText as NSString).size(withAttributes: attrs)
-            (codeText as NSString).draw(at: NSPoint(x: x, y: frame.midY - size.height / 2), withAttributes: attrs)
-        }
+        (nameText as NSString).draw(at: NSPoint(x: x, y: labelY), withAttributes: name)
     }
 }
 ```
@@ -2742,7 +2772,7 @@ Build and launch the Debug app, open an ACP tab on this Alas worktree, and check
 1. Type `@restore`. Symbols appear in a SYMBOLS group above FILES; the footer shows indexing progress on first open, then the key hints.
 2. ⌘3 shows only symbols; ⌘1 returns to All; ⇥ still inserts the highlighted row.
 3. While indexing, the highlighted row does not change under the pointer as results arrive.
-4. ⏎ on `SessionManager…` (or any method) inserts a style A badge; ⌥⏎ inserts the filled badge with `{ } N lines`. Hovering shows `path:start–end`.
+4. ⏎ on `SessionManager…` (or any method) inserts a code-token badge with the kind icon and colored name; ⌥⏎ inserts it with the accent edge and `N lines` segment. Check both badges on the light theme too. Hovering shows `path:start–end`.
 5. `LSPClient.swift#docum` lists that file's symbols only.
 6. Send a prompt with one plain and one code badge to an agent. The transcript shows two `curlybraces` chips; clicking one opens the editor with the symbol's lines revealed. Repeat steps 5–6 on a remote (SSH) worktree: drill-down lists symbols and the chip opens the remote file.
 7. Inspect what the agent received (agent log or ask the agent to quote it): the reference line, and the code as a fence or resource.

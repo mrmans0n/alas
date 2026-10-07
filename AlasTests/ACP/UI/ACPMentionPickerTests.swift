@@ -215,4 +215,102 @@ struct ACPMentionPickerTests {
         // standardized output shares this prefix for relative-path stripping.
         return root.resolvingSymlinksInPath()
     }
+
+    private func symbol(_ name: String, _ kind: SymbolKind, container: String? = nil, path: String = "Sources/A.swift") -> SymbolEntry {
+        SymbolEntry(name: name, kind: kind, container: container, languageID: "swift",
+                    relativePath: path, nameRange: NSRange(location: 0, length: name.utf16.count), lineRange: 0...0)
+    }
+
+    @Test("symbols rank exact names first, then types over members, real code over tests, shorter paths")
+    func ranksSymbols() {
+        let symbols = [
+            symbol("testRestore", .method, container: "SessionManagerTests", path: "Tests/SessionManagerTests.swift"),
+            symbol("restore", .method, container: "TabStore", path: "Sources/Tabs/TabStore.swift"),
+            symbol("restore", .method, container: "SessionManager", path: "Sources/SessionManager.swift"),
+            symbol("RestorePolicy", .struct, path: "Sources/Session/RestorePolicy.swift"),
+            symbol("restore", .method, container: "Fixture", path: "Tests/Fixtures/Fixture.swift"),
+        ]
+        let ranked = MentionSymbolRanking.rank(symbols, query: "restore", limit: 10).map(\.qualifiedName)
+        #expect(ranked == [
+            // Equal exact matches: the shorter path wins (27 vs 28 characters).
+            "TabStore.restore", "SessionManager.restore", "Fixture.restore",
+            "RestorePolicy", "SessionManagerTests.testRestore",
+        ])
+        #expect(MentionSymbolRanking.rank(symbols, query: "tabst rest", limit: 1).map(\.qualifiedName) == ["TabStore.restore"])
+        #expect(MentionSymbolRanking.rank(symbols, query: "zzz", limit: 10).isEmpty)
+    }
+
+    @Test("on an equal match, a type beats a member even when the type lives in tests")
+    func typeBeatsMember() {
+        let symbols = [symbol("Store", .property, container: "App"), symbol("Store", .class, path: "Tests/StoreTests.swift")]
+        #expect(MentionSymbolRanking.rank(symbols, query: "Store", limit: 2).map(\.kind) == [.class, .property])
+    }
+
+    @Test("test paths follow the spec's directory and file-name rules", arguments: [
+        ("Tests/A.swift", true), ("src/__tests__/a.ts", true), ("spec/a_spec.rb", true),
+        ("Sources/FooTests.swift", true), ("pkg/server_test.go", true), ("src/a.test.ts", true),
+        ("Sources/Testing.swift", false), ("Sources/Contest.swift", false), ("src/latest/a.ts", false),
+    ])
+    func testPaths(path: String, isTest: Bool) {
+        #expect(MentionSymbolRanking.isTestPath(path) == isTest)
+    }
+
+    @Test("a # splits a file filter from a symbol filter", arguments: [
+        ("restore", MentionSymbolQuery.project("restore")),
+        ("TabStore.swift#res", .file(file: "TabStore.swift", symbol: "res")),
+        ("TabStore.swift#", .file(file: "TabStore.swift", symbol: "")),
+        ("#res", .project("#res")),
+        ("a#b#c", .file(file: "a#b", symbol: "c")),
+    ])
+    func parsesSymbolQuery(query: String, expected: MentionSymbolQuery) {
+        #expect(MentionSymbolQuery.parse(query) == expected)
+    }
+
+    @Test("File.swift#name lists only that file's symbols, in All as in Symbols")
+    func drillDownListsOnlyFileSymbols() {
+        for scope in [MentionScope.all, .symbols] {
+            let plan = MentionQueryPlan.make(
+                query: "TabStore.swift#res", scope: scope, isAbsolute: false, offersSymbols: true, displayLimit: 80)
+            #expect(plan == MentionQueryPlan(
+                sessions: false, symbols: .file(file: "TabStore.swift", symbol: "res"), fileQuery: nil))
+        }
+        // Files scope narrows by the file part; nothing to drill into without symbols.
+        #expect(MentionQueryPlan.make(
+            query: "TabStore.swift#res", scope: .files, isAbsolute: false, offersSymbols: true, displayLimit: 80
+        ) == MentionQueryPlan(sessions: false, symbols: .none, fileQuery: "TabStore.swift"))
+        #expect(MentionQueryPlan.make(
+            query: "a#b", scope: .all, isAbsolute: false, offersSymbols: false, displayLimit: 80
+        ) == MentionQueryPlan(sessions: true, symbols: .none, fileQuery: "a#b"))
+    }
+
+    @Test("project queries group by scope; All caps symbols and skips them for an empty query")
+    func projectQueryPlans() {
+        func plan(_ query: String, _ scope: MentionScope, absolute: Bool = false) -> MentionQueryPlan {
+            MentionQueryPlan.make(query: query, scope: scope, isAbsolute: absolute, offersSymbols: true, displayLimit: 80)
+        }
+        #expect(plan("res", .all) == MentionQueryPlan(
+            sessions: true, symbols: .project(query: "res", limit: MentionSymbolRanking.allScopeLimit), fileQuery: "res"))
+        #expect(plan("", .all) == MentionQueryPlan(sessions: true, symbols: .none, fileQuery: ""))
+        #expect(plan("", .symbols) == MentionQueryPlan(sessions: false, symbols: .project(query: "", limit: 80), fileQuery: nil))
+        #expect(plan("res", .sessions) == MentionQueryPlan(sessions: true, symbols: .none, fileQuery: nil))
+        #expect(plan("~/src#x", .all, absolute: true) == MentionQueryPlan(sessions: false, symbols: .none, fileQuery: "~/src#x"))
+    }
+
+    @Test("scopes offered follow the available sources; none when only files are")
+    func offeredScopes() {
+        #expect(MentionScope.offered(symbols: true, sessions: true) == [.all, .files, .symbols, .sessions])
+        #expect(MentionScope.offered(symbols: false, sessions: true) == [.all, .files, .sessions])
+        #expect(MentionScope.offered(symbols: true, sessions: false) == [.all, .files, .symbols])
+        #expect(MentionScope.offered(symbols: false, sessions: false).isEmpty)
+    }
+
+    @Test("new results keep the highlighted item when it is still listed")
+    func preservesHighlightedItem() {
+        let a = MentionPickerItem.file(URL(fileURLWithPath: "/tmp/a"))
+        let b = MentionPickerItem.file(URL(fileURLWithPath: "/tmp/b"))
+        let s = MentionPickerItem.symbol(symbol("restore", .method))
+        #expect(MentionPickerNavigation.index(preserving: b, fallback: 1, in: [s, a, b]) == 2)
+        #expect(MentionPickerNavigation.index(preserving: b, fallback: 1, in: [s, a]) == 1)
+        #expect(MentionPickerNavigation.index(preserving: nil, fallback: 5, in: [a]) == 0)
+    }
 }

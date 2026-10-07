@@ -138,11 +138,18 @@ enum ACPMessage: Equatable {
         /// attachments as different.
         let textOffset: Int?
 
-        init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil) {
+        /// Symbol mentions only: what was sent (see `ACPSymbolReference`).
+        /// Absent in legacy rows. Excluded from `==`/`hash(into:)` like
+        /// `textOffset`, so an agent-echoed copy still reconciles.
+        let symbol: ACPSymbolSnapshot?
+
+        init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil,
+             symbol: ACPSymbolSnapshot? = nil) {
             self.uri = uri
             self.name = name
             self.mimeType = mimeType
             self.textOffset = textOffset
+            self.symbol = symbol
         }
 
         static func checkpointReference(id: CheckpointID) -> Self {

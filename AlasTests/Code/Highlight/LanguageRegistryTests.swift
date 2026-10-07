@@ -205,4 +205,18 @@ struct LanguageRegistryTests {
             )
         }
     }
+
+    @Test("Every symbol language resolves a compiling tags query", arguments: [
+        "a.swift", "a.ts", "a.tsx", "a.js", "a.py", "a.go", "a.rs", "a.java", "a.kt",
+    ])
+    func tagsQueryResolves(path: String) {
+        #expect(LanguageRegistry.tagsQuery(forPath: path) != nil)
+        #expect(LanguageRegistry.supportsSymbols(forPath: path))
+    }
+
+    @Test("Languages without a tags query report no symbol support")
+    func noTagsQuery() {
+        #expect(LanguageRegistry.tagsQuery(forPath: "a.json") == nil)
+        #expect(!LanguageRegistry.supportsSymbols(forPath: "README.md"))
+    }
 }

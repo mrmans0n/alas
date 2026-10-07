@@ -5,6 +5,10 @@ import SwiftUI
 struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
+    /// Read only through `attachments`; here because `Attachment.==` leaves
+    /// out `symbol`, so SwiftUI would keep a chip's label and click target
+    /// when a sent prompt's snapshots arrive.
+    let symbolSnapshots: [ACPSymbolSnapshot?]
     let pastedSpans: [ACPPastedTextSpan]
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
@@ -12,6 +16,7 @@ struct UserMessageRow: View {
     let chipsAbsolutePaths: Bool
     @Environment(\.theme) private var theme
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
+    @Environment(\.openURL) private var openURL
     var body: some View {
         HStack {
             Spacer(minLength: 40)
@@ -37,13 +42,26 @@ struct UserMessageRow: View {
                     }
                     if !others.isEmpty {
                         HStack(spacing: 4) {
-                            ForEach(others, id: \.uri) { a in
-                                FileChip(
-                                    path: a.name ?? a.uri,
-                                    lines: nil,
-                                    iconSystemName: ACPSessionReference.sessionId(fromURI: a.uri) == nil
-                                        ? "at" : "bubble.left.and.bubble.right"
-                                )
+                            ForEach(Array(others.enumerated()), id: \.offset) { _, a in
+                                if let target = ACPSymbolReference.target(fromURI: a.uri) {
+                                    FileChip(
+                                        path: target.displayName,
+                                        lines: "\((target.path as NSString).lastPathComponent):\((a.symbol?.lineRange ?? target.lineRange).lowerBound + 1)",
+                                        iconSystemName: "curlybraces",
+                                        action: {
+                                            if let url = ACPSymbolReference.openURL(for: target, snapshot: a.symbol) {
+                                                openURL(url)
+                                            }
+                                        }
+                                    )
+                                } else {
+                                    FileChip(
+                                        path: a.name ?? a.uri,
+                                        lines: nil,
+                                        iconSystemName: ACPSessionReference.sessionId(fromURI: a.uri) == nil
+                                            ? "at" : "bubble.left.and.bubble.right"
+                                    )
+                                }
                             }
                         }
                     }

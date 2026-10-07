@@ -152,4 +152,15 @@ struct ACPImageBlocksTests {
         )
         #expect(outsideWorktree == [.resourceLink(uri: outside.absoluteString, name: "outside.txt")])
     }
+
+    @Test("hydrate never expands symbol links into file contents")
+    func hydrateLeavesSymbolLinks() async {
+        let link = ACPContentBlock.resourceLink(
+            uri: ACPSymbolReference.uri(for: .init(path: "a.swift", name: "a", kind: .function,
+                                                   container: nil, lineRange: 0...0, includeCode: true)),
+            name: "a()"
+        )
+        let wire = await ACPSessionRunner.hydrate([link], promptCapabilities: .init(embeddedContext: true), worktreePath: "/tmp")
+        #expect(wire == [link])
+    }
 }

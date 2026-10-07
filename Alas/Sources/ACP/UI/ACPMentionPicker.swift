@@ -21,6 +21,7 @@ struct ACPSessionMentionSource {
 
 enum MentionPickerItem: Hashable {
     case session(ACPSessionMentionCandidate)
+    case symbol(SymbolEntry)
     case file(URL)
 }
 
@@ -32,6 +33,8 @@ struct ACPMentionPickerView: View {
     var sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil
     let onPick: (URL) -> Void
     var onPickSession: (ACPSessionMentionCandidate) -> Void = { _ in }
+    var symbolMentions: ACPSymbolMentionSource? = nil
+    var onPickSymbol: (SymbolEntry, Bool) -> Void = { _, _ in }
     let onCancel: () -> Void
     let filesProvider: (@Sendable () async -> [URL])?
 
@@ -46,6 +49,11 @@ struct ACPMentionPickerView: View {
     @State private var rankTask: Task<Void, Never>?
     @State private var rankGeneration: Int = 0
     @State private var scrollOnHighlightChange = false
+    @State private var scope: MentionScope = .all
+    @State private var allSymbols: [SymbolEntry] = []
+    @State private var symbolIndexing: MentionSymbolIndexing? = nil
+    @State private var symbolTask: Task<Void, Never>?
+    @State private var isClosed = false
 
     private let maxDisplay = 80
 
@@ -57,10 +65,12 @@ struct ACPMentionPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             search
+            scopeBar
             Divider().background(theme.color("line"))
             list
+            footer
         }
-        .frame(width: 360, height: 280)
+        .frame(width: 440, height: 330)
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
@@ -71,7 +81,29 @@ struct ACPMentionPickerView: View {
         .onAppear {
             populateSessions()
             populateFiles()
+            populateSymbols()
         }
+        .onDisappear {
+            isClosed = true
+            symbolTask?.cancel()
+            symbolTask = nil
+            rankTask?.cancel()
+            rankTask = nil
+        }
+    }
+
+    private var offeredScopes: [MentionScope] {
+        MentionScope.offered(symbols: symbolMentions != nil, sessions: sessionsProvider != nil)
+    }
+
+    private var placeholder: String {
+        let subject = switch (symbolMentions != nil, sessionsProvider != nil) {
+        case (true, true): "files, symbols & sessions"
+        case (true, false): "files, symbols & folders"
+        case (false, true): "files, folders & sessions"
+        case (false, false): "files & folders"
+        }
+        return "Search \(subject)… (/ or ~/ to browse)"
     }
 
     private var search: some View {
@@ -79,12 +111,7 @@ struct ACPMentionPickerView: View {
             Image(systemName: "at")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
-            TextField(
-                sessionsProvider == nil
-                    ? "Search files & folders… (/ or ~/ to browse)"
-                    : "Search files, folders & sessions… (/ or ~/ to browse)",
-                text: $query
-            )
+            TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
@@ -93,7 +120,7 @@ struct ACPMentionPickerView: View {
                 .onChange(of: query) { _, _ in
                     scrollOnHighlightChange = false
                     highlight = 0
-                    rescheduleRank()
+                    rescheduleRank(preserveHighlight: false)
                 }
             if !query.isEmpty {
                 Button { query = "" } label: {
@@ -105,6 +132,59 @@ struct ACPMentionPickerView: View {
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var scopeBar: some View {
+        let scopes = offeredScopes
+        if !scopes.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(Array(scopes.enumerated()), id: \.element) { index, item in
+                    let number = index + 1
+                    Button {
+                        scope = item
+                        highlight = 0
+                        rescheduleRank(preserveHighlight: false)
+                    } label: {
+                        Text(item.title)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(scope == item ? theme.color("accent").opacity(0.22) : theme.color("bg-2"))
+                            .foregroundStyle(scope == item ? theme.color("accent") : theme.color("fg-faint"))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                    .help("\(item.title) (⌘\(number))")
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        let text: String? = switch symbolIndexing {
+        case .starting:
+            "Indexing symbols…"
+        case .progress(let indexed, let total):
+            "Indexing symbols… \(indexed) of \(total) files"
+        case nil where symbolMentions == nil:
+            nil
+        case nil where symbolMentions?.index == nil && scope == .symbols:
+            "Project symbols aren't indexed on remote worktrees. Type File.swift#name."
+        case nil:
+            "⏎ insert · ⌥⏎ insert with code · File.swift#name"
+        }
+        if let text {
+            Divider().background(theme.color("line"))
+            Text(text)
+                .font(.system(size: 10.5))
+                .foregroundStyle(theme.color("fg-faint"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+        }
     }
 
     private var list: some View {
@@ -121,10 +201,21 @@ struct ACPMentionPickerView: View {
                             // Data-based id (the item), not the row position:
                             // a positional id freezes LazyVStack rows against
                             // the ranked list changing as you type.
-                            switch item {
-                            case .file(let file): row(idx: idx, file: file).id(item)
-                            case .session(let session): row(idx: idx, session: session).id(item)
+                            VStack(alignment: .leading, spacing: 1) {
+                                if let header = groupHeader(at: idx) {
+                                    Text(header)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .tracking(0.6)
+                                        .foregroundStyle(theme.color("fg-faint"))
+                                        .padding(.horizontal, 10).padding(.top, idx == 0 ? 2 : 8)
+                                }
+                                switch item {
+                                case .file(let file): row(idx: idx, file: file)
+                                case .session(let session): row(idx: idx, session: session)
+                                case .symbol(let symbol): row(idx: idx, symbol: symbol)
+                                }
                             }
+                            .id(item)
                         }
                     }
                 }
@@ -135,6 +226,62 @@ struct ACPMentionPickerView: View {
                 scrollOnHighlightChange = false
                 guard ranked.indices.contains(new) else { return }
                 proxy.scrollTo(ranked[new], anchor: .center)
+            }
+        }
+    }
+
+    private func groupHeader(at index: Int) -> String? {
+        func group(_ item: MentionPickerItem) -> String {
+            switch item {
+            case .session: "SESSIONS"
+            case .symbol: "SYMBOLS"
+            case .file: "FILES"
+            }
+        }
+        let current = group(ranked[index])
+        if index > 0, group(ranked[index - 1]) == current { return nil }
+        let groups = Set(ranked.map(group))
+        return groups.count > 1 ? current : nil
+    }
+
+    private func row(idx: Int, symbol: SymbolEntry) -> some View {
+        let isOn = idx == highlight
+        return Button { onPickSymbol(symbol, false) } label: {
+            HStack(spacing: 8) {
+                Text(symbol.kind.badgeLetter)
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color(nsColor: symbol.kind.badgeLabelColor))
+                    .frame(width: 16, height: 16)
+                    .background(Color(nsColor: symbol.kind.badgeBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                (Text(symbol.container.map { $0 + "." } ?? "").foregroundStyle(theme.color("fg-faint"))
+                    + Text(symbol.kind.isCallable ? symbol.name + "()" : symbol.name).fontWeight(.semibold))
+                    .font(.system(size: 12, design: .monospaced))
+                    .lineLimit(1)
+                if MentionSymbolRanking.isTestPath(symbol.relativePath) {
+                    Text("test")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .padding(.horizontal, 4)
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("line"), lineWidth: 0.5))
+                }
+                Spacer(minLength: 8)
+                Text(symbol.relativePath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                scrollOnHighlightChange = false
+                highlight = idx
             }
         }
     }
@@ -227,6 +374,8 @@ struct ACPMentionPickerView: View {
             switch ranked[highlight] {
             case .session(let session):
                 onPickSession(session)
+            case .symbol(let symbol):
+                onPickSymbol(symbol, press.key == .return && press.modifiers.contains(.option))
             case .file(let file) where press.key == .tab && isAbsoluteQuery && file.hasDirectoryPath:
                 query = MentionAbsolutePath.query(entering: file)
             case .file(let file):
@@ -250,7 +399,7 @@ struct ACPMentionPickerView: View {
         guard let sessionsProvider else { return }
         Task { @MainActor in
             sessions = await sessionsProvider()
-            rescheduleRank()
+            rescheduleRank(preserveHighlight: true)
         }
     }
 
@@ -268,34 +417,83 @@ struct ACPMentionPickerView: View {
             }
             allFiles = MentionFuzzy.deduplicated(files: files, relativeTo: worktreeRoot)
             isIndexing = false
-            rescheduleRank()
+            rescheduleRank(preserveHighlight: true)
         }
     }
 
-    private func rescheduleRank() {
+    private func populateSymbols() {
+        guard let index = symbolMentions?.index else { return }
+        symbolIndexing = .starting
+        symbolTask = Task { @MainActor in
+            for await snapshot in await index() {
+                allSymbols = snapshot.symbols
+                symbolIndexing = snapshot.isComplete
+                    ? nil
+                    : .progress(indexed: snapshot.indexedFiles, total: snapshot.totalFiles)
+                rescheduleRank(preserveHighlight: true)
+            }
+            symbolIndexing = nil
+        }
+    }
+
+    private func rescheduleRank(preserveHighlight: Bool) {
         rankTask?.cancel()
+        rankTask = nil
+        // Sessions and files load in untracked tasks that can finish after
+        // the panel closed.
+        guard !isClosed else { return }
         rankGeneration &+= 1
         let gen = rankGeneration
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = allFiles
+        let symbols = allSymbols
         let root = worktreeRoot
-        let sessionItems = !root.isRemoteAlasPath && MentionAbsolutePath.isAbsolute(query: q)
-            ? []
-            : MentionSessionRanking.rank(sessions, query: q).map(MentionPickerItem.session)
+        let isAbsolute = !root.isRemoteAlasPath && MentionAbsolutePath.isAbsolute(query: q)
+        let plan = MentionQueryPlan.make(
+            query: q, scope: scope, isAbsolute: isAbsolute,
+            offersSymbols: symbolMentions != nil, displayLimit: maxDisplay)
+        let sessionItems = plan.sessions
+            ? MentionSessionRanking.rank(sessions, query: q).map(MentionPickerItem.session)
+            : []
+        let fileSymbols = symbolMentions?.fileSymbols
         rankTask = Task.detached(priority: .userInitiated) {
             try? await Task.sleep(nanoseconds: 16_000_000)
             if Task.isCancelled { return }
-            let result: [URL]
-            if q.isEmpty {
-                result = Array(files.prefix(maxDisplay))
-            } else {
-                result = !root.isRemoteAlasPath && MentionAbsolutePath.isAbsolute(query: q)
-                    ? MentionAbsolutePath.entries(forQuery: q, limit: maxDisplay)
-                    : MentionFuzzy.rank(files: files, query: q, limit: maxDisplay, relativeTo: root)
+            var symbolItems: [SymbolEntry] = []
+            switch plan.symbols {
+            case .none:
+                break
+            case .project(let text, let limit):
+                symbolItems = MentionSymbolRanking.rank(symbols, query: text, limit: limit)
+            case .file(let fileQuery, let symbolQuery):
+                if let fileSymbols {
+                    let candidates = await fileSymbols(fileQuery)
+                    if Task.isCancelled { return }
+                    symbolItems = MentionSymbolRanking.rank(candidates, query: symbolQuery, limit: maxDisplay)
+                }
+            }
+            var fileItems: [URL] = []
+            if let fileQuery = plan.fileQuery {
+                if fileQuery.isEmpty {
+                    fileItems = Array(files.prefix(maxDisplay))
+                } else {
+                    fileItems = isAbsolute
+                        ? MentionAbsolutePath.entries(forQuery: fileQuery, limit: maxDisplay)
+                        : MentionFuzzy.rank(files: files, query: fileQuery, limit: maxDisplay, relativeTo: root)
+                }
             }
             if Task.isCancelled { return }
+            let items = sessionItems + symbolItems.map(MentionPickerItem.symbol) + fileItems.map(MentionPickerItem.file)
             await MainActor.run {
-                if rankGeneration == gen { ranked = sessionItems + result.map(MentionPickerItem.file) }
+                guard rankGeneration == gen else { return }
+                // Read the live highlight here, not before the await: the
+                // user may have moved it while ranking or a drill-down read ran.
+                let current = ranked.indices.contains(highlight) ? ranked[highlight] : nil
+                let currentIndex = highlight
+                ranked = items
+                if preserveHighlight {
+                    highlight = MentionPickerNavigation.index(preserving: current, fallback: currentIndex, in: items)
+                }
             }
         }
     }
@@ -337,6 +535,13 @@ enum MentionSessionRanking {
 enum MentionPickerNavigation {
     static func move(from index: Int, by offset: Int, count: Int) -> Int {
         min(max(0, count - 1), max(0, index + offset))
+    }
+
+    /// After results change under an unchanged query, keep the user's
+    /// highlighted item if it is still listed; otherwise keep the position.
+    static func index(preserving item: MentionPickerItem?, fallback: Int, in items: [MentionPickerItem]) -> Int {
+        if let item, let index = items.firstIndex(of: item) { return index }
+        return move(from: fallback, by: 0, count: items.count)
     }
 }
 

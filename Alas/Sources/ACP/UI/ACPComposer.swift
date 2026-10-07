@@ -55,6 +55,7 @@ struct ACPInputField: NSViewRepresentable {
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
     /// Sessions that can be attached by `@` or by a drop. `nil` offers none.
     var sessionMentions: ACPSessionMentionSource? = nil
+    var symbolMentions: ACPSymbolMentionSource? = nil
     /// Slash commands Alas handles itself, offered ahead of the agent's.
     var alasCommands: [ACPPromptSuggestion] = []
 
@@ -76,6 +77,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .URL, .png, .tiff])
         context.coordinator.sessionMentions = sessionMentions
+        context.coordinator.symbolMentions = symbolMentions
         context.coordinator.restoreInitialDraft(into: textView)
         context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
@@ -136,6 +138,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.sendOnEnter = sendOnEnter
         context.coordinator.typography = typography
         context.coordinator.sessionMentions = sessionMentions
+        context.coordinator.symbolMentions = symbolMentions
         if context.coordinator.upstreamReferences !== upstreamReferences {
             context.coordinator.attachUpstreamReferences(upstreamReferences)
         }
@@ -284,6 +287,7 @@ struct ACPInputField: NSViewRepresentable {
         let onSubmit: ACPComposerSubmitHandler
         let filesProvider: (@Sendable () async -> [URL])?
         var sessionMentions: ACPSessionMentionSource?
+        var symbolMentions: ACPSymbolMentionSource?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
         private(set) var upstreamReferences: ACPUpstreamReferenceStore?
@@ -1584,11 +1588,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
             worktreeRoot: coord.worktreeRoot,
             filesProvider: coord.filesProvider,
             sessionsProvider: coord.sessionMentions?.candidates,
+            symbolMentions: coord.symbolMentions,
             onPick: { [weak self] file in
                 self?.insertMention(file)
             },
             onPickSession: { [weak self] session in
                 self?.insertSessionMention(session)
+            },
+            onPickSymbol: { [weak self] symbol, includeCode in
+                self?.insertSymbolMention(symbol, includeCode: includeCode)
             },
             onCancel: { [weak self] in
                 self?.closeMentionPanel()
@@ -2713,6 +2721,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     @discardableResult
+    func insertSymbolMention(_ entry: SymbolEntry, includeCode: Bool) -> Bool {
+        let target = ACPSymbolReference.Target(entry: entry, includeCode: includeCode)
+        return insertMention(displayName: target.displayName, uri: ACPSymbolReference.uri(for: target))
+    }
+
+    @discardableResult
     private func insertMention(displayName name: String, uri: String) -> Bool {
         invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
@@ -2813,14 +2827,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
 /// Glass NSPanel hosting the SwiftUI fuzzy file picker. Floats above
 /// the composer when the user types '@'.
 final class ACPMentionPanel: NSPanel {
+    private var host: NSView?
+
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
          sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil,
+         symbolMentions: ACPSymbolMentionSource? = nil,
          onPick: @escaping (URL) -> Void,
          onPickSession: @escaping (ACPSessionMentionCandidate) -> Void = { _ in },
+         onPickSymbol: @escaping (SymbolEntry, Bool) -> Void = { _, _ in },
          onCancel: @escaping () -> Void = {}) {
         super.init(
-            contentRect: .init(x: 0, y: 0, width: 360, height: 280),
+            contentRect: .init(x: 0, y: 0, width: 440, height: 330),
             styleMask: [.borderless, .nonactivatingPanel, .titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -2844,15 +2862,32 @@ final class ACPMentionPanel: NSPanel {
                 self?.close()
                 onPickSession(session)
             },
+            symbolMentions: symbolMentions,
+            onPickSymbol: { [weak self] symbol, includeCode in
+                self?.close()
+                onPickSymbol(symbol, includeCode)
+            },
             onCancel: { [weak self] in
                 self?.close()
                 onCancel()
             },
             filesProvider: filesProvider
         ))
-        host.frame = contentView?.bounds ?? .init(x: 0, y: 0, width: 360, height: 280)
+        host.frame = contentView?.bounds ?? .init(x: 0, y: 0, width: 440, height: 330)
         host.autoresizingMask = [.width, .height]
         contentView?.addSubview(host)
+        self.host = host
+    }
+
+    /// Closing alone keeps the SwiftUI view in the window, so its
+    /// `onDisappear`, which cancels the symbol index and ranking tasks, never
+    /// runs. Removing the host does run it. Deferred: a pick closes the
+    /// panel from inside the host's own button or key handler.
+    override func close() {
+        super.close()
+        guard let host else { return }
+        self.host = nil
+        Task { @MainActor in host.removeFromSuperview() }
     }
 
     override var canBecomeKey: Bool { true }

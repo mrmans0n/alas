@@ -3669,9 +3669,14 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
-                var wireBlocks = await self.expandingSessionReferences(Self.hydrate(
-                    blocks, promptCapabilities: self.session.promptCapabilities,
-                    worktreePath: self.worktreePath))
+                let symbolExpansion = await ACPSymbolReference.expansion(
+                    of: blocks, worktreeRoot: URL(fileURLWithPath: self.worktreePath),
+                    embeddedContext: self.session.promptCapabilities.embeddedContext)
+                var wireBlocks = ACPSymbolReference.replacingReferences(
+                    in: await self.expandingSessionReferences(Self.hydrate(
+                        blocks, promptCapabilities: self.session.promptCapabilities,
+                        worktreePath: self.worktreePath)),
+                    with: symbolExpansion)
                 guard await self.hasConfirmedLeaseForSideEffect(),
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
@@ -3691,7 +3696,8 @@ extension ACPSessionRunner {
                     let promptText = Self.textPreview(of: blocks)
                     let userMessageID = self.session.recordUserPrompt(
                         text: promptText,
-                        attachments: Self.attachments(of: blocks, draft: draft),
+                        attachments: ACPSymbolReference.attachingSnapshots(
+                            to: Self.attachments(of: blocks, draft: draft), from: symbolExpansion),
                         pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                         delegatedSource: delegatedSource)
                     recordedMessageID = userMessageID
@@ -3742,6 +3748,10 @@ extension ACPSessionRunner {
                     else { throw CancellationError() }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
                 } else {
+                    if let recordedMessageID,
+                       let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedMessageID, from: symbolExpansion) {
+                        self.persistIndices([index])
+                    }
                     self.session.allowsStreamingBoundaryCrossing = true
                     var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
                     let dirty = self.session.beginSteeringOutputBoundary(followingUserCount: 0) { text in
@@ -3811,6 +3821,7 @@ extension ACPSessionRunner {
                       !self.stopped, self.isConnectionCurrent(),
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
+                self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                 let result = try await self.connection.steer(
                     sessionId: self.session.remoteSessionId ?? self.sessionId, blocks: wireBlocks,
                     brokerOperationKey: durableQueueItem.item.steeringBrokerOperationKey)
@@ -4089,35 +4100,51 @@ extension ACPSessionRunner {
                     queueDispatchHandoffTracker.finish(queuedItemId)
                 }
             }
-            guard await self.hasConfirmedLeaseForSideEffect() else {
-                await MainActor.run {
-                    // Losing the lease stands this runner down inside the
-                    // check itself, so `stopped` is already true by the time
-                    // we get here. That teardown belongs to THIS prompt, not a
-                    // successor: when the connection still belongs to this
-                    // attempt and no newer prompt has taken over, the
-                    // submitter must learn the send failed — otherwise the
-                    // composer and remote gateways wait forever on a
-                    // completion that never fires. A replaced connection or a
-                    // newer active prompt keeps the callback (its successor
-                    // turn owns the outcome).
-                    let canFinishPrompt = self.isConnectionCurrent() &&
-                        !self.steerInProgress &&
-                        (self.activePromptID == nil || self.activePromptID == promptID)
-                    if self.activePromptID == promptID {
-                        self.activePromptID = nil
-                    }
-                    self.cancelledPromptIDs.remove(promptID)
-                    onDispatchRegistered?()
-                    if canFinishPrompt {
-                        onPromptFinished?(false)
-                    }
+            let abandonUnrecordedPrompt = { @MainActor in
+                // Losing the lease stands this runner down inside the
+                // check itself, so `stopped` is already true by the time
+                // we get here. That teardown belongs to THIS prompt, not a
+                // successor: when the connection still belongs to this
+                // attempt and no newer prompt has taken over, the
+                // submitter must learn the send failed — otherwise the
+                // composer and remote gateways wait forever on a
+                // completion that never fires. A replaced connection or a
+                // newer active prompt keeps the callback (its successor
+                // turn owns the outcome).
+                let canFinishPrompt = self.isConnectionCurrent() &&
+                    !self.steerInProgress &&
+                    (self.activePromptID == nil || self.activePromptID == promptID)
+                if self.activePromptID == promptID {
+                    self.activePromptID = nil
                 }
+                self.cancelledPromptIDs.remove(promptID)
+                onDispatchRegistered?()
+                if canFinishPrompt {
+                    onPromptFinished?(false)
+                }
+            }
+            guard await self.hasConfirmedLeaseForSideEffect() else {
+                await abandonUnrecordedPrompt()
+                return
+            }
+            let symbolExpansion = await ACPSymbolReference.expansion(
+                of: blocks, worktreeRoot: URL(fileURLWithPath: self.worktreePath),
+                embeddedContext: self.session.promptCapabilities.embeddedContext)
+            // Resolution suspends for file reads, so a takeover can land
+            // meanwhile. Confirm the lease again before recording anything.
+            guard await self.hasConfirmedLeaseForSideEffect() else {
+                await abandonUnrecordedPrompt()
                 return
             }
             let checkpointPrompt = Self.textPreview(of: blocks)
             let checkpointHasAttachments = !Self.attachments(of: blocks).isEmpty
             let promptRecording = await MainActor.run { () -> (proceeded: Bool, messageID: UUID?) in
+                // Stopped, or its connection replaced, while symbol mentions
+                // resolved: this prompt is over and must not be recorded.
+                if self.activePromptID == promptID, self.stopped || !self.isConnectionCurrent() {
+                    abandonUnrecordedPrompt()
+                    return (false, nil)
+                }
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
                 // may already be torn down by detach, and recording the
@@ -4176,7 +4203,9 @@ extension ACPSessionRunner {
                     }
                     let promptText = Self.textPreview(of: blocks)
                     let messageID = self.session.recordUserPrompt(text: promptText,
-                                                                  attachments: Self.attachments(of: blocks, draft: draft),
+                                                                  attachments: ACPSymbolReference.attachingSnapshots(
+                                                                      to: Self.attachments(of: blocks, draft: draft),
+                                                                      from: symbolExpansion),
                                                                   pastedSpans: draft?.pastedTextSpans(matching: promptText) ?? [],
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
@@ -4205,6 +4234,12 @@ extension ACPSessionRunner {
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
                     return (true, messageID)
+                }
+                let recordedID = recordedUserMessageID
+                    ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
+                if let recordedID,
+                   let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedID, from: symbolExpansion) {
+                    self.persistIndices([index])
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
@@ -4239,11 +4274,13 @@ extension ACPSessionRunner {
                         messages: Array(self.session.transcript.messages.prefix(fork.inheritedMessageCount))
                     )
                 }()
-                var wireBlocks = await self.expandingSessionReferences(Self.hydrate(
-                    blocks,
-                    promptCapabilities: promptCapabilities,
-                    worktreePath: self.worktreePath
-                ))
+                var wireBlocks = ACPSymbolReference.replacingReferences(
+                    in: await self.expandingSessionReferences(Self.hydrate(
+                        blocks,
+                        promptCapabilities: promptCapabilities,
+                        worktreePath: self.worktreePath
+                    )),
+                    with: symbolExpansion)
                 // Wire-only context is prepended for the agent and never part
                 // of the recorded transcript — recording above used `blocks`.
                 var privateBlocks: [ACPContentBlock] = []
@@ -4292,6 +4329,7 @@ extension ACPSessionRunner {
                     self.unreportedPrompts[promptID] = (
                         self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
                     self.noteSent(promptID, streamStart: self.activePromptStreamStart)
+                    self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
                     if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
@@ -4696,6 +4734,8 @@ extension ACPSessionRunner {
             persistFromIndex(before)
         }
         guard activePromptID == nil else { return }
+        // The turn's updates have drained: its echoes have all arrived.
+        session.endSymbolExpansionEchoTurn()
         session.transcript.streamingState = .idle
         guard flushQueueWhenReady else { return }
         flushQueueIfIdle()

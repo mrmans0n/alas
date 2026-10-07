@@ -8,6 +8,7 @@ struct FileChip: View {
     let path: String
     let lines: String?
     let iconSystemName: String?
+    var action: (() -> Void)? = nil
     @Environment(\.theme) private var theme
 
     private var name: String { (path as NSString).lastPathComponent }
@@ -17,6 +18,15 @@ struct FileChip: View {
     }
 
     var body: some View {
+        if let action {
+            Button(action: action) { label }
+                .buttonStyle(.plain)
+        } else {
+            label
+        }
+    }
+
+    private var label: some View {
         HStack(spacing: 6) {
             if let iconSystemName {
                 Image(systemName: iconSystemName)

@@ -123,6 +123,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
+            symbolSnapshots: symbolSnapshots(in: message),
             messageCreatedAt: messageCreatedAt,
             messagePhase: messagePhase ?? presentationPhase(of: message),
             contentMaxWidth: contentMaxWidth,
@@ -138,6 +139,10 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     struct EqualityKey: Equatable {
         let stableId: String
         let message: ACPMessage
+        /// `Attachment.==` leaves out `symbol` so an echoed copy still
+        /// reconciles, but the chip's label and click target read it, and
+        /// it changes in place once the prompt is sent.
+        let symbolSnapshots: [ACPSymbolSnapshot?]
         let messageCreatedAt: Date?
         let messagePhase: ACPMessagePhase?
         let contentMaxWidth: CGFloat
@@ -154,6 +159,15 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
         guard case .agent(_, _, let buffer) = message else { return nil }
         return buffer.phase
+    }
+
+    /// Empty unless an attachment carries a snapshot, so ordinary rows
+    /// don't allocate.
+    static func symbolSnapshots(in message: ACPMessage) -> [ACPSymbolSnapshot?] {
+        guard case .user(_, _, _, let attachments, _, _) = message,
+              attachments.contains(where: { $0.symbol != nil })
+        else { return [] }
+        return attachments.map(\.symbol)
     }
 
     static func checkpointID(in message: ACPMessage) -> CheckpointID? {
@@ -203,6 +217,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     UserMessageRow(
                         text: text,
                         attachments: attachments,
+                        symbolSnapshots: Self.symbolSnapshots(in: message),
                         pastedSpans: pastedSpans,
                         contentMaxWidth: contentMaxWidth,
                         typography: typography,

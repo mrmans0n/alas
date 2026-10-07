@@ -17,6 +17,21 @@ enum LanguageRegistry {
     nonisolated(unsafe) private static var languageCache: [String: Language] = [:]
     nonisolated(unsafe) private static var queryCache: [String: Query] = [:]
     nonisolated(unsafe) private static var queryMissCache: Set<String> = []
+    /// Tags query ids per grammar id. TypeScript and TSX inherit JavaScript's
+    /// tags the same way their highlight queries do.
+    private static let tagsQueryIDsByLanguageID: [String: [String]] = [
+        "swift": ["swift.tags"],
+        "javascript": ["javascript.tags"],
+        "typescript": ["javascript.tags", "typescript.tags"],
+        "tsx": ["javascript.tags", "tsx.tags"],
+        "python": ["python.tags"],
+        "go": ["go.tags"],
+        "rust": ["rust.tags"],
+        "java": ["java.tags"],
+        "kotlin": ["kotlin.tags"],
+    ]
+    nonisolated(unsafe) private static var tagsQueryCache: [String: Query] = [:]
+    nonisolated(unsafe) private static var tagsQueryMissCache: Set<String> = []
 
     /// File extension → grammar id in the pack. `markdown-inline` and
     /// `php-only` are not real extensions; they are how callers ask for the
@@ -188,6 +203,43 @@ enum LanguageRegistry {
             queryMissCache.insert(key)
         }
         return query
+    }
+
+    static func supportsSymbols(forPath path: String) -> Bool {
+        let ext = highlighterExtension(forPath: path)
+        guard let id = languageIDsByExtension[ext] else { return false }
+        return tagsQueryIDsByLanguageID[id] != nil
+    }
+
+    /// Grammar plus compiled tags query for `path`, or nil when the language
+    /// has no tags query. Cached per grammar id.
+    static func tagsQuery(forPath path: String) -> (languageID: String, language: Language, query: Query)? {
+        let ext = highlighterExtension(forPath: path)
+        guard let id = languageIDsByExtension[ext],
+              let parts = tagsQueryIDsByLanguageID[id],
+              let language = language(forFileExtension: ext) else { return nil }
+        cacheLock.lock()
+        if let cached = tagsQueryCache[id] {
+            cacheLock.unlock()
+            return (id, language, cached)
+        }
+        if tagsQueryMissCache.contains(id) {
+            cacheLock.unlock()
+            return nil
+        }
+        cacheLock.unlock()
+
+        let combined = parts.compactMap(queryText(id:)).joined(separator: "\n")
+        let query = combined.isEmpty ? nil : try? Query(language: language, data: Data(combined.utf8))
+
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let query else {
+            tagsQueryMissCache.insert(id)
+            return nil
+        }
+        tagsQueryCache[id] = query
+        return (id, language, query)
     }
 
     /// Compiles the concatenation of `ids`' queries as one `Query`. Missing
