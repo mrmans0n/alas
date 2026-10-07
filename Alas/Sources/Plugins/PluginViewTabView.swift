@@ -251,6 +251,8 @@ private struct PluginMarkdownView: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2")))
+        case .image(let alt, let source):
+            Text(alt.isEmpty ? source : alt).foregroundColor(theme.color("fg-dim"))
         case .table(let header, let rows):
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow { ForEach(Array(header.enumerated()), id: \.offset) { Text(Self.inline($0.element)).bold() } }

@@ -968,6 +968,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return (items.map { "[\($0.isChecked ? "x" : " ")] \($0.text)" }.joined(separator: " "), false)
             case .code(_, let body), .streamingCode(_, let body), .mermaid(let body):
                 return (body, true)
+            case .image(let alt, let source):
+                return (alt.isEmpty ? source : alt, true)
             case .table(let header, let rows):
                 return (([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " "), false)
             }
@@ -990,6 +992,8 @@ enum DiffReviewInlineFeedbackMarkdown {
                 return body
             case .mermaid(let source):
                 return source
+            case .image(let alt, let source):
+                return alt.isEmpty ? source : alt
             case .table(let header, let rows):
                 return ([header] + rows).map { row in
                     row.map { ACPMarkdownInlineRenderer.plainText($0) }.joined(separator: " ")

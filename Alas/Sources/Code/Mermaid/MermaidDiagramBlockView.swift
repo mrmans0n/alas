@@ -193,7 +193,7 @@ private struct MermaidFittedDiagram: View {
     }
 }
 
-private struct MermaidFittedDiagramLayout: Layout {
+struct MermaidFittedDiagramLayout: Layout {
     let intrinsicSize: CGSize
     let maxHeight: CGFloat
 

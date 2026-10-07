@@ -73,6 +73,24 @@ struct ACPMarkdownBlockCacheTests {
         """) == [.streamingCode(language: "mermaid", body: "graph TD; A-->B")])
     }
 
+    @Test("a line that is only an image becomes an image block, splitting the paragraph", arguments: [
+        ("![chart](out/chart.png)", "chart", "out/chart.png"),
+        ("![](/tmp/a b.png \"Title\")", "", "/tmp/a b.png"),
+        ("  ![shot](<shots/x y.png>)", "shot", "shots/x y.png"),
+    ])
+    func imageLineBecomesImageBlock(line: String, alt: String, source: String) {
+        #expect(ACPMarkdownText.parse("before\n\(line)\nafter") == [
+            .paragraph("before"),
+            .image(alt: alt, source: source),
+            .paragraph("after"),
+        ])
+    }
+
+    @Test("an image mid-sentence stays inline paragraph text")
+    func inlineImageStaysParagraph() {
+        #expect(ACPMarkdownText.parse("see ![a](b.png) here") == [.paragraph("see ![a](b.png) here")])
+    }
+
     @Test("blank line inside an unclosed tilde fence does NOT promote stable blocks")
     func tildeFenceKeepsUnstable() async {
         let cache = ACPMarkdownBlockCache()

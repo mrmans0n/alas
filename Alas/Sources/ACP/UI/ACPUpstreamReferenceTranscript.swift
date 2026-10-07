@@ -48,7 +48,7 @@ extension ACPUpstreamReferenceChip {
             case .heading(_, let text), .paragraph(let text), .quote(let text): [text]
             case .taskList(let items): items.map(\.text)
             case .table(let header, let rows): header + rows.flatMap { $0 }
-            case .code, .streamingCode, .mermaid: []
+            case .code, .streamingCode, .mermaid, .image: []
             }
             for fragment in fragments {
                 let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
