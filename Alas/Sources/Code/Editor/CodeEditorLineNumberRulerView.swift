@@ -169,7 +169,9 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
                 let storage = notification.object as? NSTextStorage,
                 storage.editedMask.contains(.editedCharacters)
             else { return }
-            Task { @MainActor [weak self] in
+            // AppKit can draw before the next main-actor task runs. Keep the
+            // cached offsets in step with the text being painted.
+            MainActor.assumeIsolated {
                 self?.rebuildLineStartsAndUpdateThickness()
                 self?.needsDisplay = true
             }

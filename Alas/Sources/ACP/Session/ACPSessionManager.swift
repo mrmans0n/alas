@@ -4860,6 +4860,15 @@ extension ACPSessionManager {
             && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
     }
 
+    func showsTakeoverBanner(sessionId: ACPSession.ID) -> Bool {
+        // Missing authority also covers setup failures and unavailable helpers.
+        // Only an observed foreign owner warrants offering a takeover.
+        if effectiveRemoteHost() != nil {
+            return remoteCoordinator?.isForeignMirror(sessionId: sessionId) == true
+        }
+        return isMirror(sessionId: sessionId)
+    }
+
     private func isAwaitingInitialLeaseObservation(sessionId: ACPSession.ID) -> Bool {
         guard let session = sessions[sessionId],
               session.restoredFromPersistence

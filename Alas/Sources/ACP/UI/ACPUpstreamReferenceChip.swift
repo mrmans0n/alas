@@ -193,6 +193,9 @@ enum ACPUpstreamReferenceChip {
             if let spelling = attributes[.upstreamReference] as? String {
                 found = true
                 result += spelling
+            } else if let command = attributes[.commandChipName] as? String {
+                found = true
+                result += command
             } else if let path = attributes[.pathReference] as? String {
                 found = true
                 result += path

@@ -39,7 +39,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             memoizesInlineMarkdown: memoizesInlineMarkdown,
             chipping: context.environment.acpUpstreamReferenceChipping,
             chipsAbsolutePaths: context.environment.acpAbsolutePathChipping,
-            pastedTextContents: context.environment.acpPastedTextContents
+            pastedTextContents: context.environment.acpPastedTextContents,
+            commandSuggestions: context.environment.acpCommandSuggestions
         )
         guard context.coordinator.shouldRender(renderState) else { return }
 
@@ -59,6 +60,10 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             })
         } ?? 0
         (textView as? ACPMarkdownInlineNSTextView)?.hasPastedTextChips = pastedChipCount > 0
+        let commandChipCount = ACPTranscriptCommandChip.chipify(
+            rendered, suggestions: context.environment.acpCommandSuggestions
+        )
+        (textView as? ACPMarkdownInlineNSTextView)?.hasCommandChips = commandChipCount > 0
         let chipping = context.environment.acpUpstreamReferenceChipping
         // Only subscribe the paragraph to store revisions, and only install
         // its hover tracking area, when it actually holds a chip: most
@@ -242,6 +247,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let chipping: ACPUpstreamReferenceChipping?
         let chipsAbsolutePaths: Bool
         let pastedTextContents: ACPPastedTextContents?
+        var commandSuggestions: [ACPPromptSuggestion] = []
     }
 }
 
@@ -251,6 +257,16 @@ extension NSAttributedString.Key {
 
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private let pastedTextHover = ACPPastedTextHoverController()
+    private let commandHover = ACPCommandChipHoverController()
+    var hasCommandChips = false {
+        didSet {
+            // Any re-render replaces attachments and their metadata.
+            commandHover.hide()
+            guard hasCommandChips != oldValue else { return }
+            updateScrollObservation()
+            updateTrackingAreas()
+        }
+    }
 
     /// Set on paragraphs that render pasted-text chips; like
     /// `upstreamReferences`, it is what installs hover tracking.
@@ -263,7 +279,7 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         }
     }
 
-    private var tracksChipHover: Bool { upstreamReferences != nil || hasPastedTextChips }
+    private var tracksChipHover: Bool { upstreamReferences != nil || hasPastedTextChips || hasCommandChips }
 
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
     var isShowingUpstreamReferenceCard: Bool { upstreamReferenceHover.isShowingCard }
@@ -310,8 +326,11 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                     object: clipView,
                     queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.upstreamReferenceHover.hide()
-                    self?.pastedTextHover.hide() }
+                    MainActor.assumeIsolated {
+                        self?.upstreamReferenceHover.hide()
+                        self?.pastedTextHover.hide()
+                        self?.commandHover.hide()
+                    }
                 })
             }
             ancestor = view.superview
@@ -367,8 +386,11 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// orphaned over whatever now occupies this row.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { upstreamReferenceHover.hide()
-        pastedTextHover.hide() }
+        if window == nil {
+            upstreamReferenceHover.hide()
+            pastedTextHover.hide()
+            commandHover.hide()
+        }
         updateScrollObservation()
     }
 
@@ -383,12 +405,18 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
             at: convert(event.locationInWindow, from: nil), in: self, store: upstreamReferences
         )
         pastedTextHover.update(at: convert(event.locationInWindow, from: nil), in: self)
+        if hasCommandChips, let hit = ACPTranscriptCommandChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            commandHover.scheduleShow(range: hit.range, suggestion: hit.suggestion, in: self)
+        } else {
+            commandHover.hide()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         upstreamReferenceHover.hide()
         pastedTextHover.hideUnlessPinned()
+        commandHover.hide()
     }
 
     override func mouseDown(with event: NSEvent) {

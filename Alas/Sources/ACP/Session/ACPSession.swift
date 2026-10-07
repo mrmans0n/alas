@@ -205,7 +205,17 @@ final class ACPSession: ObservableObject, Identifiable {
     /// whole session's usage.
     @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
-    @Published var currentGoal: ACPGoalState?
+    /// Summaries read the objective, status, and budget, so only those changes reach the
+    /// activity observers; telemetry (tokens, time, iterations) must not consume a suggestion.
+    @Published var currentGoal: ACPGoalState? {
+        willSet {
+            let old = currentGoal, new = newValue
+            if old?.objective != new?.objective || old?.status != new?.status
+                || old?.tokenBudget != new?.tokenBudget {
+                nextPromptActivity.send()
+            }
+        }
+    }
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
     /// A hidden `/btw` side session: only read-only tools run (see
