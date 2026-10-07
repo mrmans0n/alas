@@ -128,6 +128,8 @@ struct ACPMarkdownText: View {
             )
         case .mermaid(let source):
             MermaidDiagramBlockView(source: source, profile: .transcript)
+        case .image(let alt, let source):
+            ACPMarkdownImageBlockView(alt: alt, source: source)
         case .table(let header, let rows):
             tableView(
                 header: header,
@@ -285,6 +287,7 @@ struct ACPMarkdownText: View {
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case mermaid(source: String)
+        case image(alt: String, source: String)
         case table(header: [String], rows: [[String]])
     }
 
@@ -408,6 +411,22 @@ struct ACPMarkdownText: View {
         return line[afterMarker...].allSatisfy(\.isWhitespace)
     }
 
+    /// A line that is nothing but `![alt](source)`, optionally with a
+    /// `"title"` or a `<bracketed source>`. Images mid-sentence stay inline.
+    private static func matchImage(_ line: String) -> (alt: String, source: String)? {
+        guard let match = line.wholeMatch(of: /!\[([^\]]*)\]\((<[^>]*>[^)]*|[^)<][^)]*)\)/) else { return nil }
+        var source = match.2.trimmingCharacters(in: .whitespaces)
+        if source.hasSuffix("\""), let quote = source.dropLast().lastIndex(of: "\""),
+           quote > source.startIndex, source[source.index(before: quote)] == " " {
+            source = source[..<quote].trimmingCharacters(in: .whitespaces)
+        }
+        if source.hasPrefix("<"), source.hasSuffix(">") {
+            source = String(source.dropFirst().dropLast())
+        }
+        guard !source.isEmpty else { return nil }
+        return (String(match.1), source)
+    }
+
     private static func matchTaskItem(_ line: String) -> TaskItem? {
         guard line.count >= 5 else { return nil }
         let marker = String(line.prefix(5))
@@ -495,6 +514,12 @@ struct ACPMarkdownText: View {
                 continue
             }
 
+            if let (alt, source) = matchImage(trimmed) {
+                blocks.append(.image(alt: alt, source: source))
+                i += 1
+                continue
+            }
+
             // Task list: collect contiguous top-level GitHub-style items.
             if let task = matchTaskItem(line) {
                 var items = [task]
@@ -513,7 +538,7 @@ struct ACPMarkdownText: View {
             while i < lines.count {
                 let next = lines[i].trimmingCharacters(in: .whitespaces)
                 if next.isEmpty { break }
-                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil || matchTaskItem(lines[i]) != nil { break }
+                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil || matchTaskItem(lines[i]) != nil || matchImage(next) != nil { break }
                 para.append(lines[i])
                 i += 1
             }
@@ -526,7 +551,7 @@ struct ACPMarkdownText: View {
 private extension ACPMarkdownText.Block {
     var allowsNoninteractiveTapAction: Bool {
         switch self {
-        case .mermaid:
+        case .mermaid, .image:
             false
         case .heading, .paragraph, .taskList, .quote, .code, .streamingCode, .table:
             true
@@ -656,5 +681,103 @@ private struct CodeBlockView: View {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             withAnimation(.easeIn(duration: 0.2)) { copied = false }
         }
+    }
+}
+
+extension EnvironmentValues {
+    /// Worktree an agent's markdown images may load from. Without one only
+    /// inline `data:` images render, the same rule tool-call assets follow.
+    @Entry var acpTrustedImageRoot: URL? = nil
+}
+
+/// `![alt](source)` on its own line, drawn like a Mermaid block: full width,
+/// never upscaled, capped at the transcript diagram height. Sources resolve
+/// through the tool-call asset rules, so only files inside the worktree and
+/// `data:` URIs load; anything else stays a labelled row.
+private struct ACPMarkdownImageBlockView: View {
+    let alt: String
+    let source: String
+    @Environment(\.acpTrustedImageRoot) private var trustedRoot
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let asset = ACPMessage.ToolCallAsset.image(uri: source, name: alt.isEmpty ? nil : alt)
+        let trustedRoot = trustedRoot
+        if asset.canLoadImage(trustedRoot: trustedRoot) {
+            ACPCachedThumbnail(
+                cacheKey: asset.thumbnailCacheKey(trustedRoot: trustedRoot),
+                loadImage: { asset.loadedImage(trustedRoot: trustedRoot) }
+            ) { image in
+                chrome(asset) {
+                    MermaidFittedDiagramLayout(
+                        intrinsicSize: image.size,
+                        maxHeight: MermaidPresentationProfile.transcript.maxEmbeddedHeight
+                    ) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .interpolation(.high)
+                            .aspectRatio(contentMode: .fit)
+                            .accessibilityLabel(asset.displayTitle)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                }
+            } placeholder: {
+                chrome(asset) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 120)
+                }
+            } failure: {
+                unavailable(asset)
+            }
+        } else {
+            unavailable(asset)
+        }
+    }
+
+    private func chrome(
+        _ asset: ACPMessage.ToolCallAsset,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text(asset.displayTitle)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                if let url = ACPMessage.ToolCallAsset.trustedLocalURL(from: source, trustedRoot: trustedRoot) {
+                    Button("Open") { NSWorkspace.shared.open(url) }
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity)
+            .background(theme.color("bg-2").opacity(0.6))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
+            }
+            content()
+        }
+        .background(theme.color("bg-0").opacity(0.6))
+        .clipShape(.rect(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5)
+        }
+    }
+
+    private func unavailable(_ asset: ACPMessage.ToolCallAsset) -> some View {
+        Label(asset.displayText, systemImage: "photo")
+            .font(.system(size: 11.5))
+            .foregroundStyle(theme.color("fg-faint"))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(source)
     }
 }

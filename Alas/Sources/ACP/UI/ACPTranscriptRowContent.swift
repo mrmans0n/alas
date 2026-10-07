@@ -244,6 +244,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     )
                 }
             }
+            .environment(\.acpTrustedImageRoot, trustedImageRoot)
         case .thought(_, _, let buf):
             ACPThoughtView(buffer: buf, isLive: isLiveNarration)
         case .toolCall(let tc):
@@ -275,6 +276,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     // the expanded child card needs it in the environment
                     // exactly like the ordinary tool-call path below.
                     .environment(\.acpTerminalHost, session.terminalHost)
+                    .environment(\.acpTrustedImageRoot, trustedImageRoot)
             } else {
                 ACPToolCallCard(
                     toolCall: tc,

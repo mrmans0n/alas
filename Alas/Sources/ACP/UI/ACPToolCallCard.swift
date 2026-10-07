@@ -597,7 +597,7 @@ extension ACPMessage.ToolCallAsset {
             .hasPrefix("data:")
     }
 
-    private static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {
+    static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {
         guard let trustedRoot else { return nil }
         let candidate: URL
         if let url = URL(string: value), let scheme = url.scheme {
