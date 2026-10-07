@@ -306,7 +306,7 @@ and test targets from [project.yml](project.yml).
 | Dependency | Checked-in version or revision | Role |
 |---|---|---|
 | Ghostty | `1547dd667ab6` | Embedded terminal, built from the submodule as `GhosttyKit.xcframework` |
-| zmx | `8bab1f0173b0` | Persistent terminal sessions |
+| zmx | `2d23c0d44058` | Persistent terminal sessions; upstream `main` after v0.8.1 for IPC `Capture` |
 | fff | `95fd777c2529` | File search through a Rust C ABI |
 | SwiftTreeSitter | 0.10.0 | Swift syntax-highlighting API |
 | tree-sitter | 0.25.10 | Runtime resolved through SwiftPM |
