@@ -33,6 +33,27 @@ struct PluginApproval: Codable, Equatable, Sendable {
     let capabilities: [PluginCapability]
 }
 
+/// What an update asks for that the approved version it replaces did not, covering everything the approval sheet
+/// discloses. Empty means the update keeps or drops permissions, so it installs approved without asking again.
+enum PluginPermissionChange {
+    static func added(approved old: PluginManifest, granted: [PluginCapability], update new: PluginManifest) -> [String] {
+        var added = new.capabilities.filter { !granted.contains($0) }.map(\.summary)
+        added += new.network.filter { !old.network.contains($0) }.map { "Make web requests to \($0)" }
+        // Appending arguments to a command it could already run is more than running it as is.
+        for process in new.processes {
+            let covered = old.processes.contains { $0.command == process.command && ($0.appendArgs || !process.appendArgs) }
+            if !covered { added.append("Run \(PluginArgv.display(process.command))\(process.appendArgs ? " …" : "")") }
+        }
+        for setting in new.settings where setting.kind == .secret {
+            let before = old.settings.first { $0.kind == .secret && $0.key == setting.key }?.hosts ?? []
+            for host in setting.hosts where !before.contains(host) { added.append("Use \(setting.title) with \(host)") }
+        }
+        if new.remote, !old.remote { added.append("Act in projects on SSH hosts, as your user there") }
+        if new.web != nil, old.web == nil { added.append("Show its own web content, with no network access") }
+        return added
+    }
+}
+
 struct PluginApprovalStore {
     private static let key = "pluginApprovals.v1"
     private let defaults: UserDefaults

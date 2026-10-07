@@ -27,4 +27,40 @@ struct PluginTrustTests {
         #expect(PluginTrust.hash(manifest: manifest, entry: Data("a".utf8), web: Data())
             != PluginTrust.hash(manifest: manifest, entry: Data("a".utf8)))
     }
+
+    struct PermissionCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        var caps = #""network","process.exec","files.read""#
+        var network = #""a.com","b.com""#
+        var process = #""command":["git","status"]"#
+        var secretHosts = #""a.com""#
+        var extra = ""
+        let added: [String]
+        var testDescription: String { name }
+
+        func manifest() throws -> PluginManifest {
+            try PluginManifest.parse(Data(#"""
+                {"id":"io.x.p","name":"P","version":"1","api":12,"entry":"p.js","capabilities":[\#(caps)],\#
+                "network":[\#(network)],"processes":[{"id":"s",\#(process)}],\#
+                "settings":[{"key":"t","title":"Token","type":"secret","hosts":[\#(secretHosts)]}]\#(extra)}
+                """#.utf8))
+        }
+    }
+
+    /// Everything the approval sheet discloses counts; keeping or dropping permissions adds nothing.
+    @Test(arguments: [
+        PermissionCase(name: "unchanged", added: []),
+        PermissionCase(name: "fewer", caps: #""network","process.exec""#, network: #""a.com""#, added: []),
+        PermissionCase(name: "new host", network: #""a.com","b.com","c.com""#, added: ["Make web requests to c.com"]),
+        PermissionCase(name: "new capability", caps: #""network","process.exec","files.read","files.write""#,
+                       added: [PluginCapability.filesWrite.summary]),
+        PermissionCase(name: "appends arguments", process: #""command":["git","status"],"appendArgs":true"#, added: ["Run git status …"]),
+        PermissionCase(name: "secret sent to another host", secretHosts: #""a.com","b.com""#, added: ["Use Token with b.com"]),
+        PermissionCase(name: "remote and web", extra: #","remote":true,"web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"#,
+                       added: ["Act in projects on SSH hosts, as your user there", "Show its own web content, with no network access"]),
+    ])
+    func anUpdateAsksOnlyForWhatIsNew(_ c: PermissionCase) throws {
+        let old = try PermissionCase(name: "old", added: []).manifest()
+        #expect(PluginPermissionChange.added(approved: old, granted: old.capabilities, update: try c.manifest()) == c.added)
+    }
 }

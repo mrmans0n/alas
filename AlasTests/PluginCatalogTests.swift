@@ -4,11 +4,12 @@ import Testing
 
 struct PluginCatalogTests {
     static func version(
-        _ version: String, api: Int = 4, hash: String = "h", entry: Bool = true, manifest: String = "plugin"
+        _ version: String, api: Int = 4, hash: String = "h", entry: Bool = true, manifest: String = "plugin",
+        capabilities: [String] = []
     ) -> PluginCatalogIndex.Version {
         let base = URL(string: "https://example.com/\(version)/")!
         return PluginCatalogIndex.Version(
-            version: version, api: api, capabilities: [], manifest: base.appending(path: "\(manifest).json"),
+            version: version, api: api, capabilities: capabilities, manifest: base.appending(path: "\(manifest).json"),
             entry: entry ? base.appending(path: "plugin.js") : nil, hash: hash)
     }
 
@@ -65,14 +66,16 @@ struct PluginCatalogTests {
         let manager: PluginManager
         let script = Data("globalThis.handle = () => {};".utf8)
 
-        init(projects: [ProjectConfig] = []) throws {
-            let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":4,"entry":"plugin.js"}"#.utf8)
+        /// `extra` is spliced into the release's manifest after `entry`, asking for `capabilities`.
+        init(projects: [ProjectConfig] = [], api: Int = 4, extra: String = "", capabilities: [String] = []) throws {
+            let manifest = Data(#"{"id":"io.x.p","name":"P","version":"0.3.0","api":\#(api),"entry":"plugin.js"\#(extra)}"#.utf8)
             let base = "https://example.com/0.3.0/"
             let files = [
                 URL(string: base + "plugin.json")!: manifest, URL(string: base + "plugin.js")!: self.script,
                 URL(string: base + "bad.json")!: Data("{".utf8),
             ]
-            release = PluginCatalogTests.version("0.3.0", hash: PluginTrust.hash(manifest: manifest, entry: script))
+            release = PluginCatalogTests.version(
+                "0.3.0", api: api, hash: PluginTrust.hash(manifest: manifest, entry: script), capabilities: capabilities)
             manager = PluginManager(
                 directory: root, approvals: PluginApprovalStore(defaults: try #require(UserDefaults(suiteName: suite))),
                 projects: { projects }, actions: { _ in .inert }, catalog: PluginCatalog(fetch: { url in try #require(files[url]) }))
@@ -147,6 +150,39 @@ struct PluginCatalogTests {
         #expect(await f.install() == nil)
         #expect(f.manager.host(pluginID: "io.x.other", projectID: "proj") === running)
         await f.manager.shutdown()
+    }
+
+    /// Updating an approved 0.2.0 that asks for nothing new stays approved without asking; one that asks for more
+    /// installs, approved, only if the user accepts, and otherwise leaves 0.2.0 approved in place.
+    @MainActor
+    @Test(arguments: [
+        (extra: "", capabilities: [String](), answer: nil as Bool?, installed: "0.3.0"),
+        (extra: #","capabilities":["network"],"network":["a.com"]"#, capabilities: ["network"], answer: false, installed: "0.2.0"),
+        (extra: #","capabilities":["network"],"network":["a.com"]"#, capabilities: ["network"], answer: true, installed: "0.3.0"),
+    ])
+    func updatingAnApprovedPluginAsksOnlyForNewPermissions(
+        extra: String, capabilities: [String], answer: Bool?, installed: String
+    ) async throws {
+        let f = try Fixture(api: 5, extra: extra, capabilities: capabilities)
+        defer { f.cleanUp() }
+        let folder = f.root.appending(path: "io.x.p")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let oldManifest = Data(#"{"id":"io.x.p","name":"P","version":"0.2.0","api":4,"entry":"plugin.js"}"#.utf8)
+        try oldManifest.write(to: folder.appending(path: "plugin.json"))
+        try f.script.write(to: folder.appending(path: "plugin.js"))
+        await f.manager.reload()
+        await f.manager.approve(try #require(f.manager.plugin(id: "io.x.p")))
+        let old = Self.version("0.2.0", hash: PluginTrust.hash(manifest: oldManifest, entry: f.script))
+
+        var asked: [String]?
+        #expect(await f.manager.install(Self.entry([f.release, old]), f.release) { _, added in
+            asked = added
+            return answer ?? false
+        } == nil)
+        #expect(asked == answer.map { _ in [PluginCapability.network.summary, "Make web requests to a.com"] })
+        let plugin = try #require(f.manager.plugin(id: "io.x.p"))
+        #expect(plugin.manifest.version == installed)
+        #expect(f.manager.isApproved(plugin))
     }
 
     /// A symlinked staging folder must not lead install to clean up inside its target.
