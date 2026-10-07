@@ -8716,9 +8716,12 @@ extension ACPSessionManager {
         return await runner.appendAndPersistVisualAidAwaitingResult(visual)
     }
 
-    /// Store the user's answer on the visual, then send it to the agent as a
-    /// normal prompt. The answer is stored first so a second submit finds it
-    /// answered and does nothing; a failed send clears it again.
+    /// Store the user's answer on the visual and start sending it to the agent
+    /// as a normal prompt, without awaiting the turn. Returns true once the
+    /// answer is stored (and for a dismissal, which sends nothing), false when
+    /// it could not be stored. The answer is stored first so a second submit
+    /// finds it answered; a send that reports failure clears it again. A send
+    /// whose callback never fires (superseded prompt) keeps the answer.
     func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId),
@@ -8727,17 +8730,28 @@ extension ACPSessionManager {
         visual.answer = answer
         guard runner.replaceAndPersistVisualAid(visual) else { return false }
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
-        let sent = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            Task { @MainActor in
-                await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { continuation.resume(returning: $0) }
+        Task { @MainActor in
+            await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
+                if !ok { self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) }
             }
         }
-        guard !sent else { return true }
-        if var current = sessions[sessionId]?.transcript.visualAid(id: visualId), current.answer == answer {
-            current.answer = nil
-            runners[sessionId]?.replaceAndPersistVisualAid(current)
-        }
-        return false
+        return true
+    }
+
+    /// Clear an answer whose send failed, if it is still the one we set. The
+    /// transcript changes even without a runner so the card reverts; if the
+    /// runner is gone the persisted answer may remain (accepted edge).
+    func rollBackVisualAidAnswer(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) {
+        guard let session = sessions[sessionId],
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visualId }
+                  return false
+              }),
+              case .visualAid(var current) = session.transcript.messages[index], current.answer == answer
+        else { return }
+        current.answer = nil
+        session.transcript.replaceMessage(at: index, with: .visualAid(current))
+        runners[sessionId]?.persistVisualAidRow(id: visualId)
     }
 
     @discardableResult

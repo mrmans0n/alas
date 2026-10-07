@@ -4866,6 +4866,18 @@ extension ACPSessionRunner {
         persistIndices([index])
         return true
     }
+
+    /// Persist the row of a visual aid already changed in the transcript.
+    /// No-op without the lease.
+    func persistVisualAidRow(id visualId: UUID) {
+        guard holdsLeaseForWrite(),
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visualId }
+                  return false
+              })
+        else { return }
+        persistIndices([index])
+    }
 }
 
 extension ACPSessionRunner {

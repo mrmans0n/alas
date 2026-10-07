@@ -1570,4 +1570,22 @@ struct ACPSessionManagerTests {
         // Dismissal sends no prompt to the agent.
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
+
+    @Test("rollBackVisualAidAnswer clears only the answer it was given and persists the row")
+    func rollBackVisualAidAnswerClearsMatchingAnswer() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+
+        manager.rollBackVisualAidAnswer(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+
+        manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        await manager.runners[session.id]?.flushPersistence()
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)
+    }
 }

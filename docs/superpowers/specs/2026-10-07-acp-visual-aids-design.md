@@ -346,11 +346,18 @@ Submit:
    row and persists it. The card switches to a read-only summary, for example
    "Answered: b, Two column". A second submit finds the row answered and does
    nothing, which is what keeps it from sending twice.
-3. It sends the text through `ACPSessionManager.sendPrompt`, the path the
-   composer and the phone client use, so it shows as the user's own message
-   and waits in the queue if a turn is running.
-4. If `sendPrompt` reports failure, the answer is cleared and persisted again,
-   the question becomes editable, and the card shows an inline error.
+3. It starts `ACPSessionManager.sendPrompt`, the path the composer and the
+   phone client use, so the answer shows as the user's own message and waits in
+   the queue if a turn is running. `answerVisualAid` does not wait for the
+   send to finish: `sendPrompt` reports back when the agent's turn ends, and
+   not at all when a newer prompt supersedes this one or the connection is
+   replaced, so waiting would hold the card, or hang.
+4. If `sendPrompt` reports failure, the answer is cleared, on the session's
+   transcript directly so it happens even when the runner is already gone, and
+   persisted when a runner still holds the lease. The question becomes
+   editable again and the card shows an inline error. A report that never
+   arrives leaves the answer in place, which is right: a superseded prompt was
+   still delivered.
 
 Storing the answer first means a quit while the prompt is in flight leaves an
 answered card next to the user's message, never an open question whose answer
