@@ -53,11 +53,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         configuration.preferences.isFraudulentWebsiteWarningEnabled = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         // WebKit skips user scripts in srcdoc frames, so the lockdown script alone
-        // leaves `RTCPeerConnection` in them; switch WebRTC off at the engine too.
-        let peerConnectionSetter = NSSelectorFromString("_setPeerConnectionEnabled:")
-        if configuration.preferences.responds(to: peerConnectionSetter) {
-            configuration.preferences.setValue(false, forKey: "peerConnectionEnabled")
-        }
+        // leaves `RTCPeerConnection` in them; switch WebRTC off at the engine too,
+        // and never load the document if that did not take.
+        let peerConnectionDisabled = Self.disablePeerConnection(on: configuration.preferences)
         webView = WKWebView(frame: .zero, configuration: configuration)
         #if DEBUG
         webView.isInspectable = true
@@ -75,7 +73,19 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         controller.add(self, contentWorld: Self.bridgeWorld, name: VisualAidWebPolicy.bridgeHandlerName)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        guard peerConnectionDisabled else {
+            status = .sandboxFailed
+            return
+        }
         Task { await load() }
+    }
+
+    /// Switches WebRTC off through WebKit's private preference and reads it back.
+    /// False when the setter is missing or the value did not stick.
+    static func disablePeerConnection(on preferences: WKPreferences) -> Bool {
+        guard preferences.responds(to: NSSelectorFromString("_setPeerConnectionEnabled:")) else { return false }
+        preferences.setValue(false, forKey: "peerConnectionEnabled")
+        return preferences.value(forKey: "peerConnectionEnabled") as? Bool == false
     }
 
     /// Loads the document once the content rules are in place; without them it never loads.
