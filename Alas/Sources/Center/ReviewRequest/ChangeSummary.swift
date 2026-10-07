@@ -279,8 +279,10 @@ enum ChangeSummaryPolicy {
         let shrinkSteps: [(inout Payload) -> Void] = [
             { $0.commitBody = nil },
             { $0.issueTitle = nil },
-            { $0.branch = prefix($0.branch, utf8Bytes: 32); $0.base = prefix($0.base, utf8Bytes: 32) },
-            { $0.branch = ""; $0.base = "" },
+            { $0.branch = prefix($0.branch, utf8Bytes: 32)
+            $0.base = prefix($0.base, utf8Bytes: 32) },
+            { $0.branch = ""
+            $0.base = "" },
         ]
         for shrink in shrinkSteps where !fits(payload) { shrink(&payload) }
 
@@ -365,13 +367,13 @@ enum ChangeSummaryPolicy {
     /// but not next to an outcome, which would claim a run the model never saw.
     private static var checkMention: Regex<Substring> { /(?i)\b(?:builds?|built|checks?|lint\w*|compil\w*)\b/ }
     private static var outcomeWord: Regex<Substring> {
-        /(?i)\b(?:pass\w*|succe\w*|green|complet\w*|ran|runs?|running|fail\w*|confirm\w*|works?|working|clean(?:ly)?)\b/
+        /(?i)\b(?:pass\w*|succe\w*|green|complet\w*|ran|runs?|running|fail\w*|confirm\w*|works?|working|clean(?:ly)?|errors?|warnings?|issues?)\b/
     }
     /// Whether a description supports a stated reason cannot be checked, so
     /// the narrative never gives one. Purpose verbs are matched in every
     /// inflection, with or without a connector such as "to".
     private static var motivation: Regex<Substring> {
-        /(?i)\b(?:because|so that|in order to|due to|to (?:fix|address|speed up|make sure|let)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always|don't|doesn't|won't|can't)|letting|making (?:it|things|them) possible|(?:avoid|prevent|ensur|reduc|allow|enabl|help)\w*)\b/
+        /(?i)\b(?:because|so that|in order to|due to|to (?:fix|address|speed up|make sure|let)|so\s+(?:\w+\s+){0,3}(?:can|could|will|would|no longer|never|always|don't|doesn't|won't|can't)|\bable to|letting|making (?:it|things|them) possible|(?:avoid|prevent|ensur|reduc|allow|enabl|help)\w*)\b/
     }
     /// Benefits are claimed through words like these whatever connects them
     /// ("for", "allowing", "letting"), so the words themselves are rejected.
@@ -383,7 +385,7 @@ enum ChangeSummaryPolicy {
     private static var markup: Regex<Substring> { /(?i)(?:^|[^\w])@[\w-]|\b(?:https?|ftp|mailto):|\bwww\./ }
     private static var commitHash: Regex<Substring> { /(?i)\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b/ }
     private static var restatedCount: Regex<Substring> {
-        /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozens of|hundreds of)[\s-]+(?:[\w-]+\s+){0,2}(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
+        /(?i)\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|both|a dozen|dozens of|hundreds of)[\s-]+(?:[\w-]+\s+){0,2}(?:files?|commits?|lines?|additions?|deletions?|changes)\b/
     }
 
     /// Returns the narrative, or nil unless the output is exactly
