@@ -67,6 +67,19 @@ struct SessionSummaryActivityTests {
         withExtendedLifetime(observation) {}
     }
 
+    @Test func goalMetadataSignalsOnlyWhenTheGoalChanges() {
+        let session = ACPSession(id: "activity", agentId: "codex", worktreeId: "w", title: "Activity")
+        var signals = 0
+        let observation = session.nextPromptActivity.sink { signals += 1 }
+        let goal = AnyCodable(["goal": AnyCodable(["objective": AnyCodable("Ship it")])])
+
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: goal)))
+        #expect(signals == 1)
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: goal)))
+        #expect(signals == 1)
+        withExtendedLifetime(observation) {}
+    }
+
     @Test func managerTeardownSignalsSynchronously() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

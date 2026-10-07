@@ -205,7 +205,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// whole session's usage.
     @Published private(set) var sessionQuotaTotal: ACPPromptQuota?
     @Published var currentMode: String?
-    @Published var currentGoal: ACPGoalState?
+    /// Summaries key on the goal, so a real change must reach the activity observers.
+    @Published var currentGoal: ACPGoalState? { willSet { if newValue != currentGoal { nextPromptActivity.send() } } }
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
     /// A hidden `/btw` side session: only read-only tools run (see
