@@ -462,6 +462,14 @@ private struct ACPSessionView: View {
             if showsPreSessionUserInput {
                 messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                     .transition(.opacity)
+                if isMirror {
+                    composerView(
+                        placement: .bottom,
+                        contentMaxWidth: contentMaxWidth,
+                        typography: chatTypography
+                    )
+                    .padding(.trailing, showMinimap ? MinimapView.width : 0)
+                }
             } else if let phase = firstRunConnectingPhase {
                 introStateAndComposer(contentMaxWidth: contentMaxWidth) {
                     ACPFirstRunConnectingView(
