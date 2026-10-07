@@ -248,8 +248,7 @@ struct WorktreeStatusStoreTests {
                 await recorder.record(paths: paths)
             }
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         state.projectsManager.insertOptimisticWorktree(worktree)
 
         state.selectWorkspaceCheckout(id: checkout.id)

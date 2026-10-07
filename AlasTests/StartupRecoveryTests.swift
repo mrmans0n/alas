@@ -213,39 +213,28 @@ struct StartupRecoveryTests {
     @Test func rootWorkspaceRemainsVisibleForWorkspaceContentWithoutProjects() {
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
-            workspacesEnabled: true,
             hasWorkspaceContent: true
         ))
         #expect(!RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
-            workspacesEnabled: false,
-            hasWorkspaceContent: true
-        ))
-        #expect(!RootWorkspaceVisibilityPolicy.showsWorkspace(
-            hasProjects: false,
-            workspacesEnabled: true,
             hasWorkspaceContent: false
         ))
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
-            workspacesEnabled: false,
             hasWorkspaceContent: false,
             hasAttentionHistory: true
         ))
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
-            workspacesEnabled: false,
             hasWorkspaceContent: false,
             hasAttentionHistoryLoadError: true
         ))
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: true,
-            workspacesEnabled: false,
             hasWorkspaceContent: false
         ))
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: false,
-            workspacesEnabled: false,
             hasWorkspaceContent: false,
             hasPeerGroups: true
         ))

@@ -9,7 +9,7 @@ extension AppState {
                 projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == id }
             }
         case .workspaceCheckout(let id, let location):
-            config.workspacesEnabled && workspacesManager.checkouts.contains {
+            workspacesManager.checkouts.contains {
                 $0.id == id && $0.executionLocation.normalized == location.normalized && $0.archivedAt == nil
             }
         }

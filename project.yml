@@ -187,6 +187,11 @@ schemes:
       config: Debug
       commandLineArguments:
         "--no-parallel": true
+      # Tests run under an isolated profile so nothing reads or locks the
+      # developer's real app-support files (workspaces.json, sockets, prefs).
+      # The leaf must stay named "Alas"; PathsTests checks it.
+      environmentVariables:
+        ALAS_APP_SUPPORT_DIR: /tmp/alas-tests/Alas
       targets:
         - name: AlasTests
           parallelizable: false

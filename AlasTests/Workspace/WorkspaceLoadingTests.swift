@@ -11,10 +11,10 @@ private actor RecordingWorkspaceProgressObserver: WorkspaceCheckoutObserving {
     }
 }
 
-@Suite("Workspace feature flag")
+@Suite("Workspace loading")
 @MainActor
-struct WorkspaceFeatureFlagTests {
-    @Test func disabledManagerDoesNotLoadOrReconcileWorkspaceStorage() async throws {
+struct WorkspaceLoadingTests {
+    @Test func managerLoadsWorkspaceStorage() async throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url) }
         let state = WorkspaceStateFile(workspaces: [
@@ -24,30 +24,10 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(state)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        _ = await manager.setEnabled(false, spacesFile: emptySpacesFile())
-
-        #expect(manager.loadState == .notLoaded)
-        guard case .loaded(let storedState) = await store.load() else {
-            Issue.record("Expected dormant Workspace state to remain readable")
-            return
-        }
-        #expect(storedState.workspaces.map(\.id) == state.workspaces.map(\.id))
-    }
-
-    @Test func enabledManagerLoadsWorkspaceStorage() async throws {
-        let url = temporaryURL()
-        defer { try? FileManager.default.removeItem(at: url) }
-        let state = WorkspaceStateFile(workspaces: [
-            Workspace(name: "Release", executionLocation: .local, members: [])
-        ])
-        let store = WorkspaceStore(url: url)
-        try await store.checkpoint(state)
-        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
-
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
 
         guard case .loaded(let loadedState) = manager.loadState else {
-            Issue.record("Expected enabled Workspace state")
+            Issue.record("Expected loaded Workspace state")
             return
         }
         #expect(loadedState.workspaces.map(\.id) == state.workspaces.map(\.id))
@@ -79,7 +59,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [local, remote]))
         let observer = RecordingWorkspaceProgressObserver()
         let manager = WorkspacesManager(bridge: .init(workspaceStore: store), observer: observer)
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
         let remoteReport = manager.checkoutReconciliations[remote.id]
         try await store.mutate { state in
             state.checkouts[0].members[0].checkpoint = .setupComplete
@@ -90,10 +70,6 @@ struct WorkspaceFeatureFlagTests {
         #expect(await observer.checkoutIDs == [local.id, remote.id, local.id])
         #expect(manager.checkout(id: local.id)?.members[0].checkpoint == .setupComplete)
         #expect(manager.checkoutReconciliations[remote.id] == remoteReport)
-        _ = await manager.setEnabled(false, spacesFile: emptySpacesFile())
-        await manager.refreshCheckoutSnapshots(reconciling: local.id)
-        #expect(await observer.checkoutIDs.count == 3)
-        #expect(manager.loadState == .notLoaded)
     }
 
     @Test func appStateDefaultBridgeUsesTheInjectedWorkspaceStore() async throws {
@@ -109,7 +85,7 @@ struct WorkspaceFeatureFlagTests {
             workspaceStore: workspaceStore
         )
 
-        await state.setWorkspacesEnabled(true, persistConfig: false)
+        await state.loadWorkspaces()
 
         #expect(state.workspacesManager.workspaces.map(\.id) == [workspace.id])
         guard case .loaded(let loadedState) = state.workspacesManager.loadState else {
@@ -119,7 +95,7 @@ struct WorkspaceFeatureFlagTests {
         #expect(loadedState.workspaces.map(\.id) == [workspace.id])
     }
 
-    @Test func enabledManagerPresentsReconciledMemberAvailabilityWithoutMutatingStorage() async throws {
+    @Test func loadPresentsReconciledMemberAvailabilityWithoutMutatingStorage() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
         let memberID = UUID()
@@ -159,7 +135,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .missing)
         guard case .loaded(let persistedState) = await store.load() else {
@@ -209,7 +185,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .explicitlyDeleted)
     }
@@ -230,7 +206,7 @@ struct WorkspaceFeatureFlagTests {
         try await store.checkpoint(.init(checkouts: [checkout]))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
 
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
 
         #expect(manager.checkout(id: checkout.id)?.archivedAt == checkout.archivedAt)
     }
@@ -241,7 +217,7 @@ struct WorkspaceFeatureFlagTests {
         try Data("not JSON".utf8).write(to: url)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: url)))
 
-        _ = await manager.setEnabled(true, spacesFile: emptySpacesFile())
+        _ = await manager.load(spacesFile: emptySpacesFile())
 
         guard case .unreadable = manager.loadState else {
             Issue.record("Expected recovery state")
@@ -266,7 +242,7 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager
         )
 
-        await state.setWorkspacesEnabled(true)
+        await state.loadWorkspaces()
 
         #expect(state.workspaceRecoveryError != nil)
     }
@@ -287,7 +263,7 @@ struct WorkspaceFeatureFlagTests {
             workspaceStore: workspaceStore
         )
 
-        await state.setWorkspacesEnabled(true, persistConfig: false)
+        await state.loadWorkspaces()
         #expect(state.workspaceRecoveryError != nil)
 
         await state.discardWorkspaceRecoveryState()
@@ -302,7 +278,7 @@ struct WorkspaceFeatureFlagTests {
         #expect(!siblingFiles.contains { $0.lastPathComponent.hasPrefix("\(url.lastPathComponent).broken-") })
     }
 
-    @Test func enablingReupgradeDoesNotWriteLegacySpaces() async throws {
+    @Test func loadingReupgradeDoesNotWriteLegacySpaces() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
         let workspaceID = UUID()
@@ -330,7 +306,7 @@ struct WorkspaceFeatureFlagTests {
             )
         )
 
-        await state.setWorkspacesEnabled(true, persistConfig: false)
+        await state.loadWorkspaces()
 
         #expect(persistence.spacesWriteCount == 0)
         #expect(state.spacesManager.activeSpace?.members == [.project("project"), .workspace(workspaceID)])
@@ -378,7 +354,7 @@ struct WorkspaceFeatureFlagTests {
         let workspaceStore = WorkspaceStore(url: url)
         let spaces = emptySpacesFile()
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: ThrowingSpacesStore(spacesFile: spaces),
             persistenceErrorHandler: { _, _ in },
@@ -386,7 +362,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
 
         await #expect(throws: WorkspaceDefinitionSaveError.spacePlacementFailed) {
@@ -406,7 +381,7 @@ struct WorkspaceFeatureFlagTests {
         let manager = WorkspacesManager(
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: managerURL))
         )
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let persistence = RecordingSpacesStore(
             spacesFile: spaces,
             projectsFile: ProjectsFile(projects: [
@@ -420,7 +395,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: WorkspaceStore(url: URL(fileURLWithPath: "/dev/null/workspaces.json"))
         )
-        state.config.workspacesEnabled = true
         let originalSpacesFile = state.spacesManager.file
         let originalSpacesWriteCount = persistence.spacesWriteCount
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
@@ -446,7 +420,7 @@ struct WorkspaceFeatureFlagTests {
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let spaces = emptySpacesFile()
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: RecordingSpacesStore(spacesFile: spaces),
             persistenceErrorHandler: { _, _ in },
@@ -454,7 +428,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         state.config.terminal.worktreeCreateScript = "global setup"
         let workspace = Workspace(
             name: "Release",
@@ -498,7 +471,7 @@ struct WorkspaceFeatureFlagTests {
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let spaces = emptySpacesFile()
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: RecordingSpacesStore(spacesFile: spaces),
             persistenceErrorHandler: { _, _ in },
@@ -506,7 +479,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let agent = AgentDefinition(
             id: "workspace-test-agent",
             displayName: "Workspace Test Agent",
@@ -565,7 +537,7 @@ struct WorkspaceFeatureFlagTests {
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let spaces = emptySpacesFile()
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: RecordingSpacesStore(spacesFile: spaces),
             persistenceErrorHandler: { _, _ in },
@@ -573,7 +545,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let agent = AgentDefinition(
             id: "workspace-test-agent",
             displayName: "Workspace Test Agent",
@@ -676,7 +647,7 @@ struct WorkspaceFeatureFlagTests {
             ])
         )
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: persistence,
             persistenceErrorHandler: { _, _ in },
@@ -684,7 +655,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         state.selectWorkspace(id: workspace.id)
 
         try await state.deleteWorkspaceDefinition(id: workspace.id)
@@ -719,7 +689,7 @@ struct WorkspaceFeatureFlagTests {
         ])
         try await workspaceStore.checkpoint(.init(spaceLayouts: WorkspaceSpaceMigration.layouts(for: originalSpaces.spaces)))
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: originalSpaces)
+        _ = await manager.load(spacesFile: originalSpaces)
         let persistence = RecordingSpacesStore(
             spacesFile: originalSpaces,
             projectsFile: ProjectsFile(projects: [
@@ -733,7 +703,6 @@ struct WorkspaceFeatureFlagTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
             try await state.deleteWorkspaceDefinition(id: workspaceID)

@@ -70,7 +70,7 @@ import Testing
         try await store.checkpoint(.init(checkouts: [checkout]))
         let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: store)
         let manager = WorkspacesManager(bridge: bridge)
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let state = AppState(
@@ -78,7 +78,6 @@ import Testing
             workspacesManager: manager,
             workspaceStore: store
         )
-        state.config.workspacesEnabled = true
 
         let model = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkout.id)
 

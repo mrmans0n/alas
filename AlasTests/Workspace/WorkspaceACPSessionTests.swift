@@ -47,9 +47,8 @@ struct WorkspaceACPSessionTests {
             )],
             installedIds: ["test"]
         )
-        state.config.workspacesEnabled = true
         state.config.changes.aiToolId = "none"
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         state.selectWorkspaceCheckout(id: checkout.id)
         #expect(state.checkoutFocusedWorktreeScope?.worktreeID == worktree.id)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
@@ -468,8 +467,7 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         #expect(workspacesManager.checkout(id: checkout.id)?.executionLocation == .local)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
@@ -517,8 +515,7 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
 
         let tab = await state.openWorkspaceCheckoutACPSession(checkout: stale, agentID: "test")
 
@@ -563,8 +560,7 @@ struct WorkspaceACPSessionTests {
                 return .init(exitCode: 0, stdout: "/srv/checkouts/topic\n", stderr: "")
             })
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
 
         let restored = await state.restoreWorkspaceCheckoutACPSessions(checkout)
 
@@ -601,8 +597,7 @@ struct WorkspaceACPSessionTests {
                 return .init(exitCode: 0, stdout: "/srv/checkouts/topic\n", stderr: "")
             })
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
 
         let tab = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: "test")
 
@@ -713,8 +708,7 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let registeredCheckout = try #require(workspacesManager.checkout(id: checkout.id))
         #expect(registeredCheckout.executionLocation == .local)
         #expect(registeredCheckout.members.isEmpty)
@@ -772,7 +766,6 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         state.reloadTabs()
         for _ in 0 ..< 100 where state.acpManager(for: owner) == nil {
@@ -818,8 +811,7 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
 
         _ = try await state.unarchiveWorkspaceCheckout(id: checkout.id)
 
@@ -900,7 +892,7 @@ struct WorkspaceACPSessionTests {
                 mcpServers: [liveServer]
             ),
         ])
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let worktree = Worktree(
             id: "worktree",
             projectId: "project",
@@ -970,8 +962,7 @@ struct WorkspaceACPSessionTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
 
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout ACP manager")

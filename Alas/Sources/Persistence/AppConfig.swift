@@ -41,9 +41,6 @@ struct AppConfig: Codable, Equatable {
     var agents: Agents
     var files: Files
     var remote: Remote = .init()
-    /// Preview gate for persistent multi-repository Workspaces. This remains
-    /// off until the feature has completed its preview acceptance matrix.
-    var workspacesEnabled: Bool = false
     var nextPromptSuggestionsEnabled: Bool = false
     var sessionSummariesEnabled: Bool = false
     var runFailureBriefsEnabled: Bool = true
@@ -615,7 +612,6 @@ struct AppConfig: Codable, Equatable {
             chatFontSize: 13
         ),
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
-        workspacesEnabled: false,
         nextPromptSuggestionsEnabled: false,
         sessionSummariesEnabled: false,
         localTextModelEnabled: false,
@@ -713,7 +709,6 @@ extension AppConfig {
              agents,
              files,
              remote,
-             workspacesEnabled,
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
              runFailureBriefsEnabled,
@@ -965,9 +960,6 @@ extension AppConfig {
         }
         // Older configs predate `remote`; default to disabled so they still load.
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
-        // Workspace preview is opt-in. Configs written before the preview
-        // must continue to load with the feature disabled.
-        workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true

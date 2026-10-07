@@ -7,16 +7,14 @@ enum WorkspaceLoadState: Equatable {
     case unreadable(WorkspaceRecoveryState)
 }
 
-/// Owns the Workspace preview boundary. When disabled it deliberately does
-/// not touch `workspaces.json`; this lets an older-style Alas session keep its
-/// Workspace data dormant without reconciling or rewriting it.
+/// Owns the loaded Workspace state read from `workspaces.json` and the
+/// reconciled presentation of its checkouts.
 @Observable
 @MainActor
 final class WorkspacesManager {
     private let bridge: WorkspaceSpacePersistenceBridge
     private let observer: any WorkspaceCheckoutObserving
     private(set) var loadState: WorkspaceLoadState = .notLoaded
-    private(set) var dormantCheckouts: [WorkspaceCheckout] = []
     private(set) var checkoutReconciliations: [UUID: WorkspaceCheckoutReconciliation] = [:]
 
     var canMutate: Bool {
@@ -39,13 +37,6 @@ final class WorkspacesManager {
         return state.checkouts.map(presentedCheckout)
     }
 
-    var ownershipCheckouts: [WorkspaceCheckout] {
-        if case .loaded = loadState {
-            return checkouts
-        }
-        return dormantCheckouts
-    }
-
     /// Current persisted/reconciled checkout snapshot for runtime session
     /// attachment. Returns nil while Workspace storage is unavailable rather
     /// than fabricating a focus-derived replacement.
@@ -61,19 +52,9 @@ final class WorkspacesManager {
         self.observer = observer
     }
 
-    /// Enables or disables the preview. Disabling is intentionally a pure
-    /// in-memory gate: it neither deletes nor rewrites Workspace storage.
-    func setEnabled(_ enabled: Bool, spacesFile: SpacesFile) async -> SpacesFile? {
-        guard enabled else {
-            if case let .loaded(state) = loadState {
-                dormantCheckouts = state.checkouts.map(presentedCheckout)
-            }
-            loadState = .notLoaded
-            checkoutReconciliations = [:]
-            return nil
-        }
-        dormantCheckouts = []
-
+    /// Loads Workspace storage and reconciles its checkouts. Returns the
+    /// Spaces file with typed layouts re-upgraded, or nil when unchanged.
+    func load(spacesFile: SpacesFile) async -> SpacesFile? {
         switch await bridge.load() {
         case .missing:
             let state = WorkspaceStateFile()
@@ -85,9 +66,9 @@ final class WorkspacesManager {
         case .loaded(let state):
             loadState = .loaded(state)
             checkoutReconciliations = await reconcileCheckouts(in: state)
-            // Enabling is strictly observational. Future explicit Workspace
-            // operations own persistence; the preview gate must never rewrite
-            // an otherwise valid state merely because the app launched.
+            // Loading is strictly observational. Explicit Workspace
+            // operations own persistence; loading must never rewrite an
+            // otherwise valid state merely because the app launched.
             let result = WorkspaceSpaceMigration.reupgrade(
                 spacesFile: spacesFile,
                 savedLayouts: state.spaceLayouts
@@ -161,8 +142,8 @@ final class WorkspacesManager {
         return copy
     }
 
-    /// Checkpoints typed Space layout only while the preview has an editable,
-    /// successfully loaded Workspace state.
+    /// Checkpoints typed Space layout only while Workspace state is
+    /// editable and successfully loaded.
     func checkpointSpaceLayouts(afterWriting spacesFile: SpacesFile) async throws {
         guard canMutate else { return }
         try await bridge.checkpointAfterSpacesWrite(spacesFile)
