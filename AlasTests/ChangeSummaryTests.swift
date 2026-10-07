@@ -264,14 +264,12 @@ struct ChangeSummaryTests {
             commitSubjects: [], commits: [],
             changedFiles: [
                 CommitChangedFile(path: "Sources/App.swift", originalPath: nil, status: "M", add: 3, del: 1),
-                CommitChangedFile(path: "Assets/icon.png", originalPath: nil, status: "M", add: 0, del: 0),
+                CommitChangedFile(path: "Assets/new/icon.png", originalPath: "Assets/old/icon.png", status: "R", add: 0, del: 0),
             ],
             diff: "",
-            fileDiffsByPath: [
-                "Sources/App.swift": "diff --git a/Sources/App.swift b/Sources/App.swift\n@@ -1 +1 @@\n-a\n+b\n",
-                "Assets/icon.png": "diff --git a/Assets/icon.png b/Assets/icon.png\nBinary files a/Assets/icon.png and b/Assets/icon.png differ\n",
-            ],
-            hasUncommittedChanges: false
+            fileDiffsByPath: [:],
+            hasUncommittedChanges: false,
+            binaryPaths: GitService.reviewRequestBinaryPaths(numstat: "3\t1\tSources/App.swift\n-\t-\tAssets/{old => new}/icon.png\n")
         )
 
         let facts = ChangeSummaryFacts(

@@ -105,19 +105,13 @@ struct ChangeSummaryFacts: Equatable, Sendable {
             commits: context.commits.map { .init(sha: $0.sha, shortSHA: $0.shortSha, subject: $0.rawSubject) },
             files: context.changedFiles.map {
                 .init(path: $0.path, status: $0.status, additions: $0.add, deletions: $0.del,
-                      isBinary: Self.isBinaryDiff(context.fileDiffsByPath[$0.path]))
+                      isBinary: context.binaryPaths.contains($0.path))
             },
             runResults: runResults,
             issueTitle: issueTitle,
             commitBody: context.singleCommitBody,
             hasUncommittedChanges: context.hasUncommittedChanges
         )
-    }
-
-    /// `git diff` replaces a binary file's hunks with one of these lines.
-    static func isBinaryDiff(_ diff: String?) -> Bool {
-        guard let diff else { return false }
-        return diff.split(separator: "\n").contains { $0.hasPrefix("Binary files ") || $0 == "GIT binary patch" }
     }
 
     /// The latest finished run of each script: durable history, plus any

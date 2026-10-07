@@ -13,6 +13,8 @@ struct ReviewRequestDraftContext: Equatable {
     /// Where the branch forks from the base, or nil when Git finds none. The
     /// branch diff and commit list change exactly when this or HEAD moves.
     let mergeBaseSHA: String?
+    /// Changed files Git reports without line counts (`-` in numstat).
+    let binaryPaths: Set<String>
 
     init(
         commitSubjects: [String],
@@ -23,7 +25,8 @@ struct ReviewRequestDraftContext: Equatable {
         hasUncommittedChanges: Bool,
         singleCommitBody: String? = nil,
         headSHA: String? = nil,
-        mergeBaseSHA: String? = nil
+        mergeBaseSHA: String? = nil,
+        binaryPaths: Set<String> = []
     ) {
         self.commitSubjects = commitSubjects
         self.commits = commits
@@ -34,6 +37,7 @@ struct ReviewRequestDraftContext: Equatable {
         self.singleCommitBody = singleCommitBody
         self.headSHA = headSHA
         self.mergeBaseSHA = mergeBaseSHA
+        self.binaryPaths = binaryPaths
     }
 }
 
@@ -133,7 +137,8 @@ extension GitService {
             hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             singleCommitBody: singleCommitBody,
             headSHA: head,
-            mergeBaseSHA: await mergeBase
+            mergeBaseSHA: await mergeBase,
+            binaryPaths: Self.reviewRequestBinaryPaths(numstat: files.stdout)
         )
     }
 
@@ -180,6 +185,16 @@ extension GitService {
         guard result.exitCode == 0 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
+    }
+
+    /// Destination paths of numstat entries whose counts are `-`, which Git
+    /// uses for binary files.
+    static func reviewRequestBinaryPaths(numstat: String) -> Set<String> {
+        Set(numstat.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2)
+            guard parts.count == 3, parts[0] == "-", parts[1] == "-" else { return nil }
+            return NumstatParser.destinationPath(from: String(parts[2]))
+        })
     }
 
     private static func reviewRequestChangedFiles(numstat: String, nameStatus: String) -> [CommitChangedFile] {
