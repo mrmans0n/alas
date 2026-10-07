@@ -5572,6 +5572,7 @@ extension ACPSessionManager {
         session.authStatus = row.authStatus
         session.pendingMCPPreamble = row.mcpPreamblePending
         session.mcpPreambleSent = row.mcpPreambleSent
+        session.directTurnInFlight = row.directTurnInFlight
         // `usageLimit` is restored with the queue (see the caller), not here,
         // so it is never published ahead of its resume item.
         // Mirrors never run their own attach, so the persisted suggestions
