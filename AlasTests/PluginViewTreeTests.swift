@@ -42,6 +42,7 @@ struct PluginViewTreeTests {
         (#"{"id":"a","kind":"link","label":"PR","url":"/pulls"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
         (#"{"id":"a","kind":"link","label":"PR","url":"javascript:alert(1)"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
         (#"{"id":"a","kind":"link","label":"PR","url":"https://a.com/\#(String(repeating: "x", count: 2_035))"}"#, "link \"a\" url must be an absolute https URL of at most 2048 bytes"),
+        (#"{"id":"a","kind":"hstack","align":"top","children":[]}"#, "hstack \"a\" has unknown align \"top\""),
     ])
     func invalidTreesAreRejected(json: String, reason: String) {
         #expect(throws: PluginViewTreeError(reason: reason)) { try decode(json).get() }
@@ -60,9 +61,23 @@ struct PluginViewTreeTests {
         (#"{"id":"a","kind":"progress"}"#, "progress", 8),
         (#"{"id":"a","kind":"link","label":"PR","url":"https://a.com"}"#, "link", 8),
         (#"{"id":"a","kind":"markdown","text":"**Hi**"}"#, "markdown", 9),
+        (#"{"id":"a","kind":"progressBar","total":1}"#, "progressBar", 14),
     ])
     func newerKindsNeedTheirAPI(json: String, kind: String, api: Int) {
         #expect(throws: PluginViewTreeError(reason: "kind \"\(kind)\" needs \"api\": \(api)")) { try decode(json, api: api - 1).get() }
+    }
+
+    /// A progress bar's counts must fit its total; `done` and `running` default to 0.
+    @Test(arguments: [
+        (#""done":3,"running":2,"total":5"#, true), (#""total":10000"#, true),
+        (#""done":3,"running":3,"total":5"#, false), (#""done":-1,"total":5"#, false),
+        (#""total":0"#, false), (#""total":10001"#, false), (#""done":1"#, false),
+    ])
+    func progressBarCountsFitTheTotal(fields: String, valid: Bool) {
+        let result = decode(#"{"id":"p","kind":"progressBar",\#(fields)}"#, api: 14)
+        if valid { #expect((try? result.get()) != nil) } else {
+            #expect(throws: PluginViewTreeError(reason: "progressBar \"p\" needs a total of 1 to 10000, and done and running of at least 0 that add up to at most total")) { try result.get() }
+        }
     }
 
     /// API 13's `success` tone, here on a button, which draws its tone from API 13.

@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let plugins draw a progress bar of done, running and remaining steps, and center a row's items vertically, through plugin API 14.
+
 ### 🐛 Fixes
 
 - Stop trailing agent metadata updates (usage, commands, models, titles) from discarding the on-device next-prompt suggestion for a finished turn, and add `next-prompt` diagnostic logging that names why a suggestion was dropped.

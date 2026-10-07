@@ -77,7 +77,8 @@ struct PluginViewNodeView: View {
         case .hstack:
             // Baseline, not top: a caption beside a button sits level with its label, and a row's
             // leading text lines up with the first line of a stacked title.
-            HStack(alignment: .firstTextBaseline, spacing: spacing) { children }
+            // `"align": "center"` (API 14) centers controls beside a multi-line column instead.
+            HStack(alignment: node.centered ? .center : .firstTextBaseline, spacing: spacing) { children }
         case .scroll:
             ScrollView(node.horizontal ? .horizontal : .vertical) { children }
         case .text:
@@ -129,6 +130,8 @@ struct PluginViewNodeView: View {
                 }
             }
             .accessibilityElement(children: .combine)
+        case .progressBar:
+            progressBar
         case .link:
             // Opened by Alas, not the plugin: no event, and always the default browser.
             AlasButton(title: node.label ?? "", icon: "arrow.up.right", style: .subtle) {
@@ -176,6 +179,27 @@ struct PluginViewNodeView: View {
         } else {
             content
         }
+    }
+
+    /// Done steps in the tone (success by default), running ones in the warning color, the rest in the line color.
+    private var progressBar: some View {
+        let barWidth: CGFloat = 64
+        let step = barWidth / CGFloat(node.total)
+        return HStack(spacing: 6) {
+            HStack(spacing: 0) {
+                Rectangle().fill(color(node.tone ?? .success)).frame(width: step * CGFloat(node.done))
+                Rectangle().fill(color(.warn)).frame(width: step * CGFloat(node.running))
+                Rectangle().fill(theme.color("line"))
+            }
+            .frame(width: barWidth, height: 4)
+            .clipShape(Capsule())
+            if let text = node.text {
+                Text(text).font(.caption).foregroundColor(color(.dim))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(node.text ?? "Progress")
+        .accessibilityValue("\(node.done) of \(node.total) done, \(node.running) running")
     }
 
     private var spacing: CGFloat? { node.spacing.map { CGFloat($0) } }
