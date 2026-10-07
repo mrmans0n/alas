@@ -68,8 +68,12 @@ enum VisualAidWebPolicy {
             guard let end = rest.range(of: "-->") else { return false }
             rest = rest[end.upperBound...]
         }
-        let opening = rest.prefix(9).lowercased()
-        return opening.hasPrefix("<!doctype") || opening.hasPrefix("<html")
+        let opening = rest.prefix(10).lowercased()
+        return ["<!doctype", "<html"].contains { token in
+            guard opening.hasPrefix(token) else { return false }
+            guard let next = opening.dropFirst(token.count).first else { return true }
+            return next.isWhitespace || next == ">" || next == "/"
+        }
     }
 
     /// Fragments go inside the frame template. Full documents stay as written,
@@ -83,13 +87,62 @@ enum VisualAidWebPolicy {
             let parts = frameTemplate.replacingOccurrences(of: "{{HEAD}}", with: head).components(separatedBy: "{{CONTENT}}")
             return Data((parts.first ?? "").appending(html).appending(parts.dropFirst().joined(separator: "{{CONTENT}}")).utf8)
         }
-        if let range = html.range(of: #"<head(\s[^>]*)?>"#, options: [.regularExpression, .caseInsensitive]) {
+        if let index = headInsertionIndex(in: html) {
             var result = html
-            result.insert(contentsOf: head, at: range.upperBound)
+            result.insert(contentsOf: head, at: index)
             return Data(result.utf8)
         }
         return Data((html + head).utf8)
     }
+
+    /// The end of the first real `<head ...>` opening tag: comments are skipped,
+    /// `>` inside a quoted attribute value does not end the tag, and `<header>`
+    /// is not `<head>`. Nil when there is none.
+    private static func headInsertionIndex(in html: String) -> String.Index? {
+        var index = html.startIndex
+        while index < html.endIndex {
+            guard html[index] == "<" else {
+                index = html.index(after: index)
+                continue
+            }
+            let rest = html[index...]
+            if rest.hasPrefix("<!--") {
+                guard let end = rest.range(of: "-->", range: html.index(index, offsetBy: 4)..<html.endIndex) else { return nil }
+                index = end.upperBound
+                continue
+            }
+            let name = rest.dropFirst().prefix(5).lowercased()
+            if name.hasPrefix("head"), let next = name.dropFirst(4).first, next.isWhitespace || next == ">" {
+                var quote: Character?
+                var cursor = html.index(index, offsetBy: 5)
+                while cursor < html.endIndex {
+                    let character = html[cursor]
+                    cursor = html.index(after: cursor)
+                    if let open = quote {
+                        if character == open { quote = nil }
+                    } else if character == "\"" || character == "'" {
+                        quote = character
+                    } else if character == ">" {
+                        return cursor
+                    }
+                }
+                return nil
+            }
+            index = html.index(after: index)
+        }
+        return nil
+    }
+
+    /// Runs in the page world before any page script. CSP does not cover
+    /// WebRTC, so agent scripts could otherwise open peer connections and send
+    /// data out; this removes every `RTC*` / `webkitRTC*` global.
+    static let pageLockdownScript = """
+    (() => {
+      for (const name of Object.getOwnPropertyNames(window)) {
+        if (/^(webkit)?RTC/.test(name)) { try { delete window[name]; } catch (e) {} }
+      }
+    })();
+    """
 
     static func cardHeight(forContentHeight height: CGFloat) -> CGFloat {
         min(max(height, minCardHeight), maxCardHeight)
@@ -109,6 +162,8 @@ enum VisualAidWebPolicy {
         if (!event.isTrusted || !(event.target instanceof Element)) return;
         const link = event.target.closest('a[href]');
         if (link) {
+          // Same-document anchors keep their default navigation.
+          if ((link.getAttribute('href') || '').startsWith('#')) return;
           event.preventDefault();
           post({ open: link.href });
           return;

@@ -42,6 +42,11 @@ struct VisualAidWebPolicyTests {
         ("<!-- unterminated <html>", false),
         ("<div>hi</div>", false),
         ("<h2>html</h2>", false),
+        ("<html-preview>x</html-preview>", false),
+        ("<!doctype-widget>", false),
+        ("<html>", true),
+        ("<html/>", true),
+        ("<!DOCTYPE\nhtml>", true),
     ])
     func fullDocumentDetection(html: String, full: Bool) {
         #expect(VisualAidWebPolicy.isFullDocument(html) == full)
@@ -59,6 +64,9 @@ struct VisualAidWebPolicyTests {
     @Test("full documents are kept intact; theme variables go after <head> or at the end", arguments: [
         ("<!DOCTYPE html><html><HEAD lang=\"x\"><title>t</title></HEAD><body>b</body></html>", "<HEAD lang=\"x\"><meta"),
         ("<html><body>b</body></html>", "<html><body>b</body></html><meta"),
+        ("<html><!-- <head> --><head><title>t</title></head></html>", "<!-- <head> --><head><meta"),
+        ("<html><head data-x=\"a>b\"><title>t</title></head></html>", "<head data-x=\"a>b\"><meta"),
+        ("<html><header>h</header><head><title>t</title></head></html>", "</header><head><meta"),
     ])
     func fullDocumentAssembly(html: String, expectedSubstring: String) {
         let document = String(decoding: VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template), as: UTF8.self)

@@ -54,6 +54,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         super.init()
         let controller = configuration.userContentController
         controller.addUserScript(WKUserScript(
+            source: VisualAidWebPolicy.pageLockdownScript,
+            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        controller.addUserScript(WKUserScript(
             source: VisualAidWebPolicy.bridgeScript,
             injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Self.bridgeWorld))
         // Removed in `close`; the controller retains its handler.
