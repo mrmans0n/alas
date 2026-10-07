@@ -6,12 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.5] - 2026-10-07
+
 ### ✨ Features
 
-- Show language server status in diff and review toolbars and keep loading badges up through indexing, with progress and crash details on click.
-- Let plugins color buttons by the kind of action, with a new `success` tone, in plugin API 13.
-- Support "Disable native subagents" for Copilot 1.0.76 and later: sessions start with `--excluded-tools` for `task`, `list_agents`, `read_agent`, and `write_agent`, keeping your own exclusions and narrowing any `--available-tools` allowlist instead of widening it (#1592).
-- Draft an on-device summary of a branch from the Draft PR/MR tab. Commits, file counts, diff statistics, and run results stay exact, large branches say what was left out, the summary expires when the branch changes, and it only leaves the card when you copy it (#1487).
+- Show language server status in editor, diff, and review toolbars. Loading badges now cover indexing, and the status details report progress and crashes (#1809).
+- Let plugins color buttons by action and use a new `success` tone through plugin API 13 (#1810).
+- Support "Disable native subagents" for Copilot 1.0.76 and later without widening user tool allowlists (#1811).
+- Draft an on-device branch summary from the Draft PR/MR tab, with exact commit, file, diff, and run details and explicit coverage limits (#1812).
+
+### 🐛 Fixes
+
+- Release MLX's cached buffers when the local text model unloads, returning its memory to macOS (#1805).
+- Open plugin web tabs reliably instead of leaving Kanban, Agent Usage, and other web tabs blank (#1808).
+
+### 🏗️ Internal
+
+- Update the bundled `tree-sitter-php` crate to 0.25.0 (#1807).
 
 ## [0.20.4] - 2026-10-06
 
