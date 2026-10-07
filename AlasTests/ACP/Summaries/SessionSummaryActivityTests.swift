@@ -67,16 +67,22 @@ struct SessionSummaryActivityTests {
         withExtendedLifetime(observation) {}
     }
 
-    @Test func goalMetadataSignalsOnlyWhenTheGoalChanges() {
+    @Test func goalMetadataSignalsOnlyForSummaryRelevantChanges() {
         let session = ACPSession(id: "activity", agentId: "codex", worktreeId: "w", title: "Activity")
         var signals = 0
         let observation = session.nextPromptActivity.sink { signals += 1 }
         let goal = AnyCodable(["goal": AnyCodable(["objective": AnyCodable("Ship it")])])
 
+        let telemetry = AnyCodable(["goal": AnyCodable(["tokensUsed": AnyCodable(42), "iterations": AnyCodable(3)])])
+        let status = AnyCodable(["goal": AnyCodable(["status": AnyCodable("complete")])])
+
         session.apply(.sessionInfoUpdate(.init(title: nil, metadata: goal)))
         #expect(signals == 1)
         session.apply(.sessionInfoUpdate(.init(title: nil, metadata: goal)))
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: telemetry)))
         #expect(signals == 1)
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: status)))
+        #expect(signals == 2)
         withExtendedLifetime(observation) {}
     }
 
