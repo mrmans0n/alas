@@ -39,9 +39,11 @@ enum PluginPermissionChange {
     static func added(approved old: PluginManifest, granted: [PluginCapability], update new: PluginManifest) -> [String] {
         var added = new.capabilities.filter { !granted.contains($0) }.map(\.summary)
         added += new.network.filter { !old.network.contains($0) }.map { "Make web requests to \($0)" }
-        // Appending arguments to a command it could already run is more than running it as is.
+        // A command that took appended arguments already ran anything starting with it; one that did not, only itself.
         for process in new.processes {
-            let covered = old.processes.contains { $0.command == process.command && ($0.appendArgs || !process.appendArgs) }
+            let covered = old.processes.contains {
+                $0.appendArgs ? process.command.starts(with: $0.command) : $0.command == process.command && !process.appendArgs
+            }
             if !covered { added.append("Run \(PluginArgv.display(process.command))\(process.appendArgs ? " …" : "")") }
         }
         for setting in new.settings where setting.kind == .secret {

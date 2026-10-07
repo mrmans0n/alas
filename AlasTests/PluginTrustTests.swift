@@ -35,6 +35,8 @@ struct PluginTrustTests {
         var process = #""command":["git","status"]"#
         var secretHosts = #""a.com""#
         var extra = ""
+        /// The approved version's process; the other fields of the approved version are the defaults.
+        var oldProcess = #""command":["git","status"]"#
         let added: [String]
         var testDescription: String { name }
 
@@ -55,12 +57,14 @@ struct PluginTrustTests {
         PermissionCase(name: "new capability", caps: #""network","process.exec","files.read","files.write""#,
                        added: [PluginCapability.filesWrite.summary]),
         PermissionCase(name: "appends arguments", process: #""command":["git","status"],"appendArgs":true"#, added: ["Run git status …"]),
+        PermissionCase(name: "narrows a command that took arguments", process: #""command":["git","status"],"appendArgs":true"#,
+                       oldProcess: #""command":["git"],"appendArgs":true"#, added: []),
         PermissionCase(name: "secret sent to another host", secretHosts: #""a.com","b.com""#, added: ["Use Token with b.com"]),
         PermissionCase(name: "remote and web", extra: #","remote":true,"web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}"#,
                        added: ["Act in projects on SSH hosts, as your user there", "Show its own web content, with no network access"]),
     ])
     func anUpdateAsksOnlyForWhatIsNew(_ c: PermissionCase) throws {
-        let old = try PermissionCase(name: "old", added: []).manifest()
+        let old = try PermissionCase(name: "old", process: c.oldProcess, added: []).manifest()
         #expect(PluginPermissionChange.added(approved: old, granted: old.capabilities, update: try c.manifest()) == c.added)
     }
 }
