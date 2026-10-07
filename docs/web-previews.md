@@ -127,8 +127,9 @@ show visuals yet.
 
 The visual runs in a sandboxed `WKWebView`. Scripts, styles, fonts, and images
 may load from https URLs while the page loads; `fetch`, XHR, WebSockets, and
-WebRTC are blocked. A visual with a `question` is not clickable until it has
-loaded (or 10 seconds have passed), and from then on it can load nothing:
+WebRTC are blocked. A visual with a `question` takes no input until it has
+loaded (or 10 seconds have passed): no click, keyboard focus or key press, and
+no accessibility action reaches the page. From then on it can load nothing:
 locking cancels any load still in flight. Page script therefore cannot send
 out the user's choices before they submit. Links in a question visual do
 nothing until the question is answered, and stay off if it is dismissed.

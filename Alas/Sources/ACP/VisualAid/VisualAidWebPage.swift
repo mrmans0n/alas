@@ -328,12 +328,67 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 }
 
-/// Refuses hit testing while a question visual still has its network open, so no click reaches the page.
+/// Refuses every input path while a question visual still has its network open, so nothing reaches the
+/// page as a trusted event: not a click (hit testing), not keyboard focus or key presses (a focused
+/// link or button activates on Return or Space), and not accessibility activation (AXPress through the
+/// web content's accessibility tree). `isHidden` would do the same in one switch, but it blanks the card
+/// while it loads and lets WebKit pause rendering, which the height reports depend on.
 final class VisualAidWKWebView: WKWebView {
-    var blocksInteraction = false
+    var blocksInteraction = false {
+        didSet {
+            guard blocksInteraction != oldValue else { return }
+            if blocksInteraction {
+                resignFocusIfHeld()
+            }
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        }
+    }
+
+    override var acceptsFirstResponder: Bool {
+        blocksInteraction ? false : super.acceptsFirstResponder
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        blocksInteraction ? false : super.becomeFirstResponder()
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         blocksInteraction ? nil : super.hitTest(point)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !blocksInteraction { super.keyDown(with: event) }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if !blocksInteraction { super.keyUp(with: event) }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        if !blocksInteraction { super.flagsChanged(with: event) }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        blocksInteraction ? false : super.performKeyEquivalent(with: event)
+    }
+
+    override func isAccessibilityElement() -> Bool {
+        blocksInteraction ? false : super.isAccessibilityElement()
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        blocksInteraction ? [] : super.accessibilityChildren()
+    }
+
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        blocksInteraction ? nil : super.accessibilityHitTest(point)
+    }
+
+    private func resignFocusIfHeld() {
+        guard let window, let responder = window.firstResponder as? NSView,
+              responder === self || responder.isDescendant(of: self)
+        else { return }
+        window.makeFirstResponder(nil)
     }
 }
 

@@ -267,8 +267,10 @@ refuse new requests); the lock then marks a committed page `.ready` itself,
 because no `didFinish` follows a cancelled load. The locked list is
 compiled before the document loads; if it fails to compile the page fails closed
 (`.sandboxFailed`). Until the lock, the web view is a `VisualAidWKWebView`
-whose `hitTest` returns nil, so no click reaches the page, and `onChoice` and
-`setSelected` do nothing. `reload()` after a crash puts the loading rules back
+that takes no input: `hitTest` returns nil, it refuses first responder and
+key events, and it hides itself from accessibility, so no click, keyboard
+activation or accessibility action reaches the page. `onChoice` and
+`setSelected` do nothing either. `reload()` after a crash puts the loading rules back
 and resets `isLocked`, so the page can fetch its CDN resources again, then
 locks again. Visuals without a question never lock.
 

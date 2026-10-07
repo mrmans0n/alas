@@ -170,15 +170,33 @@ extension VisualAidWebPolicyTests {
         return page
     }
 
+    /// Every input path into a question visual's page: hit testing, keyboard focus and accessibility.
+    /// Unblocked, the view must behave like a plain `WKWebView`.
+    @MainActor
+    private func expectInput(of view: VisualAidWKWebView, blocked: Bool, sourceLocation: SourceLocation = #_sourceLocation) {
+        let plain = WKWebView(frame: .zero)
+        let point = CGPoint(x: 100, y: 100)
+        #expect((view.hitTest(point) == nil) == blocked, sourceLocation: sourceLocation)
+        #expect(view.acceptsFirstResponder == !blocked, sourceLocation: sourceLocation)
+        #expect(view.becomeFirstResponder() == !blocked, sourceLocation: sourceLocation)
+        if blocked {
+            #expect(!view.isAccessibilityElement(), sourceLocation: sourceLocation)
+            #expect(view.accessibilityChildren()?.isEmpty == true, sourceLocation: sourceLocation)
+            #expect(view.accessibilityHitTest(point) == nil, sourceLocation: sourceLocation)
+        } else {
+            #expect(view.isAccessibilityElement() == plain.isAccessibilityElement(), sourceLocation: sourceLocation)
+        }
+    }
+
     @MainActor
     @Test("a question visual stays untouchable until its network is shut, then takes clicks")
     func questionVisualLocksAfterLoad() async throws {
         let page = try makePage(locks: true)
         defer { page.close() }
-        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) == nil)
+        expectInput(of: page.webView, blocked: true)
         try await waitUntilReady(page)
         #expect(page.isLocked)
-        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+        expectInput(of: page.webView, blocked: false)
     }
 
     @MainActor
@@ -197,6 +215,8 @@ extension VisualAidWebPolicyTests {
         try #require(
             await awaitCondition(within: .seconds(30)) { server.accepted == 1 },
             "the image request never reached the server; status \(page.status)")
+        // Committed but still loading, so the page can already run script: no input may reach it.
+        expectInput(of: page.webView, blocked: true)
         // The deadline never fires here: the lock is driven once the request is known to be in flight.
         try #require(page.lockNetwork())
         #expect(
@@ -204,7 +224,7 @@ extension VisualAidWebPolicyTests {
             "the outstanding connection was never cancelled; status \(page.status)")
         #expect(page.isLocked)
         #expect(page.status == .ready)
-        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+        expectInput(of: page.webView, blocked: false)
         // The bridge script still ran once the stalled load was cancelled, so selection mirroring works.
         let bridge = try await page.webView.evaluateJavaScript(
             "typeof alasVisualSelect", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
@@ -216,9 +236,10 @@ extension VisualAidWebPolicyTests {
     func visualWithoutQuestionNeverLocks() async throws {
         let page = try makePage(locks: false)
         defer { page.close() }
-        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+        expectInput(of: page.webView, blocked: false)
         try await waitUntilReady(page)
         #expect(!page.isLocked)
+        expectInput(of: page.webView, blocked: false)
     }
 
     @MainActor
