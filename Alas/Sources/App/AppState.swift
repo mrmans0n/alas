@@ -4445,7 +4445,7 @@ final class AppState {
 
     private func requireCheckpointWorktreeRemovalAllowedAfterDiscovery(_ worktree: Worktree) async throws {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            throw WorkspaceStoreError.recoveryRequired
+            throw WorkspaceStoreError.checkpointRecoveryBlocksRemoval
         }
     }
 
