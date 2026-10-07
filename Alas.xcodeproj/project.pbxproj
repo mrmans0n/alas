@@ -1613,6 +1613,7 @@
 		B736E17293E8D8F114B9982C /* HighlightSpanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D88FF0751011A91008BFC78 /* HighlightSpanCache.swift */; };
 		B7542C247255B91CEC68004F /* ChatFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2AC43D07BE4012DB52A2D1B /* ChatFontCatalog.swift */; };
 		B76AD708A9FD54304F84366A /* ImageFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3F942D660C7ABA8542C77D /* ImageFileType.swift */; };
+		B77A3994E3D2318363D17F92 /* ACPSymbolSentPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAAF0101BB38BF3B793A72D4 /* ACPSymbolSentPreview.swift */; };
 		B78214694674C09800388F25 /* WebPreviewAutomationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD7C7B5112D091262C7FB9C8 /* WebPreviewAutomationService.swift */; };
 		B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FF766C79A3F9F004A513D4D /* UpdateProgressSheet.swift */; };
 		B79D01EECD92181B710D2648 /* CommitInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C01FBF2EE3668E6772CEB1D /* CommitInfo.swift */; };
@@ -3902,6 +3903,7 @@
 		BA6B1D3B6A09D9298B55F76B /* TabBarToolbarPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarToolbarPresentationTests.swift; sourceTree = "<group>"; };
 		BA6C7434D216D5C43A2FB921 /* ACPFileChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFileChip.swift; sourceTree = "<group>"; };
 		BA9D3F3FFE39D7E29827D83D /* TabsManagerReviewSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManagerReviewSessionTests.swift; sourceTree = "<group>"; };
+		BAAF0101BB38BF3B793A72D4 /* ACPSymbolSentPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSymbolSentPreview.swift; sourceTree = "<group>"; };
 		BAE3E5634CC9BA68765EA539 /* ANSIStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ANSIStream.swift; sourceTree = "<group>"; };
 		BB2445F05867BE94E6EC1EA5 /* ACPTranscriptQueuePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptQueuePolicyTests.swift; sourceTree = "<group>"; };
 		BB24D2B5B40327AD5738C4FA /* ACPAuthStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAuthStatusTests.swift; sourceTree = "<group>"; };
@@ -6736,6 +6738,7 @@
 				360ABD30E1401D712723D0E0 /* ACPSubagentRowView.swift */,
 				122BF82C6163B46AB4C5F8F6 /* ACPSymbolChipCell.swift */,
 				94E5F1EF8C0CEE1DD78AE8BC /* ACPSymbolHoverPreview.swift */,
+				BAAF0101BB38BF3B793A72D4 /* ACPSymbolSentPreview.swift */,
 				C72B05E51A4C6FAE18666DBC /* ACPSyntaxHighlightedText.swift */,
 				C3BC736DAAD590624B840923 /* ACPSystemNoticeView.swift */,
 				B832ED19AC178DAD77C78D37 /* ACPTabView.swift */,
@@ -8681,6 +8684,7 @@
 				0F31C765837B1560F3671BB9 /* ACPSymbolHoverPreview.swift in Sources */,
 				7F4713CE6ABD89A16CD75E90 /* ACPSymbolPresence.swift in Sources */,
 				871B1AA513DFE5CD46BF5B56 /* ACPSymbolReference.swift in Sources */,
+				B77A3994E3D2318363D17F92 /* ACPSymbolSentPreview.swift in Sources */,
 				A139CD869FCFF8F4CFB7E50D /* ACPSyntaxHighlightedText.swift in Sources */,
 				8510C6B68C2CF6664574C161 /* ACPSystemNoticeView.swift in Sources */,
 				F66BDC777D0BFDE306E8880A /* ACPTabView.swift in Sources */,

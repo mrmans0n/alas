@@ -44,8 +44,17 @@ enum ACPSymbolHoverPreview {
                       shownLines: shown, hiddenLines: lineRange.count - shown)
     }
 
+    /// The stored excerpt of a sent snapshot as a preview window, numbered from
+    /// the sent range. Nil when the code was not sent.
+    static func sentWindow(from snapshot: ACPSymbolSnapshot) -> Window? {
+        guard let excerpt = snapshot.excerpt else { return nil }
+        return window(declaration: excerpt, startLine: snapshot.lineRange.lowerBound)
+    }
+
     enum Loaded: Equatable, Sendable {
-        case found(lineRange: ClosedRange<Int>, window: Window)
+        /// `contentHash` is `ACPSymbolReference.contentHash(of:)` over the full
+        /// declaration, not the capped window.
+        case found(lineRange: ClosedRange<Int>, window: Window, contentHash: String)
         case missing
     }
 
@@ -57,7 +66,8 @@ enum ACPSymbolHoverPreview {
         let resolution = ACPSymbolReference.resolve(target, source: source)
         guard resolution.found, let declaration = resolution.declaration else { return .missing }
         return .found(lineRange: resolution.lineRange,
-                      window: window(declaration: declaration, startLine: resolution.lineRange.lowerBound))
+                      window: window(declaration: declaration, startLine: resolution.lineRange.lowerBound),
+                      contentHash: ACPSymbolReference.contentHash(of: declaration))
     }
 }
 
@@ -120,7 +130,7 @@ final class ACPSymbolHoverModel: ObservableObject {
     func apply(_ loaded: ACPSymbolHoverPreview.Loaded, theme: Theme?, animated: Bool = false) {
         let next: State
         var range = lineRange
-        if case .found(let foundRange, let window) = loaded {
+        if case .found(let foundRange, let window, _) = loaded {
             let highlighted: NSAttributedString = if let theme {
                 ACPCodeBlockHighlighter.attributedString(
                     code: window.text, language: ACPCodeLanguage.highlighterExtension(forPath: target.path),
