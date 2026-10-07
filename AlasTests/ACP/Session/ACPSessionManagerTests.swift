@@ -1718,12 +1718,42 @@ struct ACPSessionManagerTests {
     }
 
     @Test("an answer is not confirmed by the visual's own earlier write of the same row")
-    func answerVisualAidIgnoresTheEarlierWriteOfTheSameRow() async throws {
+    func answerWriteIgnoresTheEarlierWriteOfTheSameRow() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        // `answerVisualAid` now waits for the card's first write, so this ordering is only reachable
+        // at the runner: hold the visual's own write in the queue while its row is already replaced.
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        var answered = visual
+        answered.answer = .answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let replacing = Task { @MainActor in await runner.replaceAndPersistVisualAidAwaitingResult(answered) }
+        #expect(await awaitCondition { session.transcript.visualAid(id: visual.id)?.answer == answered.answer })
+        // The visual's own write may land; the answer's write must fail.
+        rejectVisualAidWrites(store, answeredOnly: true)
+        await initialWrite.release()
+
+        #expect(await show.value)
+        #expect(await replacing.value == false)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+    }
+
+    @Test("an answer issued while the card's first write fails is refused, and sends nothing")
+    func answerDuringAFailingFirstWriteIsRefused() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()
         defer { manager.shutdownBackgroundTasks() }
         let runner = try #require(manager.runners[session.id])
         let visual = questionVisual()
-        // Hold the visual's own write in the queue while the card is already shown.
         let initialWrite = AsyncGate()
         var held = false
         runner.beforePersistenceForTesting = {
@@ -1736,16 +1766,44 @@ struct ACPSessionManagerTests {
         await initialWrite.waitUntilEntered()
         let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
         let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
-        #expect(await awaitCondition { session.transcript.visualAid(id: visual.id)?.answer == answer })
-        // The visual's own write may land; the answer's write must fail.
-        rejectVisualAidWrites(store, answeredOnly: true)
+        // Only the answered payload may land, and the card's own write is rejected.
+        rejectVisualAidWrites(store, unansweredOnly: true)
+        await initialWrite.release()
+
+        #expect(await show.value == false)
+        #expect(await answering.value == false)
+        await runner.flushPersistence()
+        #expect(session.transcript.visualAid(id: visual.id) == nil)
+        #expect(try storedVisualAids(store, sessionId: session.id).isEmpty)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+    }
+
+    @Test("an answer issued while the card's first write is held is stored once that write lands")
+    func answerWaitsForTheFirstWrite() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id) }
         await initialWrite.release()
 
         #expect(await show.value)
-        #expect(await answering.value == false)
-        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
-        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
-        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(await answering.value)
+        #expect(await second.value == false)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
     }
 
     @Test("rollBackVisualAidAnswer clears only the answer it was given, confirms the row and records the failure on the session")

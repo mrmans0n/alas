@@ -228,6 +228,8 @@ final class ACPSessionRunner {
     }
     private var awaitedWrites: [UUID: AwaitedWrite] = [:]
     private var confirmedAwaitedWrites: Set<UUID> = []
+    /// Visual aids whose first write is unresolved, with the answers waiting on it.
+    private var unconfirmedVisualAids: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -4866,6 +4868,7 @@ extension ACPSessionRunner {
     func appendAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
         let before = session.transcript.messages.count
+        unconfirmedVisualAids[visual.id] = []
         session.appendVisualAid(visual)
         let written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
             persistFromIndex(before)
@@ -4876,7 +4879,23 @@ extension ACPSessionRunner {
             // store call. Without the delete a reload would show the old last row twice.
             rewriteShrunkenTranscript(from: removedIndex)
         }
+        for waiter in unconfirmedVisualAids.removeValue(forKey: visual.id) ?? [] {
+            waiter.resume(returning: written)
+        }
         return written
+    }
+
+    /// Waits until the visual's first write is resolved and reports whether the card is still shown
+    /// and stored. An answer must not start earlier: the card appears in the transcript before that
+    /// write is confirmed, and if it then fails the card is removed, which would also remove the row
+    /// an already-queued answer had stored.
+    func awaitVisualAidFirstWrite(id visualId: UUID) async -> Bool {
+        guard unconfirmedVisualAids[visualId] != nil else {
+            return session.transcript.visualAid(id: visualId) != nil
+        }
+        return await withCheckedContinuation { continuation in
+            unconfirmedVisualAids[visualId]?.append(continuation)
+        }
     }
 
     /// Replace the visual aid with the same id in place and report whether

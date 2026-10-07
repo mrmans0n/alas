@@ -385,8 +385,12 @@ Submit:
    Multi-select lists every selected option on the `Selected:` line, comma
    separated, in the question's option order. The `Note:` line appears only
    when the note is non-empty.
-2. `ACPSessionManager.answerVisualAid` stores `answer = .answered(...)` on the
-   row in memory at once and queues its write. The card switches to a
+2. `ACPSessionManager.answerVisualAid` first waits for the card's own first
+   write to be confirmed (the card is in the transcript before that), and is
+   refused, sending nothing, if that write failed and the card was removed;
+   otherwise a failed first write would remove the card and the row an
+   already-queued answer had stored. It then stores `answer = .answered(...)`
+   on the row in memory at once and queues its write. The card switches to a
    read-only summary, for example "Answered: b, Two column". A second submit
    finds the row answered and does nothing, which is what keeps it from
    sending twice.

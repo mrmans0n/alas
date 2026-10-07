@@ -8719,12 +8719,19 @@ extension ACPSessionManager {
     /// Store the user's answer on the visual and start sending it to the agent
     /// as a normal prompt, without awaiting the turn. Returns true once the
     /// answer's row is confirmed written (and for a dismissal, which sends
-    /// nothing), false when it could not be stored. The in-memory answer is set
+    /// nothing), false when it could not be stored. An answer first waits for
+    /// the card's own first write to be confirmed, and is refused if that
+    /// write failed and the card was removed. The in-memory answer is set
     /// first so a second submit finds it answered; when the write fails the
     /// answer is reverted, the card shows the send error, and nothing is sent.
     /// A send that reports failure clears the answer too. A send whose callback
     /// never fires (superseded prompt) keeps the answer.
     func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        // The wait comes before every guard and before the synchronous mutation below, so two answers
+        // that wait together resume in order and the second finds the first one's answer.
+        guard let firstWriteRunner = runners[sessionId],
+              await firstWriteRunner.awaitVisualAidFirstWrite(id: visualId)
+        else { return false }
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId),
               var visual = session.transcript.visualAid(id: visualId), visual.answer == nil
