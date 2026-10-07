@@ -46,7 +46,8 @@ struct RunReportTabTests {
 
     @Test(arguments: [true, false])
     func visualAidTabsDoNotRestore(withTitle: Bool) {
-        let state = VisualAidTabState(sessionId: "s", visualId: UUID(), title: withTitle ? "Plan" : "")
+        let state = VisualAidTabState(
+            ownerKey: "w", sessionId: "s", visualId: UUID(), title: withTitle ? "Plan" : "")
         #expect(!Tab.visualAid(state).isRestorable)
     }
 

@@ -6,20 +6,51 @@ struct VisualAidTabView: View {
     let tab: VisualAidTabState
 
     var body: some View {
-        if let session = state.session(for: tab.sessionId), let manager = state.acpManager(forSession: tab.sessionId) {
+        if let manager = state.acpManager(forOwnerKey: tab.ownerKey) {
+            VisualAidManagedTabView(manager: manager, tab: tab)
+        } else {
+            VisualAidUnavailableView()
+        }
+    }
+}
+
+/// Mirrors `ACPManagedTabView`'s lifecycle: the tab retains the session while
+/// shown so releasing the ACP tab view cannot evict it, and observes the
+/// manager so closure or eviction updates the content.
+private struct VisualAidManagedTabView: View {
+    @ObservedObject var manager: ACPSessionManager
+    let tab: VisualAidTabState
+
+    var body: some View {
+        if let session = manager.placeholderSession(id: tab.sessionId) {
             VisualAidTabContent(
                 transcript: session.transcript,
                 session: session,
                 tab: tab,
                 actions: ACPVisualAidActions(
-                    answer: { visualId, answer in
-                        await manager.answerVisualAid(id: visualId, answer: answer, in: tab.sessionId)
+                    answer: { [manager, sessionId = tab.sessionId] visualId, answer in
+                        await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
                     },
                     popOut: { _ in }
                 )
             )
-        } else {
+            .onAppear {
+                manager.retainSession(id: tab.sessionId)
+                manager.markSessionVisible(id: tab.sessionId)
+            }
+            .onDisappear {
+                manager.unmarkSessionVisible(id: tab.sessionId)
+                manager.releaseSession(id: tab.sessionId)
+            }
+        } else if manager.isKnownMissingSession(id: tab.sessionId) {
             VisualAidUnavailableView()
+        } else {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task {
+                    _ = manager.placeholderSession(id: tab.sessionId)
+                }
         }
     }
 }

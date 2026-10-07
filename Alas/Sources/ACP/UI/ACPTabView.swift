@@ -733,9 +733,12 @@ private struct ACPSessionView: View {
                     await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
                 },
                 popOut: { visual in
+                    let resolvedOwner = owner ?? .worktree(worktree.id)
                     state.tabs.openOrFocusVisualAid(
-                        owner: owner ?? .worktree(worktree.id),
-                        state: VisualAidTabState(sessionId: sessionId, visualId: visual.id, title: visual.title)
+                        owner: resolvedOwner,
+                        state: VisualAidTabState(
+                            ownerKey: resolvedOwner.storageKey, sessionId: sessionId, visualId: visual.id,
+                            title: visual.title)
                     )
                 }
             )

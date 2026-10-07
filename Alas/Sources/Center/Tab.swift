@@ -192,11 +192,14 @@ enum Tab: Codable, Equatable, Identifiable {
 
 struct VisualAidTabState: Codable, Equatable, Identifiable {
     let id: TabID
+    /// `SessionOwnerID.storageKey` of the manager that owns the session.
+    let ownerKey: String
     let sessionId: String
     let visualId: UUID
     let title: String
 
-    init(sessionId: String, visualId: UUID, title: String) {
+    init(ownerKey: String, sessionId: String, visualId: UUID, title: String) {
+        self.ownerKey = ownerKey
         self.sessionId = sessionId
         self.visualId = visualId
         self.title = title

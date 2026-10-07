@@ -12767,6 +12767,10 @@ final class AppState {
         acpManagers[owner]
     }
 
+    func acpManager(forOwnerKey key: String) -> ACPSessionManager? {
+        acpManagers.first { $0.key.storageKey == key }?.value
+    }
+
     // MARK: Session references
 
     /// Sessions of `projectId` the composer can attach, most recent first.
