@@ -31,11 +31,14 @@ extension AppState {
             .sorted { $0.createdAt < $1.createdAt }
             .compactMap { session in
                 guard let console = peerConsoleSocket(session) else { return nil }
+                let names = projectAndWorktree(withWorktreeId: session.worktreeId)
                 return PeerConsoleSummary(
                     consoleId: session.id,
                     title: tabs.terminalRuntimeTitles[session.id] ?? "Console",
                     worktreeId: session.worktreeId,
                     projectId: session.projectId,
+                    projectName: names?.project.name,
+                    worktreeName: names?.worktree.name,
                     rows: console.size.rows,
                     columns: console.size.columns
                 )
@@ -55,5 +58,30 @@ extension AppState {
             rows: console.size.rows,
             columns: console.size.columns
         )
+    }
+
+    /// The client side: viewing paired Macs' consoles. Console events from
+    /// peers go straight here, never through federation.
+    func makeNativePeerConsoles() -> NativePeerConsoles {
+        let consoles = NativePeerConsoles(
+            send: { [weak self] serverId, message in self?.remotePeers.sendToPeer(message, serverId: serverId) },
+            supportsConsoles: { [weak self] serverId in
+                self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.v1) == true
+            },
+            makeSurface: { [weak self] executable, args, onExit in
+                guard let self else { throw CancellationError() }
+                return try terminal.makeTransientSurface(
+                    cfg: config.terminal,
+                    theme: themeStore.current,
+                    executable: executable,
+                    args: args,
+                    onExit: onExit
+                )
+            }
+        )
+        remotePeers.onConsoleEvent = { [weak consoles] serverId, event in
+            consoles?.receive(serverId: serverId, event)
+        }
+        return consoles
     }
 }

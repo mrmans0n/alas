@@ -345,6 +345,15 @@ extension AlasGhostty {
             let columns: Int
         }
 
+        /// One cell in points, or nil before the surface has font metrics.
+        var cellSize: CGSize? {
+            guard let surface = cSurface else { return nil }
+            let size = ghostty_surface_size(surface)
+            guard size.cell_width_px > 0, size.cell_height_px > 0 else { return nil }
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            return CGSize(width: CGFloat(size.cell_width_px) / scale, height: CGFloat(size.cell_height_px) / scale)
+        }
+
         var gridSize: GridSize? {
             guard let surface = cSurface else { return nil }
             let size = ghostty_surface_size(surface)

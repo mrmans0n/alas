@@ -22,7 +22,8 @@ struct RemoteProtocolTests {
         let control = PeerConsoleControl(owner: .you, generation: 3, change: .granted)
         let events: [PeerConsoleEvent] = [
             .list(consoles: [PeerConsoleSummary(
-                consoleId: "c", title: "zsh", worktreeId: "w", projectId: nil, rows: 40, columns: 120)]),
+                consoleId: "c", title: "zsh", worktreeId: "w", projectId: nil,
+                projectName: "alas", worktreeName: nil, rows: 40, columns: 120)]),
             .attached(attachmentId: "a", rows: 40, columns: 120, control: control),
             .snapshot(attachmentId: "a", sequence: 0, reason: .peerBackpressure, data: bytes),
             .output(attachmentId: "a", sequence: 1, data: bytes),

@@ -125,6 +125,11 @@ private struct PaneLeafView: View {
                     lineWidth: 1
                 )
         )
+        .overlay(alignment: .top) {
+            if let host = state._peerConsoleHost, let peer = host.controllers[leaf.id] {
+                PeerConsoleControlBanner(peerName: peer) { host.reclaim(leaf.id) }
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             if let owner {
@@ -346,5 +351,34 @@ private struct TerminalRecoverPlaceholder: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-0"))
+    }
+}
+
+/// Shown on the host while a paired Mac controls this console. Local input
+/// is suppressed until the user reclaims it here or the peer releases it.
+private struct PeerConsoleControlBanner: View {
+    let peerName: String
+    let onReclaim: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .foregroundColor(theme.color("accent"))
+            Text("\(peerName) is controlling this console. Your typing is paused.")
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button("Reclaim", action: onReclaim)
+                .controlSize(.small)
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(theme.color("bg-3"))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color("line")).frame(height: 1)
+        }
     }
 }

@@ -17,6 +17,9 @@ struct PeerConsoleSummary: Codable, Equatable, Sendable {
     let title: String
     let worktreeId: String?
     let projectId: String?
+    /// Display names; a peer may know nothing else about the worktree.
+    let projectName: String?
+    let worktreeName: String?
     let rows: Int
     let columns: Int
 }
@@ -95,4 +98,16 @@ enum PeerConsoleEvent: Codable, Equatable, Sendable {
     case inputAck(attachmentId: String, sequence: Int, accepted: Bool)
     case geometry(attachmentId: String, rows: Int, columns: Int)
     case detached(attachmentId: String, reason: PeerConsoleDetachReason)
+}
+
+extension PeerConsoleEvent {
+    /// Nil for `list`, which is not attachment scoped.
+    var attachmentId: String? {
+        switch self {
+        case .list: nil
+        case .attached(let id, _, _, _), .snapshot(let id, _, _, _), .output(let id, _, _), .control(let id, _),
+             .inputAck(let id, _, _), .geometry(let id, _, _), .detached(let id, _):
+            id
+        }
+    }
 }
