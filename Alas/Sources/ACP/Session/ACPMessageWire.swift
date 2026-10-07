@@ -13,10 +13,11 @@ enum ACPMessageWire: Sendable, Equatable {
     case fileEdit(ACPMessage.FileEdit)
     case plan([ACPMessage.PlanItem])
     case systemNotice(text: String)
+    case visualAid(ACPVisualAid)
 
     var isAgentSideProgress: Bool {
         switch self {
-        case .agent, .thought, .toolCall, .fileEdit, .plan:
+        case .agent, .thought, .toolCall, .fileEdit, .plan, .visualAid:
             return true
         case .user, .systemNotice:
             return false
@@ -52,6 +53,8 @@ enum ACPMessageWire: Sendable, Equatable {
             return .fileEdit(try decoder.decode(ACPMessage.FileEdit.self, from: payload))
         case "plan":
             return .plan(try decoder.decode(PlanPayload.self, from: payload).items)
+        case "visual_aid":
+            return .visualAid(try decoder.decode(ACPVisualAid.self, from: payload))
         case "system":
             return .systemNotice(text: try decoder.decode(TextPayload.self, from: payload).text)
         default:
@@ -78,6 +81,8 @@ enum ACPMessageWire: Sendable, Equatable {
             return .plan(id: UUID(), items)
         case .systemNotice(let text):
             return .systemNotice(id: UUID(), text: text)
+        case .visualAid(let visual):
+            return .visualAid(visual)
         }
     }
 
@@ -135,6 +140,8 @@ enum ACPMessageWire: Sendable, Equatable {
             return items == existingItems ? existing : .plan(id: id, items)
         case let (.systemNotice(text), .systemNotice(id, existingText)):
             return text == existingText ? existing : .systemNotice(id: id, text: text)
+        case let (.visualAid(visual), .visualAid(existingVisual)):
+            return visual == existingVisual ? existing : .visualAid(visual)
         default:
             return toMessage()
         }

@@ -27,7 +27,7 @@ struct ACPTranscriptMinimapLayout {
             switch message {
             case .user: role = .user
             case .systemNotice: role = .notice
-            case .agent, .thought, .toolCall, .fileEdit, .plan: role = .assistant
+            case .agent, .thought, .toolCall, .fileEdit, .plan, .visualAid: role = .assistant
             }
             let globalIndex = offset + index
             if role != .user, let last = blocks.last, last.role == role {
@@ -59,7 +59,7 @@ struct ACPTranscriptMinimapLayout {
             case 1_600..<6_400: return 3
             default: return 4
             }
-        case .thought, .toolCall, .fileEdit, .plan:
+        case .thought, .toolCall, .fileEdit, .plan, .visualAid:
             return 1
         case .user(_, _, let text, _, _, _):
             switch text.utf8.count {

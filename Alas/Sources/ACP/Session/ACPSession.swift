@@ -3726,6 +3726,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .agent = transcript.messages[i] { return i }
             if case .toolCall = transcript.messages[i] { return nil }
             if case .fileEdit = transcript.messages[i] { return nil }
+            if case .visualAid = transcript.messages[i] { return nil }
         }
         return nil
     }
@@ -3740,6 +3741,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // new bubble, so a legacy chunk (or a replay continuation adopted
             // via this index) must not extend the pre-edit thought.
             if case .fileEdit = transcript.messages[i] { return nil }
+            if case .visualAid = transcript.messages[i] { return nil }
         }
         return nil
     }

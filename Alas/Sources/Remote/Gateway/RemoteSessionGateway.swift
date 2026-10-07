@@ -1330,6 +1330,8 @@ final class RemoteSessionGateway {
             )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
+        case .visualAid:
+            return .init(stableId: sid, kind: "systemNotice", text: nil, json: nil, index: index, isHidden: true)
         }
     }
 

@@ -306,6 +306,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             EmptyView()
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
+        case .visualAid:
+            EmptyView()
         }
     }
 

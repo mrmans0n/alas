@@ -953,7 +953,7 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
                 return kind == .agent ? index : nil
             case .thought:
                 return kind == .thought ? index : nil
-            case .toolCall, .user, .fileEdit:
+            case .toolCall, .user, .fileEdit, .visualAid:
                 return nil
             case .plan, .systemNotice:
                 continue
