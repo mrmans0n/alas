@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 struct NextPromptEligibilitySnapshot {
     let id: NextPromptRequestID
@@ -31,31 +32,14 @@ struct NextPromptEligibilitySnapshot {
     static func live(session: ACPSession, turn: NextPromptCompletedTurn,
                      environment: Environment) -> Self? {
         let transcript = session.transcript
-        guard environment.isEnabled, environment.hasVerifiedModel, environment.isRuntimeAvailable,
-              environment.isAppActive, environment.isActiveVisibleWriter, environment.hasComposerFocus,
-              !environment.hasPendingInput, !environment.hasSelection, !environment.hasMarkedText,
-              !environment.isDictating, !environment.isPickerPresented,
-              !environment.hasPromptWork, !environment.hasForkOrDelegationWork,
-              session.id == turn.sessionID, session.incarnation == turn.incarnation,
-              session.nextPromptID == turn.promptID + 1,
-              transcript.messagesGeneration == turn.transcriptRevision,
-              session.agentState == .ready, session.hydrationState == .ready,
-              session.nextPromptWorkCount == 0, !session.hasPendingDelegatedMessages,
-              !session.subagents.values.contains(where: { $0.isRunning }),
-              session.composerDraft.isEmpty, session.queue.isEmpty,
-              session.pendingQueuePersistenceCount == 0,
-              transcript.streamingState == .idle,
-              transcript.pendingPermission == nil, transcript.pendingQuestion == nil,
-              transcript.pendingPlan == nil, transcript.pendingUserInputs.isEmpty,
-              transcript.urlElicitationWaits.isEmpty,
-              session.retryStatus == nil, session.connectionRecoveryState == nil,
-              session.contextRestoreWarning == nil,
-              session.contextRecoveryStatus == nil || session.contextRecoveryStatus == .restored,
-              session.forkRecord?.phase != .negotiatingNative,
-              session.forkRecord?.contextDeliveryPending != true,
-              !session.autoRunEnabled,
-              let turns = NextPromptContext.snapshot(session: session, completedUserID: turn.userMessageID)
-        else { return nil }
+        if let failed = firstFailedCheck(session: session, turn: turn, environment: environment) {
+            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: \(failed, privacy: .public)")
+            return nil
+        }
+        guard let turns = NextPromptContext.snapshot(session: session, completedUserID: turn.userMessageID) else {
+            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: no usable context")
+            return nil
+        }
         return .init(id: .init(sessionID: session.id, incarnation: session.incarnation, promptID: turn.promptID,
                               transcriptRevision: transcript.messagesGeneration,
                               draftRevision: session.composerDraftRevision,
@@ -63,6 +47,47 @@ struct NextPromptEligibilitySnapshot {
                               settingsGeneration: environment.settingsGeneration,
                               modelGeneration: environment.modelGeneration),
                      turns: turns, isEligible: true)
+    }
+    /// Names the first live gate that blocks an offer, so diagnostics can say why none appeared.
+    @MainActor
+    private static func firstFailedCheck(session: ACPSession, turn: NextPromptCompletedTurn,
+                                         environment: Environment) -> String? {
+        let transcript = session.transcript
+        guard environment.isEnabled else { return "disabled" }
+        guard environment.hasVerifiedModel else { return "model not verified" }
+        guard environment.isRuntimeAvailable else { return "runtime unavailable" }
+        guard environment.isAppActive else { return "app inactive" }
+        guard environment.isActiveVisibleWriter else { return "not the active visible writer" }
+        guard environment.hasComposerFocus else { return "composer unfocused" }
+        guard !environment.hasPendingInput else { return "pending input" }
+        guard !environment.hasSelection else { return "selection" }
+        guard !environment.hasMarkedText else { return "marked text" }
+        guard !environment.isDictating else { return "dictating" }
+        guard !environment.isPickerPresented else { return "picker presented" }
+        guard !environment.hasPromptWork else { return "prompt work" }
+        guard !environment.hasForkOrDelegationWork else { return "fork or delegation work" }
+        guard session.id == turn.sessionID, session.incarnation == turn.incarnation else { return "other session" }
+        guard session.nextPromptID == turn.promptID + 1 else { return "newer prompt" }
+        guard transcript.messagesGeneration == turn.transcriptRevision else { return "transcript changed" }
+        guard session.agentState == .ready else { return "agent not ready" }
+        guard session.hydrationState == .ready else { return "not hydrated" }
+        guard session.nextPromptWorkCount == 0 else { return "session work" }
+        guard !session.hasPendingDelegatedMessages else { return "delegated messages" }
+        guard !session.subagents.values.contains(where: { $0.isRunning }) else { return "running subagents" }
+        guard session.composerDraft.isEmpty else { return "draft" }
+        guard session.queue.isEmpty, session.pendingQueuePersistenceCount == 0 else { return "queue" }
+        guard transcript.streamingState == .idle else { return "streaming" }
+        guard transcript.pendingPermission == nil, transcript.pendingQuestion == nil,
+              transcript.pendingPlan == nil, transcript.pendingUserInputs.isEmpty,
+              transcript.urlElicitationWaits.isEmpty else { return "pending request" }
+        guard session.retryStatus == nil, session.connectionRecoveryState == nil,
+              session.contextRestoreWarning == nil,
+              session.contextRecoveryStatus == nil || session.contextRecoveryStatus == .restored
+        else { return "retry or recovery" }
+        guard session.forkRecord?.phase != .negotiatingNative,
+              session.forkRecord?.contextDeliveryPending != true else { return "fork negotiation" }
+        guard !session.autoRunEnabled else { return "auto-run" }
+        return nil
     }
 }
 
@@ -114,7 +139,11 @@ final class NextPromptCoordinator: ObservableObject {
     }
 
     func completed(_ turn: NextPromptCompletedTurn) {
-        guard turn.promptID > consumedPromptIDs[turn.incarnation, default: -1] else { return }
+        nextPromptLogger.notice("prompt \(turn.promptID) completed")
+        guard turn.promptID > consumedPromptIDs[turn.incarnation, default: -1] else {
+            nextPromptLogger.notice("prompt \(turn.promptID) skipped: already consumed")
+            return
+        }
         if let current = opportunities[turn.incarnation] {
             guard turn.promptID >= current.turn.promptID else { return }
             if turn.promptID == current.turn.promptID {
@@ -161,11 +190,12 @@ final class NextPromptCoordinator: ObservableObject {
     }
 
     /// Permanently consumes the retained opportunity for one live session.
-    func invalidate(incarnation: UUID) {
+    func invalidate(incarnation: UUID, reason: String = "invalidated") {
         guard let opportunity = opportunities[incarnation] else {
             if activeIncarnation == incarnation { deactivateActive() }
             return
         }
+        nextPromptLogger.notice("prompt \(opportunity.turn.promptID) dropped: \(reason, privacy: .public)")
         consumedPromptIDs[incarnation] = max(
             consumedPromptIDs[incarnation, default: -1],
             opportunity.turn.promptID
@@ -175,8 +205,8 @@ final class NextPromptCoordinator: ObservableObject {
     }
 
     /// Permanently consumes a prompt even when its completion has not arrived yet.
-    func invalidate(incarnation: UUID, throughPromptID promptID: Int) {
-        invalidate(incarnation: incarnation)
+    func invalidate(incarnation: UUID, throughPromptID promptID: Int, reason: String = "invalidated") {
+        invalidate(incarnation: incarnation, reason: reason)
         consumedPromptIDs[incarnation] = max(
             consumedPromptIDs[incarnation, default: -1],
             promptID
@@ -199,6 +229,7 @@ final class NextPromptCoordinator: ObservableObject {
 
     func invalidateAll() {
         let retained = opportunities.values.map(\.turn)
+        for turn in retained { nextPromptLogger.notice("prompt \(turn.promptID) dropped: invalidate all") }
         opportunities.removeAll()
         for turn in retained {
             consumedPromptIDs[turn.incarnation] = max(
@@ -254,6 +285,7 @@ final class NextPromptCoordinator: ObservableObject {
         let deadline = clock.now().advanced(by: .seconds(15))
         let previousDrain = drainTask
         hasUsedEngine = true
+        nextPromptLogger.notice("prompt \(turn.promptID) generating from \(current.turns.count) turns")
         generationTask = Task { [weak self, engine, clock] in
             await previousDrain?.value
             guard !Task.isCancelled, clock.now() < deadline else { return }
@@ -264,13 +296,16 @@ final class NextPromptCoordinator: ObservableObject {
                 result = .failure(error)
             }
             guard let self, self.epoch == capturedEpoch, self.requestID == request.id,
-                  self.activeIncarnation == turn.incarnation else { return }
+                  self.activeIncarnation == turn.incarnation else {
+                nextPromptLogger.notice("prompt \(turn.promptID) result discarded: superseded")
+                return
+            }
             self.generationTask = nil
             self.deadlineTask?.cancel()
             self.deadlineTask = nil
             guard !Task.isCancelled, clock.now() < deadline,
                   self.matchingSnapshot(for: turn)?.id == request.id else {
-                self.invalidate(incarnation: turn.incarnation)
+                self.invalidate(incarnation: turn.incarnation, reason: "stale after generation")
                 return
             }
             switch result {
@@ -279,12 +314,16 @@ final class NextPromptCoordinator: ObservableObject {
                     self.consumedPromptIDs[turn.incarnation, default: -1],
                     turn.promptID
                 )
+                nextPromptLogger.notice("prompt \(turn.promptID) offered \(text.count) characters")
                 self.opportunities[turn.incarnation]?.state = .offered(request.id, text)
                 self.offer = text
                 // @Published stores after notifying; a subscriber may have invalidated this value.
                 if self.epoch != capturedEpoch { self.offer = nil }
-            case .success(nil), .failure:
-                self.invalidate(incarnation: turn.incarnation)
+            case .success(nil):
+                self.invalidate(incarnation: turn.incarnation, reason: "model abstained")
+            case .failure(let error):
+                self.invalidate(incarnation: turn.incarnation,
+                                reason: "generation failed: \(String(describing: type(of: error)))")
             }
         }
         deadlineTask = Task { [weak self, clock] in
@@ -292,7 +331,7 @@ final class NextPromptCoordinator: ObservableObject {
                 try await clock.sleep(deadline)
                 try Task.checkCancellation()
                 guard let self, self.epoch == capturedEpoch else { return }
-                self.invalidate(incarnation: turn.incarnation)
+                self.invalidate(incarnation: turn.incarnation, reason: "deadline")
             } catch {}
         }
     }

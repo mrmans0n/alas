@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import os
 
 extension AppState {
     func ensureNextPromptObserversStarted() {
@@ -123,7 +124,7 @@ extension AppState {
                 self.localTextObservers.sessions[incarnation] = [
                     session.nextPromptActivity.sink { [weak self] in
                         guard let self else { return }
-                        self.nextPromptCoordinator.invalidate(incarnation: incarnation)
+                        self.nextPromptCoordinator.invalidate(incarnation: incarnation, reason: "session activity")
                         if let parentID = self.delegatedSessionParents[sessionID] {
                             self.nextPromptCoordinator.invalidate(sessionID: parentID)
                         }
@@ -180,7 +181,8 @@ extension AppState {
         nextPromptComposerEnvironment = environment
         if environment.hasPendingInput || environment.hasSelection || environment.hasMarkedText ||
             environment.isDictating || environment.isPickerPresented {
-            nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1)
+            nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1,
+                                             reason: "composer input")
             nextPromptComposerEpochs[incarnation, default: 0] &+= 1
             return
         }
@@ -193,7 +195,8 @@ extension AppState {
               session.incarnation == nextPromptActiveIncarnation else { return }
         nextPromptCoordinator.invalidate(
             incarnation: session.incarnation,
-            throughPromptID: session.nextPromptID - 1
+            throughPromptID: session.nextPromptID - 1,
+            reason: "dismissed"
         )
         nextPromptComposerEpochs[session.incarnation, default: 0] &+= 1
     }
@@ -236,9 +239,18 @@ extension AppState {
     func nextPromptSnapshot(for turn: NextPromptCompletedTurn) -> NextPromptEligibilitySnapshot? {
         guard let owner = nextPromptOwner, let id = nextPromptSessionID,
               let session = acpManager(for: owner)?.sessions[id],
-              session.incarnation == turn.incarnation,
-              !nextPromptInputBlocked(owner: owner, sessionID: id),
-              let native = NSApp.keyWindow?.firstResponder as? ACPNSTextView else { return nil }
+              session.incarnation == turn.incarnation else {
+            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: composer shows another session")
+            return nil
+        }
+        guard !nextPromptInputBlocked(owner: owner, sessionID: id) else {
+            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: input blocked")
+            return nil
+        }
+        guard let native = NSApp.keyWindow?.firstResponder as? ACPNSTextView else {
+            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: composer is not first responder")
+            return nil
+        }
         var environment = native.nextPromptInputState
         environment.isAppActive = NSApp.isActive
         environment.isActiveVisibleWriter = environment.hasKeyWindow

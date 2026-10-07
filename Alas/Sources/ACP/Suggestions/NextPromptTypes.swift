@@ -1,4 +1,8 @@
 import Foundation
+import os
+
+/// Stream with `log stream --level debug --predicate 'category == "next-prompt"'`.
+let nextPromptLogger = Logger(subsystem: "io.nlopez.alas", category: "next-prompt")
 
 struct NextPromptTurn: Equatable, Sendable {
     let user: String

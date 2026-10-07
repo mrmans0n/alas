@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Stop trailing agent metadata updates (usage, commands, models, titles) from discarding the on-device next-prompt suggestion for a finished turn, and add `next-prompt` diagnostic logging that names why a suggestion was dropped.
+
 ## [0.20.5] - 2026-10-07
 
 ### ✨ Features

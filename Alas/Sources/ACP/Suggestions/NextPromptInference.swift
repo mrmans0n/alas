@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 protocol NextPromptGenerating: Sendable {
     func generate(_ request: NextPromptRequest) async throws -> String?
@@ -106,16 +107,19 @@ actor NextPromptInference: NextPromptRuntime {
         let id = generation
         activeRequestID = nil
         guard failures < 2 else {
+            nextPromptLogger.notice("inference skipped: retry required after repeated failures")
             await abstain(id: id, state: restingState)
             return nil
         }
         guard supported() else {
+            nextPromptLogger.notice("inference skipped: unsupported on this device")
             await abstain(id: id, state: .unavailable)
             return nil
         }
         guard request.turns.reduce(0, { $0 + $1.user.utf8.count + $1.assistant.utf8.count })
                 <= NextPromptContext.sourceLimit,
               NextPromptPolicy.permitsInput(request.turns) else {
+            nextPromptLogger.notice("inference skipped: context too large or blocked by input policy")
             await abstain(id: id, state: restingState)
             return nil
         }
@@ -144,11 +148,18 @@ actor NextPromptInference: NextPromptRuntime {
             activeRequestID = nil
             failures = 0
             publish(.ready)
-            guard let candidate = NextPromptPolicy.parse(Data(result.text.utf8)),
-                  NextPromptPolicy.permitsOutput(candidate, turns: request.turns) else { return nil }
+            guard let candidate = NextPromptPolicy.parse(Data(result.text.utf8)) else {
+                nextPromptLogger.notice("inference returned no suggestion (\(result.text.utf8.count) bytes)")
+                return nil
+            }
+            guard NextPromptPolicy.permitsOutput(candidate, turns: request.turns) else {
+                nextPromptLogger.notice("inference suggestion blocked by output policy")
+                return nil
+            }
             return candidate
         } catch let failure as LocalTextInferenceFailure {
             deadlineTask.cancel()
+            nextPromptLogger.notice("inference failed: \(String(describing: failure), privacy: .public)")
             guard finishRequest(id) else { return nil }
             switch failure {
             case .unsupported:
@@ -167,6 +178,7 @@ actor NextPromptInference: NextPromptRuntime {
             return nil
         } catch {
             deadlineTask.cancel()
+            nextPromptLogger.notice("inference failed: \(String(describing: type(of: error)), privacy: .public)")
             guard finishRequest(id) else { return nil }
             failures += 1
             publish(restingState)
