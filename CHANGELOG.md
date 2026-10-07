@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Features
 
-- Move ACP session takeover into the composer's bottom-left controls, matching peer transcripts instead of showing a separate read-only banner. Keep takeover available while initial connection waits for user input.
+- Move ACP session takeover into the composer's bottom-left controls, matching peer transcripts instead of showing a separate read-only banner. Keep takeover available while initial connection waits for user input, and reject custom paste/drop edits in read-only composers.
 
 ## [0.20.6] - 2026-10-07
 
