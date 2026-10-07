@@ -1270,7 +1270,9 @@ private struct ACPSessionView: View {
     }
 
     private func refreshDetectedAgentUpdateState() async {
-        guard adapterTarget == .local,
+        guard ACPDetectedAgentUpdater.runsLocally(
+                adapterTarget: adapterTarget,
+                checkoutLocation: state.workspaceCheckout(for: owner)?.executionLocation),
               let binary = ACPDetectedAgentUpdater.binaryName(
                 agentID: session.agentId,
                 binaryOverride: state.agent(id: session.agentId)?.binaryOverride)

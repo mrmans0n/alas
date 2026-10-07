@@ -23,6 +23,25 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.classify(resolvedPath: path) == expected)
     }
 
+    @Test("a custom Bun global dir is recognized by its lockfile", arguments: ["bun.lock", "bun.lockb"])
+    func customBunGlobalDir(lockfile: String) {
+        let owner = ACPDetectedAgentOwner.classify(resolvedPath: "/opt/bun-global/node_modules/omp/cli.js") {
+            $0 == "/opt/bun-global/\(lockfile)" ? Data() : nil
+        }
+        #expect(owner == .bun(package: "omp", root: "/opt/bun-global"))
+    }
+
+    @Test("detected CLIs are only checked for sessions that run on this Mac", arguments: [
+        (ACPAdapterTarget.local, ExecutionLocation?.none, true),
+        (.local, .some(.local), true),
+        // An SSH workspace checkout can sit on a worktree whose path looks local.
+        (.local, .some(.ssh("mini.lan")), false),
+        (.ssh(host: "mini.lan"), nil, false),
+    ])
+    func runsLocally(target: ACPAdapterTarget, checkout: ExecutionLocation?, expected: Bool) {
+        #expect(ACPDetectedAgentUpdater.runsLocally(adapterTarget: target, checkoutLocation: checkout) == expected)
+    }
+
     @Test("Homebrew names keep their tap so a tapped formula is not confused with core", arguments: [
         ("/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode",
          "/opt/homebrew/Cellar/opencode/1.18.34/INSTALL_RECEIPT.json", "anomalyco/tap",

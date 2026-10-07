@@ -94,9 +94,14 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
         else { return nil }
         let parent = components[..<index]
 
-        // `$BUN_INSTALL/install/global`; `BUN_INSTALL` defaults to `~/.bun`.
-        if parent.suffix(2).elementsEqual(["install", "global"]) {
-            return .bun(package: package, root: "/" + parent.joined(separator: "/"))
+        let root = "/" + parent.joined(separator: "/")
+
+        // `$BUN_INSTALL/install/global` by default; a custom `install.globalDir`
+        // is recognized by the lockfile Bun keeps in its global root.
+        if parent.suffix(2).elementsEqual(["install", "global"])
+            || readFile("\(root)/bun.lock") != nil
+            || readFile("\(root)/bun.lockb") != nil {
+            return .bun(package: package, root: root)
         }
         if parent.last == "lib", parent.count >= 2 {
             return .npm(package: package, prefix: "/" + parent.dropLast().joined(separator: "/"))
@@ -127,20 +132,32 @@ struct ACPDetectedAgentUpdater: Sendable {
     typealias Runner = @Sendable (_ arguments: [String], _ cwd: String?, _ timeout: TimeInterval) async throws -> ProcessResult
 
     let checkTimeout: TimeInterval
+    /// Longer: `brew outdated` may first refresh Homebrew's metadata.
+    let brewCheckTimeout: TimeInterval
     let upgradeTimeout: TimeInterval
     let runner: Runner
     let readFile: @Sendable (_ path: String) -> Data?
 
     init(
         checkTimeout: TimeInterval = 30,
+        brewCheckTimeout: TimeInterval = 3 * 60,
         upgradeTimeout: TimeInterval = 10 * 60,
         runner: @escaping Runner = ACPDetectedAgentUpdater.defaultRunner,
         readFile: @escaping @Sendable (String) -> Data? = { FileManager.default.contents(atPath: $0) }
     ) {
         self.checkTimeout = checkTimeout
+        self.brewCheckTimeout = brewCheckTimeout
         self.upgradeTimeout = upgradeTimeout
         self.runner = runner
         self.readFile = readFile
+    }
+
+    /// Detected CLIs are only checked on this Mac. An SSH workspace checkout
+    /// runs its agent remotely even when its worktree path looks local.
+    static func runsLocally(adapterTarget: ACPAdapterTarget, checkoutLocation: ExecutionLocation?) -> Bool {
+        guard adapterTarget == .local else { return false }
+        if case .ssh = checkoutLocation { return false }
+        return true
     }
 
     /// The agent CLI to check for `agentID`, or nil when Alas owns the
@@ -185,11 +202,12 @@ struct ACPDetectedAgentUpdater: Sendable {
             return Self.state(current: current, latestOutput: result.stdout)
         case .homebrewFormula(let name, let prefix), .homebrewCask(let name, let prefix):
             let kind = if case .homebrewCask = owner { "--cask" } else { "--formula" }
-            // Skip brew's slow auto-update so the check fits its timeout.
+            // Let brew's own throttled auto-update run so stale metadata is
+            // never cached as "up to date".
             guard let result = try? await runner(
-                ["HOMEBREW_NO_AUTO_UPDATE=1", "\(prefix)/bin/brew", "outdated", "--json=v2", "--greedy", kind, name],
+                ["\(prefix)/bin/brew", "outdated", "--json=v2", "--greedy", kind, name],
                 nil,
-                checkTimeout)
+                brewCheckTimeout)
             else { return .unknown }
             return Self.parseBrewOutdated(name: name, status: result.exitCode, stdout: result.stdout)
         }
