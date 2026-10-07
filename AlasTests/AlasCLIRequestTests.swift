@@ -384,6 +384,35 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test func decodeVisualShowRequest() throws {
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","cwd":"/wt","params":{"title":"Layouts","html":"<h2>Pick</h2>","question":{"prompt":"Which?","options":[{"id":"a","label":"One"},{"id":"b","label":"Two"}],"allow_multiple":true}}}"#
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .visualShow(
+            title: "Layouts", html: "<h2>Pick</h2>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: true)
+        ))
+    }
+
+    @Test func visualShowTrimsTextFieldsButKeepsHTMLVerbatim() throws {
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"  T \n","html":"\n <p>x</p> \n","question":{"prompt":" Q ","options":[{"id":"a","label":" One "},{"id":"b","label":"Two\n"}]}}}"#
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .visualShow(
+            title: "T", html: "\n <p>x</p> \n",
+            question: .init(prompt: "Q", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false)
+        ))
+    }
+
+    @Test func visualShowOutsideTheContractIsMalformed() {
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"acp-1","params":{"title":"T","html":"<p>","question":{"prompt":"Q","options":[{"id":"a","label":"One"}]}}}"#
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

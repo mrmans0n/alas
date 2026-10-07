@@ -55,6 +55,8 @@ struct AlasCLIRequest: Equatable {
             role: String? = nil
         )
         case sessionSend(sessionID: String, prompt: String)
+        /// MCP-only: show a visual aid in the calling ACP session.
+        case visualShow(title: String, html: String, question: ACPVisualAid.Question?)
         /// `session_read`, `session_search`, `session_wait`, `session_interrupt`.
         case sessionAction(ACPDelegatedSessionAction)
         case resolve
@@ -234,6 +236,23 @@ struct AlasCLIRequest: Equatable {
     private struct SessionSendParams: Decodable {
         var session_id: String
         var prompt: String
+    }
+
+    private struct VisualShowParams: Decodable {
+        struct Option: Decodable {
+            var id: String
+            var label: String
+        }
+
+        struct Question: Decodable {
+            var prompt: String
+            var options: [Option]
+            var allow_multiple: Bool?
+        }
+
+        var title: String
+        var html: String
+        var question: Question?
     }
 
     private struct SessionReadParams: Decodable {
@@ -512,6 +531,22 @@ struct AlasCLIRequest: Equatable {
                 sessionID: try requiredNonEmpty(params.session_id),
                 prompt: try requiredNonEmpty(params.prompt)
             )
+        case "visual_show":
+            let params = try Self.decodeParams(VisualShowParams.self, from: data)
+            let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let question = params.question.map { question in
+                ACPVisualAid.Question(
+                    prompt: question.prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                    options: question.options.map {
+                        .init(id: $0.id, label: $0.label.trimmingCharacters(in: .whitespacesAndNewlines))
+                    },
+                    allowMultiple: question.allow_multiple ?? false
+                )
+            }
+            guard ACPVisualAid.validationFailure(title: title, html: params.html, question: question) == nil else {
+                throw AlasCLIRequestError.malformed
+            }
+            command = .visualShow(title: title, html: params.html, question: question)
         case "session_read":
             let params = try Self.decodeParams(SessionReadParams.self, from: data)
             if let offset = params.offset, offset < 0 { throw AlasCLIRequestError.malformed }

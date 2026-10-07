@@ -60,6 +60,9 @@ struct AlasCLICommandRouter {
         .error("Preview automation is not available.")
     }
     var activateApp: () -> Void
+    var showVisualAid: (String, ACPVisualAid) async -> AlasCLIResponse = { _, _ in
+        .error("Visual aids are not available yet.")
+    }
 
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
     var service: AlasActionService {
@@ -112,6 +115,13 @@ struct AlasCLICommandRouter {
             return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
             return await workspaceCommand(command)
+        case .visualShow(let title, let html, let question):
+            guard let sessionId = request.sessionId, resolveACPSessionOrigin(sessionId) != nil else {
+                return .error("visual_show is only available to ACP agent sessions")
+            }
+            return await showVisualAid(sessionId, ACPVisualAid(
+                id: UUID(), title: title, html: html, question: question, answer: nil, createdAt: Date()
+            ))
         case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             guard let sessionId = request.sessionId,
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
@@ -268,6 +278,8 @@ struct AlasCLICommandRouter {
             )
         case .agentList, .sessionList, .sessionNew, .sessionSend, .sessionAction:
             preconditionFailure("Session commands are handled before generic origin resolution")
+        case .visualShow:
+            preconditionFailure("visual_show is handled before generic origin resolution")
         }
     }
 }
