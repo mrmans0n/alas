@@ -34,6 +34,8 @@ enum LSPServerChipAggregation {
 
     static func isInline(count: Int) -> Bool { count <= inlineLimit }
 
+    static func isExpandedByDefault(count: Int) -> Bool { count <= 8 }
+
     static func presentation(_ snapshots: [LSPChipSnapshot]) -> Presentation {
         guard !isInline(count: snapshots.count) else { return .inline }
         return .summary(
