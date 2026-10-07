@@ -81,35 +81,17 @@ struct WorkspaceSidebarLayoutTests {
 struct WorkspaceCheckoutWorktreeResolverTests {
     @Test func resolvesExactProjectAndCanonicalPathMatch() throws {
         let worktree = makeWorktree(projectID: "project-a", path: "/tmp/workspace/repo")
-        let matching = makeCheckout(
-            name: "Release",
-            members: [.init(
-                workspaceMemberID: UUID(),
-                projectID: "project-a",
-                fallbackProjectName: "Repo",
-                fallbackRepositoryRoot: "/tmp/repo",
-                worktreePath: "/tmp/workspace/./repo",
-                availability: .available
-            )]
-        )
-        let differentProject = makeCheckout(
-            name: "Other",
-            members: [.init(
-                workspaceMemberID: UUID(),
-                projectID: "project-b",
-                fallbackProjectName: "Repo",
-                fallbackRepositoryRoot: "/tmp/repo",
-                worktreePath: "/tmp/workspace/repo",
-                availability: .available
-            )]
-        )
+        let sibling = makeMember(projectID: "project-b", worktreePath: "/tmp/workspace/plugins")
+        let member = makeMember(worktreePath: "/tmp/workspace/./repo")
+        let matching = makeCheckout(name: "Release", members: [sibling, member])
+        let differentProject = makeCheckout(name: "Other", members: [makeMember(projectID: "project-b")])
 
         let presentation = try #require(WorkspaceCheckoutWorktreeResolver.presentation(
             for: worktree,
             checkouts: [differentProject, matching]
         ))
 
-        #expect(presentation == .init(name: "Release", state: .active))
+        #expect(presentation == .init(name: "Release", state: .active, checkoutID: matching.id, memberID: member.id))
     }
 
     @Test func prefersActiveCheckoutOverNewerArchivedMatch() throws {
@@ -122,7 +104,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [archived, active]
         ))
 
-        #expect(presentation == .init(name: "Active", state: .active))
+        #expect(presentation == .init(name: "Active", state: .active, checkoutID: active.id, memberID: active.members[0].id))
     }
 
     @Test func showsFormerWorkspaceUsingPersistedName() throws {
@@ -138,7 +120,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [former]
         ))
 
-        #expect(presentation == .init(name: "Former Release", state: .formerWorkspace))
+        #expect(presentation.state == .formerWorkspace)
 
         #expect(presentation.accessibilityLabel == "Former workspace checkout: Former Release")
     }
@@ -151,7 +133,7 @@ struct WorkspaceCheckoutWorktreeResolverTests {
             checkouts: [archived]
         ))
 
-        #expect(presentation == .init(name: "Archived Release", state: .archived))
+        #expect(presentation.state == .archived)
         #expect(presentation.accessibilityLabel == "Archived workspace checkout: Archived Release")
     }
 
@@ -220,15 +202,17 @@ struct WorkspaceCheckoutWorktreeResolverTests {
     }
 
     private func makeMember(
+        projectID: String = "project-a",
+        worktreePath: String = "/tmp/workspace/repo",
         availability: WorkspaceCheckoutMemberAvailability = .available,
         gitLineageID: String? = nil
     ) -> WorkspaceCheckoutMember {
         .init(
             workspaceMemberID: UUID(),
-            projectID: "project-a",
+            projectID: projectID,
             fallbackProjectName: "Repo",
             fallbackRepositoryRoot: "/tmp/repo",
-            worktreePath: "/tmp/workspace/repo",
+            worktreePath: worktreePath,
             gitLineageID: gitLineageID,
             availability: availability
         )

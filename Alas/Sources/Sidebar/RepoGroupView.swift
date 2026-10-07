@@ -24,6 +24,7 @@ struct RepoGroupView: View {
     var onPullUpstream: ((Worktree) -> Void)? = nil
     var isPullUpstreamInFlight: ((Worktree) -> Bool)? = nil
     let workspaceCheckout: (Worktree) -> WorktreeWorkspaceCheckoutPresentation?
+    var onOpenWorkspaceCheckout: (WorktreeWorkspaceCheckoutPresentation) -> Void = { _ in }
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: (Worktree) -> GGWorktreeMenuModel
@@ -200,6 +201,7 @@ struct RepoGroupView: View {
                             onRetryDelete: { onRetryDelete(wt) },
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
                             workspaceCheckout: workspaceCheckout(wt),
+                            onOpenWorkspaceCheckout: onOpenWorkspaceCheckout,
                             commitQuery: commitQuery(wt),
                             worktreeExplanation: worktreeExplanation(wt),
                             worktreeExplainerEvidence: worktreeExplainerEvidence(wt),

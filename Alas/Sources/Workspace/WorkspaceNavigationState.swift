@@ -157,6 +157,10 @@ enum WorktreeWorkspaceCheckoutPresentationState: Equatable {
 struct WorktreeWorkspaceCheckoutPresentation: Equatable {
     let name: String
     let state: WorktreeWorkspaceCheckoutPresentationState
+    /// The checkout and member this worktree backs, so the row can open the
+    /// Workspace focused on this repository.
+    let checkoutID: UUID
+    let memberID: UUID
 
     var isActive: Bool {
         state == .active
@@ -176,19 +180,21 @@ enum WorkspaceCheckoutWorktreeResolver {
         for worktree: Worktree,
         checkouts: [WorkspaceCheckout]
     ) -> WorktreeWorkspaceCheckoutPresentation? {
-        let matchingCheckouts = checkouts.filter { checkout in
-            checkout.members.contains { member in
+        let matches = checkouts.compactMap { checkout -> (WorkspaceCheckout, WorkspaceCheckoutMember)? in
+            checkout.members.first { member in
                 member.availability == .available
                     && member.projectID == worktree.projectId
                     && (member.gitLineageID == nil || worktree.lineageID == nil || member.gitLineageID == worktree.lineageID)
                     && URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
                         == worktree.path.standardizedFileURL.path
-            }
+            }.map { (checkout, $0) }
         }
-        guard let checkout = matchingCheckouts.sorted(by: isPreferred).first else { return nil }
+        guard let (checkout, member) = matches.sorted(by: { isPreferred($0.0, $1.0) }).first else { return nil }
         return .init(
             name: checkout.fallbackWorkspaceName,
-            state: presentationState(for: checkout)
+            state: presentationState(for: checkout),
+            checkoutID: checkout.id,
+            memberID: member.id
         )
     }
 

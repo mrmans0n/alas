@@ -199,7 +199,7 @@ struct WorktreeRowHeightTests {
         let withoutWorkspaceCheckout = try renderHeight(harnessSummary: nil)
         let withWorkspaceCheckout = try renderHeight(
             harnessSummary: nil,
-            workspaceCheckout: .init(name: "Workspace Release", state: .active)
+            workspaceCheckout: .init(name: "Workspace Release", state: .active, checkoutID: UUID(), memberID: UUID())
         )
 
         #expect(withoutWorkspaceCheckout == withWorkspaceCheckout)

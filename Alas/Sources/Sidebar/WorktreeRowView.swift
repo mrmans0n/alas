@@ -198,6 +198,7 @@ struct WorktreeRowView: View {
     let onRetryDelete: () -> Void
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
+    var onOpenWorkspaceCheckout: (WorktreeWorkspaceCheckoutPresentation) -> Void = { _ in }
     var commitQuery: CommitQuery? = nil
     var worktreeExplanation: String? = nil
     var worktreeExplainerEvidence: WorktreeExplainerEvidence? = nil
@@ -518,20 +519,26 @@ struct WorktreeRowView: View {
     ) -> some View {
         HStack(spacing: 7) {
             if let workspaceCheckout {
-                HStack(spacing: 4) {
-                    Icon(
-                        name: "square.grid.2x2",
-                        size: 9,
-                        color: theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim")
-                    )
-                    .accessibilityHidden(true)
-                    Text(workspaceCheckout.name)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                Button { onOpenWorkspaceCheckout(workspaceCheckout) } label: {
+                    HStack(spacing: 4) {
+                        Icon(
+                            name: "square.grid.2x2",
+                            size: 9,
+                            color: theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim")
+                        )
+                        .accessibilityHidden(true)
+                        Text(workspaceCheckout.name)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .foregroundColor(theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim"))
+                    .contentShape(Rectangle())
                 }
-                .foregroundColor(theme.color(workspaceCheckout.isActive ? "accent" : "fg-dim"))
+                .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help(workspaceCheckout.accessibilityLabel)
                 .accessibilityLabel(workspaceCheckout.accessibilityLabel)
+                .accessibilityHint("Opens the workspace focused on this repository")
             }
             if let status {
                 HStack(spacing: 5) {
@@ -720,6 +727,9 @@ struct WorktreeRowView: View {
 
     @ViewBuilder
     private var availableWorktreeContextMenuContent: some View {
+        if let workspaceCheckout {
+            Button("Go to Workspace") { onOpenWorkspaceCheckout(workspaceCheckout) }
+        }
         Button("Open in Terminal", action: onOpenTerminal)
         if let onOpenIssue {
             Button("Open Issue", action: onOpenIssue)
