@@ -6,17 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-07
+
 ### ✨ Features
 
-- Mention project symbols in the composer. `@` now searches classes, functions, and other declarations next to files and sessions; a picked symbol becomes a badge that shows its code on hover and can send its code with ⌥⏎ (#1821).
-- Let plugins draw a progress bar of done, running and remaining steps, and center a row's items vertically, through plugin API 14 (#1826).
+- Render local Markdown images inline in ACP transcripts, with bounded previews, safe worktree path checks, and an Open action (#1813).
+- Create a worktree and start its session directly from a peer's new-session sheet (#1814).
+- Detect Bun, npm, and Homebrew installations for agent CLIs that Alas did not install, then offer in-place updates (#1815).
+- Mention project symbols in the composer. `@` now searches declarations, shows code on hover, and can send a bounded code excerpt with the prompt (#1821).
+- Add progress bars and vertically centered rows to plugin API 14 (#1826).
+- Normalize new worktree names as they are typed by converting spaces to hyphens and rejecting Git-forbidden characters (#1829).
 
 ### 🐛 Fixes
 
-- Stop trailing agent metadata updates (usage, commands, models, titles) from discarding the on-device next-prompt suggestion for a finished turn, and add `next-prompt` diagnostic logging that names why a suggestion was dropped.
-- Refresh completed-turn state before taking over an ACP session from another Alas instance, preventing an automatic restart-continuation prompt after the turn already finished.
-- Keep code editor gutter line numbers from blinking while typing or deleting beside blank lines.
-- Convert spaces to hyphens and block Git-forbidden characters in the new-worktree name field. Preserve native caret, selection, marked-text, and undo behavior; complete branch-name validation still runs before creation.
+- Keep on-device next-prompt suggestions when trailing metadata arrives, while still refreshing session summaries when the goal changes (#1816, #1818).
+- Keep editor gutter line numbers stable while typing or deleting beside blank lines (#1817).
+- Show the SSH session takeover banner only when another owner actually holds the session (#1819).
+- Preserve inline skill badges in submitted user messages, including their hover details and copied command text (#1820).
+- Expand language-server details by default when the status list is small (#1822).
+- Prevent false restart-continuation prompts after taking over a session whose direct turn already finished (#1824).
+- Support Workspace member lineage IDs in checkpoint and writer-lease storage (#1825).
+- Match workspace titles to the typography used by repository rows (#1827).
+
+### 🏗️ Internal
+
+- Update the bundled `tree-sitter-erlang` crate to 0.21.0 (#1823).
 
 ## [0.20.5] - 2026-10-07
 
