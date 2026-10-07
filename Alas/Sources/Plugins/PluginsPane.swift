@@ -33,7 +33,7 @@ enum PluginStatusText {
 struct PluginsPane: View {
     let state: AppState
     @Environment(\.theme) var theme
-    @State private var approving: PluginManager.Plugin?
+    @State private var approvals = PluginApprovalQueue()
     @State private var configuring: PluginPanelTarget?
     /// Install or update failures, by catalog entry id, until the next attempt.
     @State private var installFailures: [String: String] = [:]
@@ -61,13 +61,11 @@ struct PluginsPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
-        .sheet(item: $approving) { plugin in
-            PluginApprovalSheet(plugin: plugin) { approved in
-                approving = nil
-                if approved, let manager = state.pluginManager {
-                    Task { await manager.approve(plugin) }
-                }
-            }
+        .onAppear { approvals.isShown = true }
+        .onDisappear { approvals.close() }
+        // Requests leave the queue only through `finish`, which the sheet calls however it closes.
+        .sheet(item: Binding(get: { approvals.requests.first }, set: { _ in })) { request in
+            PluginApprovalSheet(request: request) { approvals.finish(request.id, $0) }
         }
         .sheet(item: $configuring) { target in
             PluginConfigureSheet(target: target) { configuring = nil }
@@ -88,6 +86,10 @@ struct PluginsPane: View {
             }
         }
         .padding(.bottom, 12)
+        let updates = Self.updates(manager)
+        if !updates.isEmpty {
+            updatesBanner(manager, updates)
+        }
         if manager.plugins.isEmpty {
             SettingsRow(name: "No plugins installed.", desc: nil) { }
         }
@@ -97,24 +99,33 @@ struct PluginsPane: View {
                 SettingsRow(name: plugin.id, desc: PluginStatusText.make(
                     approved: manager.isApproved(plugin), enabled: manager.isEnabled(plugin),
                     hostStates: hosts.map(\.host.state))) {
-                    if manager.isApproved(plugin) {
-                        HStack(spacing: 12) {
-                            AlasToggle(on: Binding(
-                                get: { manager.isEnabled(plugin) },
-                                set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
-                            if let panel = plugin.manifest.configurePanel {
-                                let host = state.pluginConfigureHost(plugin)
-                                AlasButton(title: "Configure…", style: .normal) {
-                                    if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
-                                }
-                                .disabled(host == nil)
-                                .help(host == nil ? "Open a project to configure this plugin" : "")
-                            }
-                            Spacer()
-                            AlasButton(title: "Revoke Approval", style: .subtle) { Task { await manager.revoke(plugin) } }
+                    HStack(spacing: 12) {
+                        if let update = updates.first(where: { $0.entry.id == plugin.id }) {
+                            updateButton(manager, update)
                         }
-                    } else {
-                        AlasButton(title: "Approve…", style: .normal) { approving = plugin }
+                        if manager.isApproved(plugin) {
+                            HStack(spacing: 12) {
+                                AlasToggle(on: Binding(
+                                    get: { manager.isEnabled(plugin) },
+                                    set: { enabled in Task { await manager.setEnabled(plugin, enabled) } }))
+                                if let panel = plugin.manifest.configurePanel {
+                                    let host = state.pluginConfigureHost(plugin)
+                                    AlasButton(title: "Configure…", style: .normal) {
+                                        if let host { configuring = PluginPanelTarget(host: host, place: PluginPanelPlace(panel: panel.id), title: panel.title) }
+                                    }
+                                    .disabled(host == nil)
+                                    .help(host == nil ? "Open a project to configure this plugin" : "")
+                                }
+                                Spacer()
+                                AlasButton(title: "Revoke Approval", style: .subtle) { Task { await manager.revoke(plugin) } }
+                            }
+                        } else {
+                            AlasButton(title: "Approve…", style: .normal) {
+                                approvals.ask(PluginApprovalRequest(manifest: plugin.manifest) { approved in
+                                    if approved { Task { await manager.approve(plugin) } }
+                                })
+                            }
+                        }
                     }
                 }
                 if manager.isApproved(plugin), !plugin.manifest.settings.isEmpty {
@@ -166,14 +177,53 @@ struct PluginsPane: View {
                 }
             case .loaded(let index):
                 ForEach(index.plugins) { entry in
-                    catalogRow(manager, entry, PluginCatalogRow(
-                        entry: entry, installed: manager.plugin(id: entry.id),
-                        // Duplicates of this plugin, or anything else at the path install would use.
-                        quarantined: manager.invalid.contains { $0.pluginID == entry.id } || manager.catalogPathIsTaken(id: entry.id)))
+                    catalogRow(manager, entry, Self.row(manager, entry))
                 }
             }
         }
         .task { await catalog.refresh() }
+    }
+
+    private static func row(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry) -> PluginCatalogRow {
+        PluginCatalogRow(
+            entry: entry, installed: manager.plugin(id: entry.id),
+            // Duplicates of this plugin, or anything else at the path install would use.
+            quarantined: manager.invalid.contains { $0.pluginID == entry.id } || manager.catalogPathIsTaken(id: entry.id))
+    }
+
+    private typealias Update = (entry: PluginCatalogIndex.Entry, version: PluginCatalogIndex.Version)
+
+    private static func updates(_ manager: PluginManager) -> [Update] {
+        (manager.catalog.index?.plugins ?? []).compactMap { entry in
+            if case .update(let version) = row(manager, entry) { (entry, version) } else { nil }
+        }
+    }
+
+    private func updatesBanner(_ manager: PluginManager, _ updates: [Update]) -> some View {
+        HStack {
+            Text(updates.count == 1 ? "1 update available" : "\(updates.count) updates available")
+                .font(.system(size: 12.5, weight: .medium))
+            Spacer()
+            AlasButton(title: "Update All", style: .normal) {
+                Task { for update in updates { await install(manager, update.entry, update.version) } }
+            }
+            .disabled(updates.contains { busy.contains($0.entry.id) })
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(theme.color("accent-soft"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.bottom, 12)
+    }
+
+    @ViewBuilder
+    private func updateButton(_ manager: PluginManager, _ update: Update) -> some View {
+        if busy.contains(update.entry.id) {
+            Spinner().frame(width: 14, height: 14).accessibilityLabel("Updating")
+        } else {
+            AlasButton(title: "Update to \(update.version.version)", style: .normal) {
+                Task { await install(manager, update.entry, update.version) }
+            }
+        }
     }
 
     private func catalogRow(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow) -> some View {
@@ -185,9 +235,9 @@ struct PluginsPane: View {
             } else {
                 switch row {
                 case .install(let version):
-                    AlasButton(title: "Install \(version.version)", style: .normal) { install(manager, entry, version) }
+                    AlasButton(title: "Install \(version.version)", style: .normal) { Task { await install(manager, entry, version) } }
                 case .update(let version):
-                    AlasButton(title: "Update to \(version.version)", style: .normal) { install(manager, entry, version) }
+                    AlasButton(title: "Update to \(version.version)", style: .normal) { Task { await install(manager, entry, version) } }
                     removeButton(manager, entry.id)
                 case .installed:
                     removeButton(manager, entry.id)
@@ -248,12 +298,20 @@ struct PluginsPane: View {
         }
     }
 
-    private func install(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) {
-        Task {
-            busy.insert(entry.id)
-            installFailures[entry.id] = await manager.install(entry, version)
-            busy.remove(entry.id)
+    private func install(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async {
+        guard !busy.contains(entry.id) else { return }
+        let from = manager.plugin(id: entry.id)?.manifest.version ?? ""
+        busy.insert(entry.id)
+        // The instance itself, not the @State read later: the download may finish after the pane has gone.
+        let approvals = self.approvals
+        installFailures[entry.id] = await manager.install(entry, version) { manifest, added in
+            await withCheckedContinuation { continuation in
+                approvals.ask(PluginApprovalRequest(manifest: manifest, update: .init(from: from, added: added)) {
+                    continuation.resume(returning: $0)
+                })
+            }
         }
+        busy.remove(entry.id)
     }
 
     private static func catalogDescription(_ entry: PluginCatalogIndex.Entry, _ row: PluginCatalogRow, failure: String?) -> String? {
@@ -436,18 +494,72 @@ private struct HostLogDisclosure: View {
     }
 }
 
+/// A plugin to approve: an installed one, or an update that asks for more than the approved version it replaces.
+private struct PluginApprovalRequest: Identifiable {
+    struct Update {
+        let from: String
+        let added: [String]
+    }
+
+    let id = UUID()
+    let manifest: PluginManifest
+    var update: Update?
+    let finish: (Bool) -> Void
+}
+
+/// Approval requests shown one at a time: Update All, or two downloads finishing together, can ask more than once.
+/// Install tasks keep it past the pane, so every request is answered: one made after the pane closed is declined.
+@MainActor
+@Observable
+private final class PluginApprovalQueue {
+    private(set) var requests: [PluginApprovalRequest] = []
+    var isShown = false
+
+    func ask(_ request: PluginApprovalRequest) {
+        guard isShown else { return request.finish(false) }
+        requests.append(request)
+    }
+
+    /// Answers a request once; later calls for it do nothing.
+    func finish(_ id: UUID, _ approved: Bool) {
+        guard let index = requests.firstIndex(where: { $0.id == id }) else { return }
+        requests.remove(at: index).finish(approved)
+    }
+
+    func close() {
+        isShown = false
+        let pending = requests
+        requests = []
+        for request in pending { request.finish(false) }
+    }
+}
+
 private struct PluginApprovalSheet: View {
-    let plugin: PluginManager.Plugin
+    let request: PluginApprovalRequest
     let finish: (Bool) -> Void
     @State private var acceptsFullAccess = false
+    @Environment(\.theme) var theme
 
     var body: some View {
-        let manifest = plugin.manifest
+        let manifest = request.manifest
         let sandboxed = manifest.capabilities.filter { !$0.isFullAccess }
         let fullAccess = manifest.capabilities.filter(\.isFullAccess)
         VStack(alignment: .leading, spacing: 12) {
-            Text("Approve \(manifest.name)?").font(.headline)
-            Text("\(plugin.id) · version \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+            if let update = request.update {
+                Text("Update \(manifest.name) to \(manifest.version)?").font(.headline)
+                Text("\(manifest.id) · \(update.from) → \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("New in this version:").font(.subheadline.weight(.semibold))
+                    ForEach(update.added, id: \.self) { Text("• \($0)") }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.color("warn").opacity(0.13))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            } else {
+                Text("Approve \(manifest.name)?").font(.headline)
+                Text("\(manifest.id) · version \(manifest.version)").font(.caption).foregroundStyle(.secondary)
+            }
             // A long disclosure scrolls, so the confirmation and the buttons below it stay on screen.
             ViewThatFits(in: .vertical) {
                 disclosure(sandboxed: sandboxed, fullAccess: fullAccess)
@@ -457,21 +569,24 @@ private struct PluginApprovalSheet: View {
             if !fullAccess.isEmpty {
                 Toggle(Self.confirmation(fullAccess, remote: manifest.remote), isOn: $acceptsFullAccess)
             }
-            Text("Changing the plugin's files requires approving it again.")
+            Text(request.update.map { "If you cancel, \($0.from) keeps running." }
+                ?? "Changing the plugin's files requires approving it again.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
-                Button("Approve") { finish(true) }.keyboardShortcut(.defaultAction)
+                Button(request.update == nil ? "Approve" : "Update and Approve") { finish(true) }.keyboardShortcut(.defaultAction)
                     .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
             }
         }
         .padding(20)
         .frame(width: 460)
+        // Closed some other way: an update waiting on the answer must still get one.
+        .onDisappear { finish(false) }
     }
 
     private func disclosure(sandboxed: [PluginCapability], fullAccess: [PluginCapability]) -> some View {
-        let manifest = plugin.manifest
+        let manifest = request.manifest
         return VStack(alignment: .leading, spacing: 12) {
             if manifest.capabilities.isEmpty {
                 Text("It requests no capabilities.")

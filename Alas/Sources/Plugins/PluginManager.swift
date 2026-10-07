@@ -165,9 +165,14 @@ final class PluginManager {
     }
 
     /// Downloads `version` of the catalog entry `id`, checks it against the catalog's hash, and replaces
-    /// the folder named after the id. The new files are unapproved, so nothing runs until the user approves.
-    /// Returns the failure to show, or nil.
-    func install(_ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version) async -> String? {
+    /// the folder named after the id. An update to an approved plugin stays approved when it asks for nothing new;
+    /// when it does, `confirm` is shown the new manifest and what it adds, and the update installs, approved, only
+    /// if it returns true. Anything else installs unapproved, so nothing runs until the user approves.
+    /// Returns the failure to show, or nil, also when the user declined.
+    func install(
+        _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version,
+        confirm: @MainActor (PluginManifest, [String]) async -> Bool = { _, _ in false }
+    ) async -> String? {
         func describe(_ error: Error) -> String { (error as? PluginCatalogError)?.description ?? error.localizedDescription }
         // Downloaded and checked outside the serialized queue, so a slow server never holds up reloads or shutdown.
         let download: Download
@@ -176,6 +181,17 @@ final class PluginManager {
         } catch {
             return describe(error)
         }
+        // Asked outside the queue too, so an open sheet never holds it up.
+        let current = plugin(id: entry.id)
+        let replaced = current.flatMap { approvals.approval(id: $0.id, hash: $0.hash) }
+        var confirmed = false
+        if let current, let replaced {
+            let added = PluginPermissionChange.added(approved: current.manifest, granted: replaced.capabilities, update: download.manifest)
+            if !added.isEmpty {
+                guard await confirm(download.manifest, added) else { return nil }
+                confirmed = true
+            }
+        }
         var failure: String?
         await serialized {
             // Plugins were turned off while it downloaded: the manager is gone, so nothing is written.
@@ -183,8 +199,15 @@ final class PluginManager {
                 failure = "Plugins were turned off."
                 return
             }
+            // Carried silently only if the replaced version is still approved: a revoke during the download wins.
+            let carriesApproval = confirmed
+                || replaced.map { self.approvals.approval(id: $0.id, hash: $0.hash) != nil } == true
             do {
                 try await self.performInstall(entry, version, download)
+                // performInstall checked the files in place hash to `version.hash`, so this approves exactly them.
+                if carriesApproval {
+                    self.approvals.approve(PluginApproval(id: entry.id, hash: version.hash, capabilities: download.manifest.capabilities))
+                }
                 await self.performRescan()
             } catch {
                 // Nothing was stopped or replaced, so the installed version keeps running untouched.
