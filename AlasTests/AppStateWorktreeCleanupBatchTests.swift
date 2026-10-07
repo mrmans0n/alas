@@ -455,21 +455,6 @@ struct AppStateWorktreeCleanupBatchTests {
 
         #expect(secondFingerprint != firstFingerprint)
     }
-    @Test func workspaceCleanupOwnershipIsAvailableWhenWorkspacePreviewIsDisabled() {
-        #expect(AppState.workspaceCleanupOwnershipAvailable(
-            workspacesEnabled: false,
-            workspacesCanMutate: false
-        ))
-        #expect(AppState.workspaceCleanupOwnershipAvailable(
-            workspacesEnabled: true,
-            workspacesCanMutate: true
-        ))
-        #expect(!AppState.workspaceCleanupOwnershipAvailable(
-            workspacesEnabled: true,
-            workspacesCanMutate: false
-        ))
-    }
-
     @Test func missingHarnessActivityIsIdleForCleanupSessionCounts() {
         #expect(!AppState.harnessActivityIsBusy(nil))
         #expect(!AppState.harnessActivityIsBusy(.idle))

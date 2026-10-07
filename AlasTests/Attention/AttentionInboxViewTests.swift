@@ -147,11 +147,9 @@ struct AttentionInboxViewTests {
         let baselineHeight = try headerSize(count: 0).height
         for width in [CGFloat(200), CGFloat(244)] {
             for count in [0, 999] {
-                for workspacesEnabled in [false, true] {
-                    let size = try headerSize(count: count, width: width, workspacesEnabled: workspacesEnabled)
-                    #expect(size.width <= width)
-                    #expect(size.height == baselineHeight)
-                }
+                let size = try headerSize(count: count, width: width)
+                #expect(size.width <= width)
+                #expect(size.height == baselineHeight)
             }
         }
     }
@@ -180,9 +178,9 @@ struct AttentionInboxViewTests {
         return controller.sizeThatFits(in: NSSize(width: 700, height: CGFloat.greatestFiniteMagnitude)).height
     }
 
-    private func headerSize(count: Int, width: CGFloat = 300, workspacesEnabled: Bool = false) throws -> NSSize {
+    private func headerSize(count: Int, width: CGFloat = 300) throws -> NSSize {
         let view = SidebarHeaderView(onSettings: {}, onAddProject: {}, onSearch: {}, onHideSidebar: {},
-                                     onNewWorkspace: workspacesEnabled ? {} : nil,
+                                     onNewWorkspace: {},
                                      attentionCount: count, attentionInboxOpen: .constant(false))
             .environment(\.theme, try ThemeStore().current)
         let controller = NSHostingController(rootView: view)

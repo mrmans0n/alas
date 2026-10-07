@@ -386,7 +386,6 @@ struct WebPreviewFeedbackTests {
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")

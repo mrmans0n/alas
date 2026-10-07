@@ -200,8 +200,7 @@ struct OwnerTabsManagerTests {
             workspacesManager: workspacesManager,
             workspaceStore: store
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         state.selectWorkspaceCheckout(id: checkout.id)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
@@ -242,8 +241,7 @@ struct OwnerTabsManagerTests {
             workspacesManager: workspacesManager,
             workspaceStore: store
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
         _ = manager.splitFocusedLeaf(owner: owner, tabId: tab.id, axis: .vertical, newLeafId: "second", newSessionId: "second-session")
@@ -289,8 +287,7 @@ struct OwnerTabsManagerTests {
             workspacesManager: workspacesManager,
             workspaceStore: store
         )
-        state.config.workspacesEnabled = true
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         state.selectWorkspaceCheckout(id: checkout.id)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         _ = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")

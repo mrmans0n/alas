@@ -17,19 +17,6 @@ struct AdvancedPane: View {
 
                 SettingsGroup(title: "Experimental") {
                     SettingsRow(
-                        name: "Workspaces preview",
-                        desc: "Enables persistent multi-repository Workspaces for preview testing."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.workspacesEnabled },
-                            set: { enabled in
-                                Task { @MainActor in
-                                    await state.setWorkspacesEnabled(enabled)
-                                }
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Needs attention",
                         desc: "Shows the attention inbox and repository attention counts."
                     ) {
@@ -44,7 +31,9 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
-                    if let recovery = state.workspaceRecoveryError {
+                }
+                if let recovery = state.workspaceRecoveryError {
+                    SettingsGroup(title: "Workspaces") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
                                 .font(.system(size: 11.5))

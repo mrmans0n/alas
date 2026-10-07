@@ -1374,9 +1374,7 @@ final class AppState {
     @ObservationIgnored
     private let statusCache = GitStatusCache()
     @ObservationIgnored
-    private var workspaceDisableInProgress = false
-    @ObservationIgnored
-    private var workspacePreviewToggleGeneration = 0
+    private var workspaceLoadTask: Task<Void, Never>?
 
     var lsp: WorkspaceLSPManager {
         if let lspManager { return lspManager }
@@ -1550,10 +1548,8 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
-        if config.workspacesEnabled {
-            Task { @MainActor [weak self] in
-                await self?.setWorkspacesEnabled(true, persistConfig: false)
-            }
+        Task { @MainActor [weak self] in
+            await self?.loadWorkspaces()
         }
         // All stored properties are initialized; we can safely capture `self`.
         // Wire the live default-ordering source so the manager reads the
@@ -2217,12 +2213,10 @@ final class AppState {
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
         let restoringActiveTabs = restoreActiveTabsOnNextReload
-        if config.workspacesEnabled {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.setWorkspacesEnabled(true, persistConfig: false)
-                await self.restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: restoringActiveTabs)
-            }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.loadWorkspaces()
+            await self.restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: restoringActiveTabs)
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
@@ -2528,7 +2522,6 @@ final class AppState {
     }
 
     func restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: Bool) async {
-        guard config.workspacesEnabled else { return }
         loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
         await restoreLoadedWorkspaceCheckoutACPSessions()
         if !config.terminal.keepSessionsAlive {
@@ -2540,7 +2533,7 @@ final class AppState {
     }
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         let tasks = workspacesManager.checkouts.compactMap { checkout -> Task<Void, Never>? in
             guard checkout.archivedAt == nil else { return nil }
             return Task { @MainActor in
@@ -2580,7 +2573,7 @@ final class AppState {
     }
 
     func loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: Bool = true) {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         for checkout in workspacesManager.checkouts {
             loadSessionTabs(
                 owner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
@@ -2590,7 +2583,7 @@ final class AppState {
     }
 
     private func pruneWorkspaceCheckoutTerminalTabs() {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         for checkout in workspacesManager.checkouts {
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
             for tab in tabs.tabs(for: owner) {
@@ -2790,14 +2783,14 @@ final class AppState {
     }
 
     func selectWorkspace(id: UUID) {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectWorkspace(id)
         selectedWorktreeId = nil
     }
 
     func selectWorkspaceCheckout(id: UUID) {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         guard let checkout = workspacesManager.checkout(id: id) else { return }
         nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
@@ -2808,7 +2801,7 @@ final class AppState {
     }
 
     func focusWorkspaceCheckoutMember(id: UUID) {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard workspacesManager.canMutate else { return }
         guard let checkout = selectedWorkspaceCheckout else { return }
         nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
@@ -2827,7 +2820,7 @@ final class AppState {
         revealEndLine: Int? = nil,
         revealCharacter: Int? = nil
     ) -> Bool {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return false }
+        guard workspacesManager.canMutate else { return false }
         selectWorkspaceCheckout(id: checkoutID)
         guard let checkout = selectedWorkspaceCheckout,
               checkout.id == checkoutID,
@@ -2940,22 +2933,21 @@ final class AppState {
         }
     }
 
-    func setWorkspacesEnabled(_ enabled: Bool, persistConfig: Bool = true) async {
-        workspacePreviewToggleGeneration += 1
-        let generation = workspacePreviewToggleGeneration
-        if !enabled, config.workspacesEnabled {
-            workspaceDisableInProgress = true
-            await quiesceWorkspaceCheckoutCreationBeforeDisable()
+    /// Loads run one at a time in call order, so each caller observes its own
+    /// load and the most recent call is the last to apply.
+    func loadWorkspaces() async {
+        let previous = workspaceLoadTask
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            await self?.performWorkspaceLoad()
         }
-        guard generation == workspacePreviewToggleGeneration else { return }
-        config.workspacesEnabled = enabled
-        if enabled || !config.workspacesEnabled {
-            workspaceDisableInProgress = false
-        }
-        if persistConfig { _ = saveConfig() }
+        workspaceLoadTask = task
+        await task.value
+    }
+
+    private func performWorkspaceLoad() async {
         let legacySpaces = spacesManager.file
-        let reconciled = await workspacesManager.setEnabled(enabled, spacesFile: legacySpaces)
-        guard generation == workspacePreviewToggleGeneration else { return }
+        let reconciled = await workspacesManager.load(spacesFile: legacySpaces)
         reconcileWorkspaceNavigationSelection()
         workspaceRecoveryError = workspacesManager.recoveryState
         if let recovery = workspaceRecoveryError {
@@ -2964,9 +2956,9 @@ final class AppState {
         guard let reconciled,
               spacesManager.file == legacySpaces
         else { return }
-        // The enabled preview may reveal dormant typed members, but enabling
-        // itself is not a user mutation. Keep that projection in memory until
-        // a later explicit Spaces or Workspace action persists it.
+        // Loading may reveal dormant typed members, but loading itself is
+        // not a user mutation. Keep that projection in memory until a later
+        // explicit Spaces or Workspace action persists it.
         spacesManager.replace(file: reconciled)
     }
 
@@ -2974,33 +2966,10 @@ final class AppState {
         do {
             try await workspaceStore.discardUnreadableState()
             workspaceRecoveryError = nil
-            if config.workspacesEnabled {
-                _ = await workspacesManager.setEnabled(true, spacesFile: spacesManager.file)
-                workspaceRecoveryError = workspacesManager.recoveryState
-            }
+            await loadWorkspaces()
         } catch {
             persistenceErrorHandler("Workspace Recovery Failed", error.localizedDescription)
         }
-    }
-
-    private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
-        guard workspacesManager.canMutate else { return }
-        let checkouts = workspacesManager.checkouts
-        let stoppableCheckoutIDs = checkouts
-            .filter { $0.operation == .creating || $0.operation == .repairing || $0.operation == .deleting }
-            .map(\.id)
-        let coordinator = workspaceCoordinator()
-        for checkoutID in stoppableCheckoutIDs {
-            try? await coordinator.stopAfterCurrentOperations(checkoutID: checkoutID)
-        }
-        for checkoutID in checkouts.map(\.id) {
-            await coordinator.awaitLiveOperations(checkoutID: checkoutID)
-        }
-        await workspacesManager.refreshCheckoutSnapshots()
-    }
-
-    private var workspaceMutationAvailable: Bool {
-        config.workspacesEnabled && !workspaceDisableInProgress && workspacesManager.canMutate
     }
 
     struct LanguageServerConfigChangeTracker {
@@ -3039,9 +3008,7 @@ final class AppState {
         do {
             let file = spacesManager.file
             try store.write(file, to: Paths.spacesFile)
-            if config.workspacesEnabled {
-                enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
-            }
+            enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
             return true
         } catch {
             persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
@@ -3549,8 +3516,7 @@ final class AppState {
     }
 
     private func authoritativeCheckoutForWorkspaceTerminal(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
-        guard config.workspacesEnabled,
-              let authoritative = await workspaceStore.checkout(id: checkout.id),
+        guard let authoritative = await workspaceStore.checkout(id: checkout.id),
               authoritative.executionLocation.normalized == checkout.executionLocation.normalized,
               authoritative.archivedAt == nil,
               authoritative.operation == .idle,
@@ -3671,7 +3637,7 @@ final class AppState {
     /// Definition changes are intentionally independent of checkout snapshots:
     /// they only determine future creation requests.
     func saveWorkspaceDefinition(_ workspace: Workspace) async throws {
-        guard workspaceMutationAvailable else {
+        guard workspacesManager.canMutate else {
             throw WorkspaceStoreError.recoveryRequired
         }
         // Make sidebar placement visible first. If its legacy Spaces write
@@ -3702,9 +3668,7 @@ final class AppState {
                 spacesManager.replace(file: originalSpacesFile)
                 do {
                     try store.write(originalSpacesFile, to: Paths.spacesFile)
-                    if config.workspacesEnabled {
-                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
-                    }
+                    enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
                 } catch {
                     persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
@@ -3723,7 +3687,7 @@ final class AppState {
     /// definition, against the live store rather than a cache, so nothing
     /// can land in between the check and the removal.
     func deleteWorkspaceDefinition(id workspaceID: UUID, requireNoCheckouts: Bool = false) async throws {
-        guard workspaceMutationAvailable else {
+        guard workspacesManager.canMutate else {
             throw WorkspaceStoreError.recoveryRequired
         }
         let originalSpacesFile = spacesManager.file
@@ -3768,9 +3732,7 @@ final class AppState {
                 spacesManager.replace(file: originalSpacesFile)
                 do {
                     try store.write(originalSpacesFile, to: Paths.spacesFile)
-                    if config.workspacesEnabled {
-                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
-                    }
+                    enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
                 } catch {
                     persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
@@ -3795,7 +3757,7 @@ final class AppState {
     /// and leaves both the definition and the remaining checkouts in place
     /// rather than orphaning the rest into Former Workspace.
     func deleteWorkspaceDefinitionAndCheckouts(id workspaceID: UUID) async throws {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         // Re-scan after every pass rather than snapshotting the checkout list
         // once: a checkout can be persisted under this Workspace while an
         // earlier one is still being deleted (an already-open creation dialog
@@ -3852,7 +3814,7 @@ final class AppState {
     /// The coordinator persists the frozen plan before returning. Selection is
     /// therefore never optimistic before durability is established.
     func createWorkspaceCheckout(workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else {
+        guard workspacesManager.canMutate else {
             throw WorkspaceStoreError.recoveryRequired
         }
         let coordinator = workspaceCoordinator()
@@ -3868,7 +3830,7 @@ final class AppState {
             throw error
         }
         await workspacesManager.refreshCheckoutSnapshots(reconciling: plan.checkoutID)
-        guard workspaceMutationAvailable else {
+        guard workspacesManager.canMutate else {
             return try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
         }
         selectWorkspaceCheckout(id: checkout.id)
@@ -3977,7 +3939,7 @@ final class AppState {
     }
 
     func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let wasSelected = workspaceNavigationState.selectedCheckoutID == id
         let checkout = try await workspaceCoordinator().archive(checkoutID: id)
         await workspacesManager.refreshCheckoutSnapshots()
@@ -3989,7 +3951,7 @@ final class AppState {
     }
 
     func unarchiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: id)
         _ = await restoreWorkspaceCheckoutACPSessions(checkout)
         return checkout
@@ -4026,13 +3988,13 @@ final class AppState {
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         try await workspaceCoordinator().stopAfterCurrentOperations(checkoutID: id)
         await workspacesManager.refreshCheckoutSnapshots()
     }
 
     func resumeWorkspaceCheckoutCreation(id: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: id)
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
@@ -4040,7 +4002,7 @@ final class AppState {
     }
 
     func resumeWorkspaceCheckoutMemberCreation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: checkoutID, memberID: memberID)
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
@@ -4049,7 +4011,7 @@ final class AppState {
     }
 
     func retryWorkspaceCheckoutSetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().retrySetup(checkoutID: checkoutID, memberID: memberID)
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
@@ -4057,7 +4019,7 @@ final class AppState {
     }
 
     func workspaceRepairPlan(checkoutID: UUID, memberID: UUID) throws -> WorkspaceRepairPlanModel {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         guard let checkout = workspacesManager.checkout(id: checkoutID),
               let member = checkout.members.first(where: { $0.id == memberID })
         else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
@@ -4088,7 +4050,7 @@ final class AppState {
     }
 
     func useWorkspaceRepairCandidate(checkoutID: UUID, memberID: UUID, candidate: WorkspaceRepairCandidate) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().useExistingVerifiedCandidate(
             checkoutID: checkoutID,
             memberID: memberID,
@@ -4100,9 +4062,9 @@ final class AppState {
     }
 
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         if let resolvedWorktree {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(resolvedWorktree)
         }
@@ -4213,7 +4175,7 @@ final class AppState {
     }
 
     func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().deleteMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
@@ -4221,7 +4183,7 @@ final class AppState {
     }
 
     func openWorkspaceReview(_ action: WorkspaceReviewAction) {
-        guard workspaceMutationAvailable else { return }
+        guard workspacesManager.canMutate else { return }
         WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
             guard let self else { return }
             let tab = self.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
@@ -4242,7 +4204,7 @@ final class AppState {
     }
 
     func workspaceMemberDeletionConfirmation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
         model.risks.append(contentsOf: preview.rootObservation.leftovers)
@@ -4256,7 +4218,7 @@ final class AppState {
     /// archived checkout at all, so without this the preview itself would
     /// throw before the user ever sees a confirmation.
     func workspaceCheckoutDeletionConfirmation(checkoutID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         guard var checkout = workspacesManager.checkout(id: checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
@@ -4324,7 +4286,7 @@ final class AppState {
     }
 
     func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         guard let checkout = workspacesManager.checkout(id: checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
@@ -4344,7 +4306,7 @@ final class AppState {
         confirmingRisks: Bool = false,
         confirmedPreserveArtifacts: Bool = false
     ) async throws -> WorkspaceCheckoutDeletionOutcome {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
         // Archived is a settled state, not a lock: deletion always
         // supersedes it. The coordinator itself refuses to touch an
@@ -4377,7 +4339,7 @@ final class AppState {
         func worktreeToCleanUp(for member: WorkspaceCheckoutMember) -> Worktree? {
             resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap { Self.synthesizedWorktreeIfOwned(for: $0, in: before) }
         }
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         for worktree in resolvedWorktrees.values {
             try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
         }
@@ -4450,7 +4412,7 @@ final class AppState {
     }
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
-        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         // Same reasoning as `deleteAndForgetWorkspaceCheckout`: a checkout
         // can be archived after its members were already deleted, and
         // forgetting that record is still a stronger, terminal action than
@@ -7487,10 +7449,6 @@ final class AppState {
     private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse {
         let service = WorkspaceAutomationService(
             store: workspaceStore,
-            isEnabled: { [weak self] in
-                guard let self else { return false }
-                return self.config.workspacesEnabled
-            },
             refreshNavigation: { [weak self] in
                 await self?.workspacesManager.refreshCheckoutSnapshots()
             },
@@ -10680,10 +10638,7 @@ final class AppState {
     /// checkout record behind pointing at a "missing" member with no hint
     /// that the checkout, not the worktree, is what needs attention.
     private func workspaceOwnershipDeletionRefusal(for worktree: Worktree) -> String? {
-        guard Self.workspaceCleanupOwnershipAvailable(
-            workspacesEnabled: config.workspacesEnabled,
-            workspacesCanMutate: workspacesManager.canMutate
-        ) else {
+        guard workspacesManager.canMutate else {
             return "Workspace Checkout ownership could not be verified. Try again once Workspace storage is available."
         }
         // Only a checkout still actively managing this worktree's lifecycle
@@ -10860,10 +10815,7 @@ final class AppState {
                 sessionStateIsAcknowledged = !hasLiveSessions(worktreeId: worktree.id)
             }
             let ownershipIsValid = authorization == nil || (
-                Self.workspaceCleanupOwnershipAvailable(
-                    workspacesEnabled: config.workspacesEnabled,
-                    workspacesCanMutate: workspacesManager.canMutate
-                ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             )
             guard sessionStateIsAcknowledged,
                   projectsManager.operationState(for: worktree) == nil,
@@ -10929,10 +10881,7 @@ final class AppState {
                     )
                     let postPreflightSessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
                         .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
-                    let postPreflightOwnershipIsValid = Self.workspaceCleanupOwnershipAvailable(
-                        workspacesEnabled: config.workspacesEnabled,
-                        workspacesCanMutate: workspacesManager.canMutate
-                    ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                    let postPreflightOwnershipIsValid = workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
                     let postPreflightBranchMatches =
                         WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
                     guard postPreflightDirtyIsAcknowledged,
@@ -11108,10 +11057,7 @@ final class AppState {
                         },
                         workspaceOwnershipAvailable: {
                             await MainActor.run {
-                                Self.workspaceCleanupOwnershipAvailable(
-                                    workspacesEnabled: self.config.workspacesEnabled,
-                                    workspacesCanMutate: self.workspacesManager.canMutate
-                                )
+                                self.workspacesManager.canMutate
                             }
                         }
                     )
@@ -11224,7 +11170,7 @@ final class AppState {
     ) -> [WorktreeCleanupWorkspaceOwner] {
         let path = worktree.path.standardizedFileURL.path
 
-        return workspacesManager.ownershipCheckouts.compactMap { checkout in
+        return workspacesManager.checkouts.compactMap { checkout in
             guard let member = checkout.members.first(where: { member in
                 guard member.projectID == worktree.projectId,
                       URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
@@ -11275,10 +11221,7 @@ final class AppState {
         var contentFingerprintsByWorktree: [String: String] = [:]
 
         for worktree in worktrees {
-            guard Self.workspaceCleanupOwnershipAvailable(
-                workspacesEnabled: config.workspacesEnabled,
-                workspacesCanMutate: workspacesManager.canMutate
-            ) else {
+            guard workspacesManager.canMutate else {
                 unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
                 continue
             }
@@ -11344,10 +11287,7 @@ final class AppState {
         var unavailableReasons: [String: String] = [:]
 
         for worktree in worktrees {
-            guard Self.workspaceCleanupOwnershipAvailable(
-                workspacesEnabled: config.workspacesEnabled,
-                workspacesCanMutate: workspacesManager.canMutate
-            ) else {
+            guard workspacesManager.canMutate else {
                 unavailableReasons[worktree.id] = "Workspace Checkout ownership could not be verified"
                 continue
             }
@@ -11440,10 +11380,7 @@ final class AppState {
             )
             let sessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
                 .isSubset(of: authorization.sessionIDsByWorktree[worktree.id] ?? [])
-            let ownershipIsValid = Self.workspaceCleanupOwnershipAvailable(
-                workspacesEnabled: config.workspacesEnabled,
-                workspacesCanMutate: workspacesManager.canMutate
-            ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+            let ownershipIsValid = workspacesManager.canMutate && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard dirtyIsAcknowledged,
                   sessionsAreAcknowledged,
                   projectsManager.operationState(for: worktree) == nil,
@@ -11974,10 +11911,7 @@ final class AppState {
             )
                 && worktreeCleanupSessionIDs(worktreeId: worktree.id).isSubset(of: authorizedSessionIDs)
                 && WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
-                && Self.workspaceCleanupOwnershipAvailable(
-                    workspacesEnabled: config.workspacesEnabled,
-                    workspacesCanMutate: workspacesManager.canMutate
-                )
+                && workspacesManager.canMutate
                 && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard volatileStateIsStillAuthorized else {
                 projectsManager.setOperationState(for: worktree, state: nil)
@@ -11992,10 +11926,7 @@ final class AppState {
             outcome = try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
                 let workspaceOwnershipIsValid = await MainActor.run {
                     if isAuthorizedBatchDeletion {
-                        let isValid = Self.workspaceCleanupOwnershipAvailable(
-                            workspacesEnabled: self.config.workspacesEnabled,
-                            workspacesCanMutate: self.workspacesManager.canMutate
-                        ) && self.worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                        let isValid = self.workspacesManager.canMutate && self.worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
                         if !isValid {
                             self.projectsManager.setOperationState(for: worktree, state: nil)
                         }
@@ -12252,13 +12183,6 @@ final class AppState {
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
         try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)
-    }
-
-    nonisolated static func workspaceCleanupOwnershipAvailable(
-        workspacesEnabled: Bool,
-        workspacesCanMutate: Bool
-    ) -> Bool {
-        !workspacesEnabled || workspacesCanMutate
     }
 
     nonisolated static func pendingForceDelete(
@@ -13926,7 +13850,7 @@ final class AppState {
     }
 
     private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
-        guard workspaceMutationAvailable else { return nil }
+        guard workspacesManager.canMutate else { return nil }
         guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
         guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
         guard authoritative.archivedAt == nil, authoritative.operation == .idle else { return nil }

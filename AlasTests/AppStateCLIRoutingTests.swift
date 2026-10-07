@@ -148,7 +148,7 @@ struct AppStateCLIRoutingTests {
         }
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let routedState = AppState(
@@ -234,7 +234,7 @@ struct AppStateCLIRoutingTests {
             ]
         )
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [project.id], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let remote = WorkspaceRemoteTransport { _, args, _ in

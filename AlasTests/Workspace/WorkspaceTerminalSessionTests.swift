@@ -193,7 +193,6 @@ struct WorkspaceTerminalSessionTests {
             tabsManager: TabsManager(store: WorkspaceTerminalMemoryStore()),
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         await #expect(throws: (any Error).self) {
             try await state.openWorkspaceCheckoutTerminalTab(staleCheckout)
@@ -243,7 +242,6 @@ struct WorkspaceTerminalSessionTests {
             tabsManager: tabs,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         await #expect(throws: (any Error).self) {
             try await state.openWorkspaceCheckoutTerminalTab(checkout)
@@ -307,7 +305,6 @@ struct WorkspaceTerminalSessionTests {
             tabsManager: tabs,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         state.agentRegistry = AgentRegistry(
             builtinState: [:],
             customs: [AgentDefinition(
@@ -409,7 +406,6 @@ struct WorkspaceTerminalSessionTests {
             tabsManager: tabs,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         state.projectsManager.insertOptimisticWorktree(worktree)
         let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
         // Activating the pane schedules a real-git base-branch probe that then
@@ -532,7 +528,7 @@ struct WorkspaceTerminalSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         let manager = WorkspacesManager(bridge: bridge)
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
@@ -681,7 +677,7 @@ struct WorkspaceTerminalSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         let manager = WorkspacesManager(bridge: bridge)
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
@@ -730,7 +726,6 @@ struct WorkspaceTerminalSessionTests {
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         state.reloadTabs()
 
@@ -758,7 +753,7 @@ struct WorkspaceTerminalSessionTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         let manager = WorkspacesManager(bridge: bridge)
-        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await manager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ]))
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)

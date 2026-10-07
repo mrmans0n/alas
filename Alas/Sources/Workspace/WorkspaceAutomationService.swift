@@ -1,7 +1,6 @@
 import Foundation
 
 enum WorkspaceAutomationError: Error, Equatable, Sendable {
-    case disabled
     case recoveryRequired
     case checkoutNotFound
     case memberNotFound
@@ -11,7 +10,6 @@ enum WorkspaceAutomationError: Error, Equatable, Sendable {
 
     var code: String {
         switch self {
-        case .disabled: "workspace_disabled"
         case .recoveryRequired: "workspace_recovery_required"
         case .checkoutNotFound: "workspace_checkout_not_found"
         case .memberNotFound: "workspace_member_not_found"
@@ -23,7 +21,7 @@ enum WorkspaceAutomationError: Error, Equatable, Sendable {
 
     var exitCode: Int {
         switch self {
-        case .disabled, .checkoutNotFound, .memberNotFound, .memberRequired, .memberUnavailable: 2
+        case .checkoutNotFound, .memberNotFound, .memberRequired, .memberUnavailable: 2
         case .ambiguous: 1
         case .recoveryRequired: 3
         }
@@ -31,7 +29,6 @@ enum WorkspaceAutomationError: Error, Equatable, Sendable {
 
     var message: String {
         switch self {
-        case .disabled: "Workspace preview is disabled."
         case .recoveryRequired: "Workspace storage requires recovery."
         case .checkoutNotFound: "Workspace Checkout not found."
         case .memberNotFound: "Workspace Checkout member not found."
@@ -94,7 +91,6 @@ struct WorkspaceAutomationTarget: Codable, Equatable, Sendable {
 
 struct WorkspaceAutomationService: Sendable {
     var store: WorkspaceStore
-    var isEnabled: @MainActor @Sendable () -> Bool
     var refreshNavigation: @MainActor @Sendable () async -> Void
     var selectCheckout: @MainActor @Sendable (UUID) -> Void
     var focusMember: @MainActor @Sendable (UUID, UUID) -> Void
@@ -102,14 +98,12 @@ struct WorkspaceAutomationService: Sendable {
 
     init(
         store: WorkspaceStore,
-        isEnabled: @escaping @MainActor @Sendable () -> Bool,
         refreshNavigation: @escaping @MainActor @Sendable () async -> Void = {},
         selectCheckout: @escaping @MainActor @Sendable (UUID) -> Void = { _ in },
         focusMember: @escaping @MainActor @Sendable (UUID, UUID) -> Void = { _, _ in },
         observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()
     ) {
         self.store = store
-        self.isEnabled = isEnabled
         self.refreshNavigation = refreshNavigation
         self.selectCheckout = selectCheckout
         self.focusMember = focusMember
@@ -159,7 +153,6 @@ struct WorkspaceAutomationService: Sendable {
     }
 
     private func loadedState() async throws -> WorkspaceStateFile {
-        guard await isEnabled() else { throw WorkspaceAutomationError.disabled }
         switch await store.load() {
         case .loaded(let state): return await reconciled(state)
         case .missing: return WorkspaceStateFile()

@@ -16,7 +16,7 @@ struct WorkspacePresentationTests {
         checkout.branch = "feature/a-long-branch-name-for-coordinated-changes"
         try await store.checkpoint(.init(workspaces: [workspace], checkouts: [checkout]))
         let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false, workspaceStore: store)
-        await state.setWorkspacesEnabled(true, persistConfig: false)
+        await state.loadWorkspaces()
         state.spacesManager.setTypedMembers([.workspace(workspace.id)], forSpace: state.spacesManager.activeSpaceId)
         state.selectWorkspaceCheckout(id: checkout.id)
 

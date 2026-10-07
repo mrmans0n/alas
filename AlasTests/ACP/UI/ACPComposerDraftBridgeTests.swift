@@ -18,16 +18,36 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPMessageQuote.canQuote("hello"))
         #expect(!ACPMessageQuote.canQuote(" \n\t"))
     }
-
-    @Test("composer actions forward quote requests")
-    func composerActionsForwardQuoteRequests() {
-        let actions = ACPComposerActions()
-        var received: String?
-        actions.insertQuote = { received = $0 }
-
-        actions.quote("hello")
-
-        #expect(received == "hello")
+    @Test("read-only composers preserve the owner's draft during custom insertion",
+          arguments: ["mention", "image", "draft", "dictation", "quote"])
+    func readOnlyComposerRejectsCustomInsertion(_ input: String) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "Owner draft"
+        let selection = NSRange(location: 0, length: textView.string.utf16.count)
+        textView.setSelectedRange(selection)
+        textView.isEditable = false
+        switch input {
+        case "mention":
+            _ = textView.insertMention(URL(fileURLWithPath: "/tmp/File.swift"))
+        case "image":
+            _ = textView.insertImage(data: pngBytes, worktreeId: "read-only-\(UUID())")
+        case "draft":
+            let board = NSPasteboard(name: .init("alas-test-\(UUID())"))
+            defer { board.releaseGlobally() }
+            ACPNSTextView.writeComposerDraftForTesting(Self.chipDraft, to: board)
+            _ = textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType)
+        case "dictation":
+            _ = textView.replaceDictationRegion("Dictated", isFinal: true)
+        default:
+            coordinator.insertQuote("Quoted", into: textView)
+        }
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString())
+                == ACPComposerDraft(segments: [.text("Owner draft")]))
+        #expect(textView.selectedRange() == selection)
+        textView.isEditable = true
+        #expect(textView.insertPlainText("Editable"))
+        #expect(textView.string == "Editable")
     }
 
     @Test("quote insertion replaces selection and leaves caret on an empty line")

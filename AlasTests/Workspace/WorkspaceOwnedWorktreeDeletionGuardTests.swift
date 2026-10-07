@@ -223,8 +223,7 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let state = AppState(workspaceStore: workspaceStore)
-        state.config.workspacesEnabled = true
-        _ = await state.workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+        _ = await state.workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast),
         ]))
         let projectA = try await state.projectsManager.addProject(path: repoA, displayName: "\(suffix)-a", color: "#5fb7c4")
@@ -408,13 +407,12 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         let spaces = SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
         ])
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
 
@@ -437,13 +435,12 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         let spaces = SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
         ])
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let lateCheckout = WorkspaceCheckout(
             workspaceID: workspace.id, fallbackWorkspaceName: workspace.name, executionLocation: .local,
             branch: "release/late", rootPath: "/checkouts/late", members: []
@@ -486,13 +483,12 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         let spaces = SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
         ])
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         _ = state.tabs.appendTerminal(owner: owner, title: "term", sessionId: "checkout-session")
 
@@ -524,13 +520,12 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         let spaces = SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], members: [.workspace(workspace.id)], lastSelectedWorktreeId: nil, createdAt: .distantPast),
         ])
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         let state = AppState(
             store: InMemoryWorkspaceDeletionStore(spacesFile: spaces),
             workspacesManager: manager,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
 
         await #expect(throws: WorkspaceDefinitionSaveError.checkoutsNotFullyRemoved) {
             try await state.deleteWorkspaceDefinitionAndCheckouts(id: workspace.id)
@@ -590,8 +585,7 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
 
             let workspaceStore = WorkspaceStore(url: workspaceURL)
             let state = AppState(workspaceStore: workspaceStore)
-            state.config.workspacesEnabled = true
-            _ = await state.workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            _ = await state.workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
                 SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast),
             ]))
             let project = try await state.projectsManager.addProject(path: repo, displayName: suffix, color: "#5fb7c4")
