@@ -268,4 +268,21 @@ struct ACPTranscriptRowContentTests {
             typography: .default, trustedImageRoot: URL(fileURLWithPath: "/tmp"))
         #expect(a != b)
     }
+
+    @Test("equality detects a symbol snapshot recorded after sending, though the messages compare equal")
+    @MainActor
+    func rowContentEqualityDetectsSymbolSnapshotChange() {
+        let id = UUID()
+        let uri = "alas-symbol://symbol?path=a.swift&name=a&kind=method&start=0&end=2"
+        let snapshot = ACPSymbolSnapshot(lineRange: 4...6, contentHash: "h", excerpt: nil, truncated: false, found: true)
+        let unsent = ACPMessage.user(id: id, text: "hi", attachments: [.init(uri: uri, name: "a()")])
+        let sent = ACPMessage.user(id: id, text: "hi", attachments: [.init(uri: uri, name: "a()", symbol: snapshot)])
+        #expect(unsent == sent)
+        func key(_ message: ACPMessage) -> ACPTranscriptRowContent.EqualityKey {
+            ACPTranscriptRowContent.equalityKey(
+                stableId: "s1", message: message, contentMaxWidth: 800, typography: .default, trustedImageRoot: nil)
+        }
+        #expect(key(unsent) != key(sent))
+        #expect(key(sent) == key(sent))
+    }
 }

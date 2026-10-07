@@ -398,4 +398,24 @@ struct ACPMessageTests {
         }
         #expect(legacySpans.isEmpty)
     }
+
+    @Test("symbol snapshots round-trip, legacy rows decode without one, and equality ignores them")
+    func symbolSnapshotPersistence() throws {
+        let snapshot = ACPSymbolSnapshot(lineRange: 3...9, contentHash: "abc", excerpt: "func a() {}", truncated: false, found: true)
+        let attachment = ACPMessage.Attachment(uri: "alas-symbol://symbol?x", name: "A.a()", symbol: snapshot)
+        let message = ACPMessage.user(id: UUID(), text: "hi", attachments: [attachment])
+        let back = try ACPMessageCodec.decode(kind: message.kind, payload: ACPMessageCodec.encode(message))
+        guard case .user(_, _, _, let attachments, _, _) = back else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(attachments.first?.symbol == snapshot)
+
+        let legacy = try JSONDecoder().decode(ACPMessage.Attachment.self, from: Data(#"{"uri":"file:///a","name":"a"}"#.utf8))
+        #expect(legacy.symbol == nil)
+
+        let echoed = ACPMessage.Attachment(uri: attachment.uri, name: attachment.name)
+        #expect(echoed == attachment)
+        #expect(echoed.hashValue == attachment.hashValue)
+    }
 }

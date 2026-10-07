@@ -400,6 +400,25 @@ final class ACPSession: ObservableObject, Identifiable {
         var metadata: AnyCodable?
     }
 
+    /// Blocks sent in place of symbol mentions during the active turn,
+    /// across its prompt and any steers. Agents that echo a prompt as
+    /// `user_message_chunk` send them back too; they are wire-only, so the
+    /// echo is dropped instead of merged into the recorded message, like a
+    /// session link's echo (see `ACPSessionReference.agentSentAttachments`).
+    private var expectedSymbolExpansionEchoes: [ACPContentBlock] = []
+
+    /// Expect the agent to echo `blocks`, sent in place of symbol mentions,
+    /// until the turn ends. A steer adds to a prompt's expectations, so the
+    /// prompt's echo arriving after the steer is still dropped.
+    func expectSymbolExpansionEchoes(_ blocks: [ACPContentBlock]) {
+        expectedSymbolExpansionEchoes.append(contentsOf: blocks)
+    }
+
+    /// The turn ended: a later user chunk is never an echo of its expansions.
+    func endSymbolExpansionEchoTurn() {
+        expectedSymbolExpansionEchoes.removeAll()
+    }
+
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
     private var liveUserChunkMessageIds: Set<String> = []
@@ -788,6 +807,28 @@ final class ACPSession: ObservableObject, Identifiable {
         return true
     }
 
+    /// Re-stamps symbol snapshots on an already-recorded user message when a
+    /// retried delivery resolved its symbols again. Returns the message index
+    /// when a snapshot changed, so the caller can persist it.
+    func replaceSymbolSnapshots(
+        inUserMessage id: UUID, from expansion: ACPSymbolReference.Expansion
+    ) -> Int? {
+        guard !expansion.snapshots.isEmpty,
+              let index = transcript.messages.firstIndex(where: {
+                  guard case .user(let messageID, _, _, _, _, _) = $0 else { return false }
+                  return messageID == id
+              }),
+              case .user(let messageID, let remoteMessageID, let text, let attachments, let delegatedSource, let pastedSpans) = transcript.messages[index]
+        else { return nil }
+        let updated = ACPSymbolReference.attachingSnapshots(to: attachments, from: expansion)
+        guard updated.map(\.symbol) != attachments.map(\.symbol) else { return nil }
+        transcript.replaceMessage(at: index, with: .user(
+            id: messageID, messageId: remoteMessageID, text: text, attachments: updated,
+            delegatedSource: delegatedSource, pastedSpans: pastedSpans
+        ))
+        return index
+    }
+
     nonisolated static func removingAlasWorkspaceContext(from text: String) -> String {
         var result = text
         let openingTag = "<alas-workspace-context>"
@@ -898,6 +939,7 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             return flushedForAgent.union([i])
         case .userMessageChunk(let chunk):
+            guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
@@ -3745,6 +3787,20 @@ final class ACPSession: ObservableObject, Identifiable {
         case user
         case agent
         case thought
+    }
+
+    /// Whether `block` is the agent echoing a block sent in place of a
+    /// symbol mention this turn. Embedded code without its text comes back
+    /// as a plain link, which carries only the URI.
+    private func isEchoedSymbolExpansion(_ block: ACPContentBlock) -> Bool {
+        expectedSymbolExpansionEchoes.contains { sent in
+            switch (sent, block) {
+            case (.resource(let sentURI, _, _), .resourceLink(let echoedURI, _)):
+                return sentURI == echoedURI
+            default:
+                return sent == block
+            }
+        }
     }
 
     private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {

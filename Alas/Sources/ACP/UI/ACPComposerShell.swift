@@ -189,6 +189,7 @@ struct ACPComposer: View {
     let onSubmit: ACPComposerSubmitHandler
     let filesProvider: (@Sendable () async -> [URL])?
     let sessionMentions: ACPSessionMentionSource?
+    let symbolMentions: ACPSymbolMentionSource?
 
     let nextPromptOffer: String?
     let takeNextPromptOffer: () -> String?
@@ -225,6 +226,7 @@ struct ACPComposer: View {
         actions: ACPComposerActions,
         filesProvider: (@Sendable () async -> [URL])? = nil,
         sessionMentions: ACPSessionMentionSource? = nil,
+        symbolMentions: ACPSymbolMentionSource? = nil,
         nextPromptOffer: String? = nil,
         takeNextPromptOffer: @escaping () -> String? = { nil },
         dismissNextPromptOffer: @escaping () -> Void = {},
@@ -249,6 +251,7 @@ struct ACPComposer: View {
         self.actions = actions
         self.filesProvider = filesProvider
         self.sessionMentions = sessionMentions
+        self.symbolMentions = symbolMentions
         self.onSubmit = onSubmit
         self.nextPromptOffer = nextPromptOffer
         self.takeNextPromptOffer = takeNextPromptOffer
@@ -430,6 +433,7 @@ struct ACPComposer: View {
                 nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
                 upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot),
                 sessionMentions: sessionMentions,
+                symbolMentions: symbolMentions,
                 alasCommands: manager.isMirror(sessionId: session.id) || session.readOnlyRestricted
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion] + pluginPrompts

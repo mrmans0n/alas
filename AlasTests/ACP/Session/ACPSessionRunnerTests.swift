@@ -264,6 +264,62 @@ struct ACPSessionRunnerTests {
         #expect(usage.isEmpty)
     }
 
+    /// Symbol mentions resolve after the lease is first confirmed. A takeover while they resolve leaves the prompt
+    /// unrecorded and unsent, and the submitter learns it failed.
+    @Test func aLeaseLostWhileSymbolMentionsResolveRecordsNothing() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var leaseChecks = 0
+        var sent = false
+        var finished: Bool?
+        let (runner, mock) = try makeRunner(session: session, validateLease: {
+            leaseChecks += 1
+            return leaseChecks == 1
+        })
+        mock.script(method: "session/prompt") { _ in
+            sent = true
+            return Data("{}".utf8)
+        }
+        let link = ACPSymbolReference.uri(for: .init(path: "A.swift", name: "run", kind: .function,
+                                                     container: nil, lineRange: 0...0, includeCode: true))
+        runner.send(text: "explain", attachments: [.init(uri: link, name: "run()")]) { finished = $0 }
+        #expect(await awaitCondition { finished != nil })
+        #expect(finished == false)
+        #expect(!sent)
+        #expect(!session.transcript.messages.contains {
+            if case .user = $0 { return true }
+            return false
+        })
+    }
+
+    /// A sent symbol mention's echo is expected only until its turn ends: a later user chunk with the same text is
+    /// a new prompt, not an echo.
+    @Test func symbolExpansionEchoesAreNotExpectedAfterTheTurnEnds() async throws {
+        let (runner, mock) = try makeRunner()
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let link = ACPContentBlock.resourceLink(
+            uri: ACPSymbolReference.uri(for: .init(path: "Missing\(UUID()).swift", name: "run", kind: .function,
+                                                   container: nil, lineRange: 0...0, includeCode: true)),
+            name: "run()")
+        let sent = ACPSymbolReference.expansion(
+            of: [link], sources: [:], worktreeRoot: FileManager.default.temporaryDirectory,
+            embeddedContext: runner.session.promptCapabilities.embeddedContext).sentBlocks
+        guard case .text(let reference) = sent.first, case .resourceLink(let uri, let name) = link else {
+            Issue.record("expected a reference, got \(sent)")
+            return
+        }
+        var finished: Bool?
+        runner.send(text: "explain", attachments: [.init(uri: uri, name: name ?? "")]) { finished = $0 }
+        #expect(await awaitCondition { finished != nil && runner.session.transcript.streamingState == .idle })
+        #expect(finished == true)
+
+        runner.session.apply(.userMessageChunk(.init(messageId: "later", content: .text(reference))))
+        guard case .user(_, _, let text, _, _, _) = runner.session.transcript.messages.last else {
+            Issue.record("expected the later prompt to be recorded")
+            return
+        }
+        #expect(text == reference)
+    }
+
     /// A prompt that fails is recorded only when the agent answered with the error: one the client could not send
     /// (the agent is not running) never reached it.
     @Test(arguments: [true, false])
