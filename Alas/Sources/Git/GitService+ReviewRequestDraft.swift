@@ -8,6 +8,13 @@ struct ReviewRequestDraftContext: Equatable {
     let fileDiffsByPath: [String: String]
     let hasUncommittedChanges: Bool
     let singleCommitBody: String?
+    /// The HEAD commit every read was pinned to.
+    let headSHA: String?
+    /// Where the branch forks from the base, or nil when Git finds none. The
+    /// branch diff and commit list change exactly when this or HEAD moves.
+    let mergeBaseSHA: String?
+    /// Changed files Git reports without line counts (`-` in numstat).
+    let binaryPaths: Set<String>
 
     init(
         commitSubjects: [String],
@@ -16,7 +23,10 @@ struct ReviewRequestDraftContext: Equatable {
         diff: String,
         fileDiffsByPath: [String: String],
         hasUncommittedChanges: Bool,
-        singleCommitBody: String? = nil
+        singleCommitBody: String? = nil,
+        headSHA: String? = nil,
+        mergeBaseSHA: String? = nil,
+        binaryPaths: Set<String> = []
     ) {
         self.commitSubjects = commitSubjects
         self.commits = commits
@@ -25,18 +35,32 @@ struct ReviewRequestDraftContext: Equatable {
         self.fileDiffsByPath = fileDiffsByPath
         self.hasUncommittedChanges = hasUncommittedChanges
         self.singleCommitBody = singleCommitBody
+        self.headSHA = headSHA
+        self.mergeBaseSHA = mergeBaseSHA
+        self.binaryPaths = binaryPaths
     }
+}
+
+struct ReviewRequestRangeIdentity: Equatable, Sendable {
+    let head: String?
+    let mergeBase: String?
+    let hasUncommittedChanges: Bool?
 }
 
 extension GitService {
     func reviewRequestDraftContext(worktreePath: URL, baseRef: String) async throws -> ReviewRequestDraftContext {
-        let diffRange = "\(baseRef)...HEAD"
+        // Every read below uses these commits, so a ref that moves mid-load
+        // cannot mix two ranges into one context.
+        let base = try await reviewRequestCommit(baseRef, worktreePath: worktreePath)
+        let head = try await reviewRequestCommit("HEAD", worktreePath: worktreePath)
+        let diffRange = "\(base)...\(head)"
+        let logRange = "\(base)..\(head)"
         async let subjectsResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=format:%s"],
+            ["log", logRange, "--pretty=format:%s"],
             cwd: worktreePath
         )
         async let commitsResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
+            ["log", logRange, "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
             cwd: worktreePath
         )
         async let diffResult = Process.git(
@@ -55,8 +79,9 @@ extension GitService {
             ["status", "--porcelain"],
             cwd: worktreePath
         )
+        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
         async let commitBodyResult = Process.git(
-            ["log", "\(baseRef)..HEAD", "--pretty=format:%b"],
+            ["log", logRange, "--pretty=format:%b"],
             cwd: worktreePath
         )
 
@@ -110,14 +135,66 @@ extension GitService {
             diff: diff.stdout,
             fileDiffsByPath: fileDiffsByPath,
             hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            singleCommitBody: singleCommitBody
+            singleCommitBody: singleCommitBody,
+            headSHA: head,
+            mergeBaseSHA: await mergeBase,
+            binaryPaths: Self.reviewRequestBinaryPaths(numstat: files.stdout)
         )
+    }
+
+    /// HEAD, the merge base with `baseRef`, and whether the tree is dirty, as
+    /// they are now, for checking that loaded branch context still describes
+    /// the repository. A failed read is nil and matches nothing. HEAD is read
+    /// on both sides of the other reads; if it moved meanwhile they may mix
+    /// two states, so the head is reported as unknown.
+    func reviewRequestRangeIdentity(worktreePath: URL, baseRef: String) async -> ReviewRequestRangeIdentity {
+        let before = await reviewRequestHead(worktreePath: worktreePath)
+        async let status = Process.git(["status", "--porcelain"], cwd: worktreePath)
+        async let mergeBase = reviewRequestMergeBase(worktreePath: worktreePath, baseRef: baseRef)
+        let dirty = (try? await status).flatMap { $0.exitCode == 0 ? $0.stdout : nil }
+            .map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let resolvedMergeBase = await mergeBase
+        let after = await reviewRequestHead(worktreePath: worktreePath)
+        return ReviewRequestRangeIdentity(
+            head: before == after ? after : nil,
+            mergeBase: resolvedMergeBase,
+            hasUncommittedChanges: dirty
+        )
+    }
+
+    private func reviewRequestHead(worktreePath: URL) async -> String? {
+        guard let result = try? await Process.git(["rev-parse", "HEAD"], cwd: worktreePath),
+              result.exitCode == 0 else { return nil }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func reviewRequestCommit(_ ref: String, worktreePath: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", "--verify", "\(ref)^{commit}"], cwd: worktreePath)
+        try Self.assertReviewRequestSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func reviewRequestMergeBase(worktreePath: URL, baseRef: String, headRef: String = "HEAD") async -> String? {
+        guard let result = try? await Process.git(["merge-base", baseRef, headRef], cwd: worktreePath),
+              result.exitCode == 0 else { return nil }
+        let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha.isEmpty ? nil : sha
     }
 
     private static func assertReviewRequestSuccess(_ result: ProcessResult) throws {
         guard result.exitCode == 0 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
+    }
+
+    /// Destination paths of numstat entries whose counts are `-`, which Git
+    /// uses for binary files.
+    static func reviewRequestBinaryPaths(numstat: String) -> Set<String> {
+        Set(numstat.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 2)
+            guard parts.count == 3, parts[0] == "-", parts[1] == "-" else { return nil }
+            return NumstatParser.destinationPath(from: String(parts[2]))
+        })
     }
 
     private static func reviewRequestChangedFiles(numstat: String, nameStatus: String) -> [CommitChangedFile] {
@@ -179,6 +256,7 @@ extension GitService {
                 authorInitials: CommitInfo.initials(for: String(fields[2])),
                 date: isoFormatter.date(from: String(fields[3])) ?? Date(timeIntervalSince1970: 0),
                 subject: subject,
+                rawSubject: rawSubject,
                 conventionalTag: tag,
                 filesChanged: filesChanged,
                 insertions: additions,

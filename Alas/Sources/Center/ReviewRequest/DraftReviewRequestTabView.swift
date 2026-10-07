@@ -33,6 +33,11 @@ struct DraftReviewRequestTabView: View {
     @State private var reviewSessionLaunchError: String?
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var changeSummaryVisible = false
+    @State private var changeSummaryDraft: ChangeSummaryDraft?
+    @State private var changeSummaryTask: Task<Void, Never>?
+    /// Nil until loaded, or when history cannot be read.
+    @State private var runHistory: [RunHistorySummary]?
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
@@ -128,6 +133,7 @@ struct DraftReviewRequestTabView: View {
         }
         .onDisappear {
             generation?.cancel()
+            cancelChangeSummary()
         }
     }
 
@@ -285,6 +291,20 @@ struct DraftReviewRequestTabView: View {
     private var contextBrowser: some View {
         VStack(spacing: 0) {
             draftContextHeader
+            if changeSummaryVisible {
+                ChangeSummaryCard(
+                    phase: ChangeSummaryPhase.resolve(
+                        isSummarizing: changeSummaryTask != nil,
+                        draft: changeSummaryDraft,
+                        currentFacts: currentChangeSummaryFacts
+                    ),
+                    canSummarize: canSummarizeChange,
+                    onSummarize: summarizeChange,
+                    onCopy: copyChangeSummary,
+                    onCancel: cancelChangeSummary,
+                    onDismiss: cancelChangeSummary
+                )
+            }
             draftCommitStrip
             Divider().overlay(theme.color("line"))
             draftContextContent
@@ -325,6 +345,11 @@ struct DraftReviewRequestTabView: View {
                     .truncationMode(.middle)
             }
             LSPServerChipStrip(chips: lspLeases.chips, appState: appState)
+            if canSummarizeChange {
+                AlasButton(title: "Summarize", icon: "sparkle", action: summarizeChange)
+                    .disabled(changeSummaryTask != nil)
+                    .help("Draft a summary of this branch on-device. It is only copied when you choose Copy.")
+            }
             AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
                 if let targetMismatchMessage {
                     reviewSessionLaunchError = targetMismatchMessage
@@ -653,6 +678,86 @@ struct DraftReviewRequestTabView: View {
                 self.error = (error as NSError).localizedDescription
             }
         }
+    }
+
+    /// Facts for the branch as currently loaded, or nil while it is loading
+    /// or no longer matches the draft's target.
+    private var currentChangeSummaryFacts: ChangeSummaryFacts? {
+        guard let context, loadedContextKey == contextKey, let snapshot = matchingSnapshot else { return nil }
+        let issueTitle = appState.worktree(withId: worktreeId).flatMap {
+            appState.projectsManager.issueAttachment(projectId: $0.projectId, worktreeId: worktreeId)?.title
+        }
+        return ChangeSummaryFacts(
+            context: context,
+            base: tabState.baseBranch,
+            branch: tabState.branchName,
+            headSHA: snapshot.local.headSHA,
+            runResults: ChangeSummaryFacts.latestRuns(
+                history: runHistory,
+                records: appState.runRecords.records(worktreeID: worktreeId)
+            ),
+            issueTitle: issueTitle
+        )
+    }
+
+    private var canSummarizeChange: Bool {
+        guard let context, !context.changedFiles.isEmpty, currentChangeSummaryFacts != nil else { return false }
+        return appState.makeChangeSummarizer().isAvailable
+    }
+
+    private func summarizeChange() {
+        guard changeSummaryTask == nil, currentChangeSummaryFacts != nil else { return }
+        changeSummaryVisible = true
+        changeSummaryDraft = nil
+        let summarizer = appState.makeChangeSummarizer()
+        changeSummaryTask = Task { @MainActor in
+            await loadRunHistory()
+            guard !Task.isCancelled else { return }
+            guard let facts = currentChangeSummaryFacts else {
+                changeSummaryTask = nil
+                return
+            }
+            let draft = await summarizer.summarize(facts)
+            guard !Task.isCancelled else { return }
+            changeSummaryDraft = draft
+            changeSummaryTask = nil
+        }
+    }
+
+    /// The base and the working tree can change without changing
+    /// `contextKey`, so confirm them first; a moved branch reloads and leaves
+    /// the card stale.
+    /// Git is read after the last other suspension so nothing can move
+    /// between the check and the copy.
+    private func copyChangeSummary(_ draft: ChangeSummaryDraft) async -> Bool {
+        await loadRunHistory()
+        let identity = await git.reviewRequestRangeIdentity(worktreePath: worktreePath, baseRef: tabState.baseBranch)
+        guard draft.describes(identity) else {
+            await loadContext()
+            return false
+        }
+        guard draft.isCurrent(for: currentChangeSummaryFacts) else { return false }
+        Clipboard.copy(ChangeSummaryPolicy.markdown(for: draft))
+        return true
+    }
+
+    /// Completed runs survive restarts and reruns only in durable history.
+    /// A run that just finished may still be on its way there.
+    private func loadRunHistory() async {
+        guard let store = appState.runHistoryStore else {
+            runHistory = nil
+            return
+        }
+        await appState.flushRunHistoryPersistence(worktreeID: worktreeId)
+        let limit = RunHistoryStore.defaultMaximumEntriesPerWorktree
+        runHistory = (try? await store.page(worktreeID: worktreeId, offset: 0, limit: limit))?.entries
+    }
+
+    private func cancelChangeSummary() {
+        changeSummaryTask?.cancel()
+        changeSummaryTask = nil
+        changeSummaryDraft = nil
+        changeSummaryVisible = false
     }
 
     private func createReviewRequest() {
