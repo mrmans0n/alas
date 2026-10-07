@@ -1698,19 +1698,24 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
-    @Test func projectRevisionWatcherReloadsAnUpperEntryWhenReachableCommitsAreUnchanged() async throws {
+    @Test(arguments: [false, true])
+    func projectRevisionWatcherKeepsPreparationOnlyForUnchangedLiveHead(activeHeadChanges: Bool) async throws {
+        let repository = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repository.remove() }
+        try await repository.git(["switch", "-c", "feature"])
         let project = ProjectConfig(
             id: "test-project",
             name: "Test",
-            path: "/repo",
+            path: repository.root.path,
             color: "blue",
             addedAt: .now
         )
-        let worktree = makeWorktree()
-        let gitDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-upper-stack-watch-\(UUID().uuidString)/.git")
-        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: gitDir.deletingLastPathComponent()) }
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repository.root), projectId: project.id,
+            name: "feature", branch: "feature", path: repository.root,
+            status: .clean, lastActivity: .now
+        )
+        let gitDir = repository.root.appendingPathComponent(".git")
         let watcher = ProjectGitWatcher(
             repoPath: URL(fileURLWithPath: project.path),
             resolvedGitDir: gitDir,
@@ -1733,6 +1738,7 @@ struct RightPaneGGStackTests {
             comparisonMode: .manual
         )
         state.stop()
+        try #require(await state.refresh())
 
         let lowerSnapshot = GGStackModelsTests.fixture
             .replacingOccurrences(of: #""current_position": 3"#, with: #""current_position": 1"#)
@@ -1772,11 +1778,15 @@ struct RightPaneGGStackTests {
             ).isVisible
         }
         #expect(preparationIsVisible())
+        if activeHeadChanges {
+            try await repository.git(["commit", "--allow-empty", "-m", "advance active HEAD"])
+        }
 
         app.startProjectGitWatcher(for: project)
-        watcher.processEvents([gitDir.appendingPathComponent("refs/remotes/origin/upper-entry").path])
+        let changedRef = activeHeadChanges ? "refs/heads/feature" : "refs/remotes/origin/upper-entry"
+        watcher.processEvents([gitDir.standardizedFileURL.appendingPathComponent(changedRef).path])
         await runner.waitUntilCall(2)
-        #expect(preparationIsVisible())
+        #expect(preparationIsVisible() == !activeHeadChanges)
         await runner.complete(call: 2)
         for _ in 0..<500 where state.ggStackDisplayCommits.first?.shortSha != "ddddddd" {
             try await Task.sleep(nanoseconds: 1_000_000)

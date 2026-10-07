@@ -434,7 +434,7 @@ final class RightPaneStore {
                state.ggStackLoadState == .loaded,
                state.ggStackCommitsKey == state.currentGGStackCommitsKey,
                state.ggActionState.inFlightAction == nil {
-                activeRefresh = state.reevaluateGGGate()
+                activeRefresh = state.reevaluateGGGate(verifyingHead: true)
             } else if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task
             }

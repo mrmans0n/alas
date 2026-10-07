@@ -2002,22 +2002,39 @@ final class RightPaneState: GGSplitCommitServicing {
     /// stack visible, then reloads or clears stack state. Returns the
     /// underlying task so tests can await completion; production call
     /// sites ignore the return value.
+    /// Shared-ref refreshes verify the live branch and HEAD because the
+    /// cached commit key may not yet reflect the ref notification.
     @MainActor
     @discardableResult
-    func reevaluateGGGate() -> Task<Void, Never> {
+    func reevaluateGGGate(verifyingHead: Bool = false) -> Task<Void, Never> {
         let remoteMetadata = ggStack
+        let cachedBranch = currentBranch
+        let cachedHeadSHA = currentHeadSHA
         ggStackRefreshGeneration &+= 1
+        let refreshGeneration = ggStackRefreshGeneration
         ggStackRefreshTask?.cancel()
         ggStackRemoteMetadataCache = remoteMetadata
         let refreshID = UUID()
         ggExplicitStackRefreshID = refreshID
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.refreshGGStack(forceRemote: true)
-            if self.ggExplicitStackRefreshID == refreshID {
-                self.ggExplicitStackRefreshID = nil
-                self.scheduleDeferredGGStackRefreshIfNeeded()
+            defer {
+                if self.ggExplicitStackRefreshID == refreshID {
+                    self.ggExplicitStackRefreshID = nil
+                    self.scheduleDeferredGGStackRefreshIfNeeded()
+                }
             }
+            if verifyingHead {
+                async let liveBranch = try? self.git.currentBranch(worktreePath: self.worktree.path)
+                async let liveHeadSHA = try? self.git.resolveRevision(at: self.worktree.path, ref: "HEAD")
+                let (branch, headSHA) = await (liveBranch, liveHeadSHA)
+                guard !Task.isCancelled, self.ggStackRefreshGeneration == refreshGeneration else { return }
+                if cachedHeadSHA.isEmpty || branch != cachedBranch || headSHA != cachedHeadSHA {
+                    await self.invalidateGGPresentation(startingRefresh: true)?.value
+                    return
+                }
+            }
+            await self.refreshGGStack(forceRemote: true)
         }
         ggStackRefreshTask = task
         return task
