@@ -140,23 +140,24 @@ enum VisualAidWebPolicy {
       observer.observe(document.documentElement);
       if (document.body) observer.observe(document.body);
       addEventListener('load', reportHeight);
-      document.addEventListener('click', (event) => {
+      // Named so tests can drive it with a fake event.
+      globalThis.alasVisualHandleClick = (event) => {
         if (!event.isTrusted || !(event.target instanceof Element)) return;
-        const link = event.target.closest('a[href]');
-        if (link) {
-          // Same-document anchors keep their default navigation.
-          if ((link.getAttribute('href') || '').startsWith('#')) return;
-          event.preventDefault();
-          post({ open: link.href });
-          return;
-        }
+        // A choice is picked first, even when its element is or sits inside a link.
         const choice = event.target.closest('[data-choice]');
         if (choice) {
           // Never truncate: a longer value must not turn into a valid id.
           const value = String(choice.getAttribute('data-choice'));
           if (value.length <= 64) post({ choice: value });
         }
-      }, true);
+        const link = event.target.closest('a[href]');
+        if (!link) return;
+        // Same-document anchors keep their default navigation.
+        if ((link.getAttribute('href') || '').startsWith('#')) return;
+        event.preventDefault();
+        post({ open: link.href });
+      };
+      document.addEventListener('click', (event) => globalThis.alasVisualHandleClick(event), true);
       globalThis.alasVisualSelect = (ids) => {
         for (const element of document.querySelectorAll('[data-choice]')) {
           element.classList.toggle('selected', ids.includes(element.getAttribute('data-choice')));

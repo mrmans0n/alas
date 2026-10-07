@@ -232,6 +232,51 @@ extension VisualAidWebPolicyTests {
     }
 
     @MainActor
+    @Test("a data-choice element selects its option even when it is a link or sits inside one")
+    func choiceInsideLinkSelects() async throws {
+        let html = """
+        <a href="#" data-choice="a">A</a>
+        <a href="https://example.test/" data-choice="b"><span id="inner">B</span></a>
+        <div data-choice="c">C</div>
+        """
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: html, theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: true)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        var choices: [String] = []
+        var opened: [URL] = []
+        page.onChoice = { choices.append($0) }
+        page.openExternal = { opened.append($0) }
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        /// Runs the bridge's click handler on a real element; true when it called `preventDefault`.
+        func click(_ selector: String) async throws -> Bool {
+            let result = try await page.webView.callAsyncJavaScript(
+                """
+                const event = { isTrusted: true, target: document.querySelector(selector), prevented: false,
+                                preventDefault() { this.prevented = true } };
+                alasVisualHandleClick(event);
+                return event.prevented;
+                """,
+                arguments: ["selector": selector], in: nil, contentWorld: world)
+            return try #require(result as? Bool)
+        }
+
+        page.externalLinksEnabled = false
+        let prevented = [
+            try await click("[data-choice=a]"), try await click("#inner"), try await click("[data-choice=c]"),
+        ]
+        #expect(prevented == [false, true, false], "only the https link loses its default navigation")
+        #expect(await awaitCondition { choices.count == 3 })
+        #expect(choices == ["a", "b", "c"])
+        #expect(opened.isEmpty, "a link stays dead while external links are off")
+
+        page.externalLinksEnabled = true
+        _ = try await click("#inner")
+        #expect(await awaitCondition { opened.count == 1 })
+        #expect(opened.map(\.absoluteString) == ["https://example.test/"])
+    }
+
+    @MainActor
     @Test("a link click reaches the browser only while external links are enabled")
     func bridgeOpenHonorsExternalLinksEnabled() async throws {
         let page = try makePage(locks: false)
