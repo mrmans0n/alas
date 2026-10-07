@@ -2479,6 +2479,23 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
+    /// Drop a visual aid whose first write failed, with the per-card state the
+    /// UI kept for it. Returns the index it occupied, or nil when it is not in
+    /// the transcript. The removal is a direct `messages` mutation: the
+    /// transcript rebuilds its timestamp and index caches for it and the
+    /// remote change log records it as structural.
+    @discardableResult
+    func removeVisualAid(id visualId: UUID) -> Int? {
+        guard let index = transcript.messages.firstIndex(where: {
+            if case .visualAid(let existing) = $0 { return existing.id == visualId }
+            return false
+        }) else { return nil }
+        transcript.messages.remove(at: index)
+        visualAidForms[visualId] = nil
+        visualAidSendStatuses[visualId] = nil
+        return index
+    }
+
     /// The native form for a visual's question, created once and kept on the
     /// session so an unsent selection survives the card leaving the mount band.
     func visualAidForm(for visual: ACPVisualAid) -> ACPUserInputFormState? {

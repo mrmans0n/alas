@@ -216,12 +216,18 @@ final class ACPSessionRunner {
     private var latestPromptTask: Task<Void, Never>?
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
-    /// Row ids whose individual write outcome a caller is awaiting, and the
-    /// ones among them a confirmed write actually stored. Both are populated
-    /// only while an `appendAndPersistSystemNoticeAwaitingResult` call is in
+    /// Callers awaiting the outcome of one specific row write, and the ones
+    /// among them a confirmed write actually stored. An awaiter names the row
+    /// id AND the exact payload it expects: another write of the same row id
+    /// (an earlier one still in flight when the caller mutated the row) must
+    /// not confirm it. Populated only while an `awaitingWrite` call is in
     /// flight, so the fire-and-forget persistence path pays nothing.
-    private var awaitedRowIDs: Set<String> = []
-    private var writtenAwaitedRowIDs: Set<String> = []
+    private struct AwaitedWrite {
+        let rowID: String
+        let payload: Data
+    }
+    private var awaitedWrites: [UUID: AwaitedWrite] = [:]
+    private var confirmedAwaitedWrites: Set<UUID> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -4811,21 +4817,38 @@ extension ACPSessionRunner {
     /// which raises it optimistically at enqueue time — so it reports
     /// success for a notice whose own write was rejected by the fence or
     /// failed in SQLite, and the caller then deletes the inbox row that was
-    /// the notice's only other copy. `writtenAwaitedRowIDs` is
+    /// the notice's only other copy. `confirmedAwaitedWrites` is
     /// populated solely by `commitPersistedMessageRows`, which runs only on
-    /// a confirmed write of these exact rows, so an unwritten notice always
-    /// reports `false` and is retried from the inbox.
+    /// a confirmed write of this exact row payload, so an unwritten notice
+    /// always reports `false` and is retried from the inbox.
     func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        let rowID = messageRowID(session.transcript.messages.count)
-        awaitedRowIDs.insert(rowID)
-        defer {
-            awaitedRowIDs.remove(rowID)
-            writtenAwaitedRowIDs.remove(rowID)
+        let before = session.transcript.messages.count
+        session.appendSystemNotice(text)
+        return await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
+            persistFromIndex(before)
         }
-        appendAndPersistSystemNotice(text)
+    }
+
+    /// Enqueue a write of the row at `index` through `enqueue` and report
+    /// whether a confirmed write stored that row with the payload it holds
+    /// NOW. Matching the payload, not just the row id, keeps an earlier write
+    /// of the same row — still in flight when the row was mutated — from
+    /// confirming this one. Registering happens before any suspension point,
+    /// so no commit can slip in between the mutation and the registration.
+    private func awaitingWrite(ofRowAt index: Int, enqueue: () -> Void) async -> Bool {
+        guard session.transcript.messages.indices.contains(index),
+              let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index]))
+        else { return false }
+        let token = UUID()
+        awaitedWrites[token] = AwaitedWrite(rowID: messageRowID(index), payload: payload)
+        defer {
+            awaitedWrites[token] = nil
+            confirmedAwaitedWrites.remove(token)
+        }
+        enqueue()
         await flushPersistence()
-        return writtenAwaitedRowIDs.contains(rowID)
+        return confirmedAwaitedWrites.contains(token)
     }
 
     /// Append a file-edit card to the session AND persist it.
@@ -4838,19 +4861,22 @@ extension ACPSessionRunner {
     /// Append a visual aid and report whether its row reached the store, the
     /// way `appendAndPersistSystemNoticeAwaitingResult` does: `visual_show`
     /// tells the agent the visual is shown only once it would survive a reload.
+    /// When the write is not confirmed the card is removed again, so the agent's
+    /// retry cannot leave a second card next to a ghost that a reload would lose.
     func appendAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        let rowID = messageRowID(session.transcript.messages.count)
-        awaitedRowIDs.insert(rowID)
-        defer {
-            awaitedRowIDs.remove(rowID)
-            writtenAwaitedRowIDs.remove(rowID)
-        }
         let before = session.transcript.messages.count
         session.appendVisualAid(visual)
-        persistFromIndex(before)
-        await flushPersistence()
-        return writtenAwaitedRowIDs.contains(rowID)
+        let written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
+            persistFromIndex(before)
+        }
+        if !written, let removedIndex = session.removeVisualAid(id: visual.id) {
+            // Rows after the card shifted down by one; rewrite them at their
+            // new positions. The old last row stays in the store until the
+            // next append overwrites it.
+            if removedIndex < session.transcript.messages.count { persistFromIndex(removedIndex) }
+        }
+        return written
     }
 
     /// Replace the visual aid with the same id in place and report whether
@@ -4863,16 +4889,10 @@ extension ACPSessionRunner {
                   return false
               })
         else { return false }
-        let rowID = messageRowID(index)
-        awaitedRowIDs.insert(rowID)
-        defer {
-            awaitedRowIDs.remove(rowID)
-            writtenAwaitedRowIDs.remove(rowID)
-        }
         session.transcript.replaceMessage(at: index, with: .visualAid(visual))
-        persistIndices([index])
-        await flushPersistence()
-        return writtenAwaitedRowIDs.contains(rowID)
+        return await awaitingWrite(ofRowAt: index) {
+            persistIndices([index])
+        }
     }
 
     /// Persist the row of a visual aid already changed in the transcript.
@@ -5266,9 +5286,9 @@ extension ACPSessionRunner {
     }
 
     /// The store's row id for the message at `index`. Single source of truth:
-    /// `awaitedRowIDs` matches on this, so a divergence between how a
+    /// `awaitedWrites` matches on this, so a divergence between how a
     /// row is written and how its write is confirmed would silently report
-    /// every awaited notice as unwritten.
+    /// every awaited write as unwritten.
     private func messageRowID(_ index: Int) -> String {
         "msg-\(sessionId)-\(index)"
     }
@@ -5278,8 +5298,8 @@ extension ACPSessionRunner {
             let index = Int(row.seq)
             persistedMessageCount = max(persistedMessageCount, index + 1)
             lastPersistedPayloads[index] = row.payload
-            if awaitedRowIDs.contains(row.id) {
-                writtenAwaitedRowIDs.insert(row.id)
+            for (token, awaited) in awaitedWrites where awaited.rowID == row.id && awaited.payload == row.payload {
+                confirmedAwaitedWrites.insert(token)
             }
         }
         trimLastPersistedPayloads()

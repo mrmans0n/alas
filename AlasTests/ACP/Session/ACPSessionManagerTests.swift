@@ -1524,17 +1524,25 @@ struct ACPSessionManagerTests {
     }
 
     /// Makes the store reject every later write of a `visual_aid` row, through
-    /// a second connection to the same file.
-    private func rejectVisualAidWrites(_ store: ACPSessionStore) {
+    /// a second connection to the same file; with `answeredOnly`, only writes
+    /// of a row that carries an answer.
+    private func rejectVisualAidWrites(_ store: ACPSessionStore, answeredOnly: Bool = false) {
         var handle: OpaquePointer?
         #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
         defer { sqlite3_close(handle) }
         let sql = """
         CREATE TRIGGER reject_visual_aid BEFORE INSERT ON messages
-        WHEN NEW.kind = 'visual_aid'
+        WHEN NEW.kind = 'visual_aid'\(answeredOnly ? " AND CAST(NEW.payload AS TEXT) LIKE '%\"answer\"%'" : "")
         BEGIN SELECT RAISE(ABORT, 'rejected'); END
         """
         #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+    }
+
+    private func dropVisualAidRejection(_ store: ACPSessionStore) {
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        #expect(sqlite3_exec(handle, "DROP TRIGGER reject_visual_aid", nil, nil, nil) == SQLITE_OK)
     }
 
     private func storedVisualAids(_ store: ACPSessionStore, sessionId: String) throws -> [ACPVisualAid] {
@@ -1598,6 +1606,57 @@ struct ACPSessionManagerTests {
 
         #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
         #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+    }
+
+    @Test("a failed first write removes the visual again, so the retry leaves exactly one card")
+    func showVisualAidDropsTheCardWhenItsWriteFails() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        _ = session.visualAidForm(for: visual)
+        rejectVisualAidWrites(store)
+
+        #expect(await manager.showVisualAid(visual, in: session.id) == false)
+
+        #expect(session.transcript.visualAid(id: visual.id) == nil)
+        #expect(session.transcript.messages.isEmpty)
+        #expect(try storedVisualAids(store, sessionId: session.id).isEmpty)
+
+        dropVisualAidRejection(store)
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        #expect(session.transcript.messages.count == 1)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+    }
+
+    @Test("an answer is not confirmed by the visual's own earlier write of the same row")
+    func answerVisualAidIgnoresTheEarlierWriteOfTheSameRow() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        // Hold the visual's own write in the queue while the card is already shown.
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        #expect(await awaitCondition { session.transcript.visualAid(id: visual.id)?.answer == answer })
+        // The visual's own write may land; the answer's write must fail.
+        rejectVisualAidWrites(store, answeredOnly: true)
+        await initialWrite.release()
+
+        #expect(await show.value)
+        #expect(await answering.value == false)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
         #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }

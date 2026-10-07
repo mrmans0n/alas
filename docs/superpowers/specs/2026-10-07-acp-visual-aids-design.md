@@ -123,6 +123,8 @@ have none.
 `ACPSessionManager.showVisualAid` appends the row through the session runner
 and waits until that exact row is written, the way
 `appendDelegatedNotice` waits for its notice, then replies with the visual id.
+When that write fails or the lease fence rejects it, the card is removed from
+the transcript again, so the agent's retry cannot leave a second card behind.
 It refuses while the session is merging a fork, like `enqueuePrompt` does.
 
 ### Transcript row
@@ -375,7 +377,10 @@ Submit:
    finds the row answered and does nothing, which is what keeps it from
    sending twice.
 3. It waits until the runner confirms that exact row was written, the way
-   `showVisualAid` does, and only then starts `ACPSessionManager.sendPrompt`, the path the composer and the
+   `showVisualAid` does, and only then starts `ACPSessionManager.sendPrompt`.
+   The confirmation is tied to the exact payload of the answered row, not to
+   its row id, so an earlier write of the same row that is still in flight
+   cannot confirm it. `sendPrompt` is the path the composer and the
    phone client use, so the answer shows as the user's own message and waits in
    the queue if a turn is running. `answerVisualAid` does not wait for the
    send to finish: `sendPrompt` reports back when the agent's turn ends, and
