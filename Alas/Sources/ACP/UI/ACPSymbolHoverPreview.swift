@@ -211,21 +211,31 @@ final class ACPSymbolHoverCache {
     }
 }
 
-struct ACPSymbolHoverCard: View {
+struct ACPSymbolHoverCard<Accessory: View>: View {
     @ObservedObject var model: ACPSymbolHoverModel
     /// Tallest the code area may get before it scrolls.
     let maxCodeHeight: CGFloat
+    /// Shown between the header and the code.
+    let accessory: Accessory
 
-    private static let minWidth: CGFloat = 340
-    private static let maxWidth: CGFloat = 640
-    private static let padding: CGFloat = 12
-    private static let gutterSpacing: CGFloat = 10
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat, @ViewBuilder accessory: () -> Accessory) {
+        self.model = model
+        self.maxCodeHeight = maxCodeHeight
+        self.accessory = accessory()
+    }
+
+    // Computed, not stored: a generic type cannot hold stored statics.
+    private static var minWidth: CGFloat { 340 }
+    private static var maxWidth: CGFloat { 640 }
+    private static var padding: CGFloat { 12 }
+    private static var gutterSpacing: CGFloat { 10 }
     /// Skeleton bar widths, as fractions of the code area, cycled per line.
-    private static let skeletonWidths: [CGFloat] = [0.58, 0.82, 0.46, 0.72, 0.9, 0.52, 0.36, 0.68]
+    private static var skeletonWidths: [CGFloat] { [0.58, 0.82, 0.46, 0.72, 0.9, 0.52, 0.36, 0.68] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            accessory
             switch model.state {
             case .loading(let frame):
                 codeArea(frame) { viewportWidth in skeleton(frame, viewportWidth: viewportWidth) }
@@ -331,5 +341,11 @@ struct ACPSymbolHoverCard: View {
                 .fixedSize()
                 .frame(minWidth: viewportWidth, alignment: .leading)
         }
+    }
+}
+
+extension ACPSymbolHoverCard where Accessory == EmptyView {
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat) {
+        self.init(model: model, maxCodeHeight: maxCodeHeight) { EmptyView() }
     }
 }
