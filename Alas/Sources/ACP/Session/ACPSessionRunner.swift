@@ -220,8 +220,8 @@ final class ACPSessionRunner {
     /// ones among them a confirmed write actually stored. Both are populated
     /// only while an `appendAndPersistSystemNoticeAwaitingResult` call is in
     /// flight, so the fire-and-forget persistence path pays nothing.
-    private var awaitedNoticeRowIDs: Set<String> = []
-    private var writtenAwaitedNoticeRowIDs: Set<String> = []
+    private var awaitedRowIDs: Set<String> = []
+    private var writtenAwaitedRowIDs: Set<String> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -4811,21 +4811,21 @@ extension ACPSessionRunner {
     /// which raises it optimistically at enqueue time — so it reports
     /// success for a notice whose own write was rejected by the fence or
     /// failed in SQLite, and the caller then deletes the inbox row that was
-    /// the notice's only other copy. `writtenAwaitedNoticeRowIDs` is
+    /// the notice's only other copy. `writtenAwaitedRowIDs` is
     /// populated solely by `commitPersistedMessageRows`, which runs only on
     /// a confirmed write of these exact rows, so an unwritten notice always
     /// reports `false` and is retried from the inbox.
     func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
         let rowID = messageRowID(session.transcript.messages.count)
-        awaitedNoticeRowIDs.insert(rowID)
+        awaitedRowIDs.insert(rowID)
         defer {
-            awaitedNoticeRowIDs.remove(rowID)
-            writtenAwaitedNoticeRowIDs.remove(rowID)
+            awaitedRowIDs.remove(rowID)
+            writtenAwaitedRowIDs.remove(rowID)
         }
         appendAndPersistSystemNotice(text)
         await flushPersistence()
-        return writtenAwaitedNoticeRowIDs.contains(rowID)
+        return writtenAwaitedRowIDs.contains(rowID)
     }
 
     /// Append a file-edit card to the session AND persist it.
@@ -4833,6 +4833,38 @@ extension ACPSessionRunner {
         let before = session.transcript.messages.count
         session.appendFileEdit(edit)
         persistFromIndex(before)
+    }
+
+    /// Append a visual aid and report whether its row reached the store, the
+    /// way `appendAndPersistSystemNoticeAwaitingResult` does: `visual_show`
+    /// tells the agent the visual is shown only once it would survive a reload.
+    func appendAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        let rowID = messageRowID(session.transcript.messages.count)
+        awaitedRowIDs.insert(rowID)
+        defer {
+            awaitedRowIDs.remove(rowID)
+            writtenAwaitedRowIDs.remove(rowID)
+        }
+        let before = session.transcript.messages.count
+        session.appendVisualAid(visual)
+        persistFromIndex(before)
+        await flushPersistence()
+        return writtenAwaitedRowIDs.contains(rowID)
+    }
+
+    /// Replace the visual aid with the same id in place and persist that row.
+    @discardableResult
+    func replaceAndPersistVisualAid(_ visual: ACPVisualAid) -> Bool {
+        guard holdsLeaseForWrite(),
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visual.id }
+                  return false
+              })
+        else { return false }
+        session.transcript.replaceMessage(at: index, with: .visualAid(visual))
+        persistIndices([index])
+        return true
     }
 }
 
@@ -5214,7 +5246,7 @@ extension ACPSessionRunner {
     }
 
     /// The store's row id for the message at `index`. Single source of truth:
-    /// `awaitedNoticeRowIDs` matches on this, so a divergence between how a
+    /// `awaitedRowIDs` matches on this, so a divergence between how a
     /// row is written and how its write is confirmed would silently report
     /// every awaited notice as unwritten.
     private func messageRowID(_ index: Int) -> String {
@@ -5226,8 +5258,8 @@ extension ACPSessionRunner {
             let index = Int(row.seq)
             persistedMessageCount = max(persistedMessageCount, index + 1)
             lastPersistedPayloads[index] = row.payload
-            if awaitedNoticeRowIDs.contains(row.id) {
-                writtenAwaitedNoticeRowIDs.insert(row.id)
+            if awaitedRowIDs.contains(row.id) {
+                writtenAwaitedRowIDs.insert(row.id)
             }
         }
         trimLastPersistedPayloads()

@@ -251,6 +251,14 @@ final class ACPTranscript: ObservableObject {
         messages[index] = message
     }
 
+    /// The visual aid with `id`, searching from the newest row.
+    func visualAid(id: UUID) -> ACPVisualAid? {
+        for message in messages.reversed() {
+            if case .visualAid(let visual) = message, visual.id == id { return visual }
+        }
+        return nil
+    }
+
     func replaceMessages(
         with newMessages: [ACPMessage],
         createdAts: [Date]? = nil,

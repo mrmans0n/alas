@@ -105,6 +105,8 @@ final class ACPSession: ObservableObject, Identifiable {
     var normalQueuedTurnIDs: Set<UUID> = []
     /// The user row recorded on a queued attempt survives a failed RPC retry.
     var normalQueuedTurnUserMessageIDs: [UUID: UUID] = [:]
+    /// Unsent visual-aid answers by visual id. See `visualAidForm(for:)`.
+    private var visualAidForms: [UUID: ACPUserInputFormState] = [:]
 
     func allocatePromptID() -> Int {
         nextPromptActivity.send()
@@ -2465,6 +2467,25 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.appendMessage(.fileEdit(id: UUID(), edit))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
+    }
+
+    func appendVisualAid(_ visual: ACPVisualAid) {
+        clearRestoredContextRecoveryStatus()
+        // Like a file edit, a visual closes the current output run.
+        flushPendingReplayCandidates()
+        transcript.appendMessage(.visualAid(visual))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+    }
+
+    /// The native form for a visual's question, created once and kept on the
+    /// session so an unsent selection survives the card leaving the mount band.
+    func visualAidForm(for visual: ACPVisualAid) -> ACPUserInputFormState? {
+        if let form = visualAidForms[visual.id] { return form }
+        guard let request = ACPVisualAidQuestionForm.request(for: visual) else { return nil }
+        let form = ACPUserInputFormState(request: request)
+        visualAidForms[visual.id] = form
+        return form
     }
 
     func replaceTranscriptMessages(

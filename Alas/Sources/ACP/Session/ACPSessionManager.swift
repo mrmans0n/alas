@@ -8705,6 +8705,41 @@ extension ACPSessionManager {
         return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
     }
 
+    /// Append a visual aid an agent showed. True only once its row is written,
+    /// so `visual_show` never reports a visual that a reload would lose.
+    func showVisualAid(_ visual: ACPVisualAid, in sessionId: ACPSession.ID) async -> Bool {
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil,
+              let runner = runners[sessionId], isWriter(for: sessionId)
+        else { return false }
+        return await runner.appendAndPersistVisualAidAwaitingResult(visual)
+    }
+
+    /// Store the user's answer on the visual, then send it to the agent as a
+    /// normal prompt. The answer is stored first so a second submit finds it
+    /// answered and does nothing; a failed send clears it again.
+    func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
+              let runner = runners[sessionId], isWriter(for: sessionId),
+              var visual = session.transcript.visualAid(id: visualId), visual.answer == nil
+        else { return false }
+        visual.answer = answer
+        guard runner.replaceAndPersistVisualAid(visual) else { return false }
+        guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
+        let sent = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            Task { @MainActor in
+                await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { continuation.resume(returning: $0) }
+            }
+        }
+        guard !sent else { return true }
+        if var current = sessions[sessionId]?.transcript.visualAid(id: visualId), current.answer == answer {
+            current.answer = nil
+            runners[sessionId]?.replaceAndPersistVisualAid(current)
+        }
+        return false
+    }
+
     @discardableResult
     func enqueuePrompt(
         id: UUID,

@@ -1507,4 +1507,67 @@ struct ACPSessionManagerTests {
         let afterClear = try store.loadQueue(sessionId: session.id)
         #expect(afterClear.isEmpty)
     }
+
+    private func attachedVisualAidManager() async throws -> (ACPSessionManager, ACPSession, ACPSessionStore, ACPMockClient) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-visual-aid-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let session = manager.createSession(agentId: "codex", autoRunDefault: false)
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushPersistence()
+        return (manager, session, store, client)
+    }
+
+    private func storedVisualAids(_ store: ACPSessionStore, sessionId: String) throws -> [ACPVisualAid] {
+        try store.loadMessages(sessionId: sessionId).compactMap { stored in
+            guard stored.kind == "visual_aid",
+                  case .visualAid(let visual) = try ACPMessageCodec.decode(kind: stored.kind, payload: stored.payload)
+            else { return nil }
+            return visual
+        }
+    }
+
+    private func questionVisual() -> ACPVisualAid {
+        ACPVisualAid(
+            id: UUID(), title: "Layouts", html: "<h2>Pick</h2>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false),
+            answer: nil, createdAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    @Test("showVisualAid appends the row, persists it, and answers true")
+    func showVisualAidAppendsAndPersists() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+
+        #expect(await manager.showVisualAid(visual, in: session.id))
+
+        #expect(session.transcript.visualAid(id: visual.id) == visual)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+        #expect(await manager.showVisualAid(visual, in: "unknown") == false)
+    }
+
+    @Test("answerVisualAid stores the answer once and refuses a second answer")
+    func answerVisualAidStoresOnce() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+        await manager.runners[session.id]?.flushPersistence()
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: .dismissed(at: Date()), in: session.id) == false)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+        // Dismissal sends no prompt to the agent.
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+    }
 }
