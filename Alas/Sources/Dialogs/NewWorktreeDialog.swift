@@ -112,7 +112,8 @@ struct NewWorktreeDialog: View {
                         monospaced: true,
                         focusOnAppear: true,
                         onSubmit: submitCreate,
-                        disablesAutomaticTextSubstitutions: true
+                        disablesAutomaticTextSubstitutions: true,
+                        inputPolicy: .gitBranchName
                     )
                     .aiBeam(isActive: nameSuggestionTask != nil && issueState.isSuggestingName)
                 }

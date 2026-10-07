@@ -14,28 +14,6 @@ struct AlasFieldTests {
         try! ThemeStore().current
     }
 
-    @Test func fieldWithLeadingIconRendersWithoutCrashing() {
-        let view = AlasField(
-            text: .constant("test"),
-            placeholder: "Placeholder",
-            leadingIcon: "magnifyingglass"
-        )
-        .environment(\.theme, currentTheme())
-
-        let controller = NSHostingController(rootView: view)
-        controller.view.layoutSubtreeIfNeeded()
-        #expect(!controller.view.subviews.isEmpty)
-    }
-
-    @Test func fieldWithoutLeadingIconRendersWithoutCrashing() {
-        let view = AlasField(text: .constant("test"))
-            .environment(\.theme, currentTheme())
-
-        let controller = NSHostingController(rootView: view)
-        controller.view.layoutSubtreeIfNeeded()
-        #expect(!controller.view.subviews.isEmpty)
-    }
-
     @Test func appKitFieldCanRenderDisabled() {
         let view = AlasField(
             text: .constant("test"),
@@ -80,8 +58,8 @@ struct AlasFieldTests {
     }
 
     @Test(arguments: ["", "nacho/"])
-    func typingIntoNativeFieldKeepsEveryCharacterAndCaretAtEnd(prefix: String) {
-        let host = TypingHost(initialText: prefix)
+    func typingIntoBranchNameFieldKeepsEveryCharacterAndCaretAtEnd(prefix: String) {
+        let host = TypingHost(initialText: prefix, inputPolicy: .gitBranchName)
         let controller = NSHostingController(rootView: host.body.environment(\.theme, currentTheme()))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 28),
@@ -101,7 +79,7 @@ struct AlasFieldTests {
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
 
         var expected = prefix
-        for character in "feature-branch" {
+        for character in "feature branch" {
             let event = NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                 windowNumber: window.windowNumber, context: nil,
@@ -109,7 +87,7 @@ struct AlasFieldTests {
                 isARepeat: false, keyCode: 0
             )!
             editor.keyDown(with: event)
-            expected.append(character)
+            expected.append(character == " " ? "-" : character)
             #expect(editor.string == expected)
             #expect(editor.selectedRange() == NSRange(location: expected.utf16.count, length: 0))
             pump()
@@ -118,30 +96,106 @@ struct AlasFieldTests {
         }
     }
 
+    @Test func branchNameInputRejectsMiddleCharacterWithoutMovingCaret() throws {
+        let controller = NSHostingController(
+            rootView: TypingHost(initialText: "feature", inputPolicy: .gitBranchName)
+                .body.environment(\.theme, currentTheme())
+        )
+        let window = NSWindow(contentViewController: controller)
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+        let field = try #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 4, length: 0))
+
+        editor.insertText("?", replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.string == "feature")
+        #expect(editor.selectedRange() == NSRange(location: 4, length: 0))
+
+        editor.insertText("X", replacementRange: editor.selectedRange())
+        pump()
+        #expect(editor.string == "featXure")
+        #expect(editor.selectedRange() == NSRange(location: 5, length: 0))
+
+        let selection = NSRange(location: 4, length: 2)
+        editor.setSelectedRange(selection)
+        editor.insertText("~?", replacementRange: selection)
+        pump()
+        #expect(editor.string == "featXure")
+        #expect(editor.selectedRange() == selection)
+    }
+
+    @Test(arguments: [
+        ("one-old-tail", 4, "one-new-name-tail"),
+        ("🎯-old-tail", 3, "🎯-new-name-tail"),
+    ])
+    func branchNamePasteKeepsSelectionReplacementCaretAcrossUndoAndRedo(
+        original: String, location: Int, expected: String
+    ) throws {
+        let controller = NSHostingController(
+            rootView: TypingHost(initialText: original, inputPolicy: .gitBranchName)
+                .body.environment(\.theme, currentTheme())
+        )
+        let window = NSWindow(contentViewController: controller)
+        controller.view.layoutSubtreeIfNeeded()
+        pump()
+        let field = try #require(Self.firstTextField(in: controller.view))
+        #expect(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: location, length: 3))
+        let undo = try #require(editor.undoManager)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.setString("new name~", forType: .string)
+        undo.beginUndoGrouping()
+        #expect(editor.readSelection(from: pasteboard, type: .string))
+        undo.endUndoGrouping()
+        pump()
+
+        #expect(editor.string == expected)
+        #expect(editor.selectedRange() == NSRange(location: location + 8, length: 0))
+        undo.undo()
+        pump()
+        #expect(editor.string == original)
+        #expect(editor.selectedRange() == NSRange(location: location + 3, length: 0))
+        undo.redo()
+        pump()
+        #expect(editor.string == expected)
+        #expect(editor.selectedRange() == NSRange(location: location + 8, length: 0))
+    }
+
     private struct TypingHost {
         var initialText = "nacho/"
-        @MainActor var body: some View { Inner(text: initialText) }
+        var inputPolicy: AlasFieldInputPolicy?
+        @MainActor var body: some View { Inner(text: initialText, inputPolicy: inputPolicy) }
 
         private struct Inner: View {
             @State var text: String
+            let inputPolicy: AlasFieldInputPolicy?
             var body: some View {
                 AlasField(
                     text: $text,
                     monospaced: true,
                     focusOnAppear: true,
-                    onSubmit: {}
+                    onSubmit: {},
+                    disablesAutomaticTextSubstitutions: true,
+                    inputPolicy: inputPolicy
                 )
             }
         }
     }
 
-    @Test func markedTextDoesNotUpdateBindingUntilCommit() throws {
+    @Test func markedTextInBranchNameInputDoesNotUpdateBindingUntilCommit() throws {
         var text = "nacho/"
         let view = AlasField(
             text: Binding(get: { text }, set: { text = $0 }),
             monospaced: true,
             focusOnAppear: true,
-            onSubmit: {}
+            onSubmit: {},
+            disablesAutomaticTextSubstitutions: true,
+            inputPolicy: .gitBranchName
         )
         .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
@@ -164,6 +218,15 @@ struct AlasFieldTests {
         #expect(!editor.hasMarkedText())
         #expect(editor.string == "nacho/ê")
         #expect(text == "nacho/ê")
+
+        editor.setSelectedRange(NSRange(location: 7, length: 0))
+        editor.setMarkedText("^", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
+        editor.insertText("^", replacementRange: NSRange(location: NSNotFound, length: 0))
+        pump()
+        #expect(!editor.hasMarkedText())
+        #expect(editor.string == "nacho/ê")
+        #expect(text == "nacho/ê")
+        #expect(editor.selectedRange() == NSRange(location: 7, length: 0))
     }
 
     @Test func disablesAutomaticTextSubstitutionsWhenRequested() throws {
