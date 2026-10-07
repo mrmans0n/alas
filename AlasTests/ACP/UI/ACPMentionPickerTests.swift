@@ -354,7 +354,7 @@ struct ACPMentionPickerTests {
     // @MainActor: opens a real NSPanel; key window and first responder are
     // AppKit main-thread-only state.
     @Test("the search field takes focus when the panel opens with scope tabs")
-    @MainActor func focusesSearchFieldOnOpen() async throws {
+    @MainActor func focusesSearchFieldOnOpen() async {
         let panel = ACPMentionPanel(
             worktreeRoot: URL(fileURLWithPath: "/tmp/project"),
             filesProvider: { [] },
@@ -363,12 +363,9 @@ struct ACPMentionPickerTests {
         defer { panel.close() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while !(panel.firstResponder is NSTextView), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
         // The field editor is first responder only while the field is edited.
-        #expect(panel.firstResponder is NSTextView)
+        let focused = await awaitCondition(within: .seconds(2)) { panel.firstResponder is NSTextView }
+        #expect(focused)
     }
 
     @Test("new results keep the highlighted item when it is still listed")

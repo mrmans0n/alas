@@ -215,7 +215,7 @@ border). Left to right: the colored kind icon, the container in the type color,
 and the name in its kind's color, both in the code font. Kind colors are
 darkened on the light theme so they keep contrast. With code included, the
 pill gets a 2 pt accent edge on the left, an accent border, and a separate
-trailing segment reading `N lines` (`400+ lines` past the cap). A badge whose
+trailing segment reading `N lines` (`400+ lines` past the cap). From phase 2, a badge whose
 symbol can no longer be found shows a warning segment (`⚠ moved`).
 
 ### Preview
@@ -268,7 +268,7 @@ needs tabs and buffers, so neither is reused as-is.
 | Index still building | Footer progress; symbol results stream in without moving the highlight |
 | Language without a tags query | No symbols for it; its files still appear |
 | No language server, or starting | Preview shows tree-sitter colors; LSP features appear when ready |
-| Symbol gone before sending | Last known location sent, marked `not found when sent`; badge warns |
+| Symbol gone before sending | Last known location sent, marked `not found when sent`; the badge warns from phase 2 |
 | Declaration over the cap | Excerpt cut at 400 lines / 32 KB with a marker; footer and badge show it |
 | Remote worktree | No project-wide symbols; hint suggests `File.swift#name` |
 | Workspace checkout | No symbol mentions: the picker offers no symbols, and sent symbol links in the transcript don't open |
