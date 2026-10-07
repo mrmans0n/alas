@@ -19,7 +19,7 @@ struct WorkspaceAutomationServiceTests {
             ),
             checkout(id: UUID(), archivedAt: Date(), members: [member(projectID: "archived", availability: .available)]),
         ]))
-        let service = WorkspaceAutomationService(store: store, isEnabled: { true })
+        let service = WorkspaceAutomationService(store: store)
 
         let list = try await service.listCheckouts()
         let shown = try await service.showCheckout(id: checkoutID)
@@ -49,7 +49,6 @@ struct WorkspaceAutomationServiceTests {
         let recorder = NavigationRecorder()
         let service = WorkspaceAutomationService(
             store: store,
-            isEnabled: { true },
             refreshNavigation: { recorder.events.append("refresh") },
             selectCheckout: {
                 recorder.events.append("select")
@@ -92,7 +91,6 @@ struct WorkspaceAutomationServiceTests {
         ]))
         let service = WorkspaceAutomationService(
             store: store,
-            isEnabled: { true },
             observer: AutomationObserver(result: .missing)
         )
 
@@ -115,7 +113,6 @@ struct WorkspaceAutomationServiceTests {
         ]))
         let service = WorkspaceAutomationService(
             store: store,
-            isEnabled: { true },
             observer: AutomationObserver(result: .missing)
         )
 
@@ -127,16 +124,11 @@ struct WorkspaceAutomationServiceTests {
         }
     }
 
-    @Test func disabledOrUnreadableWorkspaceStateReturnsStableErrors() async throws {
-        let disabled = WorkspaceAutomationService(store: WorkspaceStore(url: tempURL()), isEnabled: { false })
-        await #expect(throws: WorkspaceAutomationError.disabled) {
-            try await disabled.listCheckouts()
-        }
-
+    @Test func unreadableWorkspaceStateReturnsStableError() async throws {
         let unreadableURL = tempURL()
         try FileManager.default.createDirectory(at: unreadableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try #"{"version":1,"checkouts":["bad"]}"#.write(to: unreadableURL, atomically: true, encoding: .utf8)
-        let unreadable = WorkspaceAutomationService(store: WorkspaceStore(url: unreadableURL), isEnabled: { true })
+        let unreadable = WorkspaceAutomationService(store: WorkspaceStore(url: unreadableURL))
         do {
             _ = try await unreadable.listCheckouts()
             Issue.record("expected recovery required")

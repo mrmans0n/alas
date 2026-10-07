@@ -596,7 +596,7 @@ struct AppStateAttentionTests {
             ]
         )
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         let seedingTabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
         _ = seedingTabs.appendACP(owner: owner, sessionId: "shared-acp", title: "Shared agent")
@@ -622,7 +622,6 @@ struct AppStateAttentionTests {
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url)
         )
-        state.config.workspacesEnabled = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
 
@@ -756,7 +755,7 @@ struct AppStateAttentionTests {
             ]
         )
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(),
             workspacesManager: workspacesManager,
@@ -764,7 +763,6 @@ struct AppStateAttentionTests {
             attentionStore: AttentionStore(url: fixture.url),
             harnessAttentionSettleInterval: 0
         )
-        state.config.workspacesEnabled = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         state.selectedWorktreeId = worktree.id
@@ -822,7 +820,7 @@ struct AppStateAttentionTests {
             ]
         )
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(),
             workspacesManager: workspacesManager,
@@ -899,14 +897,13 @@ struct AppStateAttentionTests {
             ]
         )
         try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspacesManager.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(),
             workspacesManager: workspacesManager,
             workspaceStore: workspaceStore,
             attentionStore: AttentionStore(url: fixture.url)
         )
-        state.config.workspacesEnabled = true
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(first)
         state.projectsManager.insertOptimisticWorktree(second)

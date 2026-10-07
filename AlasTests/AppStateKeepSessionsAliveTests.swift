@@ -217,7 +217,7 @@ struct AppStateKeepSessionsAliveTests {
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         let workspaces = WorkspacesManager(bridge: bridge)
-        _ = await workspaces.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspaces.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         let tabs = TabsManager(store: MemoryStore())
         _ = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
@@ -296,14 +296,13 @@ struct AppStateKeepSessionsAliveTests {
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
         let workspaces = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        _ = await workspaces.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        _ = await workspaces.load(spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(projectsFile: .init(projects: [project])),
             tabsManager: TabsManager(store: MemoryStore()),
             workspacesManager: workspaces,
             workspaceStore: workspaceStore
         )
-        state.config.workspacesEnabled = true
         try await state.projectsManager.refreshWorktrees(projectId: projectID)
         state.selectWorkspaceCheckout(id: checkout.id)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)

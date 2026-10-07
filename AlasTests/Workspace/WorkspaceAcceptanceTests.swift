@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
-@Suite("Workspace preview acceptance matrix")
+@Suite("Workspace acceptance matrix")
 struct WorkspaceAcceptanceTests {
     @Test func downgradeRewriteAndReupgradePreserveWorkspaceRecordsAndMixedSpacePlacement() throws {
         let workspaceID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -67,7 +67,7 @@ struct WorkspaceAcceptanceTests {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"version":1,"checkouts":["not a checkout"]}"#.utf8).write(to: url)
         let store = WorkspaceStore(url: url)
-        let service = WorkspaceAutomationService(store: store, isEnabled: { true })
+        let service = WorkspaceAutomationService(store: store)
 
         await #expect(throws: WorkspaceAutomationError.recoveryRequired) {
             try await service.listCheckouts()
@@ -99,11 +99,7 @@ struct WorkspaceAcceptanceTests {
             ),
         ])
 
-        _ = await manager.setEnabled(false, spacesFile: spaces)
-        #expect(manager.loadState == .notLoaded)
-        #expect(FileManager.default.fileExists(atPath: workspaceURL.path) == false)
-
-        _ = await manager.setEnabled(true, spacesFile: spaces)
+        _ = await manager.load(spacesFile: spaces)
         #expect(manager.workspaces.isEmpty)
         #expect(manager.checkouts.isEmpty)
         #expect(FileManager.default.fileExists(atPath: workspaceURL.path) == false)

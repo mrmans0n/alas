@@ -83,32 +83,21 @@ struct AppConfigTests {
         #expect(cfg.harness.notifyOnAwaiting == true)
         #expect(cfg.worktrees.rootPath == "~/.alas/worktrees")
         #expect(cfg.worktrees.branchPrefix == "feature/")
-        #expect(cfg.workspacesEnabled == false)
         #expect(cfg.needsAttentionEnabled == false)
     }
 
-    @Test func decodeConfigIgnoresRetiredSchedulesFlag() throws {
+    @Test(arguments: [("schedulesEnabled", false), ("workspacesEnabled", true)])
+    func decodeConfigIgnoresRetiredFeatureFlag(key: String, value: Bool) throws {
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object["schedulesEnabled"] = false
+        object[key] = value
 
         let oldConfig = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
 
         #expect(decoded == AppConfig.defaults)
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any]
-        #expect(encoded?["schedulesEnabled"] == nil)
-    }
-
-    @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {
-        let data = try JSONEncoder().encode(AppConfig.defaults)
-        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object.removeValue(forKey: "workspacesEnabled")
-
-        let oldConfig = try JSONSerialization.data(withJSONObject: object)
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
-
-        #expect(decoded.workspacesEnabled == false)
+        #expect(encoded?[key] == nil)
     }
 
     @Test func decodeConfigIgnoresRetiredRailKeys() throws {

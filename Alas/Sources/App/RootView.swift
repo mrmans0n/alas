@@ -19,14 +19,13 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
 enum RootWorkspaceVisibilityPolicy {
     static func showsWorkspace(
         hasProjects: Bool,
-        workspacesEnabled: Bool = false,
         hasWorkspaceContent: Bool = false,
         hasAttentionHistory: Bool = false,
         hasAttentionHistoryLoadError: Bool = false,
         hasPeerGroups: Bool = false
     ) -> Bool {
         hasProjects || hasAttentionHistory || hasAttentionHistoryLoadError || hasPeerGroups
-            || (workspacesEnabled && hasWorkspaceContent)
+            || hasWorkspaceContent
     }
 }
 
@@ -177,7 +176,6 @@ struct RootView: View {
             )
         } else if !RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: !state.projects.isEmpty,
-            workspacesEnabled: state.config.workspacesEnabled,
             hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
             hasAttentionHistory: !state.attentionStore.events.isEmpty,
             hasAttentionHistoryLoadError: state.attentionStore.loadError != nil,

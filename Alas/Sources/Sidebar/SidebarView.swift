@@ -477,7 +477,7 @@ private struct SidebarAttentionHeader: View {
             onAddProject: onAddProject,
             onSearch: { NotificationCenter.default.post(name: .alasOpenSearch, object: nil) },
             onHideSidebar: onHideSidebar,
-            onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
+            onNewWorkspace: { showingNewWorkspace = true },
             attentionCount: presentation.count,
             showsAttentionInbox: presentation.showsInbox,
             attentionInboxOpen: $state.isAttentionInboxOpen,
