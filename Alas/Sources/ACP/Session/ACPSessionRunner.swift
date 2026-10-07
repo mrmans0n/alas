@@ -4871,12 +4871,10 @@ extension ACPSessionRunner {
             persistFromIndex(before)
         }
         if !written, let removedIndex = session.removeVisualAid(id: visual.id) {
-            // Rows after the card shifted down by one; rewrite them at their
-            // new positions, then delete the row the shift vacated. Rows are
-            // keyed by position, so without the delete the old last row would
-            // stay in the store and a reload would show it twice.
-            if removedIndex < session.transcript.messages.count { persistFromIndex(removedIndex) }
-            deleteVacatedRows(atOrAfter: session.transcript.messages.count)
+            // Rows after the card shifted down by one. Rows are keyed by position, so the shifted rows
+            // are rewritten at their new positions and the row the shift vacated is deleted in the same
+            // store call. Without the delete a reload would show the old last row twice.
+            rewriteShrunkenTranscript(from: removedIndex)
         }
         return written
     }
@@ -5342,20 +5340,7 @@ extension ACPSessionRunner {
             return
         }
 
-        var rows: [ACPStoredMessage] = []
-        for i in lowerBound..<messages.count {
-            let m = messages[i]
-            guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            let id = messageRowID(i)
-            rows.append(ACPStoredMessage(
-                id: id,
-                sessionId: sessionId,
-                kind: m.kind,
-                seq: Int64(i),
-                payload: payload,
-                createdAt: createdAt(forMessageAt: i)
-            ))
-        }
+        let rows = storedRows(from: lowerBound)
         let fence = leaseFenceProvider()
         if !rows.isEmpty {
             let messageRows = rows
@@ -5368,23 +5353,57 @@ extension ACPSessionRunner {
         }
     }
 
-    /// Delete the store rows at or after `count` once the transcript has shrunk to `count` messages.
-    /// Queued after the rewrite of the shifted rows on the same serialized queue. When it lands, the
-    /// index-keyed caches stop vouching for the vacated rows: the high-water mark falls back to `count`
-    /// and the payloads cached for those indices go, so a later append at an old index is treated as new.
-    private func deleteVacatedRows(atOrAfter count: Int) {
+    /// Rewrite the rows from `index` on after a message was removed there, and delete the rows the
+    /// removal vacated, as one lease-fenced store call queued behind everything already in flight.
+    /// Atomic on purpose: a delete that could land without its rewrite would drop a row that was
+    /// never stored at its new position, losing it on reload. If the call fails or is cancelled the
+    /// store keeps its old rows, which is a stale tail rather than a lost row.
+    ///
+    /// When it lands, the index-keyed caches stop vouching for the vacated rows: the high-water mark
+    /// falls back to the new count and the payloads cached for those indices go, so a later append at
+    /// an old index is written as new.
+    private func rewriteShrunkenTranscript(from index: Int) {
+        flushStreamingPersist()
         guard holdsLeaseForWrite() else { return }
+        let count = session.transcript.messages.count
+        let rows = storedRows(from: index)
+        // A row that cannot be encoded would be deleted without being rewritten; keep the stale tail.
+        guard rows.count == max(0, count - index) else { return }
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         enqueuePersistence({ persistence in
-            try await persistence.deleteMessages(sessionId: sessionId, atOrAfterSeq: Int64(count), fence: fence)
-        }, completion: { [weak self] deleted in
-            guard let self, deleted == true else { return }
+            try await persistence.persistMessages(
+                rows, deletingSessionRowsAtOrAfterSeq: Int64(count), sessionId: sessionId, fence: fence)
+        }, completion: { [weak self] stored in
+            guard let self, stored == true else { return }
+            if rows.isEmpty {
+                self.onPersist?()
+                self.onMessageActivity?()
+            } else {
+                self.commitPersistedMessageRows(rows)
+            }
             self.persistedMessageCount = min(self.persistedMessageCount, count)
             self.lastPersistedPayloads = self.lastPersistedPayloads.filter { $0.key < count }
-            self.onPersist?()
-            self.onMessageActivity?()
         })
+    }
+
+    private func storedRows(from lowerBound: Int) -> [ACPStoredMessage] {
+        let messages = session.transcript.messages
+        guard lowerBound < messages.count else { return [] }
+        var rows: [ACPStoredMessage] = []
+        for i in lowerBound..<messages.count {
+            let m = messages[i]
+            guard let payload = try? ACPMessageCodec.encode(m) else { continue }
+            rows.append(ACPStoredMessage(
+                id: messageRowID(i),
+                sessionId: sessionId,
+                kind: m.kind,
+                seq: Int64(i),
+                payload: payload,
+                createdAt: createdAt(forMessageAt: i)
+            ))
+        }
+        return rows
     }
 }
 

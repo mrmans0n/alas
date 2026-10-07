@@ -629,19 +629,25 @@ actor ACPSessionPersistence {
         return true
     }
 
+    /// Rewrites `messages` and then drops every row of the session at or after `seq`, for a transcript
+    /// that shrank. Fenced, both steps share one transaction, so the delete cannot land without the
+    /// rewrite; unfenced, a failed rewrite throws before the delete runs.
     @discardableResult
-    func deleteMessages(
+    func persistMessages(
+        _ messages: [ACPStoredMessage],
+        deletingSessionRowsAtOrAfterSeq seq: Int64,
         sessionId: String,
-        atOrAfterSeq seq: Int64,
         fence: ACPSessionLeaseFence?
     ) throws -> Bool {
         let store = try openedStore()
-        if let fence {
-            return try store.withLeaseFence(fence) {
-                try store.deleteMessages(sessionId: sessionId, atOrAfterSeq: seq)
-            } != nil
+        let rewriteAndTrim = {
+            try store.upsertMessages(messages)
+            try store.deleteMessages(sessionId: sessionId, atOrAfterSeq: seq)
         }
-        try store.deleteMessages(sessionId: sessionId, atOrAfterSeq: seq)
+        if let fence {
+            return try store.withLeaseFence(fence, rewriteAndTrim) != nil
+        }
+        try rewriteAndTrim()
         return true
     }
 

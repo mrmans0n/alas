@@ -1538,6 +1538,19 @@ struct ACPSessionManagerTests {
         #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
     }
 
+    /// Makes the store reject a `system` row written at sequence 0, through a second connection.
+    private func rejectSystemWriteAtFirstIndex(_ store: ACPSessionStore) {
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        let sql = """
+        CREATE TRIGGER reject_first_system BEFORE INSERT ON messages
+        WHEN NEW.kind = 'system' AND NEW.seq = 0
+        BEGIN SELECT RAISE(ABORT, 'rejected'); END
+        """
+        #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+    }
+
     private func dropVisualAidRejection(_ store: ACPSessionStore) {
         var handle: OpaquePointer?
         #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
@@ -1667,6 +1680,39 @@ struct ACPSessionManagerTests {
         await runner.flushPersistence()
         #expect(session.transcript.messages.count == 2)
         try assertStoreMatchesTranscript()
+    }
+
+    @Test("a failed visual write whose row shift is also rejected does not delete the row that was behind it")
+    func failedRewriteKeepsTheRowBehindTheRemovedVisual() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        runner.appendAndPersistSystemNotice("after the visual")
+        // The visual's write fails, and so does the rewrite that moves the notice from index 1 to 0;
+        // the notice's own earlier write, at index 1, is not rejected.
+        rejectVisualAidWrites(store)
+        rejectSystemWriteAtFirstIndex(store)
+        await initialWrite.release()
+
+        #expect(await show.value == false)
+        await runner.flushPersistence()
+
+        #expect(session.transcript.visualAid(id: visual.id) == nil)
+        #expect(session.transcript.messages.count == 1)
+        let stored = try store.loadMessages(sessionId: session.id)
+        #expect(stored.map(\.seq) == [1])
+        #expect(stored.first?.kind == "system")
     }
 
     @Test("an answer is not confirmed by the visual's own earlier write of the same row")
