@@ -12,6 +12,29 @@ struct ACPCommandPillTests {
     ]
     private let font = NSFont.systemFont(ofSize: 13)
 
+    @Test("submitted commands render inline, including at the end, while code and links stay text", arguments: [
+        ("please /review and /brainstorming", 2),
+        ("please `/review` and [/brainstorming](https://example.com)", 0),
+        ("please /reviewer and abc/review", 0),
+    ])
+    func transcriptCommandChips(text: String, expected: Int) {
+        let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
+            source: text, theme: Theme(id: "test", name: "Test", tokens: [:]),
+            typography: .default, role: .body
+        )
+        #expect(ACPTranscriptCommandChip.chipify(rendered, suggestions: suggestions) == expected)
+        if expected > 0 {
+            #expect(ACPUpstreamReferenceChip.plainText(of: rendered) == text)
+            var chippedSuggestions: [ACPPromptSuggestion] = []
+            rendered.enumerateAttribute(.attachment, in: NSRange(location: 0, length: rendered.length)) { value, _, _ in
+                if let chip = value as? ACPTranscriptCommandChipAttachment {
+                    chippedSuggestions.append(chip.suggestion)
+                }
+            }
+            #expect(chippedSuggestions == suggestions)
+        }
+    }
+
     @Test("matches a known leading command and returns the rest")
     func matchesLeadingCommand() {
         let match = ACPSlashCommand.match(in: "/review the parser", suggestions: suggestions)
