@@ -8,8 +8,11 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
     case bun(package: String, root: String)
     /// `<prefix>/lib/node_modules/<package>`.
     case npm(package: String, prefix: String)
-    case homebrewFormula(name: String)
-    case homebrewCask(name: String)
+    /// `<prefix>/Cellar/<name>`; `prefix` picks the brew that owns it when
+    /// several Homebrew installs (e.g. `/usr/local`, `/opt/homebrew`) coexist.
+    case homebrewFormula(name: String, prefix: String)
+    /// `<prefix>/Caskroom/<name>`.
+    case homebrewCask(name: String, prefix: String)
 
     var managerName: String {
         switch self {
@@ -36,8 +39,10 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
         // one the detected binary lives in.
         case .bun(let package, let root): ["BUN_INSTALL_GLOBAL_DIR=\(root)", "bun", "add", "-g", "\(package)@latest"]
         case .npm(let package, let prefix): ["npm", "install", "-g", "--prefix", prefix, "\(package)@latest"]
-        case .homebrewFormula(let name): ["brew", "upgrade", "--formula", name]
-        case .homebrewCask(let name): ["brew", "upgrade", "--cask", name]
+        case .homebrewFormula(let name, let prefix): ["\(prefix)/bin/brew", "upgrade", "--formula", name]
+        // Auto-updating casks are skipped by `brew upgrade` without `--greedy`,
+        // matching the check.
+        case .homebrewCask(let name, let prefix): ["\(prefix)/bin/brew", "upgrade", "--cask", "--greedy", name]
         }
     }
 
@@ -47,8 +52,8 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
         switch self {
         case .bun(let package, let root): "bun|\(root)|\(package)"
         case .npm(let package, let prefix): "npm|\(prefix)|\(package)"
-        case .homebrewFormula(let name): "brew-formula|\(name)"
-        case .homebrewCask(let name): "brew-cask|\(name)"
+        case .homebrewFormula(let name, let prefix): "brew-formula|\(prefix)|\(name)"
+        case .homebrewCask(let name, let prefix): "brew-cask|\(prefix)|\(name)"
         }
     }
 
@@ -59,11 +64,12 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
 
         // Homebrew first: `/opt/homebrew/lib/node_modules/…` is npm, but
         // `Cellar`/`Caskroom` are owned by brew itself.
+        let brewPrefix = { (index: Int) in "/" + components[..<index].joined(separator: "/") }
         if let index = components.firstIndex(of: "Cellar"), index + 1 < components.count {
-            return .homebrewFormula(name: components[index + 1])
+            return .homebrewFormula(name: components[index + 1], prefix: brewPrefix(index))
         }
         if let index = components.firstIndex(of: "Caskroom"), index + 1 < components.count {
-            return .homebrewCask(name: components[index + 1])
+            return .homebrewCask(name: components[index + 1], prefix: brewPrefix(index))
         }
 
         // The outermost `node_modules` names the top-level global package;
@@ -153,11 +159,11 @@ struct ACPDetectedAgentUpdater: Sendable {
                   result.exitCode == 0
             else { return .unknown }
             return Self.state(current: current, latestOutput: result.stdout)
-        case .homebrewFormula(let name), .homebrewCask(let name):
+        case .homebrewFormula(let name, let prefix), .homebrewCask(let name, let prefix):
             let kind = if case .homebrewCask = owner { "--cask" } else { "--formula" }
             // Skip brew's slow auto-update so the check fits its timeout.
             guard let result = try? await runner(
-                ["HOMEBREW_NO_AUTO_UPDATE=1", "brew", "outdated", "--json=v2", "--greedy", kind, name],
+                ["HOMEBREW_NO_AUTO_UPDATE=1", "\(prefix)/bin/brew", "outdated", "--json=v2", "--greedy", kind, name],
                 nil,
                 checkTimeout)
             else { return .unknown }
@@ -200,7 +206,11 @@ struct ACPDetectedAgentUpdater: Sendable {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .unknown }
         let entries = ((root["formulae"] as? [[String: Any]]) ?? []) + ((root["casks"] as? [[String: Any]]) ?? [])
-        guard let entry = entries.first(where: { ($0["name"] as? String) == name }) else {
+        // Tap formulae are reported by full name (`anomalyco/tap/opencode`).
+        guard let entry = entries.first(where: {
+            guard let entryName = $0["name"] as? String else { return false }
+            return entryName == name || entryName.hasSuffix("/\(name)")
+        }) else {
             return status == 0 ? .upToDate : .unknown
         }
         guard let current = (entry["installed_versions"] as? [String])?.last,

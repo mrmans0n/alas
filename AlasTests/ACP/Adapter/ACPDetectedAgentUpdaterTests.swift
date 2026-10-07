@@ -14,8 +14,8 @@ struct ACPDetectedAgentUpdaterTests {
         // The outermost node_modules names the global package, not a nested dependency.
         ("/Users/me/.nvm/versions/node/v22.1.0/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode",
          .npm(package: "opencode-ai", prefix: "/Users/me/.nvm/versions/node/v22.1.0")),
-        ("/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode", .homebrewFormula(name: "opencode")),
-        ("/opt/homebrew/Caskroom/copilot-cli/1.0.85/copilot", .homebrewCask(name: "copilot-cli")),
+        ("/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode", .homebrewFormula(name: "opencode", prefix: "/opt/homebrew")),
+        ("/usr/local/Caskroom/copilot-cli/1.0.85/copilot", .homebrewCask(name: "copilot-cli", prefix: "/usr/local")),
         ("/Users/me/Library/pnpm/global/5/node_modules/omp/cli.js", nil),
         ("/Users/me/.local/share/cursor-agent/versions/2026.10.01/cursor-agent", nil),
     ])
@@ -29,6 +29,9 @@ struct ACPDetectedAgentUpdaterTests {
                 == ["npm", "install", "-g", "--prefix", "/Users/me/.nvm/versions/node/v22.1.0", "pi@latest"])
         #expect(ACPDetectedAgentOwner.bun(package: "omp", root: "/opt/bun/install/global").upgradeCommand
                 == ["BUN_INSTALL_GLOBAL_DIR=/opt/bun/install/global", "bun", "add", "-g", "omp@latest"])
+        // Auto-updating casks are only upgraded with --greedy.
+        #expect(ACPDetectedAgentOwner.homebrewCask(name: "copilot-cli", prefix: "/usr/local").upgradeCommand
+                == ["/usr/local/bin/brew", "upgrade", "--cask", "--greedy", "copilot-cli"])
     }
 
     @Test("registry latest is compared with the installed version", arguments: [
@@ -50,6 +53,11 @@ struct ACPDetectedAgentUpdaterTests {
         {"formulae": [], "casks": [{"name": "copilot-cli", "installed_versions": ["1.0.80"],
           "current_version": "1.0.85", "pinned": false, "pinned_version": null}]}
         """, AdapterUpdateState.available(current: "1.0.80", latest: "1.0.85")),
+        // Tap formulae are reported by their fully qualified name.
+        (1, """
+        {"formulae": [{"name": "acme/tap/copilot-cli", "installed_versions": ["1.0.80"],
+          "current_version": "1.0.81", "pinned": false}], "casks": []}
+        """, .available(current: "1.0.80", latest: "1.0.81")),
         (0, #"{"formulae": [], "casks": []}"#, .upToDate),
         (1, """
         {"formulae": [{"name": "copilot-cli", "installed_versions": ["1.0.80"],
