@@ -397,7 +397,10 @@ final class RightPaneStore {
         projectId: String
     ) -> Task<Void, Never>? {
         let projectStates = states.values.filter { $0.worktree.projectId == projectId }
-        return refreshActiveGGPresentation(invalidating: projectStates)
+        return refreshActiveGGPresentation(
+            invalidating: projectStates,
+            preservingCompatibleActiveStack: true
+        )
     }
 
     /// HEAD notifications identify the concrete worktrees whose checked-out
@@ -418,12 +421,21 @@ final class RightPaneStore {
     }
 
     private func refreshActiveGGPresentation(
-        invalidating affectedStates: [RightPaneState]
+        invalidating affectedStates: [RightPaneState],
+        preservingCompatibleActiveStack: Bool = false
     ) -> Task<Void, Never>? {
         var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
             let shouldRefresh = state.worktree.id == activeId
-            if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
+            // Verify the active local identity before either kind of ref
+            // notification can reload GG with stale branch or commit fields.
+            if shouldRefresh, state.ggContext.permitsCurrentStackQuery,
+               state.ggActionState.inFlightAction == nil {
+                if !preservingCompatibleActiveStack {
+                    state.invalidateGGPresentation(startingRefresh: false)
+                }
+                activeRefresh = state.reevaluateGGGate(verifyingHead: true)
+            } else if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task
             }
         }

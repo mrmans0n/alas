@@ -76,7 +76,7 @@ struct ChangesTabView: View {
             publishAvailability: CommitPublishAvailability.review(
                 snapshot: rps.reviewLoop.snapshot,
                 supportedRemote: rps.commitRemote ?? rps.primaryCommitRemote,
-                isRefreshing: rps.reviewLoop.isRefreshing,
+                isRefreshing: rps.reviewLoop.showsRefreshProgress,
                 currentBranch: rps.currentBranch,
                 currentBaseBranch: rps.baseBranch,
                 lastError: rps.reviewLoop.lastError,
