@@ -125,6 +125,9 @@ and waits until that exact row is written, the way
 `appendDelegatedNotice` waits for its notice, then replies with the visual id.
 When that write fails or the lease fence rejects it, the card is removed from
 the transcript again, so the agent's retry cannot leave a second card behind.
+Rows appended behind it in the meantime shift down and are rewritten at their
+new positions, and the row the shift vacated is deleted from the store, so a
+reload shows no duplicate.
 It refuses while the session is merging a fork, like `enqueuePrompt` does.
 
 ### Transcript row

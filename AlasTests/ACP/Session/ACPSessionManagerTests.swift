@@ -1630,6 +1630,45 @@ struct ACPSessionManagerTests {
         #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
     }
 
+    @Test("a failed visual write leaves no copy of the row that was behind it, now or after the next append")
+    func failedVisualWriteDeletesTheVacatedTailRow() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        // Hold the visual's write while a notice lands behind it at index 1.
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        runner.appendAndPersistSystemNotice("after the visual")
+        rejectVisualAidWrites(store)
+        await initialWrite.release()
+
+        #expect(await show.value == false)
+        await runner.flushPersistence()
+
+        func assertStoreMatchesTranscript() throws {
+            let stored = try store.loadMessages(sessionId: session.id)
+            #expect(stored.map(\.seq) == Array(0..<Int64(session.transcript.messages.count)))
+            #expect(try stored.map(\.payload) == session.transcript.messages.map { try ACPMessageCodec.encode($0) })
+        }
+        #expect(session.transcript.visualAid(id: visual.id) == nil)
+        #expect(session.transcript.messages.count == 1)
+        try assertStoreMatchesTranscript()
+
+        runner.appendAndPersistSystemNotice("appended at the old tail index")
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.count == 2)
+        try assertStoreMatchesTranscript()
+    }
+
     @Test("an answer is not confirmed by the visual's own earlier write of the same row")
     func answerVisualAidIgnoresTheEarlierWriteOfTheSameRow() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()

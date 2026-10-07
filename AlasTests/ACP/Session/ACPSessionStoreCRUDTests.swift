@@ -723,6 +723,26 @@ struct ACPSessionStoreCRUDTests {
         #expect(try store.latestMessageSeq(sessionId: "missing") == nil)
     }
 
+    @Test("deleting messages at or after a sequence leaves earlier rows and other sessions alone")
+    func deleteMessagesAtOrAfterSeq() throws {
+        let store = try tmp()
+        for id in ["s", "other"] {
+            try store.upsertSession(.init(id: id, agentId: "claude", title: "t",
+                titleSource: .placeholder,
+                currentModel: nil, currentMode: nil, autoRun: false,
+                createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        }
+        for seq in 0..<4 {
+            try store.appendMessage(sessionId: "s", id: "m\(seq)", kind: "agent", seq: Int64(seq), payload: Data("\(seq)".utf8), createdAt: 1)
+        }
+        try store.appendMessage(sessionId: "other", id: "o2", kind: "agent", seq: 2, payload: Data("o".utf8), createdAt: 1)
+
+        try store.deleteMessages(sessionId: "s", atOrAfterSeq: 2)
+
+        #expect(try store.loadMessages(sessionId: "s").map(\.id) == ["m0", "m1"])
+        #expect(try store.loadMessages(sessionId: "other").map(\.id) == ["o2"])
+    }
+
     @Test("composer draft upsert load and delete round-trips")
     func composerDraftCRUD() throws {
         let url = tmpURL()

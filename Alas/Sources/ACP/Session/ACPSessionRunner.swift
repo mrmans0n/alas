@@ -4872,9 +4872,11 @@ extension ACPSessionRunner {
         }
         if !written, let removedIndex = session.removeVisualAid(id: visual.id) {
             // Rows after the card shifted down by one; rewrite them at their
-            // new positions. The old last row stays in the store until the
-            // next append overwrites it.
+            // new positions, then delete the row the shift vacated. Rows are
+            // keyed by position, so without the delete the old last row would
+            // stay in the store and a reload would show it twice.
             if removedIndex < session.transcript.messages.count { persistFromIndex(removedIndex) }
+            deleteVacatedRows(atOrAfter: session.transcript.messages.count)
         }
         return written
     }
@@ -5364,6 +5366,25 @@ extension ACPSessionRunner {
                 self.commitPersistedMessageRows(messageRows)
             })
         }
+    }
+
+    /// Delete the store rows at or after `count` once the transcript has shrunk to `count` messages.
+    /// Queued after the rewrite of the shifted rows on the same serialized queue. When it lands, the
+    /// index-keyed caches stop vouching for the vacated rows: the high-water mark falls back to `count`
+    /// and the payloads cached for those indices go, so a later append at an old index is treated as new.
+    private func deleteVacatedRows(atOrAfter count: Int) {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            try await persistence.deleteMessages(sessionId: sessionId, atOrAfterSeq: Int64(count), fence: fence)
+        }, completion: { [weak self] deleted in
+            guard let self, deleted == true else { return }
+            self.persistedMessageCount = min(self.persistedMessageCount, count)
+            self.lastPersistedPayloads = self.lastPersistedPayloads.filter { $0.key < count }
+            self.onPersist?()
+            self.onMessageActivity?()
+        })
     }
 }
 

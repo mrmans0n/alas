@@ -629,6 +629,22 @@ actor ACPSessionPersistence {
         return true
     }
 
+    @discardableResult
+    func deleteMessages(
+        sessionId: String,
+        atOrAfterSeq seq: Int64,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        if let fence {
+            return try store.withLeaseFence(fence) {
+                try store.deleteMessages(sessionId: sessionId, atOrAfterSeq: seq)
+            } != nil
+        }
+        try store.deleteMessages(sessionId: sessionId, atOrAfterSeq: seq)
+        return true
+    }
+
     /// Child-session transcript rows. Fenced exactly like parent rows so a
     /// process that lost the lease can't keep writing a child's output.
     func persistSubagentMessages(
