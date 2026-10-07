@@ -76,61 +76,19 @@ enum VisualAidWebPolicy {
         }
     }
 
-    /// Fragments go inside the frame template. Full documents stay as written,
-    /// with the CSP meta and theme variables inserted after `<head>`, or
-    /// appended when there is none (the CSP header applies either way).
+    /// Fragments go inside the frame template with the CSP meta and the theme
+    /// variables. Full documents are served byte for byte: the scheme handler
+    /// sends the CSP as an HTTP header, and the page pushes theme variables
+    /// after load.
     static func document(html: String, themeVariables: [String: String], frameTemplate: String) -> Data {
-        let css = themeVariables.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value);" }.joined(separator: " ")
-        let head = #"<meta http-equiv="Content-Security-Policy" content="\#(contentSecurityPolicy)"><style>:root { \#(css) }</style>"#
         guard isFullDocument(html) else {
+            let css = themeVariables.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value);" }.joined(separator: " ")
+            let head = #"<meta http-equiv="Content-Security-Policy" content="\#(contentSecurityPolicy)"><style>:root { \#(css) }</style>"#
             // Split rather than replace so the agent's HTML is never scanned for placeholders.
             let parts = frameTemplate.replacingOccurrences(of: "{{HEAD}}", with: head).components(separatedBy: "{{CONTENT}}")
             return Data((parts.first ?? "").appending(html).appending(parts.dropFirst().joined(separator: "{{CONTENT}}")).utf8)
         }
-        if let index = headInsertionIndex(in: html) {
-            var result = html
-            result.insert(contentsOf: head, at: index)
-            return Data(result.utf8)
-        }
-        return Data((html + head).utf8)
-    }
-
-    /// The end of the first real `<head ...>` opening tag: comments are skipped,
-    /// `>` inside a quoted attribute value does not end the tag, and `<header>`
-    /// is not `<head>`. Nil when there is none.
-    private static func headInsertionIndex(in html: String) -> String.Index? {
-        var index = html.startIndex
-        while index < html.endIndex {
-            guard html[index] == "<" else {
-                index = html.index(after: index)
-                continue
-            }
-            let rest = html[index...]
-            if rest.hasPrefix("<!--") {
-                guard let end = rest.range(of: "-->", range: html.index(index, offsetBy: 4)..<html.endIndex) else { return nil }
-                index = end.upperBound
-                continue
-            }
-            let name = rest.dropFirst().prefix(5).lowercased()
-            if name.hasPrefix("head"), let next = name.dropFirst(4).first, next.isWhitespace || next == ">" {
-                var quote: Character?
-                var cursor = html.index(index, offsetBy: 5)
-                while cursor < html.endIndex {
-                    let character = html[cursor]
-                    cursor = html.index(after: cursor)
-                    if let open = quote {
-                        if character == open { quote = nil }
-                    } else if character == "\"" || character == "'" {
-                        quote = character
-                    } else if character == ">" {
-                        return cursor
-                    }
-                }
-                return nil
-            }
-            index = html.index(after: index)
-        }
-        return nil
+        return Data(html.utf8)
     }
 
     /// Runs in the page world before any page script. CSP does not cover

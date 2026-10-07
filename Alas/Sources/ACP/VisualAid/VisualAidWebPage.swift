@@ -28,14 +28,14 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     @ObservationIgnored private let schemeHandler: VisualAidSchemeHandler
     @ObservationIgnored private var crashes = 0
     @ObservationIgnored private var isClosed = false
-    /// Theme variables baked into the served document, and the latest ones requested since.
-    @ObservationIgnored private let documentThemeVariables: [String: String]
+    /// Theme variables baked into a fragment's frame; nil for a full document, which is served unmodified.
+    @ObservationIgnored private let documentThemeVariables: [String: String]?
     @ObservationIgnored private var themeVariables: [String: String]
 
     init(visualID: UUID, html: String, theme: Theme) {
         self.visualID = visualID
         let variables = PluginWebPolicy.cssVariables(theme)
-        documentThemeVariables = variables
+        documentThemeVariables = VisualAidWebPolicy.isFullDocument(html) ? nil : variables
         themeVariables = variables
         schemeHandler = VisualAidSchemeHandler(
             visualID: visualID,
@@ -183,7 +183,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !isClosed else { return }
         status = .ready
-        // The served document is immutable; replay any theme change made while it was loading or crashed.
+        // Fragments bake the theme into their frame; a full document is served unmodified, so it always gets
+        // the theme pushed. Either way, replay any theme change made while it was loading or crashed.
         if themeVariables != documentThemeVariables {
             pushTheme()
         }

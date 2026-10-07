@@ -61,18 +61,18 @@ struct VisualAidWebPolicyTests {
         #expect(document.contains(VisualAidWebPolicy.contentSecurityPolicy))
     }
 
-    @Test("full documents are kept intact; theme variables go after <head> or at the end", arguments: [
-        ("<!DOCTYPE html><html><HEAD lang=\"x\"><title>t</title></HEAD><body>b</body></html>", "<HEAD lang=\"x\"><meta"),
-        ("<html><body>b</body></html>", "<html><body>b</body></html><meta"),
-        ("<html><!-- <head> --><head><title>t</title></head></html>", "<!-- <head> --><head><meta"),
-        ("<html><head data-x=\"a>b\"><title>t</title></head></html>", "<head data-x=\"a>b\"><meta"),
-        ("<html><header>h</header><head><title>t</title></head></html>", "</header><head><meta"),
+    @Test("a full document is returned unchanged", arguments: [
+        "<!DOCTYPE html><html><HEAD lang=\"x\"><title>t</title></HEAD><body>b</body></html>",
+        "<html><body>b</body></html>",
+        "<html><!-- <head> --><head><title>t</title></head></html>",
+        "<html><head data-x=\"a>b\"><title>t</title></head></html>",
+        "<html><header>h</header><head><title>t</title></head></html>",
+        "<html data-note=\"<head>\"><body>b</body></html>",
+        "<html><body><script>const tag = '<head>';</script></body></html>",
     ])
-    func fullDocumentAssembly(html: String, expectedSubstring: String) {
-        let document = String(decoding: VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template), as: UTF8.self)
-        #expect(document.contains(expectedSubstring))
-        #expect(!document.contains("{{CONTENT}}"))
-        #expect(document.contains("--alas-text: red;"))
+    func fullDocumentIsReturnedUnchanged(html: String) {
+        let document = VisualAidWebPolicy.document(html: html, themeVariables: ["--alas-text": "red"], frameTemplate: Self.template)
+        #expect(document == Data(html.utf8))
     }
 
     @Test("the sandbox never allows connections or form posts")

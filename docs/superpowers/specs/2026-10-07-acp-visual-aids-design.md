@@ -211,8 +211,9 @@ A pure enum, testable without a web view, mirroring `PluginWebPolicy`.
   opens in the default browser. Everything else is cancelled.
 - Wrapping: `html` that starts (after whitespace and comments) with
   `<!DOCTYPE` or `<html`, case-insensitive, is a full document and is served
-  as is plus the injected theme variables. Anything else is a fragment and goes
-  inside the frame template.
+  byte for byte as written: the CSP already arrives as an HTTP header, so no
+  `<meta>` is inserted. The page pushes the theme variables after load through
+  the bridge. Anything else is a fragment and goes inside the frame template.
 
 The page holds only HTML the agent wrote. It has no Alas data, no file access,
 no persistent storage and no `connect-src`. An `https:` image GET can carry
@@ -281,7 +282,9 @@ the superpowers companion uses, so existing agent habits carry over:
 `data-choice` get a selected style driven by the bridge, not by page script.
 
 Colors come from the Alas theme through `PluginWebPolicy.cssVariables(theme)`,
-called directly.
+called directly. The template's `{{HEAD}}` slot holds the CSP `<meta>` and the
+theme variables, baked in for fragments. Full documents never pass through the
+template; `VisualAidWebPage` pushes their variables after load.
 
 ## Question flow
 
