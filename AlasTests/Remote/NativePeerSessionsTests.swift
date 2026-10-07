@@ -1074,6 +1074,62 @@ struct NativePeerSessionsTests {
         #expect(client.newSession?.phase == .failed("Agent is no longer available."))
     }
 
+    @Test func aWorktreeCreatedOnThePeerSelectsItsSession() {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        #expect(links.sent(to: "B").contains(.listBranches(projectId: "p")))
+        links.receive(.branchList(projectId: "p", branches: ["dev", "main"], preferredBase: "main"), from: "B")
+        #expect(client.newSession?.branches == .loaded(names: ["dev", "main"], preferredBase: "main"))
+
+        client.createNewWorktreeSession(
+            base: "main", branch: "feature/x", agentId: "claude", modelId: "opus", effortId: "high")
+        #expect(client.newSession?.phase == .creating)
+        #expect(links.sent(to: "B").last == .createWorktreeSession(
+            projectId: "p", base: "main", branch: "feature/x", agentId: "claude",
+            modelId: "opus", effortId: "high"))
+
+        links.receive(.worktreeSessionCreated(session: projectRow("new", worktreeId: "w2")), from: "B")
+        #expect(client.newSession == nil)
+        links.receive(.sessionList(sessions: [projectRow("new", worktreeId: "w2"), projectRow("s")]), from: "B")
+        #expect(client.selectedSessionId == "B:new")
+    }
+
+    @Test func aWorktreeCreatedWithoutItsSessionIsOfferedForRetry() {
+        let (links, client, peer, repo) = startedClientWithPeerRepo()
+        client.beginNewSession(peer: peer, repo: repo)
+        links.receive(.worktreeList(worktrees: [worktreeOption("w1", projectId: "p")]), from: "B")
+        client.createNewWorktreeSession(base: "main", branch: "feature/x", agentId: "claude", modelId: nil, effortId: nil)
+        links.sent.removeAll()
+
+        let message = "Worktree created, but the session could not be created."
+        links.receive(.worktreeSessionCreationFailed(stage: .session, message: message, worktreeId: "w2"), from: "B")
+
+        #expect(client.newSession?.phase == .failed(message))
+        #expect(client.newSession?.recoveredWorktreeId == "w2")
+        #expect(links.sent(to: "B") == [.listWorktrees])
+    }
+
+    @Test(arguments: [
+        ("main", "feature/x", true),
+        ("gone", "feature/x", false),   // the peer only accepts a base it lists
+        ("main", "", false),
+        ("main", "bad name", false),
+    ] as [(String, String, Bool)])
+    func aNewPeerWorktreeNeedsAListedBaseAndAValidBranch(base: String, branch: String, allowed: Bool) {
+        let branches = NativePeerNewSession.Branches.loaded(names: ["dev", "main"], preferredBase: "main")
+        #expect(NativePeerNewSession.canCreateWorktree(base: base, branch: branch, branches: branches) == allowed)
+        #expect(!NativePeerNewSession.canCreateWorktree(base: base, branch: branch, branches: .failed("no git")))
+    }
+
+    @Test(arguments: [
+        ("main", "main"),
+        ("trunk", "dev"),   // a preferred base the peer does not list falls back to its first branch
+    ] as [(String, String)])
+    func aNewPeerWorktreePreselectsThePeersPreferredBase(preferred: String, expected: String) {
+        let branches = NativePeerNewSession.Branches.loaded(names: ["dev", "main"], preferredBase: preferred)
+        #expect(NativePeerNewSession.preselectedBase(in: branches) == expected)
+    }
+
     @Test func repliesForACancelledSheetAreIgnored() {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)

@@ -521,11 +521,17 @@ struct FederatedSessionsProviderTests {
         var created: [RemoteServerMessage] = [], listed: [RemoteServerMessage] = []
         _ = provider.request(.createSession(worktreeId: "w1", agentId: "claude"),
                              toPeer: "srv-b", from: client.downstream) { created.append($0) }
+        _ = provider.request(.createWorktreeSession(projectId: "p", base: "main", branch: "b", agentId: "claude"),
+                             toPeer: "srv-b", from: client.downstream) { created.append($0) }
         _ = provider.request(.listWorktrees, toPeer: "srv-b", from: client.downstream) { listed.append($0) }
 
         links.goOffline("srv-b")
 
-        #expect(created == [.createSessionFailed(message: "Peer is unavailable.")])
+        // Each kind queues separately, so the two fail in either order.
+        #expect(created.count == 2)
+        #expect(created.contains(.createSessionFailed(message: "Peer is unavailable.")))
+        #expect(created.contains(
+            .worktreeSessionCreationFailed(stage: .worktree, message: "Peer is unavailable.", worktreeId: nil)))
         #expect(listed.isEmpty)
         #expect(!provider.request(.listAgents, toPeer: "srv-b", from: client.downstream) { _ in })
         // A late reply after reconnecting has no requester left.

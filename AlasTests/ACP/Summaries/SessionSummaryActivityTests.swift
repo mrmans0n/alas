@@ -42,6 +42,31 @@ struct SessionSummaryActivityTests {
         withExtendedLifetime(observation) {}
     }
 
+    /// Agents send these after a turn ends; signalling would consume the turn's next-prompt offer.
+    @Test(arguments: ["usage", "commands", "models", "mode", "model", "config", "title", "retry cleared"])
+    func trailingMetadataUpdatesDoNotSignal(_ kind: String) {
+        let session = ACPSession(id: "activity", agentId: "codex", worktreeId: "w", title: "Activity")
+        var signalled = false
+        let observation = session.nextPromptActivity.sink { signalled = true }
+
+        switch kind {
+        case "usage": session.apply(.usageUpdate(.init(used: 100, size: 1000, cost: nil)))
+        case "commands": session.apply(.availableCommandsUpdate([]))
+        case "models": session.apply(.availableModelsUpdate([]))
+        case "mode": session.apply(.currentModeUpdate(modeId: "plan"))
+        case "model": session.apply(.currentModelUpdate(modelId: "model"))
+        case "config": session.apply(.sessionConfigOptionsUpdate([]))
+        case "title": session.apply(.sessionInfoUpdate(.init(title: "Renamed")))
+        default:
+            session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable([
+                "codex": AnyCodable(["error": AnyCodable(["willRetry": AnyCodable(false)])])
+            ]))))
+        }
+
+        #expect(!signalled)
+        withExtendedLifetime(observation) {}
+    }
+
     @Test func managerTeardownSignalsSynchronously() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
