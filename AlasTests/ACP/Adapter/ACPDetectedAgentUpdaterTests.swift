@@ -23,6 +23,24 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.classify(resolvedPath: path) == expected)
     }
 
+    @Test("Homebrew names keep their tap so a tapped formula is not confused with core", arguments: [
+        ("/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode",
+         "/opt/homebrew/Cellar/opencode/1.18.34/INSTALL_RECEIPT.json", "anomalyco/tap",
+         ACPDetectedAgentOwner.homebrewFormula(name: "anomalyco/tap/opencode", prefix: "/opt/homebrew")),
+        ("/opt/homebrew/Cellar/opencode/1.18.34/bin/opencode",
+         "/opt/homebrew/Cellar/opencode/1.18.34/INSTALL_RECEIPT.json", "homebrew/core",
+         .homebrewFormula(name: "opencode", prefix: "/opt/homebrew")),
+        ("/opt/homebrew/Caskroom/aerospace/0.21.3/AeroSpace.app/aerospace",
+         "/opt/homebrew/Caskroom/aerospace/.metadata/INSTALL_RECEIPT.json", "nikitabobko/tap",
+         .homebrewCask(name: "nikitabobko/tap/aerospace", prefix: "/opt/homebrew")),
+    ])
+    func homebrewTapQualification(path: String, receiptPath: String, tap: String, expected: ACPDetectedAgentOwner) {
+        let owner = ACPDetectedAgentOwner.classify(resolvedPath: path) { requested in
+            requested == receiptPath ? Data(#"{"source": {"tap": "\#(tap)"}}"#.utf8) : nil
+        }
+        #expect(owner == expected)
+    }
+
     @Test("upgrades target the install that owns the binary, not the manager's default")
     func upgradeTargetsOwningInstall() {
         #expect(ACPDetectedAgentOwner.npm(package: "pi", prefix: "/Users/me/.nvm/versions/node/v22.1.0").upgradeCommand
@@ -30,8 +48,9 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.bun(package: "omp", root: "/opt/bun/install/global").upgradeCommand
                 == ["BUN_INSTALL_GLOBAL_DIR=/opt/bun/install/global", "bun", "add", "-g", "omp@latest"])
         // Auto-updating casks are only upgraded with --greedy.
+        // Homebrew must not stop for confirmation without a terminal.
         #expect(ACPDetectedAgentOwner.homebrewCask(name: "copilot-cli", prefix: "/usr/local").upgradeCommand
-                == ["/usr/local/bin/brew", "upgrade", "--cask", "--greedy", "copilot-cli"])
+                == ["HOMEBREW_NO_ASK=1", "/usr/local/bin/brew", "upgrade", "--cask", "--greedy", "copilot-cli"])
     }
 
     @Test("registry latest is compared with the installed version", arguments: [

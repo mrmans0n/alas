@@ -39,10 +39,14 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
         // one the detected binary lives in.
         case .bun(let package, let root): ["BUN_INSTALL_GLOBAL_DIR=\(root)", "bun", "add", "-g", "\(package)@latest"]
         case .npm(let package, let prefix): ["npm", "install", "-g", "--prefix", prefix, "\(package)@latest"]
-        case .homebrewFormula(let name, let prefix): ["\(prefix)/bin/brew", "upgrade", "--formula", name]
+        // Homebrew asks for confirmation by default; there is no terminal to
+        // answer it. The env var (unlike `--no-ask`) is ignored by older brews.
+        case .homebrewFormula(let name, let prefix):
+            ["HOMEBREW_NO_ASK=1", "\(prefix)/bin/brew", "upgrade", "--formula", name]
         // Auto-updating casks are skipped by `brew upgrade` without `--greedy`,
         // matching the check.
-        case .homebrewCask(let name, let prefix): ["\(prefix)/bin/brew", "upgrade", "--cask", "--greedy", name]
+        case .homebrewCask(let name, let prefix):
+            ["HOMEBREW_NO_ASK=1", "\(prefix)/bin/brew", "upgrade", "--cask", "--greedy", name]
         }
     }
 
@@ -59,17 +63,28 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
 
     /// Classifies a canonical (symlink-resolved) executable path. Returns nil
     /// for installs Alas cannot update (pnpm, uv, cargo, standalone scripts).
-    static func classify(resolvedPath path: String) -> ACPDetectedAgentOwner? {
+    /// Homebrew names are qualified with their tap from the install receipt,
+    /// so a tapped formula is never confused with a core one of the same name.
+    static func classify(
+        resolvedPath path: String,
+        readFile: (_ path: String) -> Data? = { _ in nil }
+    ) -> ACPDetectedAgentOwner? {
         let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         // Homebrew first: `/opt/homebrew/lib/node_modules/…` is npm, but
         // `Cellar`/`Caskroom` are owned by brew itself.
         let brewPrefix = { (index: Int) in "/" + components[..<index].joined(separator: "/") }
-        if let index = components.firstIndex(of: "Cellar"), index + 1 < components.count {
-            return .homebrewFormula(name: components[index + 1], prefix: brewPrefix(index))
+        if let index = components.firstIndex(of: "Cellar"), index + 2 < components.count {
+            let prefix = brewPrefix(index)
+            let name = components[index + 1]
+            let receipt = "\(prefix)/Cellar/\(name)/\(components[index + 2])/INSTALL_RECEIPT.json"
+            return .homebrewFormula(name: tapQualified(name, receipt: readFile(receipt)), prefix: prefix)
         }
         if let index = components.firstIndex(of: "Caskroom"), index + 1 < components.count {
-            return .homebrewCask(name: components[index + 1], prefix: brewPrefix(index))
+            let prefix = brewPrefix(index)
+            let name = components[index + 1]
+            let receipt = "\(prefix)/Caskroom/\(name)/.metadata/INSTALL_RECEIPT.json"
+            return .homebrewCask(name: tapQualified(name, receipt: readFile(receipt)), prefix: prefix)
         }
 
         // The outermost `node_modules` names the top-level global package;
@@ -87,6 +102,15 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
             return .npm(package: package, prefix: "/" + parent.dropLast().joined(separator: "/"))
         }
         return nil
+    }
+
+    private static func tapQualified(_ name: String, receipt: Data?) -> String {
+        guard let receipt,
+              let json = try? JSONSerialization.jsonObject(with: receipt) as? [String: Any],
+              let tap = (json["source"] as? [String: Any])?["tap"] as? String,
+              !tap.isEmpty, tap != "homebrew/core", tap != "homebrew/cask"
+        else { return name }
+        return "\(tap)/\(name)"
     }
 
     private static func packageName(_ components: [String], after index: Int) -> String? {
@@ -141,7 +165,7 @@ struct ACPDetectedAgentUpdater: Sendable {
     ) -> ACPDetectedAgentOwner? {
         guard let path = AgentPath.resolveExecutable(named: name, base: env["PATH"]) else { return nil }
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return ACPDetectedAgentOwner.classify(resolvedPath: resolved)
+        return ACPDetectedAgentOwner.classify(resolvedPath: resolved) { FileManager.default.contents(atPath: $0) }
     }
 
     func check(owner: ACPDetectedAgentOwner) async -> AdapterUpdateState {
@@ -206,10 +230,11 @@ struct ACPDetectedAgentUpdater: Sendable {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .unknown }
         let entries = ((root["formulae"] as? [[String: Any]]) ?? []) + ((root["casks"] as? [[String: Any]]) ?? [])
-        // Tap formulae are reported by full name (`anomalyco/tap/opencode`).
+        // Only the named package is queried; brew may report it with or
+        // without its tap (`anomalyco/tap/opencode`), so compare the token.
+        let token = { (value: String) in value.split(separator: "/").last.map(String.init) ?? value }
         guard let entry = entries.first(where: {
-            guard let entryName = $0["name"] as? String else { return false }
-            return entryName == name || entryName.hasSuffix("/\(name)")
+            ($0["name"] as? String).map(token) == token(name)
         }) else {
             return status == 0 ? .upToDate : .unknown
         }
