@@ -44,6 +44,12 @@ struct RunReportTabTests {
         #expect(!tab.isRestorable)
     }
 
+    @Test(arguments: [true, false])
+    func visualAidTabsDoNotRestore(withTitle: Bool) {
+        let state = VisualAidTabState(sessionId: "s", visualId: UUID(), title: withTitle ? "Plan" : "")
+        #expect(!Tab.visualAid(state).isRestorable)
+    }
+
     @Test func savedReportTabsWithoutTransientFlagDecodeAsRestorable() throws {
         let data = Data("""
         {

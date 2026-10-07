@@ -732,7 +732,12 @@ private struct ACPSessionView: View {
                 answer: { visualId, answer in
                     await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
                 },
-                popOut: { _ in }
+                popOut: { visual in
+                    state.tabs.openOrFocusVisualAid(
+                        owner: owner ?? .worktree(worktree.id),
+                        state: VisualAidTabState(sessionId: sessionId, visualId: visual.id, title: visual.title)
+                    )
+                }
             )
         )
     }

@@ -74,7 +74,7 @@ struct CenterTabComposition {
 private extension Tab {
     var isSharedSessionTab: Bool {
         switch self {
-        case .terminal, .acpSession, .webPreview:
+        case .terminal, .acpSession, .webPreview, .visualAid:
             true
         default:
             false
@@ -696,6 +696,10 @@ struct CenterPaneView: View {
                             .id(s.id + (s.remoteHost ?? ""))
                             .onAppear { completeStartupRecoveryIfActive(s.id) }
                             .task { completeStartupRecoveryIfActive(s.id) }
+                    case .visualAid(let s):
+                        VisualAidTabView(state: state, tab: s)
+                            .id(s.id)
+                            .onAppear { completeStartupRecoveryIfActive(s.id) }
                     case .plugin(let s):
                         PluginTabView(state: state, worktree: worktree, tab: s)
                             .id(s.id)
