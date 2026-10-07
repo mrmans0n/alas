@@ -1114,13 +1114,6 @@ extension ACPSessionStore {
         }
     }
 
-    /// Drops the rows a shrunken transcript vacated. Rows are keyed by position,
-    /// so after a message is removed from the middle the rewrite of the shifted
-    /// rows leaves the old last row behind; this removes it.
-    func deleteMessages(sessionId: String, atOrAfterSeq seq: Int64) throws {
-        try db.exec("DELETE FROM messages WHERE session_id = ? AND seq >= ?", bindings: [sessionId, seq])
-    }
-
     /// Salvage a streamed row received by the former owner only when the new
     /// owner has not created that deterministic row id yet. Unlike the normal
     /// upsert path this must never replace a concurrent takeover's transcript.

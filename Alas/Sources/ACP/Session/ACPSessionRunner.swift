@@ -4863,21 +4863,37 @@ extension ACPSessionRunner {
     /// Append a visual aid and report whether its row reached the store, the
     /// way `appendAndPersistSystemNoticeAwaitingResult` does: `visual_show`
     /// tells the agent the visual is shown only once it would survive a reload.
-    /// When the write is not confirmed the card is removed again, so the agent's
-    /// retry cannot leave a second card next to a ghost that a reload would lose.
+    ///
+    /// Rows are keyed by position, so a failed card never shifts the rows behind it: a shifted
+    /// row's old and new positions cannot both be kept consistent in the store if the rewrite fails
+    /// too, and a lost message is worse than a ghost card.
+    /// - Last row: nothing follows it and its own row was never stored, so it is removed, and the
+    ///   agent's retry cannot leave a second card next to a ghost that a reload would lose.
+    /// - Rows were appended behind it while its write was in flight: it stays, and its single row is
+    ///   written once more. If that lands the card is stored and the call succeeds; if not, the card
+    ///   stays in memory unstored (a reload drops it) and the call fails.
     func appendAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
         let before = session.transcript.messages.count
         unconfirmedVisualAids[visual.id] = []
         session.appendVisualAid(visual)
-        let written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
+        var written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
             persistFromIndex(before)
         }
-        if !written, let removedIndex = session.removeVisualAid(id: visual.id) {
-            // Rows after the card shifted down by one. Rows are keyed by position, so the shifted rows
-            // are rewritten at their new positions and the row the shift vacated is deleted in the same
-            // store call. Without the delete a reload would show the old last row twice.
-            rewriteShrunkenTranscript(from: removedIndex)
+        if !written, let index = session.transcript.messages.firstIndex(where: {
+            if case .visualAid(let existing) = $0 { return existing.id == visual.id }
+            return false
+        }) {
+            if index == session.transcript.messages.count - 1 {
+                session.removeVisualAid(id: visual.id)
+                // Nothing was stored at or after this index, so the caches must not claim otherwise.
+                persistedMessageCount = min(persistedMessageCount, index)
+                lastPersistedPayloads = lastPersistedPayloads.filter { $0.key < index }
+            } else {
+                written = await awaitingWrite(ofRowAt: index) {
+                    persistIndices([index])
+                }
+            }
         }
         for waiter in unconfirmedVisualAids.removeValue(forKey: visual.id) ?? [] {
             waiter.resume(returning: written)
@@ -4885,10 +4901,10 @@ extension ACPSessionRunner {
         return written
     }
 
-    /// Waits until the visual's first write is resolved and reports whether the card is still shown
-    /// and stored. An answer must not start earlier: the card appears in the transcript before that
-    /// write is confirmed, and if it then fails the card is removed, which would also remove the row
-    /// an already-queued answer had stored.
+    /// Waits until the visual's first write is resolved and reports whether it was stored, or, once it
+    /// is resolved, whether the card is in the transcript. An answer must not start earlier: the card
+    /// appears in the transcript before that write is confirmed, and if it then fails at the tail the
+    /// card is removed, which would also remove the row an already-queued answer had stored.
     func awaitVisualAidFirstWrite(id visualId: UUID) async -> Bool {
         guard unconfirmedVisualAids[visualId] != nil else {
             return session.transcript.visualAid(id: visualId) != nil
@@ -5362,7 +5378,20 @@ extension ACPSessionRunner {
             return
         }
 
-        let rows = storedRows(from: lowerBound)
+        var rows: [ACPStoredMessage] = []
+        for i in lowerBound..<messages.count {
+            let m = messages[i]
+            guard let payload = try? ACPMessageCodec.encode(m) else { continue }
+            let id = messageRowID(i)
+            rows.append(ACPStoredMessage(
+                id: id,
+                sessionId: sessionId,
+                kind: m.kind,
+                seq: Int64(i),
+                payload: payload,
+                createdAt: createdAt(forMessageAt: i)
+            ))
+        }
         let fence = leaseFenceProvider()
         if !rows.isEmpty {
             let messageRows = rows
@@ -5373,59 +5402,6 @@ extension ACPSessionRunner {
                 self.commitPersistedMessageRows(messageRows)
             })
         }
-    }
-
-    /// Rewrite the rows from `index` on after a message was removed there, and delete the rows the
-    /// removal vacated, as one lease-fenced store call queued behind everything already in flight.
-    /// Atomic on purpose: a delete that could land without its rewrite would drop a row that was
-    /// never stored at its new position, losing it on reload. If the call fails or is cancelled the
-    /// store keeps its old rows, which is a stale tail rather than a lost row.
-    ///
-    /// When it lands, the index-keyed caches stop vouching for the vacated rows: the high-water mark
-    /// falls back to the new count and the payloads cached for those indices go, so a later append at
-    /// an old index is written as new.
-    private func rewriteShrunkenTranscript(from index: Int) {
-        flushStreamingPersist()
-        guard holdsLeaseForWrite() else { return }
-        let count = session.transcript.messages.count
-        let rows = storedRows(from: index)
-        // A row that cannot be encoded would be deleted without being rewritten; keep the stale tail.
-        guard rows.count == max(0, count - index) else { return }
-        let fence = leaseFenceProvider()
-        let sessionId = sessionId
-        enqueuePersistence({ persistence in
-            try await persistence.persistMessages(
-                rows, deletingSessionRowsAtOrAfterSeq: Int64(count), sessionId: sessionId, fence: fence)
-        }, completion: { [weak self] stored in
-            guard let self, stored == true else { return }
-            if rows.isEmpty {
-                self.onPersist?()
-                self.onMessageActivity?()
-            } else {
-                self.commitPersistedMessageRows(rows)
-            }
-            self.persistedMessageCount = min(self.persistedMessageCount, count)
-            self.lastPersistedPayloads = self.lastPersistedPayloads.filter { $0.key < count }
-        })
-    }
-
-    private func storedRows(from lowerBound: Int) -> [ACPStoredMessage] {
-        let messages = session.transcript.messages
-        guard lowerBound < messages.count else { return [] }
-        var rows: [ACPStoredMessage] = []
-        for i in lowerBound..<messages.count {
-            let m = messages[i]
-            guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            rows.append(ACPStoredMessage(
-                id: messageRowID(i),
-                sessionId: sessionId,
-                kind: m.kind,
-                seq: Int64(i),
-                payload: payload,
-                createdAt: createdAt(forMessageAt: i)
-            ))
-        }
-        return rows
     }
 }
 

@@ -8721,8 +8721,8 @@ extension ACPSessionManager {
     /// answer's row is confirmed written (and for a dismissal, which sends
     /// nothing), false when it could not be stored. An answer first waits for
     /// the card's own first write to be confirmed, and is refused if that
-    /// write failed and the card was removed. The in-memory answer is set
-    /// first so a second submit finds it answered; when the write fails the
+    /// write failed. The in-memory answer is set first so a second submit
+    /// finds it answered; when the write fails the
     /// answer is reverted, the card shows the send error, and nothing is sent.
     /// A send that reports failure clears the answer too. A send whose callback
     /// never fires (superseded prompt) keeps the answer.

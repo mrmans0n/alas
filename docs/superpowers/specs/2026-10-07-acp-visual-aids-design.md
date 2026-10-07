@@ -123,13 +123,22 @@ have none.
 `ACPSessionManager.showVisualAid` appends the row through the session runner
 and waits until that exact row is written, the way
 `appendDelegatedNotice` waits for its notice, then replies with the visual id.
-When that write fails or the lease fence rejects it, the card is removed from
-the transcript again, so the agent's retry cannot leave a second card behind.
-Rows appended behind it in the meantime shift down. They are rewritten at
-their new positions and the row the shift vacated is deleted in the same
-lease-fenced store transaction, so the vacated row goes only once the rewrite
-is stored: a reload shows no duplicate, and a failed rewrite leaves a stale tail
-rather than losing a row.
+When that write fails or the lease fence rejects it, the outcome depends on
+what followed the card. Transcript rows are stored by position. Removing a
+card from the middle would shift the rows behind it, and if the rewrite of
+those rows failed, the store would keep a row only at its old position, where
+the next append overwrites it. So rows never shift:
+
+- If the card is the last row, nothing followed it and its row was never
+  stored, so it is removed, and the agent's retry cannot leave a second card
+  behind.
+- If rows were appended behind it while its write was in flight, the card
+  stays and its own row is written once more. A confirmed retry means the card
+  is stored and the call succeeds. Otherwise the card stays in memory without
+  a stored row (a reload drops it), the call fails, and an agent retry may
+  show a second card. That double fault is rare, and a ghost card is cheaper
+  than a lost message.
+
 It refuses while the session is merging a fork, like `enqueuePrompt` does.
 
 ### Transcript row
@@ -387,9 +396,9 @@ Submit:
    when the note is non-empty.
 2. `ACPSessionManager.answerVisualAid` first waits for the card's own first
    write to be confirmed (the card is in the transcript before that), and is
-   refused, sending nothing, if that write failed and the card was removed;
-   otherwise a failed first write would remove the card and the row an
-   already-queued answer had stored. It then stores `answer = .answered(...)`
+   refused, sending nothing, if that write failed; otherwise a failed first
+   write at the tail would remove the card and the row an already-queued
+   answer had stored. It then stores `answer = .answered(...)`
    on the row in memory at once and queues its write. The card switches to a
    read-only summary, for example "Answered: b, Two column". A second submit
    finds the row answered and does nothing, which is what keeps it from

@@ -1645,8 +1645,8 @@ struct ACPSessionManagerTests {
         #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
     }
 
-    @Test("a failed visual write leaves no copy of the row that was behind it, now or after the next append")
-    func failedVisualWriteDeletesTheVacatedTailRow() async throws {
+    @Test("a failed visual write with rows behind it keeps every row at its own sequence, now and after the next append")
+    func failedVisualWriteWithRowsBehindShiftsNothing() async throws {
         let (manager, session, store, _) = try await attachedVisualAidManager()
         defer { manager.shutdownBackgroundTasks() }
         let runner = try #require(manager.runners[session.id])
@@ -1663,46 +1663,8 @@ struct ACPSessionManagerTests {
         let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
         await initialWrite.waitUntilEntered()
         runner.appendAndPersistSystemNotice("after the visual")
-        rejectVisualAidWrites(store)
-        await initialWrite.release()
-
-        #expect(await show.value == false)
-        await runner.flushPersistence()
-
-        func assertStoreMatchesTranscript() throws {
-            let stored = try store.loadMessages(sessionId: session.id)
-            #expect(stored.map(\.seq) == Array(0..<Int64(session.transcript.messages.count)))
-            #expect(try stored.map(\.payload) == session.transcript.messages.map { try ACPMessageCodec.encode($0) })
-        }
-        #expect(session.transcript.visualAid(id: visual.id) == nil)
-        #expect(session.transcript.messages.count == 1)
-        try assertStoreMatchesTranscript()
-
-        runner.appendAndPersistSystemNotice("appended at the old tail index")
-        await runner.flushPersistence()
-        #expect(session.transcript.messages.count == 2)
-        try assertStoreMatchesTranscript()
-    }
-
-    @Test("a failed visual write whose row shift is also rejected does not delete the row that was behind it")
-    func failedRewriteKeepsTheRowBehindTheRemovedVisual() async throws {
-        let (manager, session, store, _) = try await attachedVisualAidManager()
-        defer { manager.shutdownBackgroundTasks() }
-        let runner = try #require(manager.runners[session.id])
-        let visual = questionVisual()
-        let initialWrite = AsyncGate()
-        var held = false
-        runner.beforePersistenceForTesting = {
-            if !held {
-                held = true
-                await initialWrite.enterAndWait()
-            }
-        }
-        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
-        await initialWrite.waitUntilEntered()
-        runner.appendAndPersistSystemNotice("after the visual")
-        // The visual's write fails, and so does the rewrite that moves the notice from index 1 to 0;
-        // the notice's own earlier write, at index 1, is not rejected.
+        // The visual stays unwritable, retry included. A system row at sequence 0 is rejected too: that
+        // is where an implementation that shifted the notice down would have to rewrite it.
         rejectVisualAidWrites(store)
         rejectSystemWriteAtFirstIndex(store)
         await initialWrite.release()
@@ -1710,11 +1672,67 @@ struct ACPSessionManagerTests {
         #expect(await show.value == false)
         await runner.flushPersistence()
 
-        #expect(session.transcript.visualAid(id: visual.id) == nil)
-        #expect(session.transcript.messages.count == 1)
+        func assertStoredRowsMatchTranscript() throws {
+            let messages = session.transcript.messages
+            let stored = try store.loadMessages(sessionId: session.id)
+            for row in stored {
+                let index = Int(row.seq)
+                #expect(messages.indices.contains(index))
+                guard messages.indices.contains(index) else { continue }
+                #expect(row.kind == messages[index].kind)
+                #expect(try row.payload == ACPMessageCodec.encode(messages[index]))
+            }
+        }
+        // The card stays as an unstored row and nothing behind it moves.
+        #expect(session.transcript.visualAid(id: visual.id) == visual)
+        #expect(session.transcript.messages.count == 2)
+        #expect(try store.loadMessages(sessionId: session.id).map(\.seq) == [1])
+        try assertStoredRowsMatchTranscript()
+
+        runner.appendAndPersistSystemNotice("appended after the failure")
+        await runner.flushPersistence()
+        #expect(session.transcript.messages.count == 3)
+        #expect(try store.loadMessages(sessionId: session.id).map(\.seq) == [1, 2])
+        try assertStoredRowsMatchTranscript()
+    }
+
+    @Test("a visual whose first write fails once is written again when rows were appended behind it")
+    func failedVisualWriteWithRowsBehindIsRetriedOnce() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        var flushes = 0
+        var lifted = false
+        runner.onPersistenceFlushForTesting = { flushes += 1 }
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            } else if flushes >= 2, !lifted {
+                // Every awaited write flushes after enqueueing, so a write that starts after the second
+                // flush is the retry; the rejection is lifted exactly there.
+                lifted = true
+                self.dropVisualAidRejection(store)
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        runner.appendAndPersistSystemNotice("after the visual")
+        rejectVisualAidWrites(store)
+        await initialWrite.release()
+
+        #expect(await show.value)
+
+        #expect(flushes == 2, "one attempt and one retry")
+        #expect(lifted)
+        #expect(session.transcript.visualAid(id: visual.id) == visual)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
         let stored = try store.loadMessages(sessionId: session.id)
-        #expect(stored.map(\.seq) == [1])
-        #expect(stored.first?.kind == "system")
+        #expect(stored.map(\.seq) == [0, 1])
+        #expect(try stored.map(\.payload) == session.transcript.messages.map { try ACPMessageCodec.encode($0) })
     }
 
     @Test("an answer is not confirmed by the visual's own earlier write of the same row")
