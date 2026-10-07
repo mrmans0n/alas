@@ -427,13 +427,13 @@ final class RightPaneStore {
         var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
             let shouldRefresh = state.worktree.id == activeId
-            // Shared ref updates can affect upper stack entries without
-            // changing this worktree's branch or reachable commits. Reload
-            // them without dropping the active pane's coherent presentation.
-            if shouldRefresh, preservingCompatibleActiveStack,
-               state.ggStackLoadState == .loaded,
-               state.ggStackCommitsKey == state.currentGGStackCommitsKey,
+            // Verify the active local identity before either kind of ref
+            // notification can reload GG with stale branch or commit fields.
+            if shouldRefresh, state.ggContext.permitsCurrentStackQuery,
                state.ggActionState.inFlightAction == nil {
+                if !preservingCompatibleActiveStack {
+                    state.invalidateGGPresentation(startingRefresh: false)
+                }
                 activeRefresh = state.reevaluateGGGate(verifyingHead: true)
             } else if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task

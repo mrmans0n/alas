@@ -14,7 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixes
 
 - Keep cached review status and publish actions steady during local filesystem refreshes instead of flashing loading feedback on every inspection.
-- Keep the GG Prepare card and stack presentation visible during shared-ref refreshes after verifying the live branch and HEAD still match the cached snapshot; invalidate changed worktree heads and inactive cached panes.
+- Keep the GG Prepare card and stack presentation visible during shared-ref refreshes after verifying the live branch and HEAD still match the cached snapshot. Refresh changed local identities before reloading GG, and invalidate inactive cached panes.
 
 ## [0.20.6] - 2026-10-07
 

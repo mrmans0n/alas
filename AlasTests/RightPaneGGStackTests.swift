@@ -754,8 +754,8 @@ struct RightPaneGGStackTests {
         }
     }
 
-    private func makeWorktree() -> Worktree {
-        let path = FileManager.default.temporaryDirectory
+    private func makeWorktree(path: URL? = nil) -> Worktree {
+        let path = path ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-stack-\(UUID().uuidString)")
         return Worktree(
             id: Worktree.makeId(path: path),
@@ -1710,11 +1710,7 @@ struct RightPaneGGStackTests {
             color: "blue",
             addedAt: .now
         )
-        let worktree = Worktree(
-            id: Worktree.makeId(path: repository.root), projectId: project.id,
-            name: "feature", branch: "feature", path: repository.root,
-            status: .clean, lastActivity: .now
-        )
+        let worktree = makeWorktree(path: repository.root)
         let gitDir = repository.root.appendingPathComponent(".git")
         let watcher = ProjectGitWatcher(
             repoPath: URL(fileURLWithPath: project.path),
@@ -1781,27 +1777,36 @@ struct RightPaneGGStackTests {
         if activeHeadChanges {
             try await repository.git(["commit", "--allow-empty", "-m", "advance active HEAD"])
         }
+        let liveHeadSHA = try await GitService().resolveRevision(at: repository.root, ref: "HEAD")
 
         app.startProjectGitWatcher(for: project)
         let changedRef = activeHeadChanges ? "refs/heads/feature" : "refs/remotes/origin/upper-entry"
         watcher.processEvents([gitDir.standardizedFileURL.appendingPathComponent(changedRef).path])
         await runner.waitUntilCall(2)
         #expect(preparationIsVisible() == !activeHeadChanges)
+        #expect(state.currentHeadSHA == liveHeadSHA)
+        if activeHeadChanges {
+            #expect(state.ggStackSourceCommits.map(\.sha) == [liveHeadSHA])
+        }
         await runner.complete(call: 2)
         for _ in 0..<500 where state.ggStackDisplayCommits.first?.shortSha != "ddddddd" {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
 
-        #expect(state.currentGGStackCommitsKey == unchangedReachableKey)
+        #expect((state.currentGGStackCommitsKey == unchangedReachableKey) == !activeHeadChanges)
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
         #expect(await runner.lsCallCount == 2)
         #expect(state.ggStackDisplayCommits.first?.shortSha == "ddddddd")
         app.stopProjectGitWatcher(projectId: project.id)
     }
 
     @Test func projectRevisionInvalidatesInactiveCachedGGPresentation() async throws {
+        let repository = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repository.remove() }
+        try await repository.git(["switch", "-c", "feature"])
         let store = RightPaneStore()
         let inactiveWorktree = makeWorktree()
-        let activeWorktree = makeWorktree()
+        let activeWorktree = makeWorktree(path: repository.root)
         let inactive = store.state(
             for: inactiveWorktree,
             baseBranch: "main",
@@ -1815,6 +1820,7 @@ struct RightPaneGGStackTests {
 
         inactive.stop()
         active.stop()
+        try #require(await active.refresh())
         inactive.ggContext = .active(stackName: "agent-inbox")
         inactive.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
         inactive.ggStackCommitsKey = inactive.currentGGStackCommitsKey
@@ -2101,7 +2107,9 @@ struct RightPaneGGStackTests {
     }
 
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
-        let worktree = makeWorktree()
+        let repository = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repository.remove() }
+        let worktree = makeWorktree(path: repository.root)
         defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
         let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
             of: "agent-inbox",
@@ -2121,6 +2129,7 @@ struct RightPaneGGStackTests {
         let store = RightPaneStore()
         let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
         state.stop()
+        try #require(await state.refresh())
         installFakeGGStackLoader(on: state)
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in

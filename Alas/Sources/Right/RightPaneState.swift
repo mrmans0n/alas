@@ -358,6 +358,8 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
+    /// Gate reevaluations must join a changed-HEAD local recovery, not race it.
+    @ObservationIgnored private var ggLocalSnapshotRecoveryTask: Task<Bool?, Never>? = nil
     @ObservationIgnored private var ggExplicitStackRefreshID: UUID? = nil
     @ObservationIgnored var ggStackRefreshDeferredUntilMutationEnds = false
     @ObservationIgnored private var ggStackRefreshDeferralGeneration: UInt = 0
@@ -718,6 +720,8 @@ final class RightPaneState: GGSplitCommitServicing {
         remoteEventDebouncer.cancel()
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = nil
+        ggLocalSnapshotRecoveryTask?.cancel()
+        ggLocalSnapshotRecoveryTask = nil
         ggStackRefreshDeferredUntilMutationEnds = false
     }
 
@@ -1624,6 +1628,7 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             self.hasLoadedSnapshot = true
             self.latestSnapshotRefreshSucceeded = true
+            ggLocalSnapshotRecoveryTask = nil
             let previousReviewRequestFingerprint = Self.reviewRequestReloadFingerprint(reviewLoop.snapshot?.reviewRequest)
             let upstreamBranchName = resolvedUpstream.map {
                 String($0.ref.dropFirst($0.remote.count + 1))
@@ -2008,8 +2013,6 @@ final class RightPaneState: GGSplitCommitServicing {
     @discardableResult
     func reevaluateGGGate(verifyingHead: Bool = false) -> Task<Void, Never> {
         let remoteMetadata = ggStack
-        let cachedBranch = currentBranch
-        let cachedHeadSHA = currentHeadSHA
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
         ggStackRefreshTask?.cancel()
@@ -2021,16 +2024,33 @@ final class RightPaneState: GGSplitCommitServicing {
             defer {
                 if self.ggExplicitStackRefreshID == refreshID {
                     self.ggExplicitStackRefreshID = nil
-                    self.scheduleDeferredGGStackRefreshIfNeeded()
+                    if self.hasLoadedSnapshot || self.ggLocalSnapshotRecoveryTask == nil {
+                        self.scheduleDeferredGGStackRefreshIfNeeded()
+                    }
                 }
             }
+            if let recovery = self.ggLocalSnapshotRecoveryTask {
+                _ = await recovery.value
+                guard !Task.isCancelled else { return }
+                if !verifyingHead && !self.hasLoadedSnapshot { return }
+            }
             if verifyingHead {
+                let cachedBranch = self.currentBranch
+                let cachedHeadSHA = self.currentHeadSHA
                 async let liveBranch = try? self.git.currentBranch(worktreePath: self.worktree.path)
                 async let liveHeadSHA = try? self.git.resolveRevision(at: self.worktree.path, ref: "HEAD")
                 let (branch, headSHA) = await (liveBranch, liveHeadSHA)
                 guard !Task.isCancelled, self.ggStackRefreshGeneration == refreshGeneration else { return }
-                if cachedHeadSHA.isEmpty || branch != cachedBranch || headSHA != cachedHeadSHA {
-                    await self.invalidateGGPresentation(startingRefresh: true)?.value
+                if !self.hasLoadedSnapshot || cachedHeadSHA.isEmpty || branch != cachedBranch || headSHA != cachedHeadSHA {
+                    self.markSnapshotUnknown()
+                    // Invalidation cancels this GG task. A fresh task must
+                    // install the local snapshot before its stack can reload.
+                    let localRefresh = Task { @MainActor [weak self] in
+                        await self?.refresh()
+                    }
+                    self.ggLocalSnapshotRecoveryTask = localRefresh
+                    _ = await localRefresh.value
+                    await self.ggStackRefreshTask?.value
                     return
                 }
             }
