@@ -8,7 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
-- Let plugins draw a progress bar of done, running and remaining steps, and center a row's items vertically, through plugin API 14.
+- Mention project symbols in the composer. `@` now searches classes, functions, and other declarations next to files and sessions; a picked symbol becomes a badge that shows its code on hover and can send its code with ⌥⏎ (#1821).
+- Let plugins draw a progress bar of done, running and remaining steps, and center a row's items vertically, through plugin API 14 (#1826).
 
 ### 🐛 Fixes
 

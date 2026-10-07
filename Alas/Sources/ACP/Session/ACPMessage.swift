@@ -138,11 +138,18 @@ enum ACPMessage: Equatable {
         /// attachments as different.
         let textOffset: Int?
 
-        init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil) {
+        /// Symbol mentions only: what was sent (see `ACPSymbolReference`).
+        /// Absent in legacy rows. Excluded from `==`/`hash(into:)` like
+        /// `textOffset`, so an agent-echoed copy still reconciles.
+        let symbol: ACPSymbolSnapshot?
+
+        init(uri: String, name: String?, mimeType: String? = nil, textOffset: Int? = nil,
+             symbol: ACPSymbolSnapshot? = nil) {
             self.uri = uri
             self.name = name
             self.mimeType = mimeType
             self.textOffset = textOffset
+            self.symbol = symbol
         }
 
         static func checkpointReference(id: CheckpointID) -> Self {
@@ -521,6 +528,22 @@ enum ACPMessage: Equatable {
     struct PlanItem: Codable, Equatable, Hashable, Sendable {
         let content: String
         var status: String   // "pending" | "in_progress" | "completed"
+    }
+}
+
+extension ACPMessage {
+    /// Symbol snapshots of a user message's attachments, in order. `Attachment`
+    /// equality ignores them so an agent's echo still reconciles, which makes
+    /// `==` blind to a re-stamped snapshot.
+    var symbolSnapshots: [ACPSymbolSnapshot?] {
+        guard case .user(_, _, _, let attachments, _, _) = self else { return [] }
+        return attachments.map(\.symbol)
+    }
+
+    /// `==` plus the symbol snapshots, for deciding whether a mirror refresh
+    /// has anything new to show.
+    func matches(_ other: ACPMessage) -> Bool {
+        self == other && symbolSnapshots == other.symbolSnapshots
     }
 }
 

@@ -233,7 +233,7 @@ private struct ACPSessionView: View {
                 if let limit = session.usageLimit {
                     usageLimitBanner(limit, resumeAt: session.usageLimitResumeItem?.scheduledAt)
                 }
-                if isMirror {
+                if manager.showsTakeoverBanner(sessionId: sessionId) {
                     mirrorBanner()
                 }
                 if let err = session.lastError {
@@ -532,6 +532,19 @@ private struct ACPSessionView: View {
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             },
             onOpenTranscriptLink: { url in
+                if let target = ACPSymbolReference.target(fromURI: url.absoluteString) {
+                    // Symbol mentions are off in workspace checkouts: a link's
+                    // path is relative to the checkout root, not the focused member.
+                    guard !isWorkspaceCheckoutOwner else { return true }
+                    state.openFile(
+                        relativePath: target.path,
+                        worktreeId: worktree.id,
+                        revealLine: target.lineRange.lowerBound,
+                        revealEndLine: target.lineRange.upperBound,
+                        revealCharacter: 0
+                    )
+                    return true
+                }
                 switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
                 case .opened, .ignored:
                     return true
@@ -787,6 +800,9 @@ private struct ACPSessionView: View {
                 return result
             },
             sessionMentions: isWorkspaceCheckoutOwner ? nil : sessionMentions,
+            // A checkout's runner resolves symbol paths against the checkout
+            // root, but `worktree` is the focused member repo.
+            symbolMentions: isWorkspaceCheckoutOwner ? nil : symbolMentions,
             nextPromptOffer: nextPromptOffer,
             takeNextPromptOffer: takeNextPromptOffer,
             dismissNextPromptOffer: dismissNextPromptOffer,
@@ -947,6 +963,43 @@ private struct ACPSessionView: View {
                       candidate.projectId == worktree.projectId
                 else { return nil }
                 return candidate
+            }
+        )
+    }
+
+    private var symbolMentions: ACPSymbolMentionSource {
+        let root = worktree.path
+        let fileIndex = state.fileIndex
+        let symbolIndex = state.symbolIndex
+        var index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?
+        if !root.isRemoteAlasPath {
+            index = {
+                // Fresh listing on every open, like the file provider does;
+                // nil on a failed enumeration: the index replays its cache.
+                await symbolIndex.updates(root: root) {
+                    await fileIndex.invalidate(forWorktreePath: root)
+                    return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+                }
+            }
+        }
+        return ACPSymbolMentionSource(
+            index: index,
+            fileSymbols: { fileQuery in
+                // From FileIndex paths, not the picker's file list: that list
+                // drops remote entries, and drill-down is remote's only route.
+                // Each step can be slow (enumeration, a remote read, parsing),
+                // and a newer keystroke or the closed picker cancels this one.
+                let entries = (try? await fileIndex.entries(forWorktreePath: root)) ?? []
+                guard !Task.isCancelled else { return [] }
+                let urls = entries.map { root.appendingPathComponent($0.relativePath) }
+                guard let best = MentionFuzzy.rank(files: urls, query: fileQuery, limit: 1, relativeTo: root).first,
+                      !Task.isCancelled
+                else { return [] }
+                let relativePath = String(best.path.dropFirst(root.path.count + 1))
+                guard let source = await SymbolSource.read(root: root, relativePath: relativePath),
+                      !Task.isCancelled
+                else { return [] }
+                return SymbolExtractor.symbols(in: source, relativePath: relativePath)
             }
         )
     }

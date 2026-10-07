@@ -14,8 +14,11 @@ final class ACPMentionChipAttachment: NSTextAttachment {
         self.displayName = displayName
         self.uri = uri
         super.init(data: nil, ofType: nil)
-        let cell = ACPMentionChipCell(displayName: displayName)
-        self.attachmentCell = cell
+        if let target = ACPSymbolReference.target(fromURI: uri) {
+            self.attachmentCell = ACPSymbolChipCell(target: target)
+        } else {
+            self.attachmentCell = ACPMentionChipCell(displayName: displayName)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -113,7 +116,8 @@ enum ACPMentionChipMetrics {
     }
 }
 
-/// Shows the path behind a file mention without covering the composer with a tooltip.
+/// Shows the path behind a file mention without covering the composer with a
+/// tooltip; a symbol mention shows its declaration's current code instead.
 @MainActor
 final class ACPFileMentionHoverController {
     private struct Target: Equatable {
@@ -125,6 +129,9 @@ final class ACPFileMentionHoverController {
     private var showWork: DispatchWorkItem?
     private var target: Target?
 
+    /// Never taller than this, nor than half the screen, before the code scrolls.
+    private static let maxSymbolCodeHeight: CGFloat = 420
+
     func scheduleShow(range: NSRange, attachment: ACPMentionChipAttachment, in textView: ACPNSTextView) {
         let next = Target(range: range, uri: attachment.uri)
         guard target != next else { return }
@@ -133,22 +140,15 @@ final class ACPFileMentionHoverController {
         let work = DispatchWorkItem { [weak self, weak textView] in
             guard let self, let textView, self.target == next,
                   let anchor = textView.imageChipAnchorRect(for: range) else { return }
-            let url = URL(string: next.uri)
-            let isFile = url?.isFileURL == true
-            let sessionId = ACPSessionReference.sessionId(fromURI: next.uri)
-            let hosting = NSHostingController(
-                rootView: ACPFileMentionHoverCard(
-                    name: attachment.displayName,
-                    location: sessionId.map { "Agent session \($0)" }
-                        ?? (isFile ? (url?.path ?? next.uri) : next.uri),
-                    systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
-                )
-            )
-            hosting.sizingOptions = [.preferredContentSize]
+            let content: NSViewController = if let symbol = ACPSymbolReference.target(fromURI: next.uri) {
+                self.symbolPreview(symbol, for: next, in: textView)
+            } else {
+                Self.mentionCard(uri: next.uri, name: attachment.displayName)
+            }
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = false
-            popover.contentViewController = hosting
+            popover.contentViewController = content
             popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
             self.popover = popover
         }
@@ -162,6 +162,63 @@ final class ACPFileMentionHoverController {
         target = nil
         popover?.performClose(nil)
         popover = nil
+    }
+
+    private static func mentionCard(uri: String, name: String) -> NSViewController {
+        let url = URL(string: uri)
+        let isFile = url?.isFileURL == true
+        let sessionId = ACPSessionReference.sessionId(fromURI: uri)
+        let location: String = if let sessionId {
+            "Agent session \(sessionId)"
+        } else {
+            isFile ? (url?.path ?? uri) : uri
+        }
+        let hosting = NSHostingController(
+            rootView: ACPFileMentionHoverCard(
+                name: name,
+                location: location,
+                systemImage: sessionId != nil ? "bubble.left.and.bubble.right" : isFile ? "doc.text" : "link"
+            )
+        )
+        hosting.sizingOptions = [.preferredContentSize]
+        return hosting
+    }
+
+    /// Shows the header at once, with the code when an earlier hover read it
+    /// or else a skeleton sized for the stored range, so the popover opens at
+    /// its final height. The code is read again off the main actor and
+    /// replaces what is shown only if it changed. A result for an older hover
+    /// is dropped.
+    private func symbolPreview(
+        _ symbol: ACPSymbolReference.Target, for hovered: Target, in textView: ACPNSTextView
+    ) -> NSViewController {
+        let coordinator = textView.coordinator
+        let model = ACPSymbolHoverModel(target: symbol, typography: coordinator?.typography ?? .default)
+        let screenHeight = (textView.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? Self.maxSymbolCodeHeight * 2
+        let hosting = NSHostingController(
+            rootView: ACPSymbolHoverCard(model: model, maxCodeHeight: min(Self.maxSymbolCodeHeight, screenHeight / 2))
+        )
+        hosting.sizingOptions = [.preferredContentSize]
+        guard let coordinator else {
+            model.apply(.missing, theme: nil)
+            return hosting
+        }
+        let root = coordinator.worktreeRoot
+        let theme = coordinator.theme
+        let cache = ACPSymbolHoverCache.shared
+        let cached = cache.loaded(root: root, target: symbol)
+        if let cached {
+            model.apply(cached, theme: theme)
+        }
+        // Not cancelled when the hover ends: a finished read still fills the
+        // cache for the next hover.
+        Task { [weak self] in
+            guard let loaded = await ACPSymbolHoverPreview.load(symbol, root: root) else { return }
+            cache.store(loaded, root: root, target: symbol)
+            guard let self, self.target == hovered, loaded != cached else { return }
+            model.apply(loaded, theme: theme, animated: true)
+        }
+        return hosting
     }
 }
 

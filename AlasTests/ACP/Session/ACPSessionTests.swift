@@ -1239,6 +1239,33 @@ struct ACPSessionTests {
         #expect(attachments.map(\.checkpointID) == [checkpointID])
     }
 
+    @Test("a retried send re-stamps the recorded symbol snapshot with what it actually sent")
+    func retryRestampsSymbolSnapshot() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let target = ACPSymbolReference.Target(path: "A.swift", name: "run", kind: .function,
+                                               container: nil, lineRange: 0...0, includeCode: true)
+        let uri = ACPSymbolReference.uri(for: target)
+        let link = ACPContentBlock.resourceLink(uri: uri, name: "run()")
+        func expansion(_ source: String) -> ACPSymbolReference.Expansion {
+            ACPSymbolReference.expansion(of: [link], sources: ["A.swift": source],
+                                         worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true)
+        }
+        let id = session.recordUserPrompt(
+            text: "@run() ",
+            attachments: ACPSymbolReference.attachingSnapshots(to: [.init(uri: uri, name: "run()")],
+                                                               from: expansion("func run() {}")))
+
+        let retried = expansion("// moved\nfunc run() { work() }")
+        #expect(session.replaceSymbolSnapshots(inUserMessage: id, from: retried) == 0)
+        guard case .user(_, _, _, let attachments, _, _) = session.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(attachments.first?.symbol?.lineRange == 1...1)
+        #expect(attachments.first?.symbol?.excerpt == "func run() { work() }")
+        #expect(session.replaceSymbolSnapshots(inUserMessage: id, from: retried) == nil, "unchanged: nothing to persist")
+    }
+
     @Test("generated title ignores Alas workspace context and uses the remaining prompt")
     func generatedTitleIgnoresAlasWorkspaceContext() async {
         let session = ACPSession(

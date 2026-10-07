@@ -17,8 +17,8 @@ extern "C" {
 // Returns the `TSLanguage *` for `id`, or NULL when `id` is unknown.
 const void *alas_ts_language(const char *id);
 
-// Returns the highlight query for `id` and writes its byte length to
-// `out_len`, or NULL when `id` has no query. The bytes are static UTF-8 and
+// Returns the query for `id` (a highlight query, or a `<language>.tags`
+// symbol query) and writes its byte length to `out_len`, or NULL when `id` has no query. The bytes are static UTF-8 and
 // are NOT NUL-terminated — read exactly `out_len` of them.
 const uint8_t *alas_ts_query(const char *id, size_t *out_len);
 

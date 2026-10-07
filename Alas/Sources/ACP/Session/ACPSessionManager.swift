@@ -4860,6 +4860,15 @@ extension ACPSessionManager {
             && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
     }
 
+    func showsTakeoverBanner(sessionId: ACPSession.ID) -> Bool {
+        // Missing authority also covers setup failures and unavailable helpers.
+        // Only an observed foreign owner warrants offering a takeover.
+        if effectiveRemoteHost() != nil {
+            return remoteCoordinator?.isForeignMirror(sessionId: sessionId) == true
+        }
+        return isMirror(sessionId: sessionId)
+    }
+
     private func isAwaitingInitialLeaseObservation(sessionId: ACPSession.ID) -> Bool {
         guard let session = sessions[sessionId],
               session.restoredFromPersistence
@@ -5514,7 +5523,7 @@ extension ACPSessionManager {
         if messages.count == existing.count {
             for index in changedRange where messages.indices.contains(index) {
                 let message = messages[index].wire.toMessage(preservingIdentityFrom: transcript.messages[index])
-                if message != transcript.messages[index]
+                if !message.matches(transcript.messages[index])
                     || transcript.createdAt(forMessageAt: index) != messages[index].createdAt {
                     session.replaceTranscriptMessage(
                         at: index,
@@ -5550,7 +5559,9 @@ extension ACPSessionManager {
             && createdAts.indices.allSatisfy { index in
                 transcript.createdAt(forMessageAt: index) == createdAts[index]
             }
-        if refreshed == existing, timestampsUnchanged {
+        if refreshed.count == existing.count,
+           zip(refreshed, existing).allSatisfy({ $0.matches($1) }),
+           timestampsUnchanged {
             return true
         }
         session.replaceTranscriptMessages(refreshed, createdAts: createdAts)

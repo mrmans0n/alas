@@ -23,7 +23,8 @@ fit chat text, so this design searches symbols instead.
   ⌘-click once the server is ready.
 - **Context sent to the agent:** reference only by default. A per-badge "Include
   code" switch attaches the declaration's source.
-- **Badge style:** kind-icon pill (option A of the mockups).
+- **Badge style:** code-token pill with the kind icon (option B of the mockups,
+  with option A's kind icon).
 - **Transcript:** sent messages store enough data for a later preview from the
   first release. The transcript preview ships in a later phase.
 
@@ -49,11 +50,13 @@ which is why the preview can still use LSP.
 
 Each phase is its own pull request.
 
-1. Tag queries, symbol index, picker symbol results, style A badge, send-time
-   expansion, stored snapshot. Sent symbols render as file chips in the
-   transcript.
-2. Composer preview: read-only code view, LSP hover and ⌘-click, "Include code"
-   switch.
+1. Tag queries, symbol index, picker symbol results, code-token badge,
+   send-time expansion, stored snapshot, and a hover preview of the symbol's
+   code with tree-sitter highlighting (no LSP). Sent symbols render as file
+   chips in the transcript.
+2. Composer preview, full version: LSP hover and ⌘-click, pinning, "Include code"
+   switch. Also cut the cold index build (see "Storage"): parse files in
+   parallel, then add an on-disk cache if that is not enough.
 3. Transcript preview.
 
 ## 1. Symbol index
@@ -94,9 +97,11 @@ struct SymbolEntry: Sendable, Hashable {
 - **Build:** lazily, on the first symbol query for a worktree, on a background
   task. Never at app launch. Files over 1 MB and files that fail to parse are
   skipped.
-- **Storage:** in memory. Measure the cold build on Alas (~28 MB of tracked
-  Swift) during phase 1. Add an on-disk cache only if the measurement shows a
-  real cost.
+- **Storage:** in memory. Phase 1 measurement on this Alas worktree (Debug
+  test build, one run): `git ls-files` 0.9 s, cold build 19.9 s for 2,232
+  indexable files and 62,192 symbols, warm refresh 0.13 s. Parsing runs
+  serially on the index actor. Symbol results stream in during the cold build
+  and file results are unaffected, but 20 s is too long; phase 2 cuts it.
 - **Updates:** `WorktreeWatcher` emits a debounced change event without paths.
   On each event, compare modification time and size per indexed file and
   re-parse only changed, added, or deleted files.
@@ -105,11 +110,12 @@ struct SymbolEntry: Sendable, Hashable {
 
 ### Ranking
 
-Reuse `MentionFuzzy`. Ties break in this order: types before members, non-test
-paths before test paths, shorter paths first. A path is a test path if a
-component is `Tests`, `test`, `tests`, `__tests__`, or `spec`, or the file name
-ends in `Test`, `Tests`, `Spec`, `_test`, or `.test`. Ordering is stable for
-equal scores.
+Reuse `MentionFuzzy`, after one rule: names equal to the query rank first, then
+names starting with it, then names containing it. Ties break in this order:
+types before members, non-test paths before test paths, shorter paths first.
+A path is a test path if a component is `Tests`, `test`, `tests`, `__tests__`,
+or `spec`, or the file name ends in `Test`, `Tests`, `Spec`, `_test`, or
+`.test`. Ordering is stable for equal scores.
 
 ## 2. Reference format and what the agent receives
 
@@ -178,30 +184,46 @@ reconcile.
 
 ## 3. Interface
 
-Mockups: option A, reviewed 2026-10-06.
+Mockups reviewed 2026-10-06: picker option B (grouped list with scope chips),
+badge option B with option A's kind icon.
 
 ### Picker (`ACPMentionPicker`)
 
+- Panel 560×440 pt, content filling it edge to edge, kept on screen. The search
+  field has focus as soon as the panel opens; ↑/↓ move the highlight, Esc closes.
 - New `MentionPickerItem.symbol(SymbolEntry)`.
 - Groups in order: Sessions (as today), Symbols, Files.
 - Row: kind badge (M, C, S, P, …), container dimmed, name bold, path right-aligned
   and middle-truncated, `test` tag on test paths.
-- Scope chips: All, Files, Symbols, Sessions. ⌘1–⌘4 select a scope. ⇥ keeps its
-  current meaning (insert the highlighted row, or enter a directory in the
-  absolute-path browser).
+- Scope chips: All, Files, Symbols, Sessions; a chip shows only when its source
+  is on (no chips when neither symbols nor sessions are). ⌘1–⌘4 select a scope
+  in chip order, handled by the key panel before the app menu's tab shortcuts.
+  ⇥ selects the next scope chip and ⇧⇥ the previous, wrapping. Exception: in the
+  absolute-path browser, ⇥ on a highlighted directory enters it.
 - ⏎ inserts a badge; ⌥⏎ inserts it with "Include code" on.
-- While indexing, the footer shows `Indexing symbols… N files`. File and session
-  results are unaffected. New symbol results never move the highlighted row.
-- `File.swift#query` lists that file's symbols only.
+- While indexing, the footer shows `Indexing symbols…` until the first count
+  arrives, then `Indexing symbols… N of M files`. File and session results are
+  unaffected. New symbol results never move the highlighted row.
+- `File.swift#query` lists that file's symbols only: no files or sessions, so ⏎
+  can't attach the whole file.
 
-### Badge (style A)
+### Badge (code token)
 
-A new attachment cell next to `ACPMentionChipCell`: a pill with a colored kind
-icon, container dimmed, name in the code font. With code included it uses the
-filled variant and shows `{ } N lines`. A badge whose symbol can no longer be
-found shows a warning icon.
+A new attachment cell next to `ACPMentionChipCell`: a dark, code-style pill
+(near-black fill on dark themes, a light grey tint on the light theme, hairline
+border). Left to right: the colored kind icon, the container in the type color,
+and the name in its kind's color, both in the code font. Kind colors are
+darkened on the light theme so they keep contrast. With code included, the
+pill gets a 2 pt accent edge on the left, an accent border, and a separate
+trailing segment reading `N lines` (`400+ lines` past the cap). From phase 2, a badge whose
+symbol can no longer be found shows a warning segment (`⚠ moved`).
 
 ### Preview
+
+Phase 1 ships the hover with the header (kind icon, qualified name,
+`path:start–end`, "code included" when on) and the body: the declaration's
+current source, re-found like at send time, highlighted with tree-sitter, with
+line numbers, scrolling past 40 lines. The rest of this section is phase 2.
 
 - **Trigger:** hover after the existing chip-hover delay (0.25 s), using the
   `NSPopover` approach of `ACPImageChipHoverController` and
@@ -230,7 +252,7 @@ needs tabs and buffers, so neither is reused as-is.
 - **Phase 1:** sent symbol attachments render as `FileChip` labeled with the
   qualified name. Clicking opens the editor at the stored line range.
 - **Phase 3:** `UserMessageRow` and the compact subagent row
-  (`ACPSubagentRowView`) render symbol attachments as style A badges with the
+  (`ACPSubagentRowView`) render symbol attachments as code-token badges with the
   same preview:
   - Code included: shows the stored excerpt, labeled "Sent" (default). A
     "Current" toggle switches to the code as it is now.
@@ -246,9 +268,10 @@ needs tabs and buffers, so neither is reused as-is.
 | Index still building | Footer progress; symbol results stream in without moving the highlight |
 | Language without a tags query | No symbols for it; its files still appear |
 | No language server, or starting | Preview shows tree-sitter colors; LSP features appear when ready |
-| Symbol gone before sending | Last known location sent, marked `not found when sent`; badge warns |
+| Symbol gone before sending | Last known location sent, marked `not found when sent`; the badge warns from phase 2 |
 | Declaration over the cap | Excerpt cut at 400 lines / 32 KB with a marker; footer and badge show it |
 | Remote worktree | No project-wide symbols; hint suggests `File.swift#name` |
+| Workspace checkout | No symbol mentions: the picker offers no symbols, and sent symbol links in the transcript don't open |
 
 ## Testing
 
@@ -275,7 +298,9 @@ Per the repo testing policy: decision logic and formats only.
 ## Out of scope
 
 - LSP `workspace/symbol` search and merging LSP results into the index.
-- On-disk index cache, unless phase 1 measurement requires it.
+- Faster cold index builds (parallel parsing, on-disk cache): phase 2.
 - Project-wide symbol search on remote worktrees.
+- Symbol mentions in workspace checkouts. The picker indexes the focused member
+  repo, while the session resolves symbol paths against the checkout root.
 - Semantic tokens in the preview.
 - Automatic suggestions while typing prose.

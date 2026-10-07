@@ -1370,6 +1370,8 @@ final class AppState {
     @ObservationIgnored
     let fileIndex = FileIndex()
     @ObservationIgnored
+    let symbolIndex = WorktreeSymbolIndex()
+    @ObservationIgnored
     private let statusCache = GitStatusCache()
     @ObservationIgnored
     private var workspaceDisableInProgress = false
@@ -1606,6 +1608,7 @@ final class AppState {
         }
         rightPaneStore.worktreeDidChange = { [weak self] worktreeID in
             self?.rescanWorktreeStatus(worktreeId: worktreeID)
+            self?.refreshSymbolIndexIfLoaded(worktreeId: worktreeID)
         }
         RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
             guard let self else { return }
@@ -9806,7 +9809,13 @@ final class AppState {
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
-        if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }
+        if purgeRunScriptFailures {
+            // Archive and delete, not Close-All: the worktree is going away.
+            tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId)
+            // Worktree ids are standardized paths (`Worktree.makeId`).
+            let root = URL(fileURLWithPath: worktreeId)
+            Task { [symbolIndex] in await symbolIndex.remove(root: root) }
+        }
         return runHistoryPurgeTask
     }
 
@@ -10190,6 +10199,20 @@ final class AppState {
                 contentSearcher.search(query: query, options: options, worktrees: targets)
             }
         )
+    }
+
+    /// Keeps an already-built symbol index current. Never builds one: the
+    /// index is created lazily by the `@` picker.
+    func refreshSymbolIndexIfLoaded(worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId), !worktree.path.isRemoteAlasPath else { return }
+        let root = worktree.path
+        Task { [fileIndex, symbolIndex] in
+            await symbolIndex.refreshIfLoaded(root: root) {
+                await fileIndex.invalidate(forWorktreePath: root)
+                // `try?` without a fallback: a failed enumeration leaves the index alone.
+                return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+            }
+        }
     }
 
     /// Open a file in the right-pane code editor by routing through the

@@ -61,7 +61,7 @@ final class ACPRemoteSessionCoordinator {
     }
     func isForeignMirror(sessionId: String) -> Bool {
         guard let lease = authorities[sessionId]?.lease else { return false }
-        return lease.isFresh && lease.owner != nil && lease.owner != owner
+        return lease.owner != nil && lease.owner != owner
     }
     func isForeignMachine(sessionId: String) -> Bool {
         guard let lease = authorities[sessionId]?.lease, lease.isFresh, let other = lease.owner else { return false }

@@ -217,6 +217,7 @@ private struct ACPSubagentPromptRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
     @Environment(\.theme) private var theme
+    @Environment(\.openURL) private var openURL
 
     private var visibleAttachments: [ACPMessage.Attachment] {
         attachments.filter { !$0.isCheckpointReference }
@@ -241,11 +242,23 @@ private struct ACPSubagentPromptRow: View {
             }
             if !others.isEmpty {
                 HStack(spacing: 4) {
-                    ForEach(others, id: \.uri) { attachment in
-                        FileChip(
-                            path: attachment.name ?? attachment.uri,
-                            lines: nil,
-                            iconSystemName: "at")
+                    ForEach(Array(others.enumerated()), id: \.offset) { _, attachment in
+                        if let target = ACPSymbolReference.target(fromURI: attachment.uri) {
+                            FileChip(
+                                path: target.displayName,
+                                lines: "\((target.path as NSString).lastPathComponent):\((attachment.symbol?.lineRange ?? target.lineRange).lowerBound + 1)",
+                                iconSystemName: "curlybraces",
+                                action: {
+                                    if let url = ACPSymbolReference.openURL(for: target, snapshot: attachment.symbol) {
+                                        openURL(url)
+                                    }
+                                })
+                        } else {
+                            FileChip(
+                                path: attachment.name ?? attachment.uri,
+                                lines: nil,
+                                iconSystemName: "at")
+                        }
                     }
                 }
             }

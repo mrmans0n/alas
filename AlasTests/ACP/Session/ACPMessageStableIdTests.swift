@@ -405,4 +405,70 @@ struct ACPMessageStableIdTests {
         #expect(attachments.count == 1)
         #expect(kept == spans)
     }
+
+    @Test("an echoed symbol expansion stays out of the recorded prompt", arguments: [true, false])
+    func echoedSymbolExpansionIsDropped(embeddedContext: Bool) async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let link = ACPSymbolReference.uri(for: .init(path: "A.swift", name: "run", kind: .function,
+                                                     container: nil, lineRange: 0...0, includeCode: true))
+        let attachment = ACPMessage.Attachment(uri: link, name: "run()")
+        s.recordUserPrompt(text: "explain ", attachments: [attachment])
+        let blocks: [ACPContentBlock] = [.text("explain "), .resourceLink(uri: link, name: "run()")]
+        let expansion = ACPSymbolReference.expansion(
+            of: blocks, sources: ["A.swift": "func run() {}"],
+            worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: embeddedContext)
+        s.expectSymbolExpansionEchoes(expansion.sentBlocks)
+
+        for block in ACPSymbolReference.replacingReferences(in: blocks, with: expansion) {
+            s.apply(.userMessageChunk(.init(messageId: "user-1", content: block)))
+        }
+
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        guard case .user(_, _, let text, let attachments, _, _) = s.transcript.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(text == "explain ")
+        #expect(attachments == [attachment])
+    }
+
+    @Test("echoed expansions are expected for the whole turn, steers included, and only an exact resource matches")
+    func echoedSymbolExpansionsAreScopedToTheTurn() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        func expansion(_ name: String) -> [ACPContentBlock] {
+            let link = ACPSymbolReference.uri(for: .init(path: "A.swift", name: name, kind: .function,
+                                                         container: nil, lineRange: 0...0, includeCode: true))
+            return ACPSymbolReference.expansion(
+                of: [.resourceLink(uri: link, name: "\(name)()")], sources: ["A.swift": "func \(name)() {}"],
+                worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true).sentBlocks
+        }
+        let prompt = expansion("run")
+        guard prompt.count == 2,
+              case .text(let reference) = prompt[0],
+              case .resource(let uri, let mimeType, _) = prompt[1] else {
+            Issue.record("expected a reference and embedded code, got \(prompt)")
+            return
+        }
+        s.recordUserPrompt(text: "explain ", attachments: [])
+        s.expectSymbolExpansionEchoes(prompt)
+        s.expectSymbolExpansionEchoes(expansion("stop"))
+
+        // The prompt's echo arrives after the steer.
+        for block in prompt {
+            #expect(s.apply(.userMessageChunk(.init(messageId: "user-1", content: block))).isEmpty)
+        }
+        #expect(s.transcript.messages.count == 1)
+        // Same URI, other code: not a block that was sent.
+        let edited = ACPContentBlock.resource(uri: uri, mimeType: mimeType, text: "func run() { edited() }")
+        #expect(!s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("kept")))).isEmpty)
+        #expect(!s.apply(.userMessageChunk(.init(messageId: "user-1", content: edited))).isEmpty)
+
+        s.endSymbolExpansionEchoTurn()
+        s.apply(.userMessageChunk(.init(messageId: "user-2", content: .text(reference))))
+        guard case .user(_, _, let later, _, _, _) = s.transcript.messages.last else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(later == reference)
+    }
 }

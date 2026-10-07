@@ -93,6 +93,7 @@ enum ACPMessageWire: Sendable, Equatable {
             guard messageId != existingMessageId
                     || text != existingText
                     || attachments != existingAttachments
+                    || attachments.map(\.symbol) != existingAttachments.map(\.symbol)
                     || delegatedSource != existingDelegatedSource
                     || pastedSpans != existingPastedSpans
             else { return existing }

@@ -360,7 +360,7 @@ fn once_the_anchor_dies_cleanup_goes_on_through_pidfds_alone() {
     let mut helper = Helper::start();
     helper.spawn_script(
         "orphaned",
-        "sleep 300 &\necho $! > bg.pid\necho $$ > root.pid\nwait\n",
+        "sleep 300 &\necho $! > bg.pid\necho $$ > root.pid\nwait \"$!\"\n",
         json!({ "killGraceMs": 1000 }),
     );
     let root = helper.pid_file("root.pid");
