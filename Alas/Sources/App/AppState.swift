@@ -2814,7 +2814,7 @@ final class AppState {
     /// Opens a Workspace checkout focused on one member, switching to a Space
     /// that shows the Workspace when the active one does not.
     func openWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID) {
-        guard config.workspacesEnabled, workspacesManager.canMutate,
+        guard workspacesManager.canMutate,
               let checkout = workspacesManager.checkout(id: checkoutID)
         else { return }
         if let workspaceID = checkout.workspaceID {
