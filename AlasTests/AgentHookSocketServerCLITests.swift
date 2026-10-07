@@ -150,6 +150,40 @@ struct AgentHookSocketServerCLITests {
         #expect(request?.paths == ["/tmp/a.txt"])
     }
 
+    @Test func visualShowRequestBeyondTheOldPayloadCapIsDelivered() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        actor Holder {
+            var request: AlasCLIRequest?
+            func set(_ request: AlasCLIRequest) { self.request = request }
+            func current() -> AlasCLIRequest? { request }
+        }
+        let holder = Holder()
+        server.onCLIRequest = { request in
+            await holder.set(request)
+            return .ok
+        }
+
+        // 512 KiB of quotes escapes to about 1 MiB on the wire.
+        let html = String(repeating: "\"", count: 512 * 1024)
+        let escaped = String(repeating: "\\\"", count: 512 * 1024)
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"s1","params":{"title":"T","html":""# + escaped + #""}}"#
+        let response = try await Self.sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
+
+        #expect(object["ok"] as? Bool == true)
+        let request = await holder.current()
+        guard case .visualShow(_, let delivered, _)? = request?.command else {
+            Issue.record("expected visualShow command, got \(String(describing: request?.command))")
+            return
+        }
+        #expect(delivered.count == html.count)
+    }
+
     @Test func cliRequestReturnsHandlerError() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }

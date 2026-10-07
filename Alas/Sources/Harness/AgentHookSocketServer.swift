@@ -73,7 +73,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
         set { lock.withLock { _onMCPHello = newValue } }
     }
 
-    static let maxPayloadSize = 65_536
+    /// Large enough for `visual_show` requests: up to 512 KiB of HTML, which
+    /// JSON-escaping can inflate several times over on the wire.
+    static let maxPayloadSize = 4 * 1024 * 1024
     private static let maxConcurrentClientTasks = 16
     private static let clientIOTimeout = timeval(tv_sec: 5, tv_usec: 0)
 
@@ -374,7 +376,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
         // second per invocation, adding ~1s of latency to every Claude
         // prompt/tool/stop event.
         var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while data.count < maxPayloadSize {
             let bytesRead = read(clientFD, &buffer, buffer.count)
             if bytesRead < 0 {
