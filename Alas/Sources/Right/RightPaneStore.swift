@@ -397,7 +397,10 @@ final class RightPaneStore {
         projectId: String
     ) -> Task<Void, Never>? {
         let projectStates = states.values.filter { $0.worktree.projectId == projectId }
-        return refreshActiveGGPresentation(invalidating: projectStates)
+        return refreshActiveGGPresentation(
+            invalidating: projectStates,
+            preservingCompatibleActiveStack: true
+        )
     }
 
     /// HEAD notifications identify the concrete worktrees whose checked-out
@@ -418,12 +421,21 @@ final class RightPaneStore {
     }
 
     private func refreshActiveGGPresentation(
-        invalidating affectedStates: [RightPaneState]
+        invalidating affectedStates: [RightPaneState],
+        preservingCompatibleActiveStack: Bool = false
     ) -> Task<Void, Never>? {
         var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
             let shouldRefresh = state.worktree.id == activeId
-            if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
+            // Shared ref updates can affect upper stack entries without
+            // changing this worktree's branch or reachable commits. Reload
+            // them without dropping the active pane's coherent presentation.
+            if shouldRefresh, preservingCompatibleActiveStack,
+               state.ggStackLoadState == .loaded,
+               state.ggStackCommitsKey == state.currentGGStackCommitsKey,
+               state.ggActionState.inFlightAction == nil {
+                activeRefresh = state.reevaluateGGGate()
+            } else if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task
             }
         }

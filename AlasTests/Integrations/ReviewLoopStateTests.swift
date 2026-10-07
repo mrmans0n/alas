@@ -1051,6 +1051,35 @@ struct ReviewLoopStateTests {
         #expect(state.lastError?.contains("git status failed") == true)
     }
 
+    @Test func cachedLocalInspectionKeepsReviewPresentationAndPublishingSteady() async throws {
+        let provider = FakeCodeHostProvider(
+            kind: .github, request: Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
+        )
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-cached-review"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        await state.refresh(local: Self.makeLocal(), remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+        let availability = CommitPublishAvailability.review(snapshot: snapshot)
+        #expect(availability?.isEnabled == true)
+
+        let inspection = state.beginLocalInspection()
+        #expect(state.isRefreshing)
+        #expect(!state.showsRefreshProgress)
+        #expect(state.settledSnapshot(forRefreshGeneration: state.refreshGeneration) == nil)
+        #expect(CommitPublishAvailability.review(
+            snapshot: state.snapshot, isRefreshing: state.showsRefreshProgress
+        ) == availability)
+
+        let attempt = try #require(state.beginLocalRefresh(from: inspection, local: snapshot.local))
+        #expect(!state.showsRefreshProgress)
+        state.finishLocalRefresh(attempt, preservingRemoteWith: snapshot.local)
+        #expect(!state.isRefreshing)
+        #expect(state.snapshot == snapshot)
+    }
+
     @Test func cachedLocalRefreshPreservesEnrichedHeadRemoteMetadata() async throws {
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
@@ -1109,9 +1138,11 @@ struct ReviewLoopStateTests {
         )
 
         let attempt = state.beginLocalInspection()
+        #expect(state.showsRefreshProgress)
         state.cancelLocalRefresh(attempt)
 
         #expect(state.isRefreshing == false)
+        #expect(!state.showsRefreshProgress)
         #expect(state.snapshot == nil)
         #expect(state.lastError == nil)
     }

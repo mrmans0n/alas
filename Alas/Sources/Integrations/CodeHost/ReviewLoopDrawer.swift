@@ -46,7 +46,7 @@ struct ReviewLoopDrawer: View {
             Icon(name: model.providerIconName, size: 11, color: theme.color("fg-faint"))
             headerTitle(model: model)
 
-            if state.isRefreshing {
+            if state.showsRefreshProgress {
                 Spinner(lineWidth: 1.4, duration: 0.8)
                     .frame(width: 11, height: 11)
             }

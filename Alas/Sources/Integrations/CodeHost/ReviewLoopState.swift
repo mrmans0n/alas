@@ -22,6 +22,14 @@ final class ReviewLoopState {
 
     private(set) var snapshot: ReviewLoopSnapshot?
     private(set) var isRefreshing: Bool = false
+    private var remoteRefreshGeneration: Int?
+
+    /// Local watcher inspections keep the cached presentation steady. They
+    /// remain in flight for settledSnapshot's generation and safety checks.
+    var showsRefreshProgress: Bool {
+        isRefreshing && (snapshot == nil || remoteRefreshGeneration == refreshGeneration)
+    }
+
     private(set) var isExpanded: Bool = false
     private(set) var lastError: String?
     private(set) var inFlightAction: ReviewReadinessActionKind?
@@ -182,6 +190,7 @@ final class ReviewLoopState {
             return
         }
         let generation = attempt.generation
+        remoteRefreshGeneration = generation
 
         defer {
             if isCurrentRefresh(generation) {

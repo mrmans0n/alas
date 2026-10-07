@@ -107,7 +107,7 @@ struct DraftCommitTabView: View {
         }
         return .review(
             snapshot: rps.reviewLoop.snapshot, supportedRemote: rps.commitRemote ?? rps.primaryCommitRemote,
-            isRefreshing: rps.reviewLoop.isRefreshing, currentBranch: rps.currentBranch,
+            isRefreshing: rps.reviewLoop.showsRefreshProgress, currentBranch: rps.currentBranch,
             currentBaseBranch: rps.baseBranch, lastError: rps.reviewLoop.lastError,
             mutationDisabledReason: mutationReason, amend: amend,
             amendProbe: publicationProbe.result(for: publicationProbeKey)

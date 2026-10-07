@@ -1747,7 +1747,7 @@ struct RightPaneGGStackTests {
                 ("agent-inbox", ProcessResult(exitCode: 0, stdout: lowerSnapshot, stderr: "")),
                 ("agent-inbox", ProcessResult(exitCode: 0, stdout: rewrittenUpperSnapshot, stderr: "")),
             ],
-            suspendedCalls: []
+            suspendedCalls: [2]
         )
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
@@ -1757,12 +1757,27 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(state.ggStackDisplayCommits.first?.shortSha == "ccccccc")
         let unchangedReachableKey = state.currentGGStackCommitsKey
+        func preparationIsVisible() -> Bool {
+            let readiness = GGStackReadinessProjection.make(
+                stackLoadState: state.ggStackLoadState, stack: state.ggStack,
+                action: state.ggActionState, selectedBaseBranch: state.baseBranch,
+                behindBase: state.behindBase, mergeOperation: state.mergeOp.current,
+                effectiveConfig: state.ggEffectiveConfig,
+                localChanges: state.ggLocalChangeStatistics, undoCandidate: state.ggUndoCandidate
+            )
+            return ChangesPreparationModel.makeGG(
+                changes: [], hasDraft: false, capabilities: state.ggCapabilities(),
+                hasLoadedCommit: state.ggStackLoadState.hasLoadedCommit,
+                reconciliationAction: ChangesTabView.reconciliationAction(from: readiness)
+            ).isVisible
+        }
+        #expect(preparationIsVisible())
 
         app.startProjectGitWatcher(for: project)
         watcher.processEvents([gitDir.appendingPathComponent("refs/remotes/origin/upper-entry").path])
-        for _ in 0..<500 where await runner.lsCallCount < 2 {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await runner.waitUntilCall(2)
+        #expect(preparationIsVisible())
+        await runner.complete(call: 2)
         for _ in 0..<500 where state.ggStackDisplayCommits.first?.shortSha != "ddddddd" {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
