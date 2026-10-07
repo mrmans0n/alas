@@ -839,17 +839,8 @@ struct EditorDisplayIntegrationTests {
         let layout = try #require(f.view.layoutManager)
         let container = try #require(f.view.textContainer)
         layout.ensureLayout(for: container)
-        func raster(_ draw: () -> Void) throws -> Data {
-            let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 44, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 176, bitsPerPixel: 32))
-            let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = context
-            draw()
-            NSGraphicsContext.restoreGraphicsState()
-            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
-        }
-        let actual = try raster { ruler.drawHashMarksAndLabels(in: ruler.bounds) }
-        let expected = try raster {
+        let actual = try Self.raster { ruler.drawHashMarksAndLabels(in: ruler.bounds) }
+        let expected = try Self.raster {
             NSColor(theme.color("bg-1")).setFill()
             ruler.bounds.fill()
             let paragraph = NSMutableParagraphStyle()
@@ -865,6 +856,45 @@ struct EditorDisplayIntegrationTests {
             }
         }
         #expect(actual == expected)
+    }
+
+    @Test(arguments: [false, true])
+    func rulerKeepsBlankNeighborNumbersDuringTyping(deleting: Bool) async throws {
+        let f = try await Fixture("alpha\n\nbeta\n")
+        defer { f.remove() }
+        Self.configureLayout(f.view, buffer: f.buffer, width: 800, fontSize: 20)
+        try f.view.displayAdapter?.updateHints([], revision: f.buffer.editGeneration)
+        f.view.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 844, height: 400))
+        scroll.documentView = f.view
+        let ruler = CodeEditorLineNumberRulerView(scrollView: scroll, textView: f.view, theme: try ThemeStore().current)
+        scroll.verticalRulerView = ruler
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+        scroll.tile()
+        let layout = try #require(f.view.layoutManager)
+        layout.ensureLayout(for: try #require(f.view.textContainer))
+        f.view.setSourceSelectedRange(NSRange(location: 2, length: 0))
+        let expected = try Self.raster { ruler.drawHashMarksAndLabels(in: ruler.bounds) }
+
+        if deleting {
+            f.view.deleteBackward(nil)
+        } else {
+            f.view.insertText("x", replacementRange: f.view.selectedRange())
+        }
+
+        // Draw without yielding, so no frame can use pre-edit line offsets.
+        #expect(try Self.raster { ruler.drawHashMarksAndLabels(in: ruler.bounds) } == expected)
+    }
+
+    private static func raster(_ draw: () -> Void) throws -> Data {
+        let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 44, pixelsHigh: 400, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 176, bitsPerPixel: 32))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        draw()
+        NSGraphicsContext.restoreGraphicsState()
+        return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
     }
 
     private static func configureLayout(_ view: CodeTextView, buffer: EditorBuffer, width: CGFloat, fontSize: CGFloat) {

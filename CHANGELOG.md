@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Keep code editor gutter line numbers from blinking while typing or deleting beside blank lines.
+
 ## [0.20.5] - 2026-10-07
 
 ### ✨ Features
