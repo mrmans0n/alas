@@ -163,6 +163,24 @@ struct ACPSymbolReferenceTests {
             == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
 
+    @Test("a symbol mention is missing when its declaration or file is gone; others are ignored; files are read once")
+    func presenceMissing() async {
+        let present = ACPSymbolReference.uri(for: target("restore", .method, lines: 3...5))
+        let presentWithCode = ACPSymbolReference.uri(for: target("restore", .method, lines: 3...5, code: true))
+        let gone = ACPSymbolReference.uri(for: target("close", .method, lines: 3...5))
+        let unreadable = ACPSymbolReference.uri(for: ACPSymbolReference.Target(
+            path: "Sources/Other.swift", name: "run", kind: .function, container: nil, lineRange: 0...0, includeCode: false))
+        var reads: [String] = []
+        let missing = await ACPSymbolPresence.missing(
+            among: [present, presentWithCode, gone, unreadable, "file:///a.swift", "alas-session://abc", "not a uri"]
+        ) { path in
+            reads.append(path)
+            return path == "Sources/SessionManager.swift" ? Self.swiftSource : nil
+        }
+        #expect(missing == [gone, unreadable])
+        #expect(reads.sorted() == ["Sources/Other.swift", "Sources/SessionManager.swift"])
+    }
+
     @Test("transcript links carry the sent range, falling back to the inserted one")
     func openURL() throws {
         let target = ACPSymbolReference.Target(path: "Package.swift", name: "a", kind: .function,
