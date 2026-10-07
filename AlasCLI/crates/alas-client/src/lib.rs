@@ -119,6 +119,20 @@ pub struct Response {
     pub exit_code: Option<u8>,
 }
 
+/// The optional question a visual aid asks; see `Command::VisualShow`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisualQuestion {
+    pub prompt: String,
+    pub options: Vec<VisualOption>,
+    pub allow_multiple: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisualOption {
+    pub id: String,
+    pub label: String,
+}
+
 /// The parsed CLI intent, independent of transport. `Open` paths are already
 /// absolutized by the caller.
 #[derive(Debug, Clone, PartialEq)]
@@ -201,6 +215,12 @@ pub enum Command {
     SessionSend {
         session_id: String,
         prompt: String,
+    },
+    /// MCP-only: show an HTML visual aid in the calling ACP session's transcript.
+    VisualShow {
+        title: String,
+        html: String,
+        question: Option<VisualQuestion>,
     },
     /// One page of a direct parent's, child's, or this session's fork transcript. The
     /// app applies its defaults to omitted bounds.
@@ -581,6 +601,23 @@ pub fn build_request(
         Command::SessionSend { session_id, prompt } => {
             let mut r = Request::new("session_send");
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
+            r
+        }
+        Command::VisualShow { title, html, question } => {
+            let mut r = Request::new("visual_show");
+            let mut params = serde_json::json!({ "title": title, "html": html });
+            if let Some(question) = question {
+                params["question"] = serde_json::json!({
+                    "prompt": question.prompt,
+                    "options": question
+                        .options
+                        .iter()
+                        .map(|option| serde_json::json!({ "id": option.id, "label": option.label }))
+                        .collect::<Vec<_>>(),
+                    "allow_multiple": question.allow_multiple,
+                });
+            }
+            r.params = Some(params);
             r
         }
         Command::SessionRead {
@@ -1115,6 +1152,40 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn visual_show_request_carries_the_question_in_params() {
+        let request = build_request(
+            &Command::VisualShow {
+                title: "Layouts".into(),
+                html: "<h2>Pick</h2>".into(),
+                question: Some(VisualQuestion {
+                    prompt: "Which?".into(),
+                    options: vec![
+                        VisualOption { id: "a".into(), label: "One".into() },
+                        VisualOption { id: "b".into(), label: "Two".into() },
+                    ],
+                    allow_multiple: true,
+                }),
+            },
+            Some("acp-1".into()),
+            Some("/wt".into()),
+        );
+        assert_eq!(request.command, "visual_show");
+        assert_eq!(request.session_id.as_deref(), Some("acp-1"));
+        assert_eq!(
+            request.params,
+            Some(serde_json::json!({
+                "title": "Layouts",
+                "html": "<h2>Pick</h2>",
+                "question": {
+                    "prompt": "Which?",
+                    "options": [{ "id": "a", "label": "One" }, { "id": "b", "label": "Two" }],
+                    "allow_multiple": true
+                }
+            }))
+        );
+    }
 
     #[test]
     fn absolutize_joins_relative_against_base_without_resolving_symlinks() {
