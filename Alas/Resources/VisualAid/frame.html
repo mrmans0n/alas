@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{HEAD}}
+<style>
+  :root { color-scheme: light dark; font: 13px -apple-system, system-ui, sans-serif; }
+  html, body { margin: 0; }
+  body { padding: 16px; color: var(--alas-text, CanvasText); background: var(--alas-background, Canvas); line-height: 1.45; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  h3 { font-size: 14px; margin: 0 0 4px; }
+  .subtitle { color: var(--alas-dim, GrayText); margin: 0 0 14px; }
+  .section { margin-bottom: 16px; }
+  .label { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--alas-dim, GrayText); }
+  .options, .cards { display: grid; gap: 10px; }
+  .options { grid-template-columns: 1fr; }
+  .cards { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .option, .card { border: 1px solid var(--alas-line, #8884); border-radius: 8px; cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+  .option { display: flex; gap: 12px; align-items: flex-start; padding: 12px; }
+  .option .letter { flex: none; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; font-weight: 700; background: var(--alas-line, #8884); }
+  .option.selected, .card.selected { border-color: var(--alas-accent, AccentColor); box-shadow: 0 0 0 1px var(--alas-accent, AccentColor); }
+  .option.selected .letter { background: var(--alas-accent, AccentColor); color: var(--alas-background, Canvas); }
+  .card-image { min-height: 120px; padding: 12px; border-bottom: 1px solid var(--alas-line, #8884); }
+  .card-body { padding: 10px 12px; }
+  .mockup { border: 1px solid var(--alas-line, #8884); border-radius: 8px; overflow: hidden; }
+  .mockup-header { padding: 6px 10px; font-size: 11px; color: var(--alas-dim, GrayText); border-bottom: 1px solid var(--alas-line, #8884); }
+  .mockup-body { padding: 12px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pros h4 { color: var(--alas-tone-success, green); }
+  .cons h4 { color: var(--alas-tone-danger, red); }
+  .mock-nav { padding: 8px 12px; border: 1px solid var(--alas-line, #8884); border-radius: 6px; margin-bottom: 8px; }
+  .mock-sidebar { width: 160px; padding: 10px; border: 1px dashed var(--alas-line, #8884); border-radius: 6px; margin-right: 8px; }
+  .mock-content { flex: 1; padding: 10px; border: 1px dashed var(--alas-line, #8884); border-radius: 6px; }
+  .mock-button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--alas-accent, AccentColor); background: var(--alas-accent, AccentColor); color: var(--alas-background, Canvas); }
+  .mock-input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--alas-line, #8884); background: transparent; color: inherit; }
+  .placeholder { display: grid; place-items: center; min-height: 80px; border: 1px dashed var(--alas-line, #8884); border-radius: 6px; color: var(--alas-dim, GrayText); }
+</style>
+<script>
+  // Agent habits from the superpowers companion call these; selection is drawn by Alas.
+  function toggleSelect() {}
+</script>
+</head>
+<body>{{CONTENT}}</body>
+</html>
