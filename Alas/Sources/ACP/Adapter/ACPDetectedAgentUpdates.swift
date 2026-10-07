@@ -32,10 +32,23 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
     /// latest release in place.
     var upgradeCommand: [String] {
         switch self {
-        case .bun(let package, _): ["bun", "add", "-g", "\(package)@latest"]
+        // Bun installs into its configured global dir, which may not be the
+        // one the detected binary lives in.
+        case .bun(let package, let root): ["BUN_INSTALL_GLOBAL_DIR=\(root)", "bun", "add", "-g", "\(package)@latest"]
         case .npm(let package, let prefix): ["npm", "install", "-g", "--prefix", prefix, "\(package)@latest"]
         case .homebrewFormula(let name): ["brew", "upgrade", "--formula", name]
         case .homebrewCask(let name): ["brew", "upgrade", "--cask", name]
+        }
+    }
+
+    /// Stable identity of the install, so cached checks and dismissals never
+    /// carry over to a different installation of the same agent.
+    var cacheIdentity: String {
+        switch self {
+        case .bun(let package, let root): "bun|\(root)|\(package)"
+        case .npm(let package, let prefix): "npm|\(prefix)|\(package)"
+        case .homebrewFormula(let name): "brew-formula|\(name)"
+        case .homebrewCask(let name): "brew-cask|\(name)"
         }
     }
 
@@ -209,7 +222,8 @@ struct ACPDetectedAgentUpdater: Sendable {
             let b = i < r.count ? r[i] : 0
             if a != b { return a > b }
         }
-        return false
+        // Same base: a release outranks its own prerelease.
+        return !lhs.contains("-") && rhs.contains("-")
     }
 
     static let defaultRunner: Runner = { arguments, cwd, timeout in

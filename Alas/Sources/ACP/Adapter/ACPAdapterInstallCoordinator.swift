@@ -54,7 +54,7 @@ actor ACPAdapterInstallCoordinator {
     /// Upgrades a detected agent CLI through the package manager that owns it,
     /// sharing one run across tabs showing the same agent.
     func updateDetectedAgent(agentID: String, owner: ACPDetectedAgentOwner) async throws {
-        let key = ACPAdapterUpdateKey.detectedCLI(agentID: agentID)
+        let key = ACPAdapterUpdateKey.detectedCLI(agentID: agentID, owner: owner)
         if let task = inFlight[key] {
             return try await task.value
         }

@@ -23,10 +23,12 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.classify(resolvedPath: path) == expected)
     }
 
-    @Test("npm upgrades the prefix that owns the binary, not the npm on PATH")
-    func npmUpgradeTargetsOwningPrefix() {
+    @Test("upgrades target the install that owns the binary, not the manager's default")
+    func upgradeTargetsOwningInstall() {
         #expect(ACPDetectedAgentOwner.npm(package: "pi", prefix: "/Users/me/.nvm/versions/node/v22.1.0").upgradeCommand
                 == ["npm", "install", "-g", "--prefix", "/Users/me/.nvm/versions/node/v22.1.0", "pi@latest"])
+        #expect(ACPDetectedAgentOwner.bun(package: "omp", root: "/opt/bun/install/global").upgradeCommand
+                == ["BUN_INSTALL_GLOBAL_DIR=/opt/bun/install/global", "bun", "add", "-g", "omp@latest"])
     }
 
     @Test("registry latest is compared with the installed version", arguments: [
@@ -35,6 +37,7 @@ struct ACPDetectedAgentUpdaterTests {
         ("1.0.4", "\"1.0.4\"", .upToDate),
         ("1.10.0", "1.9.9", .upToDate),
         ("1.0.0", "2.0.0-beta.1", .upToDate),
+        ("2.0.0-beta.1", "2.0.0", .available(current: "2.0.0-beta.1", latest: "2.0.0")),
         ("1.0.0", "", .unknown),
         ("1.0.0", "error: not found", .unknown),
     ])

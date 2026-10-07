@@ -1023,13 +1023,13 @@ private struct ACPSessionView: View {
                         agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
                         mode: .agentUpdate(current: current, latest: latest, manager: owner.managerName),
-                        onDismiss: { dismissAgentUpdate(latest: latest) },
+                        onDismiss: { dismissAgentUpdate(latest: latest, owner: owner) },
                         install: {
                             try await state.acpAdapterInstallCoordinator.updateDetectedAgent(
                                 agentID: session.agentId,
                                 owner: owner)
                         },
-                        onInstalled: { await reattachAfterAgentUpdate() }
+                        onInstalled: { await reattachAfterAgentUpdate(owner: owner) }
                     )
                 }
             default:
@@ -1165,8 +1165,8 @@ private struct ACPSessionView: View {
         }
     }
 
-    private func dismissAgentUpdate(latest: String) {
-        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId)
+    private func dismissAgentUpdate(latest: String, owner: ACPDetectedAgentOwner) {
+        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId, owner: owner)
         Task {
             await state.acpAdapterUpdateStore.dismiss(key: key, latest: latest)
             await MainActor.run { agentDismissedLatest = latest }
@@ -1204,8 +1204,8 @@ private struct ACPSessionView: View {
         await refreshAdapterUpdateState()
     }
 
-    private func reattachAfterAgentUpdate() async {
-        await state.acpAdapterUpdateStore.clear(key: .detectedCLI(agentID: session.agentId))
+    private func reattachAfterAgentUpdate(owner: ACPDetectedAgentOwner) async {
+        await state.acpAdapterUpdateStore.clear(key: .detectedCLI(agentID: session.agentId, owner: owner))
         await MainActor.run {
             agentUpdateState = nil
             agentDismissedLatest = nil
@@ -1283,7 +1283,7 @@ private struct ACPSessionView: View {
         }
 
         let store = state.acpAdapterUpdateStore
-        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId)
+        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId, owner: owner)
         let result = await store.checkOrCompute(key: key) {
             await ACPDetectedAgentUpdater().check(owner: owner)
         }

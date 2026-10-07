@@ -22,9 +22,10 @@ struct ACPAdapterUpdateKey: Hashable, Sendable {
 
     /// Update state for a detected agent CLI itself rather than its ACP
     /// adapter, so pi's adapter and CLI updates are cached and dismissed
-    /// independently. Agent ids never contain `:`.
-    static func detectedCLI(agentID: String) -> Self {
-        .init(target: .local, agentID: "cli:\(agentID)")
+    /// independently. Keyed by the owning install too, so switching to
+    /// another install never reuses its state. Agent ids never contain `:`.
+    static func detectedCLI(agentID: String, owner: ACPDetectedAgentOwner) -> Self {
+        .init(target: .local, agentID: "cli:\(agentID):\(owner.cacheIdentity)")
     }
 
     private static func field(_ value: String) -> String {
