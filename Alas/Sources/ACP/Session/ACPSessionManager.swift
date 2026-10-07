@@ -8731,23 +8731,31 @@ extension ACPSessionManager {
         else { return false }
         visual.answer = answer
         guard await runner.replaceAndPersistVisualAidAwaitingResult(visual) else {
-            rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+            // The row never held the answer, so there is nothing to confirm; one write keeps it that way.
+            await rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId, answerWasStored: false)
             return false
         }
         session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
         Task { @MainActor in
             await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
-                if !ok { self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) }
+                if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
             }
         }
         return true
     }
 
     /// Clear an answer whose send failed, if it is still the one we set. The
-    /// transcript changes even without a runner so the card reverts; if the
-    /// runner is gone the persisted answer may remain (accepted edge).
-    func rollBackVisualAidAnswer(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) {
+    /// card reverts at once, then the unanswered row is written and confirmed,
+    /// retried once if the first attempt is not. The two stores involved (the
+    /// answer row and the prompt queue) cannot be made atomic, and a process
+    /// without the lease cannot write, so when the row cannot be stored the
+    /// card says that a reload may show the question as answered. With
+    /// `answerWasStored` false (the answer's own write failed) the store never
+    /// held the answer, so one write is all it takes and nothing is reported.
+    func rollBackVisualAidAnswer(
+        id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID, answerWasStored: Bool = true
+    ) async {
         guard let session = sessions[sessionId],
               let index = session.transcript.messages.firstIndex(where: {
                   if case .visualAid(let existing) = $0 { return existing.id == visualId }
@@ -8757,8 +8765,19 @@ extension ACPSessionManager {
         else { return }
         current.answer = nil
         session.transcript.replaceMessage(at: index, with: .visualAid(current))
-        session.visualAidSendStatus(for: visualId).error = ACPVisualAidSendStatus.failureMessage
-        runners[sessionId]?.persistVisualAidRow(id: visualId)
+        let status = session.visualAidSendStatus(for: visualId)
+        status.error = ACPVisualAidSendStatus.failureMessage
+        guard let runner = runners[sessionId] else {
+            if answerWasStored { status.error = ACPVisualAidSendStatus.unsavedMessage }
+            return
+        }
+        guard answerWasStored else {
+            _ = await runner.persistVisualAidRowAwaitingResult(id: visualId)
+            return
+        }
+        var stored = await runner.persistVisualAidRowAwaitingResult(id: visualId)
+        if !stored { stored = await runner.persistVisualAidRowAwaitingResult(id: visualId) }
+        if !stored { status.error = ACPVisualAidSendStatus.unsavedMessage }
     }
 
     @discardableResult

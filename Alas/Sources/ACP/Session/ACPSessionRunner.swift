@@ -4895,16 +4895,19 @@ extension ACPSessionRunner {
         }
     }
 
-    /// Persist the row of a visual aid already changed in the transcript.
-    /// No-op without the lease.
-    func persistVisualAidRow(id visualId: UUID) {
+    /// Persist the row of a visual aid already changed in the transcript with
+    /// the payload it holds now, and report whether that exact payload was
+    /// committed. False without the lease, where nothing is written.
+    func persistVisualAidRowAwaitingResult(id visualId: UUID) async -> Bool {
         guard holdsLeaseForWrite(),
               let index = session.transcript.messages.firstIndex(where: {
                   if case .visualAid(let existing) = $0 { return existing.id == visualId }
                   return false
               })
-        else { return }
-        persistIndices([index])
+        else { return false }
+        return await awaitingWrite(ofRowAt: index) {
+            persistIndices([index])
+        }
     }
 }
 

@@ -1525,14 +1525,16 @@ struct ACPSessionManagerTests {
 
     /// Makes the store reject every later write of a `visual_aid` row, through
     /// a second connection to the same file; with `answeredOnly`, only writes
-    /// of a row that carries an answer.
-    private func rejectVisualAidWrites(_ store: ACPSessionStore, answeredOnly: Bool = false) {
+    /// of a row that carries an answer, and with `unansweredOnly`, only writes of a row without one.
+    private func rejectVisualAidWrites(
+        _ store: ACPSessionStore, answeredOnly: Bool = false, unansweredOnly: Bool = false
+    ) {
         var handle: OpaquePointer?
         #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
         defer { sqlite3_close(handle) }
         let sql = """
         CREATE TRIGGER reject_visual_aid BEFORE INSERT ON messages
-        WHEN NEW.kind = 'visual_aid'\(answeredOnly ? " AND CAST(NEW.payload AS TEXT) LIKE '%\"answer\"%'" : "")
+        WHEN NEW.kind = 'visual_aid'\(answeredOnly ? " AND CAST(NEW.payload AS TEXT) LIKE '%\"answer\"%'" : "")\(unansweredOnly ? " AND CAST(NEW.payload AS TEXT) NOT LIKE '%\"answer\"%'" : "")
         BEGIN SELECT RAISE(ABORT, 'rejected'); END
         """
         #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
@@ -1746,7 +1748,7 @@ struct ACPSessionManagerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
 
-    @Test("rollBackVisualAidAnswer clears only the answer it was given, persists the row and records the failure on the session")
+    @Test("rollBackVisualAidAnswer clears only the answer it was given, confirms the row and records the failure on the session")
     func rollBackVisualAidAnswerClearsMatchingAnswer() async throws {
         let (manager, session, store, _) = try await attachedVisualAidManager()
         defer { manager.shutdownBackgroundTasks() }
@@ -1755,17 +1757,65 @@ struct ACPSessionManagerTests {
         let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
         #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
 
-        manager.rollBackVisualAidAnswer(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id)
+        await manager.rollBackVisualAidAnswer(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
         #expect(session.visualAidSendStatus(for: visual.id).error == nil)
 
-        manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+        await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
         #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
-        await manager.runners[session.id]?.flushPersistence()
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)
 
         #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
         #expect(session.visualAidSendStatus(for: visual.id).error == nil)
+    }
+
+    @Test("a rollback whose row cannot be stored tells the user a reload may show the question answered")
+    func rollBackVisualAidAnswerReportsAnUnsavedRevert() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        rejectVisualAidWrites(store, unansweredOnly: true)
+
+        await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.unsavedMessage)
+        // The accepted gap: the store still holds the answered row.
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
+    }
+
+    @Test("a rollback write that fails once is retried and reports the ordinary failure when the retry lands")
+    func rollBackVisualAidAnswerRetriesOnce() async throws {
+        let (manager, session, store, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        rejectVisualAidWrites(store, unansweredOnly: true)
+        // Every write attempt flushes the queue after enqueueing, and queued writes run only once that
+        // flush is waiting. So a write that starts after the second flush belongs to the retry, and the
+        // rejection is lifted exactly there.
+        var flushes = 0
+        var lifted = false
+        runner.onPersistenceFlushForTesting = { flushes += 1 }
+        runner.beforePersistenceForTesting = {
+            if flushes >= 2, !lifted {
+                lifted = true
+                self.dropVisualAidRejection(store)
+            }
+        }
+
+        await manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
+
+        #expect(flushes == 2, "one attempt and one retry")
+        #expect(lifted)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)
     }
 }

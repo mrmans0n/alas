@@ -406,9 +406,15 @@ Submit:
    `answerVisualAid` returns false. A dismissal returns true once written and
    sends nothing.
 4. If `sendPrompt` reports failure, the answer is cleared, on the session's
-   transcript directly so it happens even when the runner is already gone, and
-   persisted when a runner still holds the lease. The question becomes
-   editable again and the card shows an inline error. A report that never
+   transcript directly so it happens even when the runner is already gone. The
+   question becomes editable again and the card shows an inline error. The
+   unanswered row is then written the way the answer was: the runner confirms
+   that exact payload, and the write is retried once if it is not confirmed.
+   The answer row and the prompt queue are two stores and cannot be made
+   atomic, and a process without the writer lease cannot write at all. So if
+   the row still cannot be stored, or no runner is left, the error becomes
+   "Couldn't send your answer, and its unanswered state could not be saved.
+   After a reload this question may show as answered." A report that never
    arrives leaves the answer in place, which is right: a superseded prompt was
    still delivered.
 

@@ -83,6 +83,9 @@ enum ACPVisualAidQuestionForm {
 @Observable
 final class ACPVisualAidSendStatus {
     static let failureMessage = "Couldn't send your answer. Try again."
+    /// The answer was not sent and the question could not be stored as unanswered again.
+    static let unsavedMessage =
+        "Couldn't send your answer, and its unanswered state could not be saved. After a reload this question may show as answered."
 
     var error: String?
 }
