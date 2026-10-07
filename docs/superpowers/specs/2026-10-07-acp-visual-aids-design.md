@@ -16,7 +16,8 @@ the built-in `alas` MCP server with no skill, no server process, and no URL.
   element in the page preselects an answer on a native card. Submitting sends
   the answer to the agent as the user's next prompt.
 - Agent-written HTML runs sandboxed. It can load scripts, styles, fonts and
-  images from `https:` CDNs, and nothing else reaches the network.
+  images from `https:` CDNs while it loads, and nothing else reaches the
+  network. A visual with a question loads nothing once it has loaded.
 
 ## Non-goals
 
@@ -208,7 +209,9 @@ A pure enum, testable without a web view, mirroring `PluginWebPolicy`.
 - Content rules: block everything, then allow `alas-visual:`, `https:` for
   `script`, `style-sheet`, `image` and `font` resource types, `data:` and
   `blob:` for images, and `data:` for fonts. Rules and CSP agree: no `blob:`
-  fonts. The rule list compiles once per app run under its own identifier.
+  fonts. The rule lists compile once per app run under their own identifiers.
+  The locked list (`alas-visual-aid-locked-v1`) is the same without the
+  `https:` rule and replaces the loading list once a question visual has loaded.
 - Navigation: only the document URL in the main frame. A clicked `https` link
   opens in the default browser. Everything else is cancelled.
 - Wrapping: `html` that starts (after whitespace and comments) with
@@ -218,10 +221,14 @@ A pure enum, testable without a web view, mirroring `PluginWebPolicy`.
   the bridge. Anything else is a fragment and goes inside the frame template.
 
 The page holds only HTML the agent wrote. It has no Alas data, no file access,
-no persistent storage and no `connect-src`. An `https:` image GET can carry
-data out, but the only data the page has is what the agent already had. That
-makes `'unsafe-inline'` and `https:` loads acceptable here, where the plugin
-sandbox forbids them.
+no persistent storage and no `connect-src`. A visual without a question holds
+nothing the agent did not already have, so its `https:` loads are acceptable
+(`'unsafe-inline'` too), where the plugin sandbox forbids them. A visual with a
+question does hold user state: the `selected` class Alas mirrors from the
+native card, and the user's clicks, are visible to page script. So the page may
+load its CDN resources only while it loads; after that, locked content rules
+allow only `alas-visual:`, `data:` for images and fonts, and `blob:` for
+images, and nothing can leave the page before the user submits.
 
 ### `VisualAidWebPage`
 
@@ -230,6 +237,20 @@ data store, `javaScriptCanOpenWindowsAutomatically = false`, element
 fullscreen off, media requires user action, link previews off, inspectable in
 DEBUG builds. The document loads only after the content rules are in place;
 if they fail to compile, the page never loads.
+
+A visual with a question locks its network. `VisualAidWebPage` takes
+`locksNetworkAfterLoad`, which the card sets from `visual.question != nil`.
+Such a page loads under the loading rules, then, from `didFinish` (before the
+status becomes `.ready`) or after `networkLockDeadline` (10 seconds from the
+start of the load), whichever comes first, swaps them for the locked rules and
+sets `isLocked`. The deadline matters because agent HTML can hold `didFinish`
+open forever with a request that never answers. The locked list is compiled
+before the document loads; if it fails to compile the page fails closed
+(`.sandboxFailed`). Until the lock, the web view is a `VisualAidWKWebView`
+whose `hitTest` returns nil, so no click reaches the page, and `onChoice` and
+`setSelected` do nothing. `reload()` after a crash puts the loading rules back
+and resets `isLocked`, so the page can fetch its CDN resources again, then
+locks again. Visuals without a question never lock.
 
 A bridge script runs in an isolated `WKContentWorld` that page scripts cannot
 reach. It reports three things to the app:

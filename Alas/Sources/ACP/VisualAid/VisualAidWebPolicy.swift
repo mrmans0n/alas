@@ -28,6 +28,21 @@ enum VisualAidWebPolicy {
     ]
     """
 
+    /// Swapped in once a question visual has loaded: the page keeps what it has but can no longer fetch
+    /// anything, so script that sees the user's choices has no channel to send them out through.
+    static let lockedContentRules = """
+    [
+      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
+      {"trigger": {"url-filter": "^alas-visual:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^data:", "resource-type": ["image", "font"]}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^blob:", "resource-type": ["image"]}, "action": {"type": "ignore-previous-rules"}}
+    ]
+    """
+    static let lockedContentRuleListIdentifier = "alas-visual-aid-locked-v1"
+    /// How long a question visual may keep loading before the network is shut regardless; agent HTML can
+    /// hold `didFinish` open forever with a request that never answers.
+    static let networkLockDeadline: Duration = .seconds(10)
+
     static func documentURL(visualID: UUID) -> URL {
         URL(string: "\(scheme)://\(visualID.uuidString.lowercased())/")!
     }

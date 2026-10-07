@@ -126,7 +126,10 @@ show visuals yet.
 | `question` | Optional. A `prompt` (1 to 500 characters) and 2 to 8 `options`, each with a unique `id` and a `label`; `allow_multiple` permits more than one choice. |
 
 The visual runs in a sandboxed `WKWebView`. Scripts, styles, fonts, and images
-may load from https URLs; `fetch`, XHR, WebSockets, and WebRTC are blocked.
+may load from https URLs while the page loads; `fetch`, XHR, WebSockets, and
+WebRTC are blocked. A visual with a `question` is not clickable until it has
+loaded (or 10 seconds have passed), and from then on it can load nothing, so
+page script cannot send out the user's choices before they submit.
 
 With a `question`, elements carrying `data-choice="<option id>"` select that
 option when clicked, and the answer card appears under the visual. The tool

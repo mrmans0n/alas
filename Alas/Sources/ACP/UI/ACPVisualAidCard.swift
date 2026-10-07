@@ -153,7 +153,8 @@ struct ACPVisualAidCard: View {
 
     private func openPage() {
         guard page == nil else { return }
-        let page = VisualAidWebPage(visualID: visual.id, html: visual.html, theme: theme)
+        let page = VisualAidWebPage(
+            visualID: visual.id, html: visual.html, theme: theme, locksNetworkAfterLoad: visual.question != nil)
         self.page = page
         paused = false
         installChoiceHandler()

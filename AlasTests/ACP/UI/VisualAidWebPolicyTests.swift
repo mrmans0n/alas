@@ -81,6 +81,19 @@ struct VisualAidWebPolicyTests {
         #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("form-action 'none'"))
     }
 
+    @Test("only the loading rules let https resources in; the locked rules keep the scheme, data and blob")
+    func lockedRulesDropHttps() throws {
+        func filters(_ rules: String) throws -> [String] {
+            let list = try #require(JSONSerialization.jsonObject(with: Data(rules.utf8)) as? [[String: Any]])
+            return list.compactMap { ($0["trigger"] as? [String: Any])?["url-filter"] as? String }
+        }
+        let loading = try filters(VisualAidWebPolicy.contentRules)
+        let locked = try filters(VisualAidWebPolicy.lockedContentRules)
+        #expect(loading.contains { $0.hasPrefix("^https:") })
+        #expect(!locked.contains { $0.hasPrefix("^https:") })
+        #expect(locked.contains("^alas-visual:"))
+    }
+
     @Test("the page budget closes the least recently admitted page")
     func pageBudgetEvictsLeastRecent() {
         var lru = VisualAidPageLRU(limit: 2)
@@ -102,7 +115,7 @@ extension VisualAidWebPolicyTests {
         let page = VisualAidWebPage(
             visualID: UUID(),
             html: #"<p>probe</p><iframe id="static"></iframe><iframe id="doc" srcdoc="<p>x</p>"></iframe>"#,
-            theme: try Theme.loadBundled(id: "cool-slate"))
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
         defer { page.close() }
 
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
@@ -132,5 +145,44 @@ extension VisualAidWebPolicyTests {
             "srcdoc": "undefined/undefined",
             "dynamic": "undefined/undefined",
         ])
+    }
+
+    /// Polls until the page is ready, no fixed sleep.
+    @MainActor
+    private func waitUntilReady(_ page: VisualAidWebPage) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while page.status != .ready {
+            try #require(page.status == .loading && ContinuousClock.now < deadline, "page never became ready: \(page.status)")
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    @MainActor
+    private func makePage(locks: Bool) throws -> VisualAidWebPage {
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: "<p>x</p>", theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: locks)
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        return page
+    }
+
+    @MainActor
+    @Test("a question visual stays untouchable until its network is shut, then takes clicks")
+    func questionVisualLocksAfterLoad() async throws {
+        let page = try makePage(locks: true)
+        defer { page.close() }
+        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) == nil)
+        try await waitUntilReady(page)
+        #expect(page.isLocked)
+        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+    }
+
+    @MainActor
+    @Test("a visual without a question never swaps its rules and is never blocked from clicks")
+    func visualWithoutQuestionNeverLocks() async throws {
+        let page = try makePage(locks: false)
+        defer { page.close() }
+        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+        try await waitUntilReady(page)
+        #expect(!page.isLocked)
     }
 }
