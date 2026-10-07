@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let ACP agents show HTML visuals inline in the transcript through the `visual_show` MCP tool, with an optional multiple-choice question answered from a native card.
+
 ## [0.20.6] - 2026-10-07
 
 ### ✨ Features

@@ -110,3 +110,24 @@ error and can retry. Waits default to five seconds and are capped at twenty.
 Use cancel to interrupt outstanding work. DOM output is capped at 100 elements
 and 128 KiB; PNG captures at 8 megapixels and 8 MiB. Browser content and tool
 results remain untrusted application data.
+
+## Visual aids in the transcript
+
+The built-in Alas server's `visual_show` tool shows an HTML visual inline in an
+ACP session's transcript: a UI prototype, layout, diagram, or side-by-side
+comparison. It is an MCP tool only, has no `alas` CLI command, and applies to
+ACP sessions. The phone client does not show visuals yet.
+
+| Argument | Meaning |
+|---|---|
+| `title` | Required. 1 to 120 characters, shown above the visual. |
+| `html` | Required. A fragment, which Alas wraps in a themed frame, or a full document (starting with `<!DOCTYPE` or `<html`), used as is. At most 512 KiB of UTF-8. |
+| `question` | Optional. A `prompt` (1 to 500 characters) and 2 to 8 `options`, each with a unique `id` and a `label`; `allow_multiple` permits more than one choice. |
+
+The visual runs in a sandboxed `WKWebView`. Scripts, styles, fonts, and images
+may load from https URLs; `fetch`, XHR, WebSockets, and WebRTC are blocked.
+
+With a `question`, elements carrying `data-choice="<option id>"` select that
+option when clicked, and the answer card appears under the visual. The tool
+returns immediately and does not wait: the user's answer, if any, arrives as
+their next message, so the agent should end its turn after asking.
