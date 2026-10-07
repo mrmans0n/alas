@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Mention project symbols in the composer. `@` now searches classes, functions, and other declarations next to files and sessions; a picked symbol becomes a badge that shows its code on hover and can send its code with ⌥⏎ (#1821).
+
 ### 🐛 Fixes
 
 - Stop trailing agent metadata updates (usage, commands, models, titles) from discarding the on-device next-prompt suggestion for a finished turn, and add `next-prompt` diagnostic logging that names why a suggestion was dropped.
