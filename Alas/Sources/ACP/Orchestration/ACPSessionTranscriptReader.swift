@@ -59,6 +59,8 @@ enum ACPSessionTranscriptReader {
                 append("tool", "Edited \(edit.path) (+\(edit.added) -\(edit.removed))")
             case .systemNotice(_, let text):
                 append("system", text)
+            case .visualAid(let visual):
+                append("tool", visual.transcriptSummary)
             case .thought, .plan:
                 continue
             }

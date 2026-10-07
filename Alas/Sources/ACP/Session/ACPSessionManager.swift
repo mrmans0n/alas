@@ -8705,6 +8705,88 @@ extension ACPSessionManager {
         return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
     }
 
+    /// Append a visual aid an agent showed. True only once its row is written,
+    /// so `visual_show` never reports a visual that a reload would lose.
+    func showVisualAid(_ visual: ACPVisualAid, in sessionId: ACPSession.ID) async -> Bool {
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard !mergingForks.contains(sessionId), sessions[sessionId] != nil,
+              let runner = runners[sessionId], isWriter(for: sessionId)
+        else { return false }
+        return await runner.appendAndPersistVisualAidAwaitingResult(visual)
+    }
+
+    /// Store the user's answer on the visual and start sending it to the agent
+    /// as a normal prompt, without awaiting the turn. Returns true once the
+    /// answer's row is confirmed written (and for a dismissal, which sends
+    /// nothing), false when it could not be stored. An answer first waits for
+    /// the card's own first write to be confirmed, and is refused if that
+    /// write failed. The in-memory answer is set first so a second submit
+    /// finds it answered; when the write fails the
+    /// answer is reverted, the card shows the send error, and nothing is sent.
+    /// A send that reports failure clears the answer too. A send whose callback
+    /// never fires (superseded prompt) keeps the answer.
+    func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
+        // The wait comes before every guard and before the synchronous mutation below, so two answers
+        // that wait together resume in order and the second finds the first one's answer.
+        guard let firstWriteRunner = runners[sessionId],
+              await firstWriteRunner.awaitVisualAidFirstWrite(id: visualId)
+        else { return false }
+        guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
+              let runner = runners[sessionId], isWriter(for: sessionId),
+              var visual = session.transcript.visualAid(id: visualId), visual.answer == nil
+        else { return false }
+        visual.answer = answer
+        guard await runner.replaceAndPersistVisualAidAwaitingResult(visual) else {
+            // The row never held the answer, so there is nothing to confirm; one write keeps it that way.
+            await rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId, answerWasStored: false)
+            return false
+        }
+        session.visualAidSendStatus(for: visualId).error = nil
+        guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
+        Task { @MainActor in
+            await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
+                if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+            }
+        }
+        return true
+    }
+
+    /// Clear an answer whose send failed, if it is still the one we set. The
+    /// card reverts at once, then the unanswered row is written and confirmed,
+    /// retried once if the first attempt is not. The two stores involved (the
+    /// answer row and the prompt queue) cannot be made atomic, and a process
+    /// without the lease cannot write, so when the row cannot be stored the
+    /// card says that a reload may show the question as answered. With
+    /// `answerWasStored` false (the answer's own write failed) the store never
+    /// held the answer, so one write is all it takes and nothing is reported.
+    func rollBackVisualAidAnswer(
+        id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID, answerWasStored: Bool = true
+    ) async {
+        guard let session = sessions[sessionId],
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visualId }
+                  return false
+              }),
+              case .visualAid(var current) = session.transcript.messages[index], current.answer == answer
+        else { return }
+        current.answer = nil
+        session.transcript.replaceMessage(at: index, with: .visualAid(current))
+        let status = session.visualAidSendStatus(for: visualId)
+        status.error = ACPVisualAidSendStatus.failureMessage
+        guard let runner = runners[sessionId] else {
+            if answerWasStored { status.error = ACPVisualAidSendStatus.unsavedMessage }
+            return
+        }
+        guard answerWasStored else {
+            _ = await runner.persistVisualAidRowAwaitingResult(id: visualId)
+            return
+        }
+        var stored = await runner.persistVisualAidRowAwaitingResult(id: visualId)
+        if !stored { stored = await runner.persistVisualAidRowAwaitingResult(id: visualId) }
+        if !stored { status.error = ACPVisualAidSendStatus.unsavedMessage }
+    }
+
     @discardableResult
     func enqueuePrompt(
         id: UUID,

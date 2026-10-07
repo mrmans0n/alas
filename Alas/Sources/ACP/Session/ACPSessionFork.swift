@@ -197,7 +197,7 @@ enum ACPSessionForkSnapshotResolver {
                 text.isEmpty ? nil : .init(role: .user, text: text)
             case .agent(_, let text, _, _):
                 text.isEmpty ? nil : .init(role: .agent, text: text)
-            case .thought, .toolCall, .fileEdit, .plan, .systemNotice:
+            case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
                 nil
             }
         }
@@ -219,6 +219,8 @@ enum ACPSessionForkSnapshotResolver {
             liveMessageID == storedMessageID && liveText.value == storedText
         case let (.toolCall(liveCall), .toolCall(storedCall)):
             liveCall.toolCallId == storedCall.toolCallId
+        case let (.visualAid(liveVisual), .visualAid(storedVisual)):
+            liveVisual.id == storedVisual.id
         case (.fileEdit, .fileEdit), (.plan, .plan), (.systemNotice, .systemNotice):
             true
         default:
@@ -234,7 +236,7 @@ extension ACPMessage {
             .user
         case .agent:
             .agent
-        case .thought, .toolCall, .fileEdit, .plan, .systemNotice:
+        case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
             nil
         }
     }

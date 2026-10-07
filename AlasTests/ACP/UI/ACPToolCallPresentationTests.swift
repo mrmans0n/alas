@@ -114,6 +114,17 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .mcp)
     }
 
+    @Test("visual_show reads as a visual aid, not a generic MCP call", arguments: [
+        ("mcp__alas__visual_show", "mcp__alas__visual_show"),
+        ("alas.visual_show", nil),
+    ] as [(String, String?)])
+    func visualShowPresentation(title: String, name: String?) {
+        let presentation = ACPToolCallPresentation.resolve(toolCall(title: title, name: name))
+        #expect(presentation.label == "Visual aid")
+        #expect(presentation.iconSystemName == "rectangle.on.rectangle")
+        #expect(presentation.style == .mcp)
+    }
+
     @Test("guardian review title maps to review presentation")
     func guardianReviewPresentation() {
         let presentation = ACPToolCallPresentation.resolve(toolCall(

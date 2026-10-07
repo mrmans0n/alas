@@ -17,15 +17,20 @@ struct ACPSessionTranscriptReaderTests {
             .fileEdit(id: UUID(), .init(path: "Sources/Parser.swift", added: 3, removed: 1)),
             .agent(id: UUID(), StreamingText("  ")),
             .agent(id: UUID(), StreamingText("    let indented = true\n")),
+            .visualAid(ACPVisualAid(
+                id: UUID(), title: "Layouts", html: "<h2>secret markup</h2>", question: nil,
+                answer: .answered(selectedOptionIds: ["b"], note: nil, at: Date()), createdAt: Date()
+            )),
         ]
 
         let result = ACPSessionTranscriptReader.entries(messages)
 
-        #expect(result.map(\.role) == ["user", "tool", "tool", "agent"])
+        #expect(result.map(\.role) == ["user", "tool", "tool", "agent", "tool"])
         #expect(result.map(\.text) == [
             "Fix the parser", "Bash [completed]", "Edited Sources/Parser.swift (+3 -1)", "    let indented = true\n",
+            "visual aid: Layouts (answered: b)",
         ])
-        #expect(result.map(\.index) == [0, 1, 2, 3])
+        #expect(result.map(\.index) == [0, 1, 2, 3, 4])
     }
 
     @Test("without an offset the latest entries are read, within both bounds")

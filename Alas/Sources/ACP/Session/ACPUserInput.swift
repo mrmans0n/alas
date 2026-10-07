@@ -4,6 +4,8 @@ struct ACPUserInputRequest: Identifiable, Equatable {
     enum Source: Equatable {
         case cursor(id: JSONRPCID, params: ACPQuestionRequestParams)
         case elicitation(id: JSONRPCID, params: ACPElicitationRequestParams)
+        /// A visual aid's question. Never queued on the elicitation coordinator.
+        case visualAid(UUID)
     }
 
     enum Mode: Equatable {

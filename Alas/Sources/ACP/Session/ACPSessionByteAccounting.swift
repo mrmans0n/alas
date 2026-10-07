@@ -30,6 +30,8 @@ extension ACPSession {
                 for item in items { total &+= UInt64(item.content.utf8.count) }
             case .systemNotice(_, let text):
                 total &+= UInt64(text.utf8.count)
+            case .visualAid(let visual):
+                total &+= UInt64(visual.title.utf8.count + visual.html.utf8.count)
             }
         }
         return total

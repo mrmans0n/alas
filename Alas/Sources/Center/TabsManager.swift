@@ -1229,6 +1229,18 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusVisualAid(owner: SessionOwnerID, state: VisualAidTabState) -> Tab {
+        let key = owner.storageKey
+        if let existing = tabs(forWorktree: key).first(where: { $0.id == state.id }) {
+            activate(worktreeId: key, tabId: state.id)
+            return existing
+        }
+        let tab = Tab.visualAid(state)
+        append(tab, to: key)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusPluginTab(worktreeId: String, state: PluginTabState) -> Tab {
         if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
             // A plugin update can rename a contribution while keeping its id; refresh the stored title.

@@ -105,6 +105,9 @@ final class ACPSession: ObservableObject, Identifiable {
     var normalQueuedTurnIDs: Set<UUID> = []
     /// The user row recorded on a queued attempt survives a failed RPC retry.
     var normalQueuedTurnUserMessageIDs: [UUID: UUID] = [:]
+    /// Unsent visual-aid answers by visual id. See `visualAidForm(for:)`.
+    private var visualAidForms: [UUID: ACPUserInputFormState] = [:]
+    private var visualAidSendStatuses: [UUID: ACPVisualAidSendStatus] = [:]
 
     func allocatePromptID() -> Int {
         nextPromptActivity.send()
@@ -2467,6 +2470,50 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
+    func appendVisualAid(_ visual: ACPVisualAid) {
+        clearRestoredContextRecoveryStatus()
+        // Like a file edit, a visual closes the current output run.
+        flushPendingReplayCandidates()
+        transcript.appendMessage(.visualAid(visual))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+    }
+
+    /// Drop a visual aid whose first write failed, with the per-card state the
+    /// UI kept for it. Returns the index it occupied, or nil when it is not in
+    /// the transcript. The removal is a direct `messages` mutation: the
+    /// transcript rebuilds its timestamp and index caches for it and the
+    /// remote change log records it as structural.
+    @discardableResult
+    func removeVisualAid(id visualId: UUID) -> Int? {
+        guard let index = transcript.messages.firstIndex(where: {
+            if case .visualAid(let existing) = $0 { return existing.id == visualId }
+            return false
+        }) else { return nil }
+        transcript.messages.remove(at: index)
+        visualAidForms[visualId] = nil
+        visualAidSendStatuses[visualId] = nil
+        return index
+    }
+
+    /// The native form for a visual's question, created once and kept on the
+    /// session so an unsent selection survives the card leaving the mount band.
+    func visualAidForm(for visual: ACPVisualAid) -> ACPUserInputFormState? {
+        if let form = visualAidForms[visual.id] { return form }
+        guard let request = ACPVisualAidQuestionForm.request(for: visual) else { return nil }
+        let form = ACPUserInputFormState(request: request)
+        visualAidForms[visual.id] = form
+        return form
+    }
+
+    /// Whether the last answer sent for a visual failed; survives the card unmounting.
+    func visualAidSendStatus(for visualId: UUID) -> ACPVisualAidSendStatus {
+        if let status = visualAidSendStatuses[visualId] { return status }
+        let status = ACPVisualAidSendStatus()
+        visualAidSendStatuses[visualId] = status
+        return status
+    }
+
     func replaceTranscriptMessages(
         _ messages: [ACPMessage],
         createdAts: [Date]? = nil,
@@ -3726,6 +3773,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .agent = transcript.messages[i] { return i }
             if case .toolCall = transcript.messages[i] { return nil }
             if case .fileEdit = transcript.messages[i] { return nil }
+            if case .visualAid = transcript.messages[i] { return nil }
         }
         return nil
     }
@@ -3740,6 +3788,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // new bubble, so a legacy chunk (or a replay continuation adopted
             // via this index) must not extend the pre-edit thought.
             if case .fileEdit = transcript.messages[i] { return nil }
+            if case .visualAid = transcript.messages[i] { return nil }
         }
         return nil
     }

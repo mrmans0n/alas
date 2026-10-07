@@ -218,7 +218,11 @@ struct ACPSessionForkPolicyTests {
         let agent: ACPMessage = .agent(
             id: UUID(), messageId: "a1", StreamingText("Answer")
         )
-        let stored = try [user, tool, agent].enumerated().map { index, message in
+        let visual: ACPMessage = .visualAid(ACPVisualAid(
+            id: UUID(), title: "Layouts", html: "<h2>Pick</h2>", question: nil, answer: nil,
+            createdAt: Date(timeIntervalSince1970: 0)
+        ))
+        let stored = try [user, tool, visual, agent].enumerated().map { index, message in
             ACPStoredMessage(
                 id: "source-\(index)",
                 sessionId: "source",
@@ -231,11 +235,11 @@ struct ACPSessionForkPolicyTests {
 
         let snapshot = try ACPSessionForkSnapshotResolver.resolve(
             boundary: .init(stableID: agent.stableId, kind: .agent),
-            liveMessages: [user, tool, agent],
+            liveMessages: [user, tool, visual, agent],
             storedMessages: stored
         )
 
-        #expect(snapshot.sourceBoundarySequence == 2)
+        #expect(snapshot.sourceBoundarySequence == 3)
         #expect(snapshot.messages == [
             .init(role: .user, text: "Question"),
             .init(role: .agent, text: "Answer")

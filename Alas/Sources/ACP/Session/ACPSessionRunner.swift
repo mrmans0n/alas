@@ -216,12 +216,24 @@ final class ACPSessionRunner {
     private var latestPromptTask: Task<Void, Never>?
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
-    /// Row ids whose individual write outcome a caller is awaiting, and the
-    /// ones among them a confirmed write actually stored. Both are populated
-    /// only while an `appendAndPersistSystemNoticeAwaitingResult` call is in
+    /// Callers awaiting the outcome of one specific row write, and the ones
+    /// among them a confirmed write actually stored. An awaiter names the row
+    /// id AND the exact payload it expects: another write of the same row id
+    /// (an earlier one still in flight when the caller mutated the row) must
+    /// not confirm it. Populated only while an `awaitingWrite` call is in
     /// flight, so the fire-and-forget persistence path pays nothing.
-    private var awaitedNoticeRowIDs: Set<String> = []
-    private var writtenAwaitedNoticeRowIDs: Set<String> = []
+    private struct AwaitedWrite {
+        let rowID: String
+        let payload: Data
+    }
+    private var awaitedWrites: [UUID: AwaitedWrite] = [:]
+    private var confirmedAwaitedWrites: Set<UUID> = []
+    /// Visual aids whose first write is unresolved, with the answers waiting on it.
+    private var unconfirmedVisualAids: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
+    /// Visual aids whose first write failed for good. One of these may still be in the transcript (a
+    /// ghost kept so the rows behind it do not shift) although the agent was told the visual failed
+    /// and may show it again, so it never takes an answer for the rest of the session.
+    private var failedFirstWriteVisualAidIDs: Set<UUID> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -4811,21 +4823,38 @@ extension ACPSessionRunner {
     /// which raises it optimistically at enqueue time — so it reports
     /// success for a notice whose own write was rejected by the fence or
     /// failed in SQLite, and the caller then deletes the inbox row that was
-    /// the notice's only other copy. `writtenAwaitedNoticeRowIDs` is
+    /// the notice's only other copy. `confirmedAwaitedWrites` is
     /// populated solely by `commitPersistedMessageRows`, which runs only on
-    /// a confirmed write of these exact rows, so an unwritten notice always
-    /// reports `false` and is retried from the inbox.
+    /// a confirmed write of this exact row payload, so an unwritten notice
+    /// always reports `false` and is retried from the inbox.
     func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        let rowID = messageRowID(session.transcript.messages.count)
-        awaitedNoticeRowIDs.insert(rowID)
-        defer {
-            awaitedNoticeRowIDs.remove(rowID)
-            writtenAwaitedNoticeRowIDs.remove(rowID)
+        let before = session.transcript.messages.count
+        session.appendSystemNotice(text)
+        return await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
+            persistFromIndex(before)
         }
-        appendAndPersistSystemNotice(text)
+    }
+
+    /// Enqueue a write of the row at `index` through `enqueue` and report
+    /// whether a confirmed write stored that row with the payload it holds
+    /// NOW. Matching the payload, not just the row id, keeps an earlier write
+    /// of the same row — still in flight when the row was mutated — from
+    /// confirming this one. Registering happens before any suspension point,
+    /// so no commit can slip in between the mutation and the registration.
+    private func awaitingWrite(ofRowAt index: Int, enqueue: () -> Void) async -> Bool {
+        guard session.transcript.messages.indices.contains(index),
+              let payload = try? ACPMessageCodec.encode(messageForPersistence(session.transcript.messages[index]))
+        else { return false }
+        let token = UUID()
+        awaitedWrites[token] = AwaitedWrite(rowID: messageRowID(index), payload: payload)
+        defer {
+            awaitedWrites[token] = nil
+            confirmedAwaitedWrites.remove(token)
+        }
+        enqueue()
         await flushPersistence()
-        return writtenAwaitedNoticeRowIDs.contains(rowID)
+        return confirmedAwaitedWrites.contains(token)
     }
 
     /// Append a file-edit card to the session AND persist it.
@@ -4833,6 +4862,93 @@ extension ACPSessionRunner {
         let before = session.transcript.messages.count
         session.appendFileEdit(edit)
         persistFromIndex(before)
+    }
+
+    /// Append a visual aid and report whether its row reached the store, the
+    /// way `appendAndPersistSystemNoticeAwaitingResult` does: `visual_show`
+    /// tells the agent the visual is shown only once it would survive a reload.
+    ///
+    /// Rows are keyed by position, so a failed card never shifts the rows behind it: a shifted
+    /// row's old and new positions cannot both be kept consistent in the store if the rewrite fails
+    /// too, and a lost message is worse than a ghost card.
+    /// - Last row: nothing follows it and its own row was never stored, so it is removed, and the
+    ///   agent's retry cannot leave a second card next to a ghost that a reload would lose.
+    /// - Rows were appended behind it while its write was in flight: it stays, and its single row is
+    ///   written once more. If that lands the card is stored and the call succeeds; if not, the card
+    ///   stays in memory unstored (a reload drops it) and the call fails.
+    func appendAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        let before = session.transcript.messages.count
+        unconfirmedVisualAids[visual.id] = []
+        failedFirstWriteVisualAidIDs.remove(visual.id)
+        session.appendVisualAid(visual)
+        var written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
+            persistFromIndex(before)
+        }
+        if !written, let index = session.transcript.messages.firstIndex(where: {
+            if case .visualAid(let existing) = $0 { return existing.id == visual.id }
+            return false
+        }) {
+            if index == session.transcript.messages.count - 1 {
+                session.removeVisualAid(id: visual.id)
+                // Nothing was stored at or after this index, so the caches must not claim otherwise.
+                persistedMessageCount = min(persistedMessageCount, index)
+                lastPersistedPayloads = lastPersistedPayloads.filter { $0.key < index }
+            } else {
+                written = await awaitingWrite(ofRowAt: index) {
+                    persistIndices([index])
+                }
+            }
+        }
+        if !written { failedFirstWriteVisualAidIDs.insert(visual.id) }
+        for waiter in unconfirmedVisualAids.removeValue(forKey: visual.id) ?? [] {
+            waiter.resume(returning: written)
+        }
+        return written
+    }
+
+    /// Waits until the visual's first write is resolved and reports whether it was stored, or, once it
+    /// is resolved, whether the card is in the transcript and its first write did not fail. An answer must not start earlier: the card
+    /// appears in the transcript before that write is confirmed, and if it then fails at the tail the
+    /// card is removed, which would also remove the row an already-queued answer had stored.
+    func awaitVisualAidFirstWrite(id visualId: UUID) async -> Bool {
+        guard unconfirmedVisualAids[visualId] != nil else {
+            return !failedFirstWriteVisualAidIDs.contains(visualId) && session.transcript.visualAid(id: visualId) != nil
+        }
+        return await withCheckedContinuation { continuation in
+            unconfirmedVisualAids[visualId]?.append(continuation)
+        }
+    }
+
+    /// Replace the visual aid with the same id in place and report whether
+    /// that row reached the store. The in-memory change happens before the
+    /// first suspension point, so a second answer already sees this one.
+    func replaceAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
+        guard holdsLeaseForWrite(),
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visual.id }
+                  return false
+              })
+        else { return false }
+        session.transcript.replaceMessage(at: index, with: .visualAid(visual))
+        return await awaitingWrite(ofRowAt: index) {
+            persistIndices([index])
+        }
+    }
+
+    /// Persist the row of a visual aid already changed in the transcript with
+    /// the payload it holds now, and report whether that exact payload was
+    /// committed. False without the lease, where nothing is written.
+    func persistVisualAidRowAwaitingResult(id visualId: UUID) async -> Bool {
+        guard holdsLeaseForWrite(),
+              let index = session.transcript.messages.firstIndex(where: {
+                  if case .visualAid(let existing) = $0 { return existing.id == visualId }
+                  return false
+              })
+        else { return false }
+        return await awaitingWrite(ofRowAt: index) {
+            persistIndices([index])
+        }
     }
 }
 
@@ -5214,9 +5330,9 @@ extension ACPSessionRunner {
     }
 
     /// The store's row id for the message at `index`. Single source of truth:
-    /// `awaitedNoticeRowIDs` matches on this, so a divergence between how a
+    /// `awaitedWrites` matches on this, so a divergence between how a
     /// row is written and how its write is confirmed would silently report
-    /// every awaited notice as unwritten.
+    /// every awaited write as unwritten.
     private func messageRowID(_ index: Int) -> String {
         "msg-\(sessionId)-\(index)"
     }
@@ -5226,8 +5342,8 @@ extension ACPSessionRunner {
             let index = Int(row.seq)
             persistedMessageCount = max(persistedMessageCount, index + 1)
             lastPersistedPayloads[index] = row.payload
-            if awaitedNoticeRowIDs.contains(row.id) {
-                writtenAwaitedNoticeRowIDs.insert(row.id)
+            for (token, awaited) in awaitedWrites where awaited.rowID == row.id && awaited.payload == row.payload {
+                confirmedAwaitedWrites.insert(token)
             }
         }
         trimLastPersistedPayloads()

@@ -731,7 +731,16 @@ private struct ACPSessionView: View {
             },
             showMinimap: showMinimap,
             collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
-            upstreamReferences: manager.upstreamReferences.store(for: worktree.path)
+            upstreamReferences: manager.upstreamReferences.store(for: worktree.path),
+            visualAidActions: .driven(by: manager, session: session, popOut: { visual in
+                let resolvedOwner = owner ?? .worktree(worktree.id)
+                state.tabs.openOrFocusVisualAid(
+                    owner: resolvedOwner,
+                    state: VisualAidTabState(
+                        ownerKey: resolvedOwner.storageKey, sessionId: sessionId, visualId: visual.id,
+                        title: visual.title)
+                )
+            })
         )
     }
 

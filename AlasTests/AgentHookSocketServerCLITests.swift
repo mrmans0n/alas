@@ -150,6 +150,124 @@ struct AgentHookSocketServerCLITests {
         #expect(request?.paths == ["/tmp/a.txt"])
     }
 
+    // MARK: - Request framing
+
+    private static let framedObject = #"{"a":"}{\"]","b":[1,{"c":[]}],"d":"\\"}"#
+
+    @Test(arguments: Array(1..<framedObject.utf8.count))
+    func framerCompletesExactlyAtTheClosingBraceWhateverTheSplit(split: Int) {
+        let bytes = Array(Self.framedObject.utf8)
+        var framer = JSONObjectFramer()
+        #expect(framer.feed(bytes[..<split]) == false)
+        #expect(framer.feed(bytes[split...]) == true)
+    }
+
+    @Test(arguments: [
+        (#"{"a":1}"#, true),
+        (#"  [1,[2]]"#, true),
+        (#"{"a":1}trailing"#, true),
+        (#"{"a":{"b":1}"#, false),
+        (#"{"a":"unterminated}"#, false),
+        (#"junk{"a":1}"#, false),
+        (#"}{"#, false),
+    ])
+    func framerReportsClosureOnlyForABalancedTopLevelValue(input: String, completes: Bool) {
+        var framer = JSONObjectFramer()
+        #expect(framer.feed(Array(input.utf8)) == completes)
+    }
+
+    /// Runs `readPayload` on one end of a socketpair while `writer` feeds the other.
+    private static func readPayload(
+        maxPayloadSize: Int = AgentHookSocketServer.maxPayloadSize,
+        deadline: TimeInterval = AgentHookSocketServer.requestDeadline,
+        writer: @escaping @Sendable (Int32) -> Void
+    ) throws -> Data? {
+        var fds: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer { close(fds[0]) }
+        let writerFD = fds[1]
+        var noSigPipe: Int32 = 1
+        setsockopt(writerFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        let thread = Thread {
+            writer(writerFD)
+            close(writerFD)
+        }
+        thread.start()
+        return AgentHookSocketServer.readPayload(from: fds[0], maxPayloadSize: maxPayloadSize, deadline: deadline)
+    }
+
+    private static func write(_ bytes: [UInt8], to fd: Int32) {
+        var offset = 0
+        while offset < bytes.count {
+            let n = bytes[offset...].withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+            if n <= 0 { return }
+            offset += n
+        }
+    }
+
+    @Test func readPayloadAcceptsExactlyTheSizeCapAndRejectsOneByteMore() throws {
+        func json(totalBytes: Int) -> [UInt8] {
+            let overhead = #"{"p":""}"#.utf8.count
+            return Array((#"{"p":""# + String(repeating: "x", count: totalBytes - overhead) + #""}"#).utf8)
+        }
+        let cap = 100_000
+        let atCap = json(totalBytes: cap)
+        let accepted = try Self.readPayload(maxPayloadSize: cap) { Self.write(atCap, to: $0) }
+        #expect(accepted?.count == cap)
+
+        let overCap = json(totalBytes: cap + 1)
+        let rejected = try Self.readPayload(maxPayloadSize: cap) { Self.write(overCap, to: $0) }
+        #expect(rejected == nil)
+    }
+
+    @Test func readPayloadGivesUpOnAClientThatDripsPastTheDeadline() throws {
+        let started = DispatchTime.now().uptimeNanoseconds
+        let result = try Self.readPayload(deadline: 0.3) { fd in
+            // Each gap is below SO_RCVTIMEO, so only the whole-request deadline can stop this.
+            for _ in 0..<100 {
+                Self.write([UInt8(ascii: "{")], to: fd)
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+        #expect(result == nil)
+        #expect(elapsed < 3)
+    }
+
+    @Test func visualShowRequestBeyondTheOldPayloadCapIsDelivered() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        actor Holder {
+            var request: AlasCLIRequest?
+            func set(_ request: AlasCLIRequest) { self.request = request }
+            func current() -> AlasCLIRequest? { request }
+        }
+        let holder = Holder()
+        server.onCLIRequest = { request in
+            await holder.set(request)
+            return .ok
+        }
+
+        // 512 KiB of quotes escapes to about 1 MiB on the wire.
+        let html = String(repeating: "\"", count: 512 * 1024)
+        let escaped = String(repeating: "\\\"", count: 512 * 1024)
+        let json = #"{"v":1,"kind":"cli","command":"visual_show","session_id":"s1","params":{"title":"T","html":""# + escaped + #""}}"#
+        let response = try await Self.sendToSocket(path: path, payload: json)
+        let object = try responseObject(response)
+
+        #expect(object["ok"] as? Bool == true)
+        let request = await holder.current()
+        guard case .visualShow(_, let delivered, _)? = request?.command else {
+            Issue.record("expected visualShow command, got \(String(describing: request?.command))")
+            return
+        }
+        #expect(delivered.count == html.count)
+    }
+
     @Test func cliRequestReturnsHandlerError() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }

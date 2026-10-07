@@ -8,6 +8,8 @@ struct ACPUserInputPrompt: View {
     /// peer question has no wire form for either, so it hides them rather
     /// than show buttons that cannot act.
     let showsDismissActions: Bool
+    /// Right-hand badge in the header. A question that blocks nothing says so.
+    let headerLabel: String
     @Environment(\.theme) private var theme
     @State private var formState: ACPUserInputFormState
     @State private var urlOpenError = false
@@ -23,7 +25,25 @@ struct ACPUserInputPrompt: View {
         self.onRespond = onRespond
         self.onOpenURL = onOpenURL
         self.showsDismissActions = showsDismissActions
+        self.headerLabel = "Awaiting input"
         _formState = State(initialValue: ACPUserInputFormState(request: request))
+    }
+
+    /// Renders a form whose state the caller owns, so something other than
+    /// these controls (a visual aid's page clicks) can edit the same selection.
+    init(
+        formState: ACPUserInputFormState,
+        onRespond: @escaping (UUID, ACPUserInputAction) -> Void,
+        onOpenURL: @escaping (UUID) async -> Bool,
+        showsDismissActions: Bool = true,
+        headerLabel: String = "Awaiting input"
+    ) {
+        self.request = formState.request
+        self.onRespond = onRespond
+        self.onOpenURL = onOpenURL
+        self.showsDismissActions = showsDismissActions
+        self.headerLabel = headerLabel
+        _formState = State(initialValue: formState)
     }
 
     var body: some View {
@@ -57,7 +77,7 @@ struct ACPUserInputPrompt: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
             Spacer(minLength: 8)
-            Text("Awaiting input")
+            Text(headerLabel)
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(theme.color("fg-muted"))
         }

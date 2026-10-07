@@ -28,6 +28,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case webPreview(WebPreviewTabState)
     case runReport(RunReportTabState)
     case plugin(PluginTabState)
+    case visualAid(VisualAidTabState)
 
     var id: TabID {
         switch self {
@@ -55,6 +56,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview(let s):   return s.id
         case .runReport(let s):    return s.id
         case .plugin(let s):       return s.id
+        case .visualAid(let s):    return s.id
         }
     }
 
@@ -84,6 +86,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview(let s):   return s.title
         case .runReport(let s):    return s.title
         case .plugin(let s):       return s.title
+        case .visualAid(let s):    return s.title
         }
     }
 
@@ -113,12 +116,15 @@ enum Tab: Codable, Equatable, Identifiable {
         case .webPreview:   return "globe"
         case .runReport:    return "terminal.fill"
         case .plugin:       return "puzzlepiece.extension"
+        case .visualAid:    return "rectangle.on.rectangle"
         }
     }
 
     var isRestorable: Bool {
         if case .runReport(let state) = self { return !state.isTransient }
         if case .ggLanding = self { return false }
+        // The visual lives in a session transcript that may not be live after relaunch.
+        if case .visualAid = self { return false }
         return true
     }
 
@@ -181,6 +187,23 @@ enum Tab: Codable, Equatable, Identifiable {
         default:
             return false
         }
+    }
+}
+
+struct VisualAidTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    /// `SessionOwnerID.storageKey` of the manager that owns the session.
+    let ownerKey: String
+    let sessionId: String
+    let visualId: UUID
+    let title: String
+
+    init(ownerKey: String, sessionId: String, visualId: UUID, title: String) {
+        self.ownerKey = ownerKey
+        self.sessionId = sessionId
+        self.visualId = visualId
+        self.title = title
+        self.id = "visual-aid:\(visualId.uuidString)"
     }
 }
 

@@ -3,7 +3,7 @@
 //! Hand-rolled on purpose — the surface is five methods; an MCP SDK would
 //! be the largest dependency in the workspace.
 
-use alas_client::{Command, Response, TransportError};
+use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{
@@ -152,10 +152,11 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The agent-facing tools, mirroring the CLI 1:1. Descriptions make
-/// explicit that these act on the user's Alas UI — that is what makes the
-/// agent-side permission prompt legible. `resolve` is internal and not
-/// exposed.
+/// The agent-facing tools. Most mirror a CLI command; `visual_show` is
+/// MCP-only because a terminal caller has no transcript to show it in.
+/// Descriptions make explicit that these act on the user's Alas UI — that is
+/// what makes the agent-side permission prompt legible. `resolve` is internal
+/// and not exposed.
 pub fn tool_definitions() -> Vec<Value> {
     tool_definitions_for_mode(false)
 }
@@ -230,6 +231,41 @@ fn all_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["body"]
+            }
+        }),
+        json!({
+            "name": "visual_show",
+            "description": "Show the user an HTML visual aid inline in their Alas transcript: UI prototypes, layouts, diagrams, side-by-side comparisons. Use it when seeing beats reading; answer in text otherwise. `html` may be a fragment, which Alas wraps in a themed frame providing these classes: options/option (with letter and content children) for A/B/C choices, cards/card/card-image/card-body, mockup/mockup-header/mockup-body, split (side by side), pros-cons/pros/cons, mock-nav, mock-sidebar, mock-content, mock-button, mock-input, placeholder, subtitle, section, label. A document starting with <!DOCTYPE or <html is used as is. Scripts, styles, fonts and images may load from https CDNs; fetch, XHR and WebSockets are blocked. To ask the user to pick, pass `question` and put data-choice=\"<option id>\" on the matching elements: clicking one selects that option on a native card under the visual. The tool returns at once; the user's answer, if any, arrives as their next message, so end your turn after asking.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Short title shown above the visual." },
+                    "html": { "type": "string", "minLength": 1, "description": "HTML fragment or full document. Must contain non-whitespace; at most 512 KiB (524288 bytes) of UTF-8." },
+                    "question": {
+                        "type": "object",
+                        "description": "Optional single question answered from a native card.",
+                        "properties": {
+                            "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "options": {
+                                "type": "array",
+                                "description": "Option ids must be unique.",
+                                "minItems": 2,
+                                "maxItems": 8,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+                                        "label": { "type": "string", "minLength": 1, "maxLength": 200 }
+                                    },
+                                    "required": ["id", "label"]
+                                }
+                            },
+                            "allow_multiple": { "type": "boolean" }
+                        },
+                        "required": ["prompt", "options"]
+                    }
+                },
+                "required": ["title", "html"]
             }
         }),
         json!({
@@ -684,7 +720,9 @@ fn simple_preview_tool(name: &str, description: &str) -> Value {
 }
 
 fn is_workspace_tool(name: &str) -> bool {
-    name.starts_with("workspace_") || name.starts_with("preview_") || name == "session_read"
+    name.starts_with("workspace_")
+        || name.starts_with("preview_")
+        || matches!(name, "session_read" | "visual_show")
 }
 
 /// Translate a tool call into the CLI command it mirrors. Relative `open`
@@ -805,6 +843,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 role,
             })
         }
+        "visual_show" => visual_show_command(args),
         "session_send" => Ok(Command::SessionSend {
             session_id: required_string(args, "session_id")?,
             prompt: required_string(args, "prompt")?,
@@ -1105,6 +1144,76 @@ fn required_limited_string(args: &Value, key: &str, max_bytes: usize) -> Result<
         .ok_or_else(|| format!("missing required argument '{key}'"))
 }
 
+const VISUAL_TITLE_MAX_CHARS: usize = 120;
+const VISUAL_HTML_MAX_BYTES: usize = 512 * 1024;
+const VISUAL_PROMPT_MAX_CHARS: usize = 500;
+const VISUAL_OPTION_ID_MAX_CHARS: usize = 64;
+const VISUAL_OPTION_LABEL_MAX_CHARS: usize = 200;
+
+fn visual_show_command(args: &Value) -> Result<Command, String> {
+    let title = required_string(args, "title")?;
+    if title.chars().count() > VISUAL_TITLE_MAX_CHARS {
+        return Err(format!("title must be at most {VISUAL_TITLE_MAX_CHARS} characters"));
+    }
+    // Exact: the HTML reaches the page byte for byte.
+    let html = required_exact_string(args, "html")?;
+    if html.trim().is_empty() {
+        return Err("html must be non-empty".into());
+    }
+    if html.len() > VISUAL_HTML_MAX_BYTES {
+        return Err(format!("html must be at most {VISUAL_HTML_MAX_BYTES} bytes"));
+    }
+    let question = match args.get("question") {
+        None | Some(Value::Null) => None,
+        Some(value @ Value::Object(_)) => Some(visual_question(value)?),
+        Some(_) => return Err("question must be an object".into()),
+    };
+    Ok(Command::VisualShow { title, html, question })
+}
+
+fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
+    let prompt = required_string(value, "prompt")
+        .map_err(|_| "question.prompt is required".to_string())?;
+    if prompt.chars().count() > VISUAL_PROMPT_MAX_CHARS {
+        return Err(format!("question.prompt must be at most {VISUAL_PROMPT_MAX_CHARS} characters"));
+    }
+    let raw_options = value
+        .get("options")
+        .and_then(Value::as_array)
+        .ok_or("question.options must be an array")?;
+    if !(2..=8).contains(&raw_options.len()) {
+        return Err("question.options must have 2 to 8 items".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut options = Vec::with_capacity(raw_options.len());
+    for option in raw_options {
+        let id = option.get("id").and_then(Value::as_str).unwrap_or_default();
+        let valid_id = (1..=VISUAL_OPTION_ID_MAX_CHARS).contains(&id.chars().count())
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !valid_id {
+            return Err(format!(
+                "question option id '{id}' must be 1 to {VISUAL_OPTION_ID_MAX_CHARS} characters of A-Z, a-z, 0-9, '-' or '_'"
+            ));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(format!("question option id '{id}' is duplicated"));
+        }
+        let label = option.get("label").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+        if !(1..=VISUAL_OPTION_LABEL_MAX_CHARS).contains(&label.chars().count()) {
+            return Err(format!(
+                "question option '{id}' label must be 1 to {VISUAL_OPTION_LABEL_MAX_CHARS} characters"
+            ));
+        }
+        options.push(VisualOption { id: id.into(), label: label.into() });
+    }
+    let allow_multiple = match value.get("allow_multiple") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(flag)) => *flag,
+        Some(_) => return Err("question.allow_multiple must be a boolean".into()),
+    };
+    Ok(VisualQuestion { prompt, options, allow_multiple })
+}
+
 fn required_exact_string(args: &Value, key: &str) -> Result<String, String> {
     match args.get(key) {
         Some(Value::String(value)) => Ok(value.clone()),
@@ -1324,9 +1433,28 @@ fn call_tool(
     })
 }
 
+fn visual_show_result(lines: Option<&[String]>) -> Value {
+    let visual_id = lines
+        .and_then(|lines| lines.first())
+        .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        .and_then(|reply| reply.get("visual_id").and_then(Value::as_str).map(String::from));
+    match visual_id {
+        Some(id) => text_result(
+            format!(
+                "Shown to the user as visual {id}. Their selection, if any, arrives as their next message. End your turn unless you have more to show."
+            ),
+            false,
+        ),
+        None => text_result("Alas did not confirm the visual.".into(), true),
+    }
+}
+
 fn tool_result(command: &Command, resp: Response) -> Value {
     if !resp.ok {
         return text_result(resp.error.unwrap_or_else(|| "request failed".into()), true);
+    }
+    if matches!(command, Command::VisualShow { .. }) {
+        return visual_show_result(resp.lines.as_deref());
     }
     if matches!(
         command,
@@ -1367,6 +1495,7 @@ fn success_message(command: &Command) -> String {
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
+        Command::VisualShow { .. } => "Visual shown.".into(),
         Command::SessionRead { .. }
         | Command::SessionSearch { .. }
         | Command::SessionWait { .. }
@@ -1950,7 +2079,9 @@ fn handle_http_connection(
     // (pre-auth) read with a timeout; on timeout we answer 400 and move on.
     let _ = stream.set_read_timeout(Some(HTTP_IO_TIMEOUT));
 
-    const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+    // A 512 KiB `visual_show` html argument can grow several-fold under JSON
+    // escaping; 4 MiB keeps every schema-valid call transportable.
+    const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 8192];
     let request = loop {
@@ -2113,9 +2244,9 @@ mod tests {
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
         handle_line_with_parent, http_response, initialize_result, is_initialize_message,
         parse_http_request, register_pending_preview, runs_on_worker, session_wait_timed_out,
-        tools_call_command,
+        tool_result, tools_call_command,
     };
-    use alas_client::{Command, Response};
+    use alas_client::{Command, Response, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
 
     #[test]
@@ -2303,6 +2434,78 @@ mod tests {
     }
 
     #[test]
+    fn visual_show_maps_arguments_and_keeps_html_bytes() {
+        let cmd = command_for_tool(
+            "visual_show",
+            &json!({
+                "title": " Layouts ",
+                "html": "  <h2>Pick</h2>\n",
+                "question": {
+                    "prompt": "Which?",
+                    "options": [{ "id": "a", "label": "One" }, { "id": "b", "label": "Two" }],
+                    "allow_multiple": true
+                }
+            }),
+            "/wt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::VisualShow {
+                title: "Layouts".into(),
+                html: "  <h2>Pick</h2>\n".into(),
+                question: Some(VisualQuestion {
+                    prompt: "Which?".into(),
+                    options: vec![
+                        VisualOption { id: "a".into(), label: "One".into() },
+                        VisualOption { id: "b".into(), label: "Two".into() },
+                    ],
+                    allow_multiple: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn visual_show_rejects_out_of_contract_arguments() {
+        let one = json!([{ "id": "a", "label": "One" }]);
+        let duplicate = json!([{ "id": "a", "label": "One" }, { "id": "a", "label": "Two" }]);
+        let bad_id = json!([{ "id": "a b", "label": "One" }, { "id": "b", "label": "Two" }]);
+        let cases = [
+            json!({ "title": "T" }),
+            json!({ "title": "T", "html": "   " }),
+            json!({ "title": "T", "html": "x".repeat(512 * 1024 + 1) }),
+            json!({ "title": "x".repeat(121), "html": "<p>" }),
+            json!({ "title": "T", "html": "<p>", "question": { "prompt": "Q", "options": one } }),
+            json!({ "title": "T", "html": "<p>", "question": { "prompt": "Q", "options": duplicate } }),
+            json!({ "title": "T", "html": "<p>", "question": { "prompt": "Q", "options": bad_id } }),
+            json!({ "title": "T", "html": "<p>", "question": "Which?" }),
+        ];
+        for args in cases {
+            assert!(command_for_tool("visual_show", &args, "/wt").is_err(), "accepted {args}");
+        }
+    }
+
+    #[test]
+    fn visual_show_result_reports_the_visual_id() {
+        let cmd = Command::VisualShow { title: "T".into(), html: "<p>".into(), question: None };
+        let result = tool_result(
+            &cmd,
+            Response {
+                ok: true,
+                lines: Some(vec![r#"{"visual_id":"ABC"}"#.into()]),
+                error: None,
+                exit_code: None,
+            },
+        );
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(
+            result["content"][0]["text"],
+            json!("Shown to the user as visual ABC. Their selection, if any, arrives as their next message. End your turn unless you have more to show.")
+        );
+    }
+
+    #[test]
     fn unknown_method_is_method_not_found() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#;
         let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
@@ -2336,6 +2539,7 @@ mod tests {
             [
                 "open",
                 "notify",
+                "visual_show",
                 "agent_list",
                 "session_list",
                 "session_new",
@@ -2452,6 +2656,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "visual_show",
                 "session_read",
                 "preview_list",
                 "preview_open",
@@ -2560,6 +2765,24 @@ mod tests {
         )
         .unwrap();
         assert!(preview_open.get("error").is_none());
+
+        let visual = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"visual_show","arguments":{"title":"Pick","html":"<p>hi</p>"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert!(matches!(command, Command::VisualShow { title, .. } if title == "Pick"));
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![r#"{"visual_id":"v1"}"#.into()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(visual.get("error").is_none());
     }
 
     #[test]
@@ -2666,6 +2889,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"workspace_list"));
         assert!(names.contains(&"preview_capture"));
+        assert!(names.contains(&"visual_show"));
         assert!(!names.contains(&"open"));
     }
 

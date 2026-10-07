@@ -7440,12 +7440,8 @@ final class AppState {
                     let currentOwner = sessionOwnerLookup(sessionID)
                         ?? sessionWorktreeLookup(sessionID).map(SessionOwnerID.worktree)
                     guard currentOwner == owner else { return false }
-                    if let session = self.session(for: sessionID) {
-                        return session.owner == owner && self.isWriter(for: sessionID)
-                            && self.tabs.tabs(for: owner).contains {
-                                guard case .acpSession(let tab) = $0 else { return false }
-                                return tab.sessionId == sessionID
-                            }
+                    if self.session(for: sessionID) != nil {
+                        return self.isAuthorizedACPWriter(sessionID: sessionID, owner: owner)
                     }
                     return self.tabs.tabs(for: owner).contains {
                         guard case .terminal(let tab) = $0 else { return false }
@@ -7455,6 +7451,15 @@ final class AppState {
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
+            },
+            showVisualAid: { [weak self] sessionID, visual in
+                guard let self else { return .error("Alas is not available.") }
+                guard let owner = sessionOwnerLookup(sessionID),
+                      self.isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner),
+                      let manager = self.acpManager(forSession: sessionID),
+                      await manager.showVisualAid(visual, in: sessionID)
+                else { return .error("This session can't show visuals right now.") }
+                return .text([#"{"visual_id":"\#(visual.id.uuidString)"}"#])
             }
         )
     }
@@ -9967,6 +9972,8 @@ final class AppState {
             if !title.isEmpty { return title }
             let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
             return message.isEmpty ? nil : message
+        case .visualAid:
+            return nil
         }
     }
 
@@ -9983,6 +9990,8 @@ final class AppState {
         switch request.source {
         case .cursor(let id, _), .elicitation(let id, _):
             return notificationRequestId(for: id)
+        case .visualAid(let id):
+            return id.uuidString
         }
     }
 
@@ -12698,6 +12707,10 @@ final class AppState {
 
     func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
         acpManagers[owner]
+    }
+
+    func acpManager(forOwnerKey key: String) -> ACPSessionManager? {
+        acpManagers.first { $0.key.storageKey == key }?.value
     }
 
     // MARK: Session references
@@ -15433,6 +15446,28 @@ extension AppState: RemoteSessionsProvider {
             if let s = mgr.liveSession(for: id) { return s }
         }
         return nil
+    }
+
+    /// A live ACP session that belongs to `owner` and that this process
+    /// drives. Appending a transcript row needs no visible tab, so delegated
+    /// children without one qualify.
+    func isAuthorizedACPSessionWriter(sessionID: String, owner: SessionOwnerID) -> Bool {
+        guard let session = session(for: sessionID) else { return false }
+        return session.owner == owner && isWriter(for: sessionID)
+    }
+
+    /// The ACP half of CLI caller authorization: the session belongs to
+    /// `owner`, this process drives it, and the owner still shows its ACP tab.
+    func isAuthorizedACPWriter(sessionID: String, owner: SessionOwnerID) -> Bool {
+        guard isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner) else { return false }
+        return tabs.tabs(for: owner).contains {
+            guard case .acpSession(let tab) = $0 else { return false }
+            return tab.sessionId == sessionID
+        }
+    }
+
+    func acpManager(forSession id: String) -> ACPSessionManager? {
+        acpManagers.values.first { $0.liveSession(for: id) != nil }
     }
 
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? {

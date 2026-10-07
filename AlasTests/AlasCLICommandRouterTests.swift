@@ -1397,6 +1397,26 @@ struct AlasCLICommandRouterTests {
         #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
     }
 
+    @Test func visualShowRequiresAnACPSession() async {
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "terminal-1" ? worktree.id : nil },
+            resolveACPSessionOrigin: { _ in nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+        let command = AlasCLIRequest.Command.visualShow(title: "T", html: "<p>", question: nil)
+
+        let terminal = await router.handle(.init(version: 1, sessionId: "terminal-1", cwd: nil, command: command))
+        let directory = await router.handle(.init(version: 1, sessionId: nil, cwd: worktree.path.path, command: command))
+
+        #expect(terminal == .error("visual_show is only available to ACP agent sessions"))
+        #expect(directory == .error("visual_show is only available to ACP agent sessions"))
+    }
+
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],

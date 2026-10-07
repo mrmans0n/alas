@@ -73,7 +73,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
         set { lock.withLock { _onMCPHello = newValue } }
     }
 
-    static let maxPayloadSize = 65_536
+    /// Large enough for `visual_show` requests: up to 512 KiB of HTML, which
+    /// JSON-escaping can inflate several times over on the wire.
+    static let maxPayloadSize = 4 * 1024 * 1024
     private static let maxConcurrentClientTasks = 16
     private static let clientIOTimeout = timeval(tv_sec: 5, tv_usec: 0)
 
@@ -365,30 +367,41 @@ final class AgentHookSocketServer: @unchecked Sendable {
         return json["kind"] as? String
     }
 
-    static func readPayload(from clientFD: Int32) -> Data? {
-        // Read in chunks; after each chunk, try to parse what we have as
-        // JSON. As soon as it parses, return — this avoids waiting for the
-        // client to close (or the SO_RCVTIMEO to fire). macOS `nc` doesn't
-        // half-close on stdin EOF without `-N` (which it doesn't support
-        // anyway), so each hook would otherwise wait the full `-w1`
+    /// Whole-request budget. `SO_RCVTIMEO` restarts on every read, so it alone
+    /// cannot stop a client that drips bytes to hold a slot indefinitely.
+    static let requestDeadline: TimeInterval = 10
+
+    static func readPayload(
+        from clientFD: Int32,
+        maxPayloadSize: Int = AgentHookSocketServer.maxPayloadSize,
+        deadline: TimeInterval = AgentHookSocketServer.requestDeadline
+    ) -> Data? {
+        // Read in chunks and track JSON framing incrementally. As soon as a
+        // top-level value closes, parse once and return — this avoids waiting
+        // for the client to close (or the SO_RCVTIMEO to fire). macOS `nc`
+        // doesn't half-close on stdin EOF without `-N` (which it doesn't
+        // support anyway), so each hook would otherwise wait the full `-w1`
         // second per invocation, adding ~1s of latency to every Claude
         // prompt/tool/stop event.
         var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
+        var framer = JSONObjectFramer()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        let limit = DispatchTime.now().uptimeNanoseconds &+ UInt64(deadline * 1_000_000_000)
         while data.count < maxPayloadSize {
-            let bytesRead = read(clientFD, &buffer, buffer.count)
+            let wanted = min(buffer.count, maxPayloadSize - data.count)
+            let bytesRead = read(clientFD, &buffer, wanted)
             if bytesRead < 0 {
                 guard errno == EINTR else { return nil }
+                if DispatchTime.now().uptimeNanoseconds > limit { return nil }
                 continue
             }
             if bytesRead == 0 { return data.isEmpty ? nil : data }
-            data.append(contentsOf: buffer.prefix(bytesRead))
-            // Cheap parse probe: if the bytes form a complete JSON object
-            // already, we're done. Malformed bytes won't parse and we keep
-            // reading.
-            if !data.isEmpty, (try? JSONSerialization.jsonObject(with: data)) != nil {
+            data.append(contentsOf: buffer[0..<bytesRead])
+            if framer.feed(buffer[0..<bytesRead]),
+               (try? JSONSerialization.jsonObject(with: data)) != nil {
                 return data
             }
+            if DispatchTime.now().uptimeNanoseconds > limit { return nil }
         }
         return nil
     }
@@ -633,5 +646,63 @@ extension AgentHookEvent {
               let eventStr = json["event"] as? String,
               AgentLifecycleEventMapper.map(eventStr) == nil else { return false }
         return true
+    }
+}
+
+/// Incremental framing for one top-level JSON object or array. Costs O(1) per
+/// byte and holds no buffer, so a client dripping bytes cannot force repeated
+/// full parses. It only locates the closing brace; validation stays with
+/// `JSONSerialization`.
+struct JSONObjectFramer {
+    private var depth = 0
+    private var inString = false
+    private var escaped = false
+    private var finished = false
+
+    /// Feeds the next bytes. Returns `true` once, on the feed in which the
+    /// outermost `{`/`[` closes. Bytes before the opener, other than
+    /// whitespace, mean the input is not a framed object and it never completes.
+    mutating func feed<Bytes: Sequence>(_ bytes: Bytes) -> Bool where Bytes.Element == UInt8 {
+        guard !finished else { return false }
+        for byte in bytes {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                if depth == 0 {
+                    finished = true
+                    return false
+                }
+                inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth -= 1
+                if depth == 0 {
+                    finished = true
+                    return true
+                }
+                if depth < 0 {
+                    finished = true
+                    return false
+                }
+            case UInt8(ascii: " "), UInt8(ascii: "\n"), UInt8(ascii: "\r"), UInt8(ascii: "\t"):
+                continue
+            default:
+                if depth == 0 {
+                    finished = true
+                    return false
+                }
+            }
+        }
+        return false
     }
 }

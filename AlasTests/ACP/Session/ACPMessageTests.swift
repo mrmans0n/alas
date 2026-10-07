@@ -418,4 +418,22 @@ struct ACPMessageTests {
         #expect(echoed == attachment)
         #expect(echoed.hashValue == attachment.hashValue)
     }
+
+    @Test("visual aid round-trips with its answer state", arguments: [
+        ACPVisualAid.Answer?.none,
+        .answered(selectedOptionIds: ["b"], note: "Keep it", at: Date(timeIntervalSince1970: 1_700_000_000)),
+        .dismissed(at: Date(timeIntervalSince1970: 1_700_000_000)),
+    ])
+    func visualAidRoundtrip(answer: ACPVisualAid.Answer?) throws {
+        let visual = ACPVisualAid(
+            id: UUID(), title: "Layouts", html: "<h2>Pick</h2>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false),
+            answer: answer, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let message = ACPMessage.visualAid(visual)
+        let payload = try ACPMessageCodec.encode(message)
+        #expect(message.kind == "visual_aid")
+        #expect(try ACPMessageCodec.decode(kind: message.kind, payload: payload) == message)
+        #expect(try ACPMessageWire.decode(kind: message.kind, payload: payload) == .visualAid(visual))
+    }
 }

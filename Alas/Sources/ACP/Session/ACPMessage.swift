@@ -8,6 +8,7 @@ enum ACPMessage: Equatable {
     case fileEdit(id: UUID, FileEdit)
     case plan(id: UUID, [PlanItem])
     case systemNotice(id: UUID, text: String)
+    case visualAid(ACPVisualAid)
 
     static func user(id: UUID, text: String, attachments: [Attachment]) -> ACPMessage {
         .user(id: id, messageId: nil, text: text, attachments: attachments)
@@ -31,6 +32,7 @@ enum ACPMessage: Equatable {
         case fileEdit(UUID)
         case plan(UUID)
         case systemNotice(UUID)
+        case visualAid(UUID)
         case toolCall(String)
     }
 
@@ -48,6 +50,8 @@ enum ACPMessage: Equatable {
             .plan(id)
         case .systemNotice(let id, _):
             .systemNotice(id)
+        case .visualAid(let visual):
+            .visualAid(visual.id)
         case .toolCall(let tc):
             .toolCall(tc.toolCallId)
         }
@@ -60,7 +64,7 @@ enum ACPMessage: Equatable {
     /// Mirrors `ACPMessageWire.isAgentSideProgress`.
     var isAgentSideProgress: Bool {
         switch self {
-        case .agent, .thought, .toolCall, .fileEdit, .plan:
+        case .agent, .thought, .toolCall, .fileEdit, .plan, .visualAid:
             true
         case .user, .systemNotice:
             false
@@ -76,7 +80,7 @@ enum ACPMessage: Equatable {
         case .thoughtMessageId(let messageId):
             "acp-thought:\(messageId)"
         case .userUUID(let id), .agentUUID(let id), .thoughtUUID(let id),
-             .fileEdit(let id), .plan(let id), .systemNotice(let id):
+             .fileEdit(let id), .plan(let id), .systemNotice(let id), .visualAid(let id):
             id.uuidString
         case .toolCall(let toolCallId):
             "tc-\(toolCallId)"
@@ -94,6 +98,8 @@ enum ACPMessage: Equatable {
             text.utf8.count
         case .toolCall(let tc):
             tc.content.utf8.count
+        case .visualAid(let visual):
+            visual.title.utf8.count + visual.html.utf8.count
         case .fileEdit, .plan:
             0
         }
@@ -108,6 +114,7 @@ enum ACPMessage: Equatable {
         case .fileEdit: "file_edit"
         case .plan: "plan"
         case .systemNotice: "system"
+        case .visualAid: "visual_aid"
         }
     }
 
@@ -630,6 +637,7 @@ enum ACPMessageCodec {
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
         case .systemNotice(_, let text):    return try encoder.encode(TextPayload(text: text))
+        case .visualAid(let visual):        return try encoder.encode(visual)
         }
     }
 
@@ -651,6 +659,8 @@ enum ACPMessageCodec {
             return .fileEdit(id: UUID(), try JSONDecoder().decode(ACPMessage.FileEdit.self, from: payload))
         case "plan":
             return .plan(id: UUID(), try JSONDecoder().decode(PlanPayload.self, from: payload).items)
+        case "visual_aid":
+            return .visualAid(try JSONDecoder().decode(ACPVisualAid.self, from: payload))
         case "system":
             return .systemNotice(id: UUID(), text: try JSONDecoder().decode(TextPayload.self, from: payload).text)
         default:
