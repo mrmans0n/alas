@@ -91,6 +91,12 @@ struct SidebarView: View {
                                             checkouts: state.workspacesManager.checkouts
                                         )
                                     },
+                                    onOpenWorkspaceCheckout: { checkout in
+                                        state.openWorkspaceCheckoutMember(
+                                            checkoutID: checkout.checkoutID,
+                                            memberID: checkout.memberID
+                                        )
+                                    },
                                     operationState: { wt in
                                         state.projectsManager.operationState(
                                             forWorktreeId: wt.id,
