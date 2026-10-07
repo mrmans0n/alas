@@ -33,8 +33,7 @@ enum PluginStatusText {
 struct PluginsPane: View {
     let state: AppState
     @Environment(\.theme) var theme
-    /// Shown one at a time: Update All, or two downloads finishing together, can ask more than once.
-    @State private var pendingApprovals: [PluginApprovalRequest] = []
+    @State private var approvals = PluginApprovalQueue()
     @State private var configuring: PluginPanelTarget?
     /// Install or update failures, by catalog entry id, until the next attempt.
     @State private var installFailures: [String: String] = [:]
@@ -62,12 +61,11 @@ struct PluginsPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
-        // Requests leave the queue only through `finish`, which the sheet calls exactly once, however it closes.
-        .sheet(item: Binding(get: { pendingApprovals.first }, set: { _ in })) { request in
-            PluginApprovalSheet(request: request) { approved in
-                pendingApprovals.removeAll { $0.id == request.id }
-                request.finish(approved)
-            }
+        .onAppear { approvals.isShown = true }
+        .onDisappear { approvals.close() }
+        // Requests leave the queue only through `finish`, which the sheet calls however it closes.
+        .sheet(item: Binding(get: { approvals.requests.first }, set: { _ in })) { request in
+            PluginApprovalSheet(request: request) { approvals.finish(request.id, $0) }
         }
         .sheet(item: $configuring) { target in
             PluginConfigureSheet(target: target) { configuring = nil }
@@ -123,7 +121,7 @@ struct PluginsPane: View {
                             }
                         } else {
                             AlasButton(title: "Approve…", style: .normal) {
-                                pendingApprovals.append(PluginApprovalRequest(manifest: plugin.manifest) { approved in
+                                approvals.ask(PluginApprovalRequest(manifest: plugin.manifest) { approved in
                                     if approved { Task { await manager.approve(plugin) } }
                                 })
                             }
@@ -304,9 +302,11 @@ struct PluginsPane: View {
         guard !busy.contains(entry.id) else { return }
         let from = manager.plugin(id: entry.id)?.manifest.version ?? ""
         busy.insert(entry.id)
+        // The instance itself, not the @State read later: the download may finish after the pane has gone.
+        let approvals = self.approvals
         installFailures[entry.id] = await manager.install(entry, version) { manifest, added in
             await withCheckedContinuation { continuation in
-                pendingApprovals.append(PluginApprovalRequest(manifest: manifest, update: .init(from: from, added: added)) {
+                approvals.ask(PluginApprovalRequest(manifest: manifest, update: .init(from: from, added: added)) {
                     continuation.resume(returning: $0)
                 })
             }
@@ -507,11 +507,37 @@ private struct PluginApprovalRequest: Identifiable {
     let finish: (Bool) -> Void
 }
 
+/// Approval requests shown one at a time: Update All, or two downloads finishing together, can ask more than once.
+/// Install tasks keep it past the pane, so every request is answered: one made after the pane closed is declined.
+@MainActor
+@Observable
+private final class PluginApprovalQueue {
+    private(set) var requests: [PluginApprovalRequest] = []
+    var isShown = false
+
+    func ask(_ request: PluginApprovalRequest) {
+        guard isShown else { return request.finish(false) }
+        requests.append(request)
+    }
+
+    /// Answers a request once; later calls for it do nothing.
+    func finish(_ id: UUID, _ approved: Bool) {
+        guard let index = requests.firstIndex(where: { $0.id == id }) else { return }
+        requests.remove(at: index).finish(approved)
+    }
+
+    func close() {
+        isShown = false
+        let pending = requests
+        requests = []
+        for request in pending { request.finish(false) }
+    }
+}
+
 private struct PluginApprovalSheet: View {
     let request: PluginApprovalRequest
     let finish: (Bool) -> Void
     @State private var acceptsFullAccess = false
-    @State private var finished = false
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -548,21 +574,15 @@ private struct PluginApprovalSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Cancel") { close(false) }.keyboardShortcut(.cancelAction)
-                Button(request.update == nil ? "Approve" : "Update and Approve") { close(true) }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { finish(false) }.keyboardShortcut(.cancelAction)
+                Button(request.update == nil ? "Approve" : "Update and Approve") { finish(true) }.keyboardShortcut(.defaultAction)
                     .disabled(!fullAccess.isEmpty && !acceptsFullAccess)
             }
         }
         .padding(20)
         .frame(width: 460)
-        // Closed some other way, such as Settings closing: an update waiting on the answer must still get one.
-        .onDisappear { close(false) }
-    }
-
-    private func close(_ approved: Bool) {
-        guard !finished else { return }
-        finished = true
-        finish(approved)
+        // Closed some other way: an update waiting on the answer must still get one.
+        .onDisappear { finish(false) }
     }
 
     private func disclosure(sandboxed: [PluginCapability], fullAccess: [PluginCapability]) -> some View {
