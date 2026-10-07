@@ -277,8 +277,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         icon: { state.effectiveIcon(for: $0) }
                     )
                     Text(workspace.name)
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundColor(theme.color(selected ? "fg" : "fg-muted"))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .tracking(-0.12)
+                        .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
