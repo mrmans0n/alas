@@ -28,7 +28,9 @@ final class ZmxPassiveClient: @unchecked Sendable {
         /// No response to the first `Capture` before the deadline: the
         /// running daemon predates `Capture` and must be restarted.
         case captureUnsupported
-        /// Invalid framing, an oversized payload, or a later capture timeout.
+        /// A frame declared a payload above `ZmxIPC.maxPayloadLength`.
+        case overflow
+        /// Invalid framing or a capture timeout after the first.
         case protocolError(String)
     }
 
@@ -123,7 +125,7 @@ final class ZmxPassiveClient: @unchecked Sendable {
             do {
                 frames = try decoder.push(chunk)
             } catch {
-                finish(.protocolError("\(error)"))
+                finish(.overflow)
                 return
             }
             delivery.lock()

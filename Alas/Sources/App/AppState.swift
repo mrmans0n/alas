@@ -700,6 +700,9 @@ final class AppState {
     /// by `syncRemoteServer()`.
     @ObservationIgnored
     private(set) var remoteServer: RemoteServer?
+    /// Built on first peer console request; see `AppState+PeerConsoles`.
+    @ObservationIgnored
+    var _peerConsoleHost: PeerConsoleHost?
     @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
@@ -910,6 +913,7 @@ final class AppState {
             if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
+            _peerConsoleHost?.shutdown()
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]

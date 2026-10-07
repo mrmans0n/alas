@@ -185,7 +185,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: [PeerConsoleCapability.v1]))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -207,7 +207,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true, capabilities: [PeerConsoleCapability.v1]))
         task.cancel(with: .goingAway, reason: nil)
     }
 

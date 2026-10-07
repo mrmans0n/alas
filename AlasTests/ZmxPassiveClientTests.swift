@@ -77,7 +77,7 @@ import Testing
     // MARK: Passive client over a socket pair
 
     @Test func passiveAttachCapturesFirstAndOrdersStreamAroundTheSnapshot() async throws {
-        let pair = try SocketPair()
+        let pair = try ZmxSocketPair()
         let events = EventLog()
         let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 500) {
             events.append($0)
@@ -112,7 +112,7 @@ import Testing
     }
 
     @Test func daemonThatIgnoresCaptureIsReportedUnsupported() async throws {
-        let pair = try SocketPair()
+        let pair = try ZmxSocketPair()
         let events = EventLog()
         let client = ZmxPassiveClient(
             socket: ZmxIPCSocket(fd: pair.client),
@@ -126,19 +126,16 @@ import Testing
         #expect(!client.send(Data("x".utf8)))
     }
 
-    @Test func oversizedFrameDetachesWithProtocolError() async throws {
-        let pair = try SocketPair()
+    @Test func oversizedFrameDetachesAsOverflow() async throws {
+        let pair = try ZmxSocketPair()
         let events = EventLog()
         let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) {
             events.append($0)
         }
         client.start()
         pair.write(Data([1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0]))
-        try await eventually("protocol error") { !events.all.isEmpty }
-        guard case .closed(.protocolError)? = events.all.first else {
-            Issue.record("expected protocol error, got \(events.all)")
-            return
-        }
+        try await eventually("overflow") { !events.all.isEmpty }
+        #expect(events.all == [.closed(.overflow)])
     }
 
     @Test func connectingToMissingSocketNeverCreatesOne() throws {
@@ -161,7 +158,7 @@ private typealias EventLog = ZmxEventLog<ZmxPassiveClient.Event>
 
 /// A connected Unix socket pair; `client` is handed to the code under test
 /// and the other end plays the zmx daemon.
-private final class SocketPair {
+final class ZmxSocketPair: @unchecked Sendable {
     let client: Int32
     private let daemon: Int32
     private var daemonOpen = true

@@ -326,9 +326,41 @@ extension AlasGhostty {
                 UInt32(max(1, backing.width)),
                 UInt32(max(1, backing.height))
             )
+            if let size = gridSize, size != lastReportedGridSize {
+                lastReportedGridSize = size
+                onGridSizeChange?(size.rows, size.columns)
+            }
         }
 
         // MARK: - Public API
+
+        /// Fires when a resize changes the terminal's rows or columns.
+        /// ponytail: pixel resizes only; a font-size change that reflows the
+        /// grid is picked up by the next resize.
+        var onGridSizeChange: ((_ rows: Int, _ columns: Int) -> Void)?
+        private var lastReportedGridSize: GridSize?
+
+        struct GridSize: Equatable {
+            let rows: Int
+            let columns: Int
+        }
+
+        var gridSize: GridSize? {
+            guard let surface = cSurface else { return nil }
+            let size = ghostty_surface_size(surface)
+            return GridSize(rows: Int(size.rows), columns: Int(size.columns))
+        }
+
+        /// Read-only drops every user write to the PTY (keys, text, paste,
+        /// mouse reports) inside Ghostty while still rendering output and
+        /// answering terminal queries.
+        private(set) var isReadOnly = false
+
+        func setReadOnly(_ readOnly: Bool) {
+            guard readOnly != isReadOnly, cSurface != nil else { return }
+            isReadOnly = readOnly
+            runBindingAction("toggle_readonly")
+        }
 
         /// Foreground process pid in the surface's PTY (or nil if surface or pid unavailable).
         /// `cSurface` is nonisolated(unsafe) — Ghostty's foreground-pid read is a safe
