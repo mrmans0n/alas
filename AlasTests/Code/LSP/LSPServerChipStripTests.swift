@@ -15,6 +15,11 @@ private func snap(_ id: String, _ language: String, _ root: String = "/repo", _ 
 
 @Suite("LSPServerChipAggregation")
 struct LSPServerChipStripTests {
+    @Test("server details default to expanded through eight entries", arguments: [(8, true), (9, false)])
+    func defaultExpansion(count: Int, expanded: Bool) {
+        #expect(LSPServerChipAggregation.isExpandedByDefault(count: count) == expanded)
+    }
+
     @Test("chips dedupe, sort, and collapse past the inline limit", arguments: [
         ChipAggregationCase(
             name: "dedupes by id and sorts by language then root",

@@ -46,7 +46,7 @@ struct LSPServerChipStrip: View {
                     ForEach(chips) { chip in
                         let state = chip.badgeState
                         DisclosureGroup(isExpanded: Binding(
-                            get: { expansionOverrides[chip.id] ?? (chips.count <= 8) },
+                            get: { expansionOverrides[chip.id] ?? LSPServerChipAggregation.isExpandedByDefault(count: chips.count) },
                             set: { expansionOverrides[chip.id] = $0 }
                         )) {
                             LSPServerChipPopoverBody(model: chip, appState: appState) { popoverOpen = false }
