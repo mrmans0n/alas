@@ -28,14 +28,20 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     @ObservationIgnored private let schemeHandler: VisualAidSchemeHandler
     @ObservationIgnored private var crashes = 0
     @ObservationIgnored private var isClosed = false
+    /// Theme variables baked into the served document, and the latest ones requested since.
+    @ObservationIgnored private let documentThemeVariables: [String: String]
+    @ObservationIgnored private var themeVariables: [String: String]
 
     init(visualID: UUID, html: String, theme: Theme) {
         self.visualID = visualID
+        let variables = PluginWebPolicy.cssVariables(theme)
+        documentThemeVariables = variables
+        themeVariables = variables
         schemeHandler = VisualAidSchemeHandler(
             visualID: visualID,
             document: VisualAidWebPolicy.document(
                 html: html,
-                themeVariables: PluginWebPolicy.cssVariables(theme),
+                themeVariables: variables,
                 frameTemplate: VisualAidFrameTemplate.html
             )
         )
@@ -101,9 +107,14 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 
     func applyTheme(_ theme: Theme) {
+        themeVariables = PluginWebPolicy.cssVariables(theme)
         guard !isClosed, status == .ready else { return }
+        pushTheme()
+    }
+
+    private func pushTheme() {
         webView.callAsyncJavaScript(
-            "alasVisualTheme(variables)", arguments: ["variables": PluginWebPolicy.cssVariables(theme)],
+            "alasVisualTheme(variables)", arguments: ["variables": themeVariables],
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
@@ -156,6 +167,10 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !isClosed else { return }
         status = .ready
+        // The served document is immutable; replay any theme change made while it was loading or crashed.
+        if themeVariables != documentThemeVariables {
+            pushTheme()
+        }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
