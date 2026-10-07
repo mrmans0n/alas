@@ -100,7 +100,8 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
 
     private static func contentRuleList() async -> WKContentRuleList? {
-        if let compiledRules, let rules = await compiledRules.value { return rules }
+        // One decision per app run: a failed compilation is remembered, not retried by every card.
+        if let compiledRules { return await compiledRules.value }
         let task = Task { @MainActor in
             try? await WKContentRuleListStore.default().compileContentRuleList(
                 forIdentifier: VisualAidWebPolicy.contentRuleListIdentifier,
