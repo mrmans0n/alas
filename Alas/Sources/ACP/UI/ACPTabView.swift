@@ -181,6 +181,11 @@ private struct ACPSessionView: View {
     @State private var pendingComposerDrops = 0
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
+    /// Update state of the agent CLI itself when Alas detected it on PATH
+    /// instead of installing it (omp, opencode, the pi CLI under pi-acp).
+    @State private var agentUpdateState: AdapterUpdateState?
+    @State private var agentDismissedLatest: String?
+    @State private var agentUpdateOwner: ACPDetectedAgentOwner?
     @Environment(\.theme) private var theme
     @State private var composerFocusRequest: Int = 0
     @StateObject private var composerDropRouter = ACPComposerDropRouter()
@@ -264,6 +269,9 @@ private struct ACPSessionView: View {
         .task(id: sessionId) {
             await hydrateAndAttach()
             onStartupRecoveryReady()
+            // Optional and possibly slow (`brew outdated`); never gate startup
+            // recovery on it.
+            await refreshAdapterUpdateState()
         }
         .onExitCommand {
             handleEscape()
@@ -973,7 +981,9 @@ private struct ACPSessionView: View {
             let decision = ACPAdapterUpdateBannerDecider.decide(
                 setupState: session.setupState,
                 updateState: updateState,
-                dismissedLatest: dismissedLatest)
+                dismissedLatest: dismissedLatest,
+                agentUpdateState: agentUpdateState,
+                agentDismissedLatest: agentDismissedLatest)
 
             switch decision {
             case .showInstall where !isSetupNudgeDismissed:
@@ -1008,6 +1018,21 @@ private struct ACPSessionView: View {
                         onDismiss: { dismissUpdate(latest: latest) },
                         install: { try await installAdapter() },
                         onInstalled: { await reattachAfterAdapterChange() }
+                    )
+                }
+            case .showAgentUpdate(let current, let latest):
+                if let owner = agentUpdateOwner {
+                    ACPSetupNudgeBanner(
+                        agentID: session.agentId,
+                        agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+                        mode: .agentUpdate(current: current, latest: latest, manager: owner.managerName),
+                        onDismiss: { dismissAgentUpdate(latest: latest, owner: owner) },
+                        install: {
+                            try await state.acpAdapterInstallCoordinator.updateDetectedAgent(
+                                agentID: session.agentId,
+                                owner: owner)
+                        },
+                        onInstalled: { await reattachAfterAgentUpdate(owner: owner) }
                     )
                 }
             default:
@@ -1143,6 +1168,14 @@ private struct ACPSessionView: View {
         }
     }
 
+    private func dismissAgentUpdate(latest: String, owner: ACPDetectedAgentOwner) {
+        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId, owner: owner)
+        Task {
+            await state.acpAdapterUpdateStore.dismiss(key: key, latest: latest)
+            await MainActor.run { agentDismissedLatest = latest }
+        }
+    }
+
     private func installAdapter() async throws {
         try await state.acpAdapterInstallCoordinator.install(
             target: adapterTarget,
@@ -1169,6 +1202,16 @@ private struct ACPSessionView: View {
         await MainActor.run {
             updateState = nil
             dismissedLatest = nil
+        }
+        await reattach()
+        await refreshAdapterUpdateState()
+    }
+
+    private func reattachAfterAgentUpdate(owner: ACPDetectedAgentOwner) async {
+        await state.acpAdapterUpdateStore.clear(key: .detectedCLI(agentID: session.agentId, owner: owner))
+        await MainActor.run {
+            agentUpdateState = nil
+            agentDismissedLatest = nil
         }
         await reattach()
         await refreshAdapterUpdateState()
@@ -1201,7 +1244,8 @@ private struct ACPSessionView: View {
     }
 
     /// Drive a session from `.loading` through `.ready` (or `.failed`)
-    /// and, on success, attach the runner. Used by both the initial
+    /// and, on success, attach the runner. Callers refresh update state
+    /// afterwards. Used by both the initial
     /// `.task(id:)` and the failure banner's Retry button so a successful
     /// retry doesn't leave the session unattached with a disabled composer.
     private func hydrateAndAttach() async {
@@ -1217,14 +1261,51 @@ private struct ACPSessionView: View {
                 remoteSessionId: session.remoteSessionId
             )
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
-        await refreshAdapterUpdateState()
     }
 
-    /// After attach: if the adapter is ready and has an npm package, ask the
-    /// store for its cached update state (or compute it on cache miss).
-    /// Silent on failure.
+    /// After attach: if the adapter is ready, ask the store for the cached
+    /// update state of its npm package and of a detected agent CLI (or
+    /// compute them on cache miss). Silent on failure.
     private func refreshAdapterUpdateState() async {
         guard case .ready = session.setupState else { return }
+        await refreshManagedAdapterUpdateState()
+        await refreshDetectedAgentUpdateState()
+    }
+
+    private func refreshDetectedAgentUpdateState() async {
+        guard ACPDetectedAgentUpdater.runsLocally(
+                adapterTarget: adapterTarget,
+                checkoutLocation: state.workspaceCheckout(for: owner)?.executionLocation),
+              let binary = ACPDetectedAgentUpdater.binaryName(
+                agentID: session.agentId,
+                binaryOverride: state.agent(id: session.agentId)?.binaryOverride)
+        else { return }
+        let owner = await Task.detached { ACPDetectedAgentUpdater.owner(ofBinary: binary) }.value
+        guard let owner else {
+            agentUpdateOwner = nil
+            agentUpdateState = nil
+            return
+        }
+
+        let store = state.acpAdapterUpdateStore
+        let key = ACPAdapterUpdateKey.detectedCLI(agentID: session.agentId, owner: owner)
+        let result = await store.checkOrCompute(key: key) {
+            await ACPDetectedAgentUpdater().check(owner: owner)
+        }
+        var dismissed: String? = nil
+        if case .available(_, let latest) = result,
+           await store.isDismissed(key: key, latest: latest) {
+            dismissed = latest
+        }
+
+        await MainActor.run {
+            self.agentUpdateOwner = owner
+            self.agentUpdateState = result
+            self.agentDismissedLatest = dismissed
+        }
+    }
+
+    private func refreshManagedAdapterUpdateState() async {
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId),
               let pkg = spec.npmPackageName
         else { return }
@@ -1269,7 +1350,10 @@ private struct ACPSessionView: View {
                 // Mirror the initial `.task(id:)` so a successful retry
                 // continues into `attach`. Without this, the runner stays
                 // nil and the composer can't send.
-                Task { await hydrateAndAttach() }
+                Task {
+                    await hydrateAndAttach()
+                    await refreshAdapterUpdateState()
+                }
             }
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .medium))

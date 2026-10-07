@@ -85,6 +85,41 @@ struct ACPAdapterUpdateBannerDeciderTests {
         #expect(decision == .none)
     }
 
+    @Test("adapter update outranks the agent CLI update until dismissed", arguments: [
+        (AdapterUpdateState?.some(.available(current: "1", latest: "2")), String?.none,
+         ACPAdapterUpdateBannerDecider.Decision.showUpdate(current: "1", latest: "2")),
+        (.some(.available(current: "1", latest: "2")), "2", .showAgentUpdate(current: "3", latest: "4")),
+        (.some(.upToDate), nil, .showAgentUpdate(current: "3", latest: "4")),
+        (nil, nil, .showAgentUpdate(current: "3", latest: "4")),
+    ])
+    func agentUpdatePrecedence(
+        adapterState: AdapterUpdateState?,
+        adapterDismissed: String?,
+        expected: ACPAdapterUpdateBannerDecider.Decision
+    ) {
+        let decision = ACPAdapterUpdateBannerDecider.decide(
+            setupState: .ready,
+            updateState: adapterState,
+            dismissedLatest: adapterDismissed,
+            agentUpdateState: .available(current: "3", latest: "4"),
+            agentDismissedLatest: nil)
+        #expect(decision == expected)
+    }
+
+    @Test("agent CLI update dismissal suppresses only that version")
+    func agentUpdateDismissal() {
+        let decide = { (dismissed: String) in
+            ACPAdapterUpdateBannerDecider.decide(
+                setupState: .ready,
+                updateState: nil,
+                dismissedLatest: nil,
+                agentUpdateState: .available(current: "3", latest: "4"),
+                agentDismissedLatest: dismissed)
+        }
+        #expect(decide("4") == .none)
+        #expect(decide("3.5") == .showAgentUpdate(current: "3", latest: "4"))
+    }
+
     @Test("generic failure visibility follows specialized setup banners", arguments: [
         (ACPSession.SetupState.checking, false, true),
         (.ready, false, true),
