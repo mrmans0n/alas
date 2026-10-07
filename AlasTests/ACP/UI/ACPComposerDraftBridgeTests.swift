@@ -8,6 +8,46 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("restoring a draft flags a symbol badge whose declaration is gone, and only that one")
+    func restoredDraftFlagsMissingSymbolBadges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("presence-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "struct Present {\n    func here() {}\n}\n".write(
+            to: root.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+        func uri(_ name: String) -> String {
+            ACPSymbolReference.uri(for: .init(path: "a.swift", name: name, kind: .method, container: "Present",
+                                              lineRange: 1...1, includeCode: false))
+        }
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 60))
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: root, initialDraft: .empty, focusRequest: 0, sendOnEnter: true,
+            onDraftChange: { _ in }, onDraftClear: {}, onSubmit: { _, _, _, _, _ in true })
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+        textView.delegate = coordinator
+
+        coordinator.restoreDraftForTesting(
+            ACPComposerDraft(segments: [.mention(displayName: "here()", uri: uri("here")),
+                                        .mention(displayName: "gone()", uri: uri("gone"))]),
+            into: textView)
+
+        func cells() -> [String: ACPSymbolChipCell] {
+            var result: [String: ACPSymbolChipCell] = [:]
+            let storage = textView.textStorage
+            storage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage?.length ?? 0)) { value, _, _ in
+                if let chip = value as? ACPMentionChipAttachment, let cell = chip.attachmentCell as? ACPSymbolChipCell {
+                    result[chip.uri] = cell
+                }
+            }
+            return result
+        }
+        let flagged = await awaitCondition(within: .seconds(5)) { cells()[uri("gone")]?.isMissing == true }
+        #expect(flagged)
+        #expect(cells()[uri("here")]?.isMissing == false)
+        textView.cancelSymbolPresenceCheck()
+    }
+
     @Test("formats every message line as a Markdown quote")
     func formatsMessageQuote() {
         #expect(ACPMessageQuote.markdown("one\n\n**two**") == "> one\n> \n> **two**")

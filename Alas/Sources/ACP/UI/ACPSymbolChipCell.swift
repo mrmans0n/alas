@@ -56,15 +56,40 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
     /// Width of the accent edge drawn when code is included.
     private var edgeWidth: CGFloat { symbol.includeCode ? 2 : 0 }
 
+    /// Set by the composer when the declaration can no longer be found. It
+    /// changes the cell's width, so whoever sets it invalidates the layout.
+    var isMissing = false
+    private static let warningText = "⚠ not found"
+    private static let warningColor = NSColor.systemOrange
+    private static let warningFill = NSColor.systemOrange.withAlphaComponent(0.14)
+
+    /// A trailing segment: the line count, then the warning.
+    private struct Segment {
+        let text: String
+        let color: NSColor
+        let fill: NSColor
+    }
+
+    private var segments: [Segment] {
+        var result: [Segment] = []
+        if let countText {
+            result.append(Segment(text: countText, color: .secondaryLabelColor, fill: Self.countFill))
+        }
+        if isMissing {
+            result.append(Segment(text: Self.warningText, color: Self.warningColor, fill: Self.warningFill))
+        }
+        return result
+    }
+
     private func width(_ text: String, _ font: NSFont) -> CGFloat {
         ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    private func countSegmentWidth(_ text: String) -> CGFloat { 10 + width(text, Self.countFont) }
+    private func segmentWidth(_ segment: Segment) -> CGFloat { 10 + width(segment.text, Self.countFont) }
 
-    /// Everything but the label: accent edge, icon, padding, count segment.
+    /// Everything but the label: accent edge, icon, padding, trailing segments.
     private var fixedWidth: CGFloat {
-        edgeWidth + 4 + Self.iconSize + 5 + 6 + (countText.map(countSegmentWidth) ?? 0)
+        edgeWidth + 4 + Self.iconSize + 5 + 6 + segments.reduce(0) { $0 + segmentWidth($1) }
     }
 
     override var cellSize: NSSize {
@@ -107,16 +132,19 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
             accent.setFill()
             NSRect(x: frame.minX, y: frame.minY, width: edgeWidth, height: frame.height).fill()
         }
-        if let countText {
-            let segment = NSRect(x: frame.maxX - countSegmentWidth(countText), y: frame.minY,
-                                 width: countSegmentWidth(countText), height: frame.height)
-            Self.countFill.setFill()
-            segment.fill()
+        var segmentEdge = frame.maxX
+        for segment in segments.reversed() {
+            let segmentRect = NSRect(x: segmentEdge - segmentWidth(segment), y: frame.minY,
+                                     width: segmentWidth(segment), height: frame.height)
+            segment.fill.setFill()
+            segmentRect.fill()
             NSColor.separatorColor.setFill()
-            NSRect(x: segment.minX, y: frame.minY, width: 0.5, height: frame.height).fill()
-            let attrs: [NSAttributedString.Key: Any] = [.font: Self.countFont, .foregroundColor: NSColor.secondaryLabelColor]
-            let size = (countText as NSString).size(withAttributes: attrs)
-            (countText as NSString).draw(at: NSPoint(x: segment.minX + 5, y: frame.midY - size.height / 2), withAttributes: attrs)
+            NSRect(x: segmentRect.minX, y: frame.minY, width: 0.5, height: frame.height).fill()
+            let attrs: [NSAttributedString.Key: Any] = [.font: Self.countFont, .foregroundColor: segment.color]
+            let size = (segment.text as NSString).size(withAttributes: attrs)
+            (segment.text as NSString).draw(at: NSPoint(x: segmentRect.minX + 5, y: frame.midY - size.height / 2),
+                                            withAttributes: attrs)
+            segmentEdge = segmentRect.minX
         }
         NSGraphicsContext.restoreGraphicsState()
 
