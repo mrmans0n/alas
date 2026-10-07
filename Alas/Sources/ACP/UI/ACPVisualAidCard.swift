@@ -173,9 +173,11 @@ struct ACPVisualAidCard: View {
         VisualAidPageBudget.shared.release(slot)
     }
 
-    /// Page clicks edit the native form only while the question is open.
+    /// Page clicks edit the native form only while the question is open, and links open only once it is not.
     private func installChoiceHandler() {
         guard let page else { return }
+        page.externalLinksEnabled = VisualAidWebPolicy.allowsExternalLinks(
+            hasQuestion: visual.question != nil, answered: visual.answer != nil)
         guard visual.answer == nil, let form else {
             page.onChoice = { _ in }
             return

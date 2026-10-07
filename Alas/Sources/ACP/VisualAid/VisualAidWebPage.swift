@@ -32,6 +32,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     private(set) var contentHeight: CGFloat = VisualAidWebPolicy.minCardHeight
     @ObservationIgnored var onChoice: (String) -> Void = { _ in }
     @ObservationIgnored var openExternal: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// False while a question is open: a link click would otherwise reach the browser, and its URL could
+    /// carry the user's choice out before they submit. The page's own links do nothing until then.
+    @ObservationIgnored var externalLinksEnabled = true
     @ObservationIgnored private let visualID: UUID
     @ObservationIgnored private let schemeHandler: VisualAidSchemeHandler
     @ObservationIgnored private var crashes = 0
@@ -245,7 +248,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             guard acceptsInput else { return }
             onChoice(choice)
         } else if let link = body["open"] as? String, let url = PluginWebPolicy.externalLink(link) {
-            openExternal(url)
+            openExternalLink(url)
         }
     }
 
@@ -292,9 +295,15 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         if let text = navigationAction.request.url?.absoluteString, let url = PluginWebPolicy.externalLink(text) {
-            openExternal(url)
+            openExternalLink(url)
         }
         return nil
+    }
+
+    /// The one exit to the browser, for both bridge link clicks and `window.open`.
+    private func openExternalLink(_ url: URL) {
+        guard externalLinksEnabled else { return }
+        openExternal(url)
     }
 }
 

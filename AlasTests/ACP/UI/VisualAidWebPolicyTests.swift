@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import Alas
 
 /// File scope so `@Test(arguments:)` can interpolate it.
@@ -79,6 +80,16 @@ struct VisualAidWebPolicyTests {
     func cspBlocksExfiltrationChannels() {
         #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("connect-src 'none'"))
         #expect(VisualAidWebPolicy.contentSecurityPolicy.contains("form-action 'none'"))
+    }
+
+    @Test("a question visual's links stay dead until it is answered or dismissed", arguments: [
+        (false, false, true),
+        (false, true, true),
+        (true, false, false),
+        (true, true, true),
+    ])
+    func externalLinksWaitForTheAnswer(hasQuestion: Bool, answered: Bool, allowed: Bool) {
+        #expect(VisualAidWebPolicy.allowsExternalLinks(hasQuestion: hasQuestion, answered: answered) == allowed)
     }
 
     @Test("only the loading rules let https resources in; the locked rules keep the scheme, data and blob")
@@ -184,5 +195,34 @@ extension VisualAidWebPolicyTests {
         #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
         try await waitUntilReady(page)
         #expect(!page.isLocked)
+    }
+
+    @MainActor
+    @Test("a link click reaches the browser only while external links are enabled")
+    func bridgeOpenHonorsExternalLinksEnabled() async throws {
+        let page = try makePage(locks: false)
+        defer { page.close() }
+        try await waitUntilReady(page)
+        var opened: [URL] = []
+        page.openExternal = { opened.append($0) }
+        let world = WKContentWorld.world(name: VisualAidWebPolicy.bridgeWorldName)
+        func post(_ link: String) async throws {
+            _ = try await page.webView.evaluateJavaScript(
+                "window.webkit.messageHandlers.\(VisualAidWebPolicy.bridgeHandlerName).postMessage({open: '\(link)'}) && null",
+                in: nil, contentWorld: world)
+        }
+
+        page.externalLinksEnabled = false
+        try await post("https://example.com/choice-a")
+        page.externalLinksEnabled = true
+        try await post("https://example.com/choice-b")
+
+        // Messages arrive in order, so once the second landed the first has been handled.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while opened.isEmpty {
+            try #require(ContinuousClock.now < deadline, "the enabled link never opened")
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(opened.map(\.absoluteString) == ["https://example.com/choice-b"])
     }
 }
