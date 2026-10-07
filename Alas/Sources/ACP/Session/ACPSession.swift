@@ -809,7 +809,16 @@ final class ACPSession: ObservableObject, Identifiable {
         worktreeRoot: String? = nil
     ) -> Set<Int> {
         // Streaming buffers can publish before noteStreamingChange records their revision.
-        nextPromptActivity.send()
+        // Metadata updates (usage, commands, models, modes, titles) routinely
+        // trail a finished turn and must not consume its next-prompt offer;
+        // any state they touch that gates eligibility signals on its own.
+        switch update {
+        case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate, .sessionConfigOptionsUpdate,
+             .availableCommandsUpdate, .usageUpdate, .sessionInfoUpdate, .unknown:
+            break
+        default:
+            nextPromptActivity.send()
+        }
         if tracksRetryStatus {
             switch update {
             case .agentMessageChunk, .agentThoughtChunk, .toolCall, .toolCallUpdate, .plan:
@@ -3473,6 +3482,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func clearRetryStatus() {
+        guard retryStatus != nil else { return }
         retryStatus = nil
     }
 
