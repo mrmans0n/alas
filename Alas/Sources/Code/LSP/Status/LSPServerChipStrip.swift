@@ -7,6 +7,7 @@ struct LSPServerChipStrip: View {
     let appState: AppState
 
     @State private var popoverOpen = false
+    @State private var expansionOverrides: [String: Bool] = [:]
 
     var body: some View {
         // Snapshots read every server's live phase; only the summary needs them,
@@ -23,7 +24,10 @@ struct LSPServerChipStrip: View {
     }
 
     private func summary(ready: Int, total: Int, worst: LSPChipSeverity) -> some View {
-        Button { popoverOpen.toggle() } label: {
+        Button {
+            if !popoverOpen { expansionOverrides.removeAll() }
+            popoverOpen.toggle()
+        } label: {
             LSPStatusPill(
                 glyph: Self.glyph(for: worst),
                 label: "LSP \(ready)/\(total)",
@@ -41,7 +45,10 @@ struct LSPServerChipStrip: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(chips) { chip in
                         let state = chip.badgeState
-                        DisclosureGroup {
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { expansionOverrides[chip.id] ?? (chips.count <= 8) },
+                            set: { expansionOverrides[chip.id] = $0 }
+                        )) {
                             LSPServerChipPopoverBody(model: chip, appState: appState) { popoverOpen = false }
                                 .padding(.leading, 4)
                         } label: {
