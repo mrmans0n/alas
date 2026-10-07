@@ -31,10 +31,10 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
     private static let iconSize: CGFloat = 13
     private static let iconFont = NSFont.systemFont(ofSize: 8.5, weight: .bold)
     private static let countFont = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .regular)
-    private static let pillFill = NSColor.appearanceAware(
+    static let pillFill = NSColor.appearanceAware(
         dark: NSColor.black.withAlphaComponent(0.28), light: NSColor.black.withAlphaComponent(0.05)
     )
-    private static let countFill = NSColor.appearanceAware(
+    static let countFill = NSColor.appearanceAware(
         dark: NSColor.white.withAlphaComponent(0.04), light: NSColor.black.withAlphaComponent(0.04)
     )
 
@@ -47,11 +47,7 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
     private var containerText: String { symbol.container.map { $0 + "." } ?? "" }
     private var nameText: String { symbol.kind.isCallable ? symbol.name + "()" : symbol.name }
     private var countText: String? {
-        guard symbol.includeCode else { return nil }
-        let count = symbol.lineRange.count
-        return count > ACPSymbolReference.maxExcerptLines
-            ? "\(ACPSymbolReference.maxExcerptLines)+ lines"
-            : "\(count) line\(count == 1 ? "" : "s")"
+        symbol.includeCode ? ACPSymbolReference.Target.lineCountText(for: symbol.lineRange) : nil
     }
     /// Width of the accent edge drawn when code is included.
     private var edgeWidth: CGFloat { symbol.includeCode ? 2 : 0 }
@@ -178,5 +174,16 @@ final class ACPSymbolChipCell: NSTextAttachmentCell {
         let labelRect = NSRect(x: iconRect.maxX + 5, y: labelY,
                                width: max(0, frame.width - fixedWidth), height: frame.maxY - labelY)
         label.draw(with: labelRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+}
+
+extension ACPSymbolReference.Target {
+    /// The badge's trailing segment when code is included: `N lines`, or
+    /// `400+ lines` past the excerpt cap.
+    static func lineCountText(for range: ClosedRange<Int>) -> String {
+        let count = range.count
+        return count > ACPSymbolReference.maxExcerptLines
+            ? "\(ACPSymbolReference.maxExcerptLines)+ lines"
+            : "\(count) line\(count == 1 ? "" : "s")"
     }
 }

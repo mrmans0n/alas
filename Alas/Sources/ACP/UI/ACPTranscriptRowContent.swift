@@ -222,7 +222,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                         contentMaxWidth: contentMaxWidth,
                         typography: typography,
                         session: session,
-                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false)
+                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false),
+                        worktreeRoot: trustedImageRoot
                     )
                 }
             }

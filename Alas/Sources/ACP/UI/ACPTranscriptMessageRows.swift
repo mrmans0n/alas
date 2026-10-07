@@ -14,9 +14,10 @@ struct UserMessageRow: View {
     let typography: ACPChatTypography
     let session: ACPSession
     let chipsAbsolutePaths: Bool
+    /// Where symbol previews read files; nil when the row has no worktree.
+    let worktreeRoot: URL?
     @Environment(\.theme) private var theme
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
-    @Environment(\.openURL) private var openURL
     var body: some View {
         HStack {
             Spacer(minLength: 40)
@@ -44,16 +45,8 @@ struct UserMessageRow: View {
                         HStack(spacing: 4) {
                             ForEach(Array(others.enumerated()), id: \.offset) { _, a in
                                 if let target = ACPSymbolReference.target(fromURI: a.uri) {
-                                    FileChip(
-                                        path: target.displayName,
-                                        lines: "\((target.path as NSString).lastPathComponent):\((a.symbol?.lineRange ?? target.lineRange).lowerBound + 1)",
-                                        iconSystemName: "curlybraces",
-                                        action: {
-                                            if let url = ACPSymbolReference.openURL(for: target, snapshot: a.symbol) {
-                                                openURL(url)
-                                            }
-                                        }
-                                    )
+                                    ACPSymbolBadge(target: target, snapshot: a.symbol,
+                                                   root: worktreeRoot, typography: typography)
                                 } else {
                                     FileChip(
                                         path: a.name ?? a.uri,
