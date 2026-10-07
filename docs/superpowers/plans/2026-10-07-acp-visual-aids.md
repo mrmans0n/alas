@@ -858,12 +858,11 @@ Codec `decode`, before `default`:
         append("tool", visual.transcriptSummary)
 ```
 
-`RemoteSessionGateway.toWire`, before the closing brace of the switch:
+`RemoteSessionGateway.toWire`, before the closing brace of the switch. The phone client is out of scope (a follow-up renders the HTML there); this only keeps the exhaustive switch compiling, and the hidden row is the same marker background-task rows use, so phones show nothing and their history cursor still advances:
 
 ```swift
-        case .visualAid(let visual):
-            // The phone client has no sandboxed renderer; it only learns a visual exists.
-            return .init(stableId: sid, kind: "systemNotice", text: "Visual aid: \(visual.title)", json: nil, index: index)
+        case .visualAid:
+            return .init(stableId: sid, kind: "systemNotice", text: nil, json: nil, index: index, isHidden: true)
 ```
 
 `ACPSession.lastAgent()` and `lastThought()`: add `if case .visualAid = transcript.messages[i] { return nil }` next to the `.fileEdit` line, so agent text after a visual starts a new bubble.

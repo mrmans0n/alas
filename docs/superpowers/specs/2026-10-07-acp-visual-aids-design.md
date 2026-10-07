@@ -167,8 +167,9 @@ Every exhaustive switch over `ACPMessage` gets a case:
   the fork snapshot carries only user and agent text. The fork resolver
   matches visual rows by id so a visual before the fork point does not fail
   the snapshot with `transcriptMismatch`.
-- Remote clients (the phone web client) get a `systemNotice` row reading
-  `Visual aid: <title>`. They never receive the HTML.
+- Remote clients (the phone web client) get a hidden placeholder row, the
+  marker background-task rows use, so they show nothing and their history
+  cursor still advances. Rendering visuals there is a follow-up.
 - A native subagent's inline child transcript shows the visual as a title
   line, without a web view.
 - The visual counts as agent-side progress, ends an agent text run, and is an
@@ -422,6 +423,10 @@ Smoke run in the app, with a Claude agent and a Codex agent:
 
 ## Later
 
+- Phone web client support: the client is HTML already, so it can likely
+  render the stored `html` in a sandboxed iframe. Needs the gateway to send
+  the visual (title, html, question, answer) in place of the hidden row, and
+  a client-side answer path through `sendPrompt`.
 - `visual_update(visual_id, html)` replaces `html` on an existing row and
   reloads its live page.
 - An optional `alas-visual` fenced block as a second entry point to the same
