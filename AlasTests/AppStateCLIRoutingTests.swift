@@ -321,6 +321,23 @@ struct AppStateCLIRoutingTests {
         #expect(location?.worktreeId == worktree.id)
     }
 
+    @Test func sessionWriterAuthorizationNeedsNoOpenTabButStillNeedsOwnerAndLease() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "session-writer-no-tab")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let manager = try #require(state.acpManager(for: worktree))
+        let session = manager.createSession(agentId: "pi")
+        let owner = SessionOwnerID.worktree(worktree.id)
+        #expect(state.tabs.tabs(for: owner).isEmpty)
+
+        #expect(!state.isAuthorizedACPSessionWriter(sessionID: session.id, owner: owner))
+        manager._ownedLeases.insert(session.id)
+        #expect(state.isAuthorizedACPSessionWriter(sessionID: session.id, owner: owner))
+        #expect(!state.isAuthorizedACPSessionWriter(sessionID: session.id, owner: .worktree("someone-else")))
+        #expect(!state.isAuthorizedACPSessionWriter(sessionID: "unknown", owner: owner))
+        // The preview closure's stricter check still wants the ACP tab.
+        #expect(!state.isAuthorizedACPWriter(sessionID: session.id, owner: owner))
+    }
+
     @Test func routeTerminalOpenURLResolvesRelativePathAgainstShellCwd() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-relative")
         defer { try? FileManager.default.removeItem(at: worktree.path) }

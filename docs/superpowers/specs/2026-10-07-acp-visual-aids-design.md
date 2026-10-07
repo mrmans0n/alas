@@ -109,12 +109,13 @@ a `session_id`, or whose `session_id` is not a live ACP session, fail with
 `visual_show is only available to ACP agent sessions`. The router validates
 the same limits as the Rust side before touching the transcript.
 
-AppState authorizes the call with the ACP half of the check its preview
-closure runs inline today: the session's owner matches, this process is the
-writer, and the owner has an open ACP tab for that session. That half moves
-into one helper, `isAuthorizedACPWriter(sessionID:owner:)`, which the preview
-closure and `visual_show` both call. The preview closure keeps its terminal
-fallback; `visual_show` has none.
+AppState authorizes the preview closure with `isAuthorizedACPWriter(sessionID:owner:)`:
+the session's owner matches, this process is the writer, and the owner has an
+open ACP tab for that session. The preview closure keeps its terminal
+fallback. `visual_show` uses `isAuthorizedACPSessionWriter(sessionID:owner:)`,
+which is the same check without the tab requirement: appending a transcript
+row needs no visible tab, and delegated children from `session_new` usually
+have none.
 
 `ACPSessionManager.showVisualAid` appends the row through the session runner
 and waits until that exact row is written, the way
@@ -375,7 +376,7 @@ that showed the visual and is not forwarded to the parent.
 |---|---|
 | Invalid arguments | Rust returns `-32602` with the failing rule. No socket call. |
 | No `session_id` | Error: `visual_show is only available to ACP agent sessions`. |
-| Session not authorized (owner mismatch, not the writer, ACP tab closed) or fork merging | Error: `This session can't show visuals right now.` No row. |
+| Session not authorized (owner mismatch, not the writer) or fork merging | Error: `This session can't show visuals right now.` No row. |
 | Built-in MCP disabled or shadowed | The tool is not listed. Documented, no fallback. |
 | Content rules fail to compile | Card shows "Couldn't set up the visual's sandbox". The page never loads. |
 | WebContent process crash | Card shows "Visual stopped" with Reload. After 3 crashes for one card, it stays on the placeholder. |

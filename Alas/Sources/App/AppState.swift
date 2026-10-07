@@ -7475,7 +7475,7 @@ final class AppState {
             showVisualAid: { [weak self] sessionID, visual in
                 guard let self else { return .error("Alas is not available.") }
                 guard let owner = sessionOwnerLookup(sessionID),
-                      self.isAuthorizedACPWriter(sessionID: sessionID, owner: owner),
+                      self.isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner),
                       let manager = self.acpManager(forSession: sessionID),
                       await manager.showVisualAid(visual, in: sessionID)
                 else { return .error("This session can't show visuals right now.") }
@@ -15506,10 +15506,18 @@ extension AppState: RemoteSessionsProvider {
         return nil
     }
 
+    /// A live ACP session that belongs to `owner` and that this process
+    /// drives. Appending a transcript row needs no visible tab, so delegated
+    /// children without one qualify.
+    func isAuthorizedACPSessionWriter(sessionID: String, owner: SessionOwnerID) -> Bool {
+        guard let session = session(for: sessionID) else { return false }
+        return session.owner == owner && isWriter(for: sessionID)
+    }
+
     /// The ACP half of CLI caller authorization: the session belongs to
     /// `owner`, this process drives it, and the owner still shows its ACP tab.
     func isAuthorizedACPWriter(sessionID: String, owner: SessionOwnerID) -> Bool {
-        guard let session = session(for: sessionID), session.owner == owner, isWriter(for: sessionID) else { return false }
+        guard isAuthorizedACPSessionWriter(sessionID: sessionID, owner: owner) else { return false }
         return tabs.tabs(for: owner).contains {
             guard case .acpSession(let tab) = $0 else { return false }
             return tab.sessionId == sessionID
