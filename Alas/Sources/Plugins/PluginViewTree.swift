@@ -8,12 +8,15 @@ struct PluginViewNode: Equatable, Sendable {
         case progress, link
         // API 9.
         case markdown
+        // API 14.
+        case progressBar
 
         /// The plugin API that introduced the kind; an older plugin that sends it renders an invalid tree.
         var api: Int {
             switch self {
             case .progress, .link: 8
             case .markdown: 9
+            case .progressBar: 14
             default: 4
             }
         }
@@ -44,6 +47,8 @@ struct PluginViewNode: Equatable, Sendable {
     var spacing: Int? = nil
     var width: Int? = nil                 // vstack, card: fixed width in points
     var horizontal = false                // scroll axis
+    var centered = false                  // hstack: `"align": "center"`, else first text baseline
+    var done = 0, running = 0, total = 0  // progressBar: 0 ≤ done + running ≤ total
     var multiline = false
     var disabled = false
     var clickable = false
@@ -61,6 +66,7 @@ struct PluginViewTreeError: Error, Equatable, CustomStringConvertible {
 /// Decodes and validates the untrusted `root` JSON a plugin sends with `view/render`.
 enum PluginViewTree {
     static let maxNodes = 2_000, maxDepth = 16, maxString = 4_000, maxIDBytes = 64, maxMenuItems = 64, maxURLBytes = 2_048
+    static let maxProgressTotal = 10_000
     /// A markdown node's text has its own bound, above `maxString` (API 9).
     static let maxMarkdownBytes = 32 * 1024
 
@@ -138,6 +144,10 @@ enum PluginViewTree {
         var disabled: Bool?
         var clickable: Bool?
         var items: [RawItem]?
+        var align: String?
+        var done: Int?
+        var running: Int?
+        var total: Int?
     }
 
     private static func validate(_ raw: Raw, depth: Int, api: Int, ids: inout Set<String>, count: inout Int) throws -> PluginViewNode {
@@ -189,6 +199,15 @@ enum PluginViewTree {
         case .text, .badge: node.text = try string(raw.text, required: "text")
         case .button: node.label = try string(raw.label, required: "label")
         case .progress: node.text = try string(raw.text)
+        case .progressBar:
+            node.text = try string(raw.text)
+            let done = raw.done ?? 0, running = raw.running ?? 0
+            // Subtraction, not `done + running`: untrusted counts near `Int.max` would overflow.
+            guard let total = raw.total, (1...maxProgressTotal).contains(total),
+                  done >= 0, running >= 0, running <= total, done <= total - running else {
+                throw err("\(prefix) needs a total of 1 to \(maxProgressTotal), and done and running of at least 0 that add up to at most total")
+            }
+            (node.done, node.running, node.total) = (done, running, total)
         case .markdown:
             guard let text = raw.text else { throw err("\(prefix) needs text") }
             guard text.utf8.count <= maxMarkdownBytes else { throw err("\(prefix) text is longer than \(maxMarkdownBytes) bytes") }
@@ -224,6 +243,11 @@ enum PluginViewTree {
         node.multiline = raw.multiline ?? false
         node.disabled = raw.disabled ?? false
         node.clickable = raw.clickable ?? false
+        if let align = raw.align, kind == .hstack {
+            // Not gated on API 14: older Alas versions ignore the field, so any plugin may send it.
+            guard align == "center" || align == "baseline" else { throw err("\(prefix) has unknown align \"\(align)\"") }
+            node.centered = align == "center"
+        }
 
         switch kind {
         case .vstack, .hstack, .card:
