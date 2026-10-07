@@ -149,6 +149,20 @@ struct ACPSymbolReferenceTests {
         #expect(attachments[1].symbol == nil)
     }
 
+    @Test("the content hash helper reproduces the hash stamped on a snapshot")
+    func contentHashMatchesSnapshot() throws {
+        let restore = target("restore", .method, lines: 3...5)
+        let uri = ACPSymbolReference.uri(for: restore)
+        let expansion = ACPSymbolReference.expansion(
+            of: [.resourceLink(uri: uri, name: "SessionManager.restore()")],
+            sources: ["Sources/SessionManager.swift": Self.swiftSource],
+            worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true)
+        let declaration = try #require(ACPSymbolReference.resolve(restore, source: Self.swiftSource).declaration)
+        #expect(expansion.snapshots[uri]?.contentHash == ACPSymbolReference.contentHash(of: declaration))
+        #expect(ACPSymbolReference.contentHash(of: "abc")
+            == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
     @Test("transcript links carry the sent range, falling back to the inserted one")
     func openURL() throws {
         let target = ACPSymbolReference.Target(path: "Package.swift", name: "a", kind: .function,
