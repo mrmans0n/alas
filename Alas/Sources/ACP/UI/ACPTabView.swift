@@ -233,7 +233,7 @@ private struct ACPSessionView: View {
                 if let limit = session.usageLimit {
                     usageLimitBanner(limit, resumeAt: session.usageLimitResumeItem?.scheduledAt)
                 }
-                if isMirror {
+                if manager.showsTakeoverBanner(sessionId: sessionId) {
                     mirrorBanner()
                 }
                 if let err = session.lastError {
