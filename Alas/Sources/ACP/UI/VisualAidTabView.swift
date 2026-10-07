@@ -32,7 +32,9 @@ private struct VisualAidTabContent: View {
 
     var body: some View {
         if let visual = transcript.visualAid(id: tab.visualId) {
-            ACPVisualAidCard(visual: visual, form: session.visualAidForm(for: visual), actions: actions, fillsHeight: true)
+            ACPVisualAidCard(
+                visual: visual, form: session.visualAidForm(for: visual),
+                sendStatus: session.visualAidSendStatus(for: visual.id), actions: actions, fillsHeight: true)
                 .padding(16)
         } else {
             VisualAidUnavailableView()

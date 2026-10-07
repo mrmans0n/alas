@@ -1571,7 +1571,7 @@ struct ACPSessionManagerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
 
-    @Test("rollBackVisualAidAnswer clears only the answer it was given and persists the row")
+    @Test("rollBackVisualAidAnswer clears only the answer it was given, persists the row and records the failure on the session")
     func rollBackVisualAidAnswerClearsMatchingAnswer() async throws {
         let (manager, session, store, _) = try await attachedVisualAidManager()
         defer { manager.shutdownBackgroundTasks() }
@@ -1582,10 +1582,15 @@ struct ACPSessionManagerTests {
 
         manager.rollBackVisualAidAnswer(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+        #expect(session.visualAidSendStatus(for: visual.id).error == nil)
 
         manager.rollBackVisualAidAnswer(id: visual.id, answer: answer, in: session.id)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
         await manager.runners[session.id]?.flushPersistence()
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == nil)
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        #expect(session.visualAidSendStatus(for: visual.id).error == nil)
     }
 }

@@ -310,7 +310,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         case .visualAid(let visual):
-            ACPVisualAidCard(visual: visual, form: session.visualAidForm(for: visual), actions: visualAidActions)
+            ACPVisualAidCard(
+                visual: visual, form: session.visualAidForm(for: visual),
+                sendStatus: session.visualAidSendStatus(for: visual.id), actions: visualAidActions)
         }
     }
 

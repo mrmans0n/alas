@@ -8729,6 +8729,7 @@ extension ACPSessionManager {
         else { return false }
         visual.answer = answer
         guard runner.replaceAndPersistVisualAid(visual) else { return false }
+        session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
         Task { @MainActor in
             await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
@@ -8751,6 +8752,7 @@ extension ACPSessionManager {
         else { return }
         current.answer = nil
         session.transcript.replaceMessage(at: index, with: .visualAid(current))
+        session.visualAidSendStatus(for: visualId).error = ACPVisualAidSendStatus.failureMessage
         runners[sessionId]?.persistVisualAidRow(id: visualId)
     }
 

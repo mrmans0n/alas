@@ -107,6 +107,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var normalQueuedTurnUserMessageIDs: [UUID: UUID] = [:]
     /// Unsent visual-aid answers by visual id. See `visualAidForm(for:)`.
     private var visualAidForms: [UUID: ACPUserInputFormState] = [:]
+    private var visualAidSendStatuses: [UUID: ACPVisualAidSendStatus] = [:]
 
     func allocatePromptID() -> Int {
         nextPromptActivity.send()
@@ -2486,6 +2487,14 @@ final class ACPSession: ObservableObject, Identifiable {
         let form = ACPUserInputFormState(request: request)
         visualAidForms[visual.id] = form
         return form
+    }
+
+    /// Whether the last answer sent for a visual failed; survives the card unmounting.
+    func visualAidSendStatus(for visualId: UUID) -> ACPVisualAidSendStatus {
+        if let status = visualAidSendStatuses[visualId] { return status }
+        let status = ACPVisualAidSendStatus()
+        visualAidSendStatuses[visualId] = status
+        return status
     }
 
     func replaceTranscriptMessages(

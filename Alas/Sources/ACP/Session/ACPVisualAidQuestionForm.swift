@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Maps a visual aid's question onto the native user-input form, and the
 /// submitted form back onto an answer and the prompt the agent receives.
@@ -68,4 +69,14 @@ enum ACPVisualAidQuestionForm {
         if let note, !note.isEmpty { lines.append("Note: \(note)") }
         return lines.joined(separator: "\n")
     }
+}
+
+/// Delivery state of one visual aid's answer, kept on the session so a card
+/// remounted after leaving the mount band still shows a failed send.
+@MainActor
+@Observable
+final class ACPVisualAidSendStatus {
+    static let failureMessage = "Couldn't send your answer. Try again."
+
+    var error: String?
 }

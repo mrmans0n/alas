@@ -15,10 +15,9 @@ struct ACPVisualAidActions {
 /// A visual aid in the transcript (or filling a pop-out tab): the sandboxed
 /// page plus, when it asks one, the native question card.
 struct ACPVisualAidCard: View {
-    static let sendFailureMessage = "Couldn't send your answer. Try again."
-
     let visual: ACPVisualAid
     let form: ACPUserInputFormState?
+    let sendStatus: ACPVisualAidSendStatus
     let actions: ACPVisualAidActions
     var fillsHeight = false
 
@@ -27,7 +26,6 @@ struct ACPVisualAidCard: View {
     @State private var page: VisualAidWebPage?
     @State private var paused = false
     @State private var sending = false
-    @State private var sendError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,12 +48,7 @@ struct ACPVisualAidCard: View {
         .onChange(of: theme) { page?.applyTheme(theme) }
         .onChange(of: page?.status) { syncSelection() }
         .onChange(of: form?.selectionValues[ACPVisualAidQuestionForm.choiceKey]) { syncSelection() }
-        .onChange(of: visual.answer) { old, new in
-            // The manager clears an answer whose send failed; the card cannot
-            // learn that from `actions.answer`, which returns once it is stored.
-            if case .answered = old, new == nil {
-                sendError = Self.sendFailureMessage
-            }
+        .onChange(of: visual.answer) {
             installChoiceHandler()
             syncSelection()
         }
@@ -129,7 +122,7 @@ struct ACPVisualAidCard: View {
                         headerLabel: "Question"
                     )
                     .disabled(sending)
-                    if let sendError {
+                    if let sendError = sendStatus.error {
                         Text(sendError).font(.callout).foregroundStyle(theme.color("del"))
                     }
                 }
@@ -149,12 +142,12 @@ struct ACPVisualAidCard: View {
         }
         guard !sending else { return }
         sending = true
-        sendError = nil
+        sendStatus.error = nil
         let visualID = visual.id
         Task {
             let stored = await actions.answer(visualID, answer)
             sending = false
-            if !stored { sendError = Self.sendFailureMessage }
+            if !stored { sendStatus.error = ACPVisualAidSendStatus.failureMessage }
         }
     }
 
