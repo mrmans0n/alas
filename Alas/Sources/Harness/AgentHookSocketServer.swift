@@ -677,18 +677,30 @@ struct JSONObjectFramer {
             }
             switch byte {
             case UInt8(ascii: "\""):
-                if depth == 0 { finished = true; return false }
+                if depth == 0 {
+                    finished = true
+                    return false
+                }
                 inString = true
             case UInt8(ascii: "{"), UInt8(ascii: "["):
                 depth += 1
             case UInt8(ascii: "}"), UInt8(ascii: "]"):
                 depth -= 1
-                if depth == 0 { finished = true; return true }
-                if depth < 0 { finished = true; return false }
+                if depth == 0 {
+                    finished = true
+                    return true
+                }
+                if depth < 0 {
+                    finished = true
+                    return false
+                }
             case UInt8(ascii: " "), UInt8(ascii: "\n"), UInt8(ascii: "\r"), UInt8(ascii: "\t"):
                 continue
             default:
-                if depth == 0 { finished = true; return false }
+                if depth == 0 {
+                    finished = true
+                    return false
+                }
             }
         }
         return false
