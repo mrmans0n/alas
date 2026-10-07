@@ -306,6 +306,21 @@ import Foundation
         return (manager, session, store, coordinator, runner, endpoint)
     }
 
+    @Test("an SSH session without confirmed authority does not advertise another owner", arguments: [false, true])
+    func unavailableRemoteAuthorityDoesNotShowTakeoverBanner(released: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (manager, session, _, coordinator, _, _) = try await remoteWriter(in: folder)
+        defer { manager.shutdownBackgroundTasks() }
+        if released {
+            await manager.releaseWriterLease(sessionId: session.id)
+        } else {
+            coordinator.markUnavailable(sessionId: session.id)
+        }
+        #expect(manager.isMirror(sessionId: session.id))
+        #expect(!manager.showsTakeoverBanner(sessionId: session.id))
+    }
+
     @Test("an SSH takeover fences the old writer despite independent Mac-local lease databases")
     func remoteTakeoverReplacesAuthorityAcrossIndependentStores() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -331,12 +346,16 @@ import Foundation
         #expect(!(await b.acquireWriterLease(sessionId: "local-b")))
         #expect(a.isWriter(for: "local-a"))
         #expect(b.isMirror(sessionId: "local-b"))
+        #expect(b.showsTakeoverBanner(sessionId: "local-b"))
         #expect(try storeB.loadLease(sessionId: "local-b") == nil)
         _ = b.placeholderSession(id: "local-b")
         #expect(await b.takeOver(sessionId: "local-b"))
         _ = await a.heartbeatTick(sessionId: "local-a")
         #expect(!a.isWriter(for: "local-a"))
         #expect(a.isMirror(sessionId: "local-a"))
+        _ = try await coordinatorA.observe(sessionId: "local-a",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation"))
+        #expect(a.showsTakeoverBanner(sessionId: "local-a"))
         #expect(b.isWriter(for: "local-b"))
         await a.releaseWriterLease(sessionId: "local-a")
         await b.releaseWriterLease(sessionId: "local-b")
