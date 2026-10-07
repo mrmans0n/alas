@@ -239,22 +239,23 @@ fn all_tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string", "maxLength": 120, "description": "Short title shown above the visual." },
-                    "html": { "type": "string", "description": "HTML fragment or full document, at most 512 KiB of UTF-8." },
+                    "title": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Short title shown above the visual." },
+                    "html": { "type": "string", "minLength": 1, "description": "HTML fragment or full document. Must contain non-whitespace; at most 512 KiB (524288 bytes) of UTF-8." },
                     "question": {
                         "type": "object",
                         "description": "Optional single question answered from a native card.",
                         "properties": {
-                            "prompt": { "type": "string", "maxLength": 500 },
+                            "prompt": { "type": "string", "minLength": 1, "maxLength": 500 },
                             "options": {
                                 "type": "array",
+                                "description": "Option ids must be unique.",
                                 "minItems": 2,
                                 "maxItems": 8,
                                 "items": {
                                     "type": "object",
                                     "properties": {
                                         "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
-                                        "label": { "type": "string", "maxLength": 200 }
+                                        "label": { "type": "string", "minLength": 1, "maxLength": 200 }
                                     },
                                     "required": ["id", "label"]
                                 }
