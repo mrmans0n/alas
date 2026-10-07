@@ -1398,6 +1398,37 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("takeover does not continue a direct turn the writer already completed")
+    func takeoverRefreshesCompletedDirectTurnBeforeReattaching() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(id: "takeover-session", remoteSessionId: "remote-takeover"))
+        try store.setDirectTurnInFlight(sessionId: "takeover-session", inFlight: true)
+        try store.seizeLease(
+            sessionId: "takeover-session",
+            instanceId: "previous-owner",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-takeover")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client, continueInterruptedSessions: true)
+        let session = try #require(manager.placeholderSession(id: "takeover-session"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.refreshMirror(sessionId: session.id)
+        #expect(session.directTurnInFlight)
+
+        try store.setDirectTurnInFlight(sessionId: session.id, inFlight: false)
+        #expect(await manager.takeOver(sessionId: session.id))
+        try await waitUntil { session.agentState == .ready }
+
+        #expect(!session.directTurnInFlight)
+        #expect(!session.queue.contains { $0.interruptedTurnContinuation })
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("retrying uncertain queued prompt advances its durable key once")
     func retryingUncertainQueuedPromptAdvancesOperationAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
