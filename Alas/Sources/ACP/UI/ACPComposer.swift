@@ -58,6 +58,7 @@ struct ACPInputField: NSViewRepresentable {
     var symbolMentions: ACPSymbolMentionSource? = nil
     /// Slash commands Alas handles itself, offered ahead of the agent's.
     var alasCommands: [ACPPromptSuggestion] = []
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -68,6 +69,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.drawsBackground = false
+        textView.isEditable = isEnabled
         textView.backgroundColor = .clear
         textView.focusRingType = .none
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
@@ -118,7 +120,7 @@ struct ACPInputField: NSViewRepresentable {
         // `CenterPaneView` only renders the active tab), so this fires
         // every time the user swaps to this ACP tab.
         DispatchQueue.main.async { [weak textView] in
-            guard let textView, let window = textView.window else { return }
+            guard let textView, textView.isEditable, let window = textView.window else { return }
             window.makeFirstResponder(textView)
         }
         return scroll
@@ -145,11 +147,15 @@ struct ACPInputField: NSViewRepresentable {
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             if let tv = nsView.documentView as? ACPNSTextView,
-               let window = tv.window {
+               isEnabled, let window = tv.window {
                 window.makeFirstResponder(tv)
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.isEditable = isEnabled
+            if !isEnabled {
+                tv.dismissFloatingPanels()
+            }
             configureNextPrompt(tv)
             let baseFont = typography.appKitFont()
             let style = Self.codeBlockStyle(
@@ -161,8 +167,10 @@ struct ACPInputField: NSViewRepresentable {
             tv.markdownCodeBlockStyle = style
             context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
-            tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
-                                                  nativeSteering: session.canSteerRunningTurn)
+            tv.placeholderText = isEnabled
+                ? Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
+                                   nativeSteering: session.canSteerRunningTurn)
+                : "Read only until you take over"
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {

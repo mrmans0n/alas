@@ -438,6 +438,11 @@ struct ACPComposer: View {
                     ? []
                     : [ACPAlasSlashCommand.btwSuggestion] + pluginPrompts
             )
+            .disabled(isMirror)
+            .opacity(isMirror ? 0.5 : 1)
+            .onChange(of: isMirror) { _, mirror in
+                if mirror { dictation.stop() }
+            }
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
                 hasText = composer.draft.hasContent
@@ -478,15 +483,51 @@ struct ACPComposer: View {
                 }
             }
 
-            ViewThatFits(in: .horizontal) {
-                expandedToolbar(showShortcuts: true)
-                expandedToolbar(showShortcuts: false)
-                compactToolbar
+            Group {
+                if isMirror {
+                    mirrorToolbar
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        expandedToolbar(showShortcuts: true)
+                        expandedToolbar(showShortcuts: false)
+                        compactToolbar
+                    }
+                }
             }
             .padding(.horizontal, 2)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: inputFocused)
+    }
+
+    private var isMirror: Bool { manager.isMirror(sessionId: session.id) }
+
+    private var mirrorToolbar: some View {
+        HStack(spacing: 8) {
+            if manager.showsTakeoverBanner(sessionId: session.id) {
+                Button {
+                    Task { await manager.takeOver(sessionId: session.id) }
+                } label: {
+                    Text("Take over")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(theme.color("fg"))
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(theme.color("bg-3").opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .help(manager.mirrorIsBusy(sessionId: session.id)
+                      ? "Working in another window. Take over here to control this session."
+                      : "Open in another window. Take over here to control this session.")
+            }
+            Spacer(minLength: 0)
+            contextUsageButton
+            actionButton
+                .disabled(true)
+                .opacity(0.5)
+        }
     }
 
     private var contextUsageButton: some View {
