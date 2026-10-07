@@ -9991,6 +9991,8 @@ final class AppState {
             if !title.isEmpty { return title }
             let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
             return message.isEmpty ? nil : message
+        case .visualAid:
+            return nil
         }
     }
 
@@ -10007,6 +10009,8 @@ final class AppState {
         switch request.source {
         case .cursor(let id, _), .elicitation(let id, _):
             return notificationRequestId(for: id)
+        case .visualAid(let id):
+            return id.uuidString
         }
     }
 

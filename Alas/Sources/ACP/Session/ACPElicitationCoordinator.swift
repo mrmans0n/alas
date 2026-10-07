@@ -120,6 +120,8 @@ final class ACPElicitationCoordinator {
                 response = Self.elicitationResponse(action)
             }
             client.respondToElicitation(id: id, result: .success(response))
+        case .visualAid:
+            assertionFailure("Visual aid questions never enter the elicitation coordinator")
         }
         onInputResolved()
     }
@@ -172,7 +174,8 @@ final class ACPElicitationCoordinator {
         else { return false }
 
         guard removePending(token: token) != nil else { return false }
-        client.respondToElicitation(id: request.jsonRPCID, result: .success(.accept()))
+        guard let id = request.jsonRPCID else { return false }
+        client.respondToElicitation(id: id, result: .success(.accept()))
         session.transcript.urlElicitationWaits.append(.init(
             id: urlRequest.elicitationId,
             requestId: token,
@@ -243,7 +246,7 @@ final class ACPElicitationCoordinator {
         let wasEmpty = pendingByToken.isEmpty
         pendingByToken[request.id] = request
         session.transcript.pendingUserInputs.append(request)
-        if notifiedRequestIds.insert(request.jsonRPCID).inserted {
+        if let id = request.jsonRPCID, notifiedRequestIds.insert(id).inserted {
             onInputAwaiting(session, request)
         }
         if wasEmpty, session.transcript.streamingState == .idle {
@@ -322,10 +325,12 @@ final class ACPElicitationCoordinator {
     }
 
     private func clearNotificationDedupeIfResolved(for request: ACPUserInputRequest) {
-        guard !pendingByToken.values.contains(where: { $0.jsonRPCID == request.jsonRPCID }) else {
+        guard let id = request.jsonRPCID,
+              !pendingByToken.values.contains(where: { $0.jsonRPCID == id })
+        else {
             return
         }
-        notifiedRequestIds.remove(request.jsonRPCID)
+        notifiedRequestIds.remove(id)
     }
 
     private func restoreStreamingStateIfResolved() {
@@ -345,6 +350,8 @@ final class ACPElicitationCoordinator {
             client.respondToQuestion(id: id, response: .init(outcome: .cancelled))
         case .elicitation(let id, _):
             client.respondToElicitation(id: id, result: .success(.cancel))
+        case .visualAid:
+            break
         }
     }
 
@@ -381,9 +388,10 @@ final class ACPElicitationCoordinator {
 }
 
 private extension ACPUserInputRequest {
-    var jsonRPCID: JSONRPCID {
+    var jsonRPCID: JSONRPCID? {
         switch source {
         case .cursor(let id, _), .elicitation(let id, _): return id
+        case .visualAid: return nil
         }
     }
 }
