@@ -4,11 +4,14 @@ import Testing
 
 @Suite("Checkpoint writer lease store")
 struct CheckpointWriterLeaseStoreTests {
-    @Test func activeCountIncludesOtherLiveInstancesAndExcludesThisInstance() throws {
+    @Test(arguments: [
+        UUID().uuidString.lowercased(),
+        "workspace-\(UUID().uuidString.lowercased())-\(UUID().uuidString.lowercased())",
+    ])
+    func activeCountIncludesOtherLiveInstancesAndExcludesThisInstance(lineageID: String) throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
-        let lineageID = UUID().uuidString.lowercased()
 
         store.acquire(lineageIDs: [lineageID], sessionID: "local", instanceID: "this-instance", zmxSessionName: nil, remoteHost: nil)
         store.acquire(lineageIDs: [lineageID], sessionID: "other", instanceID: "other-instance", zmxSessionName: nil, remoteHost: nil)

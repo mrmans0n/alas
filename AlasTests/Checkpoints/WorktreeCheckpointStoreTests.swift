@@ -20,6 +20,22 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await reloaded.readBlob(first.blobs.keys.first!, lineageID: lineageA) == Data([0, 255, 1]))
     }
 
+    @Test func workspaceMemberLineageStoresUnderStableUUIDKey() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineage = "workspace-\(lineageA)-\(lineageB)"
+        let checkpoint = try publication(lineageID: lineage, label: "Workspace", bytes: Data([7]))
+        _ = try await WorktreeCheckpointStore(root: root).publish(checkpoint)
+
+        let reloaded = WorktreeCheckpointStore(root: root)
+        #expect(try await reloaded.catalog(lineageID: lineage).summaries.map(\.label) == ["Workspace"])
+        #expect(try await reloaded.load(id: checkpoint.manifest.id, lineageID: lineage) == checkpoint.manifest)
+        let key = try #require(CheckpointLineage.storageKey(for: lineage))
+        #expect(UUID(uuidString: key) != nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == [key])
+        #expect(CheckpointLineage.storageKey(for: lineageA) == lineageA)
+    }
+
     @Test func deletingOneCheckpointRetainsOtherManifestAndSharedBlob() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
