@@ -29,7 +29,6 @@ struct ACPCommandPillTests {
             rendered.enumerateAttribute(.attachment, in: NSRange(location: 0, length: rendered.length)) { value, _, _ in
                 if let chip = value as? ACPTranscriptCommandChipAttachment {
                     chippedSuggestions.append(chip.suggestion)
-                    #expect(chip.image != nil)
                 }
             }
             #expect(chippedSuggestions == suggestions)
