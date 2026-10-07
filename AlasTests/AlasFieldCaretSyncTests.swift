@@ -59,7 +59,8 @@ struct AlasFieldCaretSyncTests {
             AlasField(
                 text: Binding(get: get, set: set),
                 monospaced: true,
-                disablesAutomaticTextSubstitutions: true
+                disablesAutomaticTextSubstitutions: true,
+                inputPolicy: .gitBranchName
             )
         }
     }

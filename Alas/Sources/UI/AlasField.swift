@@ -10,10 +10,11 @@ struct AlasField: View {
     var leadingIcon: String? = nil
     var isEnabled: Bool = true
     var disablesAutomaticTextSubstitutions: Bool = false
+    var inputPolicy: AlasFieldInputPolicy? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
-        if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions {
+        if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions || inputPolicy != nil {
             AlasNSTextField(
                 text: $text,
                 placeholder: placeholder,
@@ -21,7 +22,8 @@ struct AlasField: View {
                 focusOnAppear: focusOnAppear,
                 onSubmit: onSubmit,
                 isEnabled: isEnabled,
-                disablesAutomaticTextSubstitutions: disablesAutomaticTextSubstitutions
+                disablesAutomaticTextSubstitutions: disablesAutomaticTextSubstitutions,
+                inputPolicy: inputPolicy
             )
             .alasFieldChrome(theme: theme)
         } else {
@@ -129,6 +131,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     var onSubmit: (() -> Void)?
     var isEnabled: Bool
     var disablesAutomaticTextSubstitutions: Bool
+    var inputPolicy: AlasFieldInputPolicy?
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
@@ -147,6 +150,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         field.focusOnAppear = focusOnAppear
         field.isEnabled = isEnabled
         field.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
+        field.inputPolicy = inputPolicy
         return field
     }
 
@@ -154,6 +158,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         context.coordinator.parent = self
         nsView.isEnabled = isEnabled
         nsView.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
+        nsView.inputPolicy = inputPolicy
         if nsView.placeholderString != placeholder { nsView.placeholderString = placeholder }
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string
@@ -263,6 +268,9 @@ class AlasNSTextFieldView: NSTextField {
     var disablesAutomaticTextSubstitutions: Bool = false {
         didSet { (cell as? AlasNSTextFieldCell)?.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions }
     }
+    var inputPolicy: AlasFieldInputPolicy? {
+        didSet { (cell as? AlasNSTextFieldCell)?.inputPolicy = inputPolicy }
+    }
 
     /// Acquires first responder and moves the caret to the end of the
     /// current text, synchronously, in a single call. Acquiring first
@@ -312,15 +320,22 @@ class AlasNSTextFieldView: NSTextField {
 /// would leak into unrelated fields the next time they're focused.
 final class AlasNSTextFieldCell: NSTextFieldCell {
     var disablesAutomaticTextSubstitutions = false
+    var inputPolicy: AlasFieldInputPolicy? {
+        didSet {
+            guard oldValue != inputPolicy else { return }
+            isolatedFieldEditor.inputPolicy = inputPolicy
+        }
+    }
 
-    private lazy var isolatedFieldEditor: NSTextView = {
-        let editor = NSTextView()
+    private lazy var isolatedFieldEditor: AlasFieldEditor = {
+        let editor = AlasFieldEditor()
         editor.isFieldEditor = true
         return editor
     }()
 
     override func fieldEditor(for controlView: NSView) -> NSTextView? {
-        disablesAutomaticTextSubstitutions ? isolatedFieldEditor : super.fieldEditor(for: controlView)
+        disablesAutomaticTextSubstitutions || inputPolicy != nil
+            ? isolatedFieldEditor : super.fieldEditor(for: controlView)
     }
 
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
@@ -341,5 +356,45 @@ final class AlasNSTextFieldCell: NSTextFieldCell {
             textView.isAutomaticDashSubstitutionEnabled = false
         }
         return textView
+    }
+}
+
+enum AlasFieldInputPolicy {
+    case gitBranchName
+}
+
+/// Normalize only committed incoming text, before AppKit records the native
+/// edit. Leave marked text, selection, deletion, and undo/redo to AppKit.
+final class AlasFieldEditor: NSTextView {
+    var inputPolicy: AlasFieldInputPolicy?
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard inputPolicy == .gitBranchName, let text = pboard.string(forType: .string) else {
+            return super.readSelection(from: pboard, type: type)
+        }
+        // NSTextView's paste path bypasses insertText. Route plain branch-name
+        // paste through the same native insertion transaction as typing.
+        insertText(text, replacementRange: selectedRange())
+        return true
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard inputPolicy == .gitBranchName else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+        let text: String
+        if let plain = insertString as? String {
+            text = plain
+        } else if let attributed = insertString as? NSAttributedString {
+            text = attributed.string
+        } else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+        let normalized = GitNameValidator.normalizedBranchNameInput(text)
+        // An entirely rejected insertion must not replace selected text.
+        guard !normalized.isEmpty || text.isEmpty || hasMarkedText() else { return }
+        super.insertText(normalized, replacementRange: replacementRange)
     }
 }

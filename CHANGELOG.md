@@ -16,6 +16,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stop trailing agent metadata updates (usage, commands, models, titles) from discarding the on-device next-prompt suggestion for a finished turn, and add `next-prompt` diagnostic logging that names why a suggestion was dropped.
 - Refresh completed-turn state before taking over an ACP session from another Alas instance, preventing an automatic restart-continuation prompt after the turn already finished.
 - Keep code editor gutter line numbers from blinking while typing or deleting beside blank lines.
+- Convert spaces to hyphens and block Git-forbidden characters in the new-worktree name field. Preserve native caret, selection, marked-text, and undo behavior; complete branch-name validation still runs before creation.
 
 ## [0.20.5] - 2026-10-07
 

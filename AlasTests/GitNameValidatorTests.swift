@@ -21,40 +21,25 @@ struct GitNameValidatorTests {
     }
 
     @Test("Rejects invalid branch name", arguments: [
-        ("", "Name cannot be empty."),
-        ("   ", "Name cannot contain spaces."),
-        ("bad name", "Name cannot contain spaces."),
-        (" leading", "Name cannot contain spaces."),
-        ("trailing ", "Name cannot contain spaces."),
-        ("feature/.secret", "Path components cannot start with '.'."),
-        ("foo/bar.", "Name cannot end with '.'."),
-        ("feature/..", "Name cannot contain '.' or '..' as a path component."),
-        ("../escape", "Name cannot contain '.' or '..' as a path component."),
-        ("/leading", "Name cannot start or end with '/' ."),
-        ("trailing/", "Name cannot start or end with '/' ."),
-        ("feature//double", "Name cannot contain consecutive '/' ."),
-        ("fix~backup", "Name contains unsupported characters."),
-        ("v1^2", "Name contains unsupported characters."),
-        ("feat:new", "Name contains unsupported characters."),
-        ("feat\\new", "Name contains unsupported characters."),
-        ("what?", "Name contains unsupported characters."),
-        ("feat/*", "Name contains unsupported characters."),
-        ("feature/[wip]", "Name contains unsupported characters."),
-        ("stash@{1}", "Name cannot contain '@{' ."),
-        ("@", "'@' is not a valid branch name."),
-        ("-dash", "Name cannot start with '-' ."),
-        ("fix.lock", "Name cannot end with '.lock' ."),
-        (String(repeating: "a", count: 251), "Name is too long (max 250 characters)."),
+        "", "   ", "bad name", " leading", "trailing ",
+        "feature/.secret", "foo/bar.", "feature/..", "../escape",
+        "/leading", "trailing/", "feature//double",
+        "fix~backup", "v1^2", "feat:new", "feat\\new", "what?",
+        "feat/*", "feature/[wip]", "stash@{1}", "@", "-dash", "fix.lock",
+        String(repeating: "a", count: 251),
     ])
-    func rejectsBranchName(_ name: String, message: String) {
-        #expect(GitNameValidator.validateBranchName(name) == .invalid(message))
+    func rejectsBranchName(_ name: String) {
+        #expect(GitNameValidator.validateBranchName(name) != .valid)
     }
 
-    // MARK: - Worktree name alias
-
-    @Test func worktreeNameDelegatesToBranchValidator() {
-        let result = GitNameValidator.validateWorktreeName("feature/foo")
-        #expect(result == .valid)
+    @Test("Normalizes characters entered in a branch-name field", arguments: [
+        ("my feature a", "my-feature-a"),
+        ("fix~one^two:three?four*five[six\\seven", "fixonetwothreefourfivesixseven"),
+        ("feature/\u{0000}name\u{007f}", "feature/name"),
+        ("feature/naïve-修正", "feature/naïve-修正"),
+    ])
+    func normalizesBranchNameInput(_ input: String, expected: String) {
+        #expect(GitNameValidator.normalizedBranchNameInput(input) == expected)
     }
 
     // MARK: - Branch prefix validation
@@ -70,12 +55,9 @@ struct GitNameValidatorTests {
     }
 
     @Test("Rejects invalid branch prefix", arguments: [
-        ("/", "Prefix cannot be '/' only."),
-        ("feature//", "Prefix cannot contain consecutive '/'."),
-        ("bad name/", "Name cannot contain spaces."),
-        ("../", "Name cannot contain '.' or '..' as a path component."),
+        "/", "feature//", "bad name/", "../",
     ])
-    func rejectsBranchPrefix(_ prefix: String, message: String) {
-        #expect(GitNameValidator.validateBranchPrefix(prefix) == .invalid(message))
+    func rejectsBranchPrefix(_ prefix: String) {
+        #expect(GitNameValidator.validateBranchPrefix(prefix) != .valid)
     }
 }

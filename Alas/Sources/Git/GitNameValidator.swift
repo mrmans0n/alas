@@ -8,6 +8,34 @@ struct GitNameValidator {
         case invalid(String)
     }
 
+    /// Only character-level rules apply during editing. Complete ref rules
+    /// still validate the composed branch before creation.
+    static func normalizedBranchNameInput(_ input: String) -> String {
+        guard input.unicodeScalars.contains(where: {
+            $0 == " " || isForbiddenBranchNameInputScalar($0)
+        }) else { return input }
+        var result = ""
+        result.reserveCapacity(input.utf8.count)
+        for scalar in input.unicodeScalars {
+            if scalar == " " {
+                result.append("-")
+            } else if !isForbiddenBranchNameInputScalar(scalar) {
+                result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
+    }
+
+    private static func isForbiddenBranchNameInputScalar(_ scalar: UnicodeScalar) -> Bool {
+        if scalar.value < 0x20 || scalar.value == 0x7f { return true }
+        switch scalar {
+        case "~", "^", ":", "?", "*", "[", "\\":
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Validate a git branch name according to git ref naming rules.
     /// Allows path-style names such as `feature/foo`.
     static func validateBranchName(_ name: String) -> ValidationResult {
