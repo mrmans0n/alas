@@ -236,6 +236,31 @@ struct ACPSymbolReferenceTests {
         #expect(ACPSymbolHoverPreview.sentWindow(from: Self.snapshot(excerpt: nil)) == nil)
     }
 
+    @Test("the sent badge counts code as included only when the snapshot carries it")
+    func asSentFollowsTheSnapshot() {
+        let requested = ACPSymbolReference.Target(path: "a.swift", name: "a", kind: .function, container: nil,
+                                                  lineRange: 10...12, includeCode: true)
+        // Code was asked for but the symbol was missing at send time: none went out.
+        #expect(!requested.asSent(snapshot: Self.snapshot(excerpt: nil, found: false)).includeCode)
+        #expect(requested.asSent(snapshot: Self.snapshot(excerpt: "x")).includeCode)
+        // Older messages have no snapshot: the link's own flag stands.
+        #expect(requested.asSent(snapshot: nil).includeCode)
+    }
+
+    // @MainActor: ACPSymbolSentHoverModel is main-actor UI state.
+    @Test("the sent popover goes back to the excerpt when Current disappears")
+    @MainActor func sentPopoverFallsBackToExcerpt() {
+        let target = ACPSymbolReference.Target(path: "a.swift", name: "a", kind: .function, container: nil,
+                                               lineRange: 10...12, includeCode: true)
+        let model = ACPSymbolSentHoverModel(target: target, snapshot: Self.snapshot(excerpt: "x"),
+                                            typography: .default, theme: nil)
+        model.applyLive(Self.liveFound(hash: "h"), theme: nil, animated: false)
+        model.shown = .current
+        model.applyLive(.missing, theme: nil, animated: false)
+        #expect(model.shown == .sent)
+        #expect(model.preview.note == .noLongerFound)
+    }
+
     @Test("transcript links carry the sent range, falling back to the inserted one")
     func openURL() throws {
         let target = ACPSymbolReference.Target(path: "Package.swift", name: "a", kind: .function,

@@ -24,6 +24,7 @@ struct ACPComposerDraftBridgeTests {
             worktreeRoot: root, initialDraft: .empty, focusRequest: 0, sendOnEnter: true,
             onDraftChange: { _ in }, onDraftClear: {}, onSubmit: { _, _, _, _, _ in true })
         coordinator.textView = textView
+        coordinator.symbolMentions = ACPSymbolMentionSource(index: nil, fileSymbols: { _ in [] })
         textView.coordinator = coordinator
         textView.delegate = coordinator
 

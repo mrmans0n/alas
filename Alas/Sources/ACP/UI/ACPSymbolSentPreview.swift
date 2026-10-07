@@ -97,9 +97,12 @@ final class ACPSymbolSentHoverModel: ObservableObject {
         if loaded != cached { applyLive(loaded, theme: theme, animated: true) }
     }
 
-    private func applyLive(_ loaded: ACPSymbolHoverPreview.Loaded, theme: Theme?, animated: Bool) {
+    func applyLive(_ loaded: ACPSymbolHoverPreview.Loaded, theme: Theme?, animated: Bool) {
         current.apply(loaded, theme: theme, animated: animated)
         preview = ACPSymbolSentPreview.make(snapshot: snapshot, live: loaded)
+        // Current can be chosen from a cached result. If the fresh read finds
+        // the symbol gone, go back to the excerpt rather than a bare "not found".
+        if sent != nil, !preview.canShowCurrent { shown = .sent }
     }
 }
 

@@ -45,6 +45,8 @@ struct ACPSubagentRowView: View {
     @ObservedObject var run: ACPSubagentRun
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
+    /// Where symbol previews read files; nil where symbol paths are not relative to it.
+    let symbolPreviewRoot: URL?
     var onCancel: (() -> Void)?
 
     @State private var expanded = false
@@ -167,6 +169,7 @@ struct ACPSubagentRowView: View {
                         message: message,
                         typography: typography,
                         trustedImageRoot: trustedImageRoot,
+                        symbolPreviewRoot: symbolPreviewRoot,
                         isLiveNarration: index == liveIndex,
                         isTurnActive: run.isRunning && index > currentTurnUserIndex)
                 }
@@ -185,6 +188,7 @@ private struct ACPSubagentMessageRow: View {
     let message: ACPMessage
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
+    let symbolPreviewRoot: URL?
     let isLiveNarration: Bool
     let isTurnActive: Bool
     @Environment(\.theme) private var theme
@@ -196,7 +200,7 @@ private struct ACPSubagentMessageRow: View {
         case .thought(_, _, let buffer):
             ACPThoughtView(buffer: buffer, isLive: isLiveNarration)
         case .user(_, _, let text, let attachments, _, _):
-            ACPSubagentPromptRow(text: text, attachments: attachments, typography: typography, root: trustedImageRoot)
+            ACPSubagentPromptRow(text: text, attachments: attachments, typography: typography, root: symbolPreviewRoot)
         case .toolCall(let toolCall):
             ACPToolCallCard(toolCall: toolCall, trustedImageRoot: trustedImageRoot)
         case .fileEdit(_, let edit):

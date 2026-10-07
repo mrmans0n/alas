@@ -15,10 +15,13 @@ struct ACPSymbolBadge: View {
     @State private var isHovering = false
     @State private var showsPreview = false
 
+    /// The target as sent; see `ACPSymbolReference.Target.asSent(snapshot:)`.
+    private var sentTarget: ACPSymbolReference.Target { target.asSent(snapshot: snapshot) }
+
     private var containerText: String { target.container.map { $0 + "." } ?? "" }
     private var nameText: String { target.kind.isCallable ? target.name + "()" : target.name }
     private var countText: String? {
-        target.includeCode
+        sentTarget.includeCode
             ? ACPSymbolReference.Target.lineCountText(for: snapshot?.lineRange ?? target.lineRange) : nil
     }
 
@@ -52,15 +55,18 @@ struct ACPSymbolBadge: View {
         }
         .popover(isPresented: $showsPreview, arrowEdge: .bottom) {
             if let root {
-                ACPSymbolSentHoverView(target: target, snapshot: snapshot, root: root,
+                ACPSymbolSentHoverView(target: sentTarget, snapshot: snapshot, root: root,
                                        typography: typography, theme: theme)
+                    // A retried send can re-stamp the snapshot while the popover
+                    // is open; a new snapshot gets a new model.
+                    .id(snapshot)
             }
         }
     }
 
     private var pill: some View {
         HStack(spacing: 0) {
-            if target.includeCode {
+            if sentTarget.includeCode {
                 Rectangle().fill(Color(nsColor: .controlAccentColor)).frame(width: 2)
             }
             HStack(spacing: 5) {
@@ -92,11 +98,22 @@ struct ACPSymbolBadge: View {
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(
             RoundedRectangle(cornerRadius: 5).strokeBorder(
-                target.includeCode
+                sentTarget.includeCode
                     ? Color(nsColor: NSColor.controlAccentColor.withAlphaComponent(0.6))
                     : Color(nsColor: .separatorColor),
                 lineWidth: 0.75)
         )
         .contentShape(Rectangle())
+    }
+}
+
+extension ACPSymbolReference.Target {
+    /// The target as it was sent: code counts as included only when the
+    /// snapshot carries it (a symbol missing at send time sent none). A message
+    /// without a snapshot keeps the link's own flag.
+    func asSent(snapshot: ACPSymbolSnapshot?) -> ACPSymbolReference.Target {
+        var sent = self
+        if let snapshot { sent.includeCode = snapshot.excerpt != nil }
+        return sent
     }
 }

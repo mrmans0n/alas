@@ -2783,10 +2783,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func recheckSymbolPresence() {
         symbolPresenceTask?.cancel()
         let uris = symbolBadgeURIs()
-        guard !uris.isEmpty, let root = coordinator?.worktreeRoot else {
+        // Without symbol mentions (a workspace checkout) the runner resolves
+        // symbol paths against another root than this composer's, so a check
+        // here would judge the wrong files.
+        guard !uris.isEmpty, let coordinator, coordinator.symbolMentions != nil else {
             symbolPresenceTask = nil
             return
         }
+        let root = coordinator.worktreeRoot
         symbolPresenceTask = Task { [weak self] in
             let missing = await ACPSymbolPresence.missing(among: uris, worktreeRoot: root)
             guard !Task.isCancelled, let self else { return }
