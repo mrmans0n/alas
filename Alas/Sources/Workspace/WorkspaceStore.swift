@@ -18,6 +18,18 @@ enum WorkspaceStoreLoadResult: Equatable, Sendable {
 
 enum WorkspaceStoreError: Error, Equatable, Sendable {
     case recoveryRequired
+    case checkpointRecoveryBlocksRemoval
+}
+
+extension WorkspaceStoreError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .recoveryRequired:
+            "Workspace storage is unavailable or needs recovery."
+        case .checkpointRecoveryBlocksRemoval:
+            "Checkpoint state for this worktree could not be verified, or an interrupted checkpoint restore needs recovery, so it cannot be deleted yet."
+        }
+    }
 }
 
 actor WorkspaceStore {
