@@ -65,8 +65,10 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
     /// for installs Alas cannot update (pnpm, uv, cargo, standalone scripts).
     /// Homebrew names are qualified with their tap from the install receipt,
     /// so a tapped formula is never confused with a core one of the same name.
+    /// `bunGlobalDir` is `$BUN_INSTALL_GLOBAL_DIR` when set.
     static func classify(
         resolvedPath path: String,
+        bunGlobalDir: String? = nil,
         readFile: (_ path: String) -> Data? = { _ in nil }
     ) -> ACPDetectedAgentOwner? {
         let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -96,11 +98,11 @@ enum ACPDetectedAgentOwner: Equatable, Sendable {
 
         let root = "/" + parent.joined(separator: "/")
 
-        // `$BUN_INSTALL/install/global` by default; a custom `install.globalDir`
-        // is recognized by the lockfile Bun keeps in its global root.
-        if parent.suffix(2).elementsEqual(["install", "global"])
-            || readFile("\(root)/bun.lock") != nil
-            || readFile("\(root)/bun.lockb") != nil {
+        // `$BUN_INSTALL/install/global` by default, or an explicit
+        // `$BUN_INSTALL_GLOBAL_DIR`. A lockfile alone is not proof: ordinary
+        // Bun projects have one too.
+        let customGlobalDir = bunGlobalDir.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        if parent.suffix(2).elementsEqual(["install", "global"]) || root == customGlobalDir {
             return .bun(package: package, root: root)
         }
         if parent.last == "lib", parent.count >= 2 {
@@ -182,7 +184,11 @@ struct ACPDetectedAgentUpdater: Sendable {
     ) -> ACPDetectedAgentOwner? {
         guard let path = AgentPath.resolveExecutable(named: name, base: env["PATH"]) else { return nil }
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return ACPDetectedAgentOwner.classify(resolvedPath: resolved) { FileManager.default.contents(atPath: $0) }
+        let bunGlobalDir = env["BUN_INSTALL_GLOBAL_DIR"]
+            .map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        return ACPDetectedAgentOwner.classify(resolvedPath: resolved, bunGlobalDir: bunGlobalDir) {
+            FileManager.default.contents(atPath: $0)
+        }
     }
 
     func check(owner: ACPDetectedAgentOwner) async -> AdapterUpdateState {

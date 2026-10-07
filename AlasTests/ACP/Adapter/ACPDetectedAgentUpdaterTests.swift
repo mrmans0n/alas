@@ -23,12 +23,17 @@ struct ACPDetectedAgentUpdaterTests {
         #expect(ACPDetectedAgentOwner.classify(resolvedPath: path) == expected)
     }
 
-    @Test("a custom Bun global dir is recognized by its lockfile", arguments: ["bun.lock", "bun.lockb"])
-    func customBunGlobalDir(lockfile: String) {
-        let owner = ACPDetectedAgentOwner.classify(resolvedPath: "/opt/bun-global/node_modules/omp/cli.js") {
-            $0 == "/opt/bun-global/\(lockfile)" ? Data() : nil
-        }
-        #expect(owner == .bun(package: "omp", root: "/opt/bun-global"))
+    @Test("a custom Bun global dir is recognized only when it is the configured one", arguments: [
+        ("/opt/bun-global/", ACPDetectedAgentOwner?.some(.bun(package: "omp", root: "/opt/bun-global"))),
+        // A project's own node_modules (with its bun.lock) is never a global install.
+        (nil, nil),
+    ])
+    func customBunGlobalDir(configured: String?, expected: ACPDetectedAgentOwner?) {
+        let owner = ACPDetectedAgentOwner.classify(
+            resolvedPath: "/opt/bun-global/node_modules/omp/cli.js",
+            bunGlobalDir: configured
+        ) { $0.hasSuffix("/bun.lock") ? Data() : nil }
+        #expect(owner == expected)
     }
 
     @Test("detected CLIs are only checked for sessions that run on this Mac", arguments: [

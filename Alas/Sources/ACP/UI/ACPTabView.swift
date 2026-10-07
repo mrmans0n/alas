@@ -269,6 +269,9 @@ private struct ACPSessionView: View {
         .task(id: sessionId) {
             await hydrateAndAttach()
             onStartupRecoveryReady()
+            // Optional and possibly slow (`brew outdated`); never gate startup
+            // recovery on it.
+            await refreshAdapterUpdateState()
         }
         .onExitCommand {
             handleEscape()
@@ -1241,7 +1244,8 @@ private struct ACPSessionView: View {
     }
 
     /// Drive a session from `.loading` through `.ready` (or `.failed`)
-    /// and, on success, attach the runner. Used by both the initial
+    /// and, on success, attach the runner. Callers refresh update state
+    /// afterwards. Used by both the initial
     /// `.task(id:)` and the failure banner's Retry button so a successful
     /// retry doesn't leave the session unattached with a disabled composer.
     private func hydrateAndAttach() async {
@@ -1257,7 +1261,6 @@ private struct ACPSessionView: View {
                 remoteSessionId: session.remoteSessionId
             )
         await manager.attach(to: sessionId, freshlyCreated: freshlyCreated)
-        await refreshAdapterUpdateState()
     }
 
     /// After attach: if the adapter is ready, ask the store for the cached
@@ -1347,7 +1350,10 @@ private struct ACPSessionView: View {
                 // Mirror the initial `.task(id:)` so a successful retry
                 // continues into `attach`. Without this, the runner stays
                 // nil and the composer can't send.
-                Task { await hydrateAndAttach() }
+                Task {
+                    await hydrateAndAttach()
+                    await refreshAdapterUpdateState()
+                }
             }
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .medium))
