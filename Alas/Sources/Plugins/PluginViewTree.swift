@@ -202,7 +202,9 @@ enum PluginViewTree {
         case .progressBar:
             node.text = try string(raw.text)
             let done = raw.done ?? 0, running = raw.running ?? 0
-            guard let total = raw.total, (1...maxProgressTotal).contains(total), done >= 0, running >= 0, done + running <= total else {
+            // Subtraction, not `done + running`: untrusted counts near `Int.max` would overflow.
+            guard let total = raw.total, (1...maxProgressTotal).contains(total),
+                  done >= 0, running >= 0, running <= total, done <= total - running else {
                 throw err("\(prefix) needs a total of 1 to \(maxProgressTotal), and done and running of at least 0 that add up to at most total")
             }
             (node.done, node.running, node.total) = (done, running, total)

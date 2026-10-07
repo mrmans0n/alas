@@ -70,7 +70,7 @@ struct PluginViewTreeTests {
     /// A progress bar's counts must fit its total; `done` and `running` default to 0.
     @Test(arguments: [
         (#""done":3,"running":2,"total":5"#, true), (#""total":10000"#, true),
-        (#""done":3,"running":3,"total":5"#, false), (#""done":-1,"total":5"#, false),
+        (#""done":3,"running":3,"total":5"#, false), (#""done":-1,"total":5"#, false), (#""done":\#(Int.max),"running":1,"total":1"#, false),
         (#""total":0"#, false), (#""total":10001"#, false), (#""done":1"#, false),
     ])
     func progressBarCountsFitTheTotal(fields: String, valid: Bool) {
