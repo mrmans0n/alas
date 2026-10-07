@@ -130,11 +130,7 @@ extension VisualAidWebPolicyTests {
             theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: false)
         defer { page.close() }
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-        while page.status != .ready {
-            try #require(page.status == .loading && ContinuousClock.now < deadline, "page never became ready: \(page.status)")
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try await waitUntilReady(page)
 
         let probe = """
         (() => {
@@ -159,14 +155,11 @@ extension VisualAidWebPolicyTests {
         ])
     }
 
-    /// Polls until the page is ready, no fixed sleep.
+    /// Waits until the page leaves `.loading` and requires that it landed on `.ready`.
     @MainActor
     private func waitUntilReady(_ page: VisualAidWebPage) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-        while page.status != .ready {
-            try #require(page.status == .loading && ContinuousClock.now < deadline, "page never became ready: \(page.status)")
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        _ = await awaitCondition(within: .seconds(20)) { page.status != .loading }
+        try #require(page.status == .ready, "page never became ready: \(page.status)")
     }
 
     @MainActor
@@ -201,17 +194,14 @@ extension VisualAidWebPolicyTests {
         defer { page.close() }
         page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-        func wait(_ what: String, until condition: () -> Bool) async throws {
-            while !condition() {
-                try #require(ContinuousClock.now < deadline, "timed out waiting for \(what); status \(page.status)")
-                try await Task.sleep(for: .milliseconds(20))
-            }
-        }
-        try await wait("the image request to reach the server") { server.accepted == 1 }
+        try #require(
+            await awaitCondition(within: .seconds(30)) { server.accepted == 1 },
+            "the image request never reached the server; status \(page.status)")
         // The deadline never fires here: the lock is driven once the request is known to be in flight.
         try #require(page.lockNetwork())
-        try await wait("the outstanding connection to be cancelled") { server.closed == 1 }
+        #expect(
+            await awaitCondition(within: .seconds(30)) { server.closed == 1 },
+            "the outstanding connection was never cancelled; status \(page.status)")
         #expect(page.isLocked)
         #expect(page.status == .ready)
         #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
@@ -297,11 +287,7 @@ extension VisualAidWebPolicyTests {
         try await post("https://example.com/choice-b")
 
         // Messages arrive in order, so once the second landed the first has been handled.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-        while opened.isEmpty {
-            try #require(ContinuousClock.now < deadline, "the enabled link never opened")
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        try #require(await awaitCondition(within: .seconds(20)) { !opened.isEmpty }, "the enabled link never opened")
         #expect(opened.map(\.absoluteString) == ["https://example.com/choice-b"])
     }
 }
