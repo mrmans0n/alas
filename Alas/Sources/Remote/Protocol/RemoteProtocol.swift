@@ -68,7 +68,9 @@ enum RemoteClientMessage: Equatable, Sendable {
     case listAgents
     case listProjects
     case listBranches(projectId: String)
-    case createWorktreeSession(projectId: String, base: String, branch: String, agentId: String)
+    case createWorktreeSession(
+        projectId: String, base: String, branch: String, agentId: String,
+        modelId: String? = nil, effortId: String? = nil)
     case createSession(worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
@@ -135,7 +137,9 @@ extension RemoteClientMessage: Codable {
                 projectId: try c.decode(String.self, forKey: .projectId),
                 base: try c.decode(String.self, forKey: .base),
                 branch: try c.decode(String.self, forKey: .branch),
-                agentId: try c.decode(String.self, forKey: .agentId))
+                agentId: try c.decode(String.self, forKey: .agentId),
+                modelId: try c.decodeIfPresent(String.self, forKey: .modelId),
+                effortId: try c.decodeIfPresent(String.self, forKey: .effortId))
         case "createSession":
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
@@ -275,12 +279,14 @@ extension RemoteClientMessage: Codable {
         case .listBranches(let projectId):
             try c.encode("listBranches", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
-        case .createWorktreeSession(let projectId, let base, let branch, let agentId):
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId):
             try c.encode("createWorktreeSession", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
             try c.encode(base, forKey: .base)
             try c.encode(branch, forKey: .branch)
             try c.encode(agentId, forKey: .agentId)
+            try c.encodeIfPresent(modelId, forKey: .modelId)
+            try c.encodeIfPresent(effortId, forKey: .effortId)
         case .createSession(let worktreeId, let agentId, let modelId, let effortId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)

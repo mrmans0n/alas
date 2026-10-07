@@ -3,9 +3,17 @@ import SwiftUI
 
 /// Worktree, agent, model and effort for a new session on a peer. Reads
 /// `client.newSession` live, so peer replies fill it in while it is open.
+/// The worktree is either an existing one or a new one the peer creates.
 struct NativePeerNewSessionSheet: View {
     @Bindable var client: NativePeerSessions
+    /// Nil until the peer's worktrees arrive and pick the default.
+    @State private var mode: NativePeerNewSession.WorktreeMode?
     @State private var worktreeId: String?
+    @State private var base = ""
+    @State private var branch = ""
+    /// The recovered worktree already switched to, so picking "New worktree"
+    /// again afterwards is not undone.
+    @State private var appliedRecoveryId: String?
     @State private var agentId: String?
     /// Nil is "Default": no model is sent and the peer uses the agent's own.
     @State private var modelId: String?
@@ -19,9 +27,15 @@ struct NativePeerNewSessionSheet: View {
 
     private var request: NativePeerNewSession? { client.newSession }
     private var peerName: String { request?.peerName ?? "peer" }
+    /// The peer can only create a worktree in a repo it identifies by id.
+    private var canCreateWorktrees: Bool { request?.projectId != nil }
+    private var createsWorktree: Bool { mode == .new && canCreateWorktrees }
+
     /// Agents the peer can launch in the selected worktree's project.
     private var agents: [RemoteAgentOption] {
-        let projectId = request?.worktrees?.first { $0.id == worktreeId }?.projectId
+        let projectId = createsWorktree
+            ? request?.projectId
+            : request?.worktrees?.first { $0.id == worktreeId }?.projectId
         return (request?.agents ?? []).filter { $0.isAvailable(inProjectId: projectId) }
     }
     private var selectedAgent: RemoteAgentOption? { agents.first { $0.id == agentId } }
@@ -32,7 +46,11 @@ struct NativePeerNewSessionSheet: View {
     private var canCreate: Bool {
         guard let request, !request.isLoading, request.phase != .creating,
               request.phase != .failed(NativePeerSessions.peerUnavailableMessage) else { return false }
-        return worktreeId != nil && agentId != nil
+        guard agentId != nil else { return false }
+        if createsWorktree {
+            return NativePeerNewSession.canCreateWorktree(base: base, branch: branch, branches: request.branches)
+        }
+        return worktreeId != nil
     }
 
     var body: some View {
@@ -50,6 +68,8 @@ struct NativePeerNewSessionSheet: View {
         .onAppear(perform: preselect)
         .onChange(of: request?.worktrees) { preselect() }
         .onChange(of: request?.agents) { preselect() }
+        .onChange(of: request?.branches) { preselect() }
+        .onChange(of: mode) { preselect() }
         .onChange(of: worktreeId) { preselect() }
         .onChange(of: agentId) {
             modelId = nil
@@ -60,11 +80,29 @@ struct NativePeerNewSessionSheet: View {
     @ViewBuilder
     private var fields: some View {
         DialogField(label: "Worktree") {
-            if let worktrees = request?.worktrees {
-                NativePeerWorktreePicker(selection: $worktreeId, worktrees: worktrees)
-            } else {
-                loadingField("Loading worktrees…")
+            VStack(alignment: .leading, spacing: 8) {
+                if canCreateWorktrees {
+                    AlasSegmentedControl(
+                        selection: mode ?? .existing,
+                        options: [
+                            AlasSegmentedOption(id: .existing, label: "Existing"),
+                            AlasSegmentedOption(id: .new, label: "New worktree"),
+                        ],
+                        onSelect: { mode = $0 }
+                    )
+                    .fixedSize()
+                }
+                if !createsWorktree {
+                    if let worktrees = request?.worktrees {
+                        NativePeerWorktreePicker(selection: $worktreeId, worktrees: worktrees)
+                    } else {
+                        loadingField("Loading worktrees…")
+                    }
+                }
             }
+        }
+        if createsWorktree {
+            newWorktreeFields
         }
         DialogField(label: "Agent") {
             VStack(alignment: .leading, spacing: 6) {
@@ -95,6 +133,35 @@ struct NativePeerNewSessionSheet: View {
         if case .failed(let message) = request?.phase {
             Text(message).font(.system(size: 11.5)).foregroundColor(theme.color("del"))
         }
+    }
+
+    @ViewBuilder
+    private var newWorktreeFields: some View {
+        DialogField(label: "Base branch") {
+            BranchPicker(
+                selection: $base,
+                branches: request?.branchNames ?? [],
+                isLoading: request?.branches == nil,
+                errorMessage: branchLoadError
+            )
+        }
+        DialogField(label: "Branch name") {
+            AlasField(
+                text: $branch,
+                monospaced: true,
+                focusOnAppear: true,
+                onSubmit: create,
+                disablesAutomaticTextSubstitutions: true
+            )
+        }
+        if let message = NativePeerNewSession.branchValidationMessage(branch) {
+            Text(message).font(.system(size: 11.5)).foregroundColor(theme.color("del"))
+        }
+    }
+
+    private var branchLoadError: String? {
+        if case .failed(let message) = request?.branches { return message }
+        return nil
     }
 
     private func agentChip(_ agents: [RemoteAgentOption]) -> some View {
@@ -187,14 +254,28 @@ struct NativePeerNewSessionSheet: View {
 
     private var emptyHint: String? {
         guard let request, !request.isLoading else { return nil }
-        if request.worktrees?.isEmpty == true { return "No worktrees in \(request.repoName) on \(request.peerName)." }
+        if !createsWorktree, request.worktrees?.isEmpty == true { return "No worktrees in \(request.repoName) on \(request.peerName)." }
         if request.agents?.isEmpty ?? true { return "No agents are enabled on \(request.peerName)." }
-        if agents.isEmpty { return "No agents on \(request.peerName) can run in this worktree's repository." }
+        if agents.isEmpty { return "No agents on \(request.peerName) can run in this repository." }
         return nil
     }
 
     private func preselect() {
         let worktrees = request?.worktrees ?? []
+        if mode == nil, let loaded = request?.worktrees {
+            mode = NativePeerNewSession.defaultWorktreeMode(for: loaded)
+        }
+        // A worktree the peer created without its session: retry in it
+        // rather than create another.
+        if let recovered = request?.recoveredWorktreeId, recovered != appliedRecoveryId,
+           worktrees.contains(where: { $0.id == recovered }) {
+            appliedRecoveryId = recovered
+            mode = .existing
+            worktreeId = recovered
+        }
+        if base.isEmpty, let preferred = NativePeerNewSession.preselectedBase(in: request?.branches) {
+            base = preferred
+        }
         // After a worktree change the filtered list reflects its project.
         if worktreeId == nil || !worktrees.contains(where: { $0.id == worktreeId }) {
             worktreeId = NativePeerNewSession.preselectedWorktreeId(
@@ -216,8 +297,13 @@ struct NativePeerNewSessionSheet: View {
     }
 
     private func create() {
-        guard canCreate, let worktreeId, let agentId else { return }
-        client.createNewSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId)
+        guard canCreate, let agentId else { return }
+        if createsWorktree {
+            client.createNewWorktreeSession(
+                base: base, branch: branch, agentId: agentId, modelId: modelId, effortId: effortId)
+        } else if let worktreeId {
+            client.createNewSession(worktreeId: worktreeId, agentId: agentId, modelId: modelId, effortId: effortId)
+        }
     }
 }
 

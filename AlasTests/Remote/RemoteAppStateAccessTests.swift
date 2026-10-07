@@ -1153,7 +1153,9 @@ struct RemoteAppStateAccessTests {
             projectId: project.id,
             base: "main",
             branch: "feature/phone",
-            agentId: "claude"
+            agentId: "claude",
+            modelId: nil,
+            effortId: nil
         )
 
         guard case let .success(summary) = result else {
