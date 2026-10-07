@@ -531,6 +531,22 @@ enum ACPMessage: Equatable {
     }
 }
 
+extension ACPMessage {
+    /// Symbol snapshots of a user message's attachments, in order. `Attachment`
+    /// equality ignores them so an agent's echo still reconciles, which makes
+    /// `==` blind to a re-stamped snapshot.
+    var symbolSnapshots: [ACPSymbolSnapshot?] {
+        guard case .user(_, _, _, let attachments, _, _) = self else { return [] }
+        return attachments.map(\.symbol)
+    }
+
+    /// `==` plus the symbol snapshots, for deciding whether a mirror refresh
+    /// has anything new to show.
+    func matches(_ other: ACPMessage) -> Bool {
+        self == other && symbolSnapshots == other.symbolSnapshots
+    }
+}
+
 /// The documented, versioned context-compaction facts carried on a synthetic
 /// tool call. Unknown metadata is intentionally not projected into the UI.
 struct ACPContextCompaction: Equatable, Sendable {

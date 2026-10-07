@@ -206,4 +206,24 @@ struct ACPMessageWireTests {
         }
         #expect(id1 != id2)
     }
+
+    @Test("a mirror row adopts a re-stamped symbol snapshot although attachment equality ignores it")
+    func mirrorRowAdoptsSymbolSnapshot() {
+        func attachments(_ lineRange: ClosedRange<Int>) -> [ACPMessage.Attachment] {
+            let snapshot = ACPSymbolSnapshot(lineRange: lineRange, contentHash: "h", excerpt: nil, truncated: false, found: true)
+            return [.init(uri: "alas-symbol://symbol?path=a.swift", name: "a", symbol: snapshot)]
+        }
+        let id = UUID()
+        let existing: ACPMessage = .user(id: id, messageId: "m", text: "see ", attachments: attachments(3...5))
+        let restamped: ACPMessage = .user(id: id, messageId: "m", text: "see ", attachments: attachments(10...12))
+        #expect(existing == restamped)
+        #expect(!existing.matches(restamped))
+        let wire: ACPMessageWire = .user(
+            messageId: "m", text: "see ", attachments: attachments(10...12), delegatedSource: nil, pastedSpans: [])
+        guard case .user(_, _, _, let refreshed, _, _) = wire.toMessage(preservingIdentityFrom: existing) else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(refreshed.first?.symbol?.lineRange == 10...12)
+    }
 }
