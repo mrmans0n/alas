@@ -127,7 +127,11 @@ enum VisualAidWebPolicy {
           return;
         }
         const choice = event.target.closest('[data-choice]');
-        if (choice) post({ choice: String(choice.getAttribute('data-choice')).slice(0, 64) });
+        if (choice) {
+          // Never truncate: a longer value must not turn into a valid id.
+          const value = String(choice.getAttribute('data-choice'));
+          if (value.length <= 64) post({ choice: value });
+        }
       }, true);
       globalThis.alasVisualSelect = (ids) => {
         for (const element of document.querySelectorAll('[data-choice]')) {
