@@ -39,6 +39,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     @ObservationIgnored private let schemeHandler: VisualAidSchemeHandler
     @ObservationIgnored private var crashes = 0
     @ObservationIgnored private var isClosed = false
+    /// True once the document has committed. Before that the only request in flight is the document itself,
+    /// which locking must not cancel.
+    @ObservationIgnored private var hasCommitted = false
     /// Theme variables baked into a fragment's frame; nil for a full document, which is served unmodified.
     @ObservationIgnored private let documentThemeVariables: [String: String]?
     @ObservationIgnored private var themeVariables: [String: String]
@@ -170,6 +173,7 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             startLockDeadline()
         }
         status = .loading
+        hasCommitted = false
         webView.load(URLRequest(url: VisualAidWebPolicy.documentURL(visualID: visualID)))
     }
 
@@ -190,6 +194,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         let controller = webView.configuration.userContentController
         controller.add(lockedRules)
         controller.remove(loadingRules)
+        // The locked rules only refuse new requests; a load already admitted would stay open as a channel the
+        // page could close selectively once it sees the user's choice. After `didFinish` this is a no-op.
+        if hasCommitted { webView.stopLoading() }
         isLocked = true
         webView.blocksInteraction = false
         return true
@@ -200,8 +207,9 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         let deadline = networkLockDeadline
         lockDeadline = Task { [weak self] in
             try? await Task.sleep(for: deadline)
-            guard !Task.isCancelled else { return }
-            self?.lockNetwork()
+            guard !Task.isCancelled, let self, lockNetwork() else { return }
+            // Cancelling the stalled loads means no `didFinish` will follow, so a committed page is ready now.
+            if hasCommitted, status == .loading { markReady() }
         }
     }
 
@@ -275,6 +283,10 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !isClosed else { return }
         if locksNetworkAfterLoad, !lockNetwork() { return }
+        markReady()
+    }
+
+    private func markReady() {
         status = .ready
         // Fragments bake the theme into their frame; a full document is served unmodified, so it always gets
         // the theme pushed. Either way, replay any theme change made while it was loading or crashed.
@@ -283,8 +295,13 @@ final class VisualAidWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         }
     }
 
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasCommitted = true
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !isClosed else { return }
+        hasCommitted = false
         crashes += 1
         status = .stopped(canReload: crashes < Self.maxCrashes)
     }

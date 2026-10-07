@@ -249,8 +249,12 @@ Such a page loads under the loading rules, then, from `didFinish` (before the
 status becomes `.ready`) or after `networkLockDeadline` (10 seconds from the
 start of the load), whichever comes first, swaps them for the locked rules and
 sets `isLocked`. The deadline matters because agent HTML can hold `didFinish`
-open forever with a request that never answers. The locked list is compiled
-before the document loads; if it fails to compile the page fails closed
+open forever with a request that never answers. Locking also calls
+`stopLoading()` once the document has committed, so every load still in flight
+is cancelled and cannot be used as a channel afterwards (the locked rules only
+refuse new requests); a lock from the deadline then marks the page `.ready`
+itself, because no `didFinish` follows a cancelled load. The locked list is
+compiled before the document loads; if it fails to compile the page fails closed
 (`.sandboxFailed`). Until the lock, the web view is a `VisualAidWKWebView`
 whose `hitTest` returns nil, so no click reaches the page, and `onChoice` and
 `setSelected` do nothing. `reload()` after a crash puts the loading rules back

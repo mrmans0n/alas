@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 import WebKit
 @testable import Alas
@@ -188,6 +189,38 @@ extension VisualAidWebPolicyTests {
     }
 
     @MainActor
+    @Test("locking a question visual cancels the loads still in flight and leaves it interactive")
+    func lockingCancelsLoadsInFlight() async throws {
+        let server = try HangingServer()
+        defer { server.stop() }
+        let port = try await server.port()
+        let page = VisualAidWebPage(
+            visualID: UUID(), html: #"<p>q</p><img src="https://127.0.0.1:\#(port)/hang">"#,
+            theme: try Theme.loadBundled(id: "cool-slate"), locksNetworkAfterLoad: true,
+            networkLockDeadline: .seconds(2))
+        defer { page.close() }
+        page.webView.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        func wait(_ what: String, until condition: () -> Bool) async throws {
+            while !condition() {
+                try #require(ContinuousClock.now < deadline, "timed out waiting for \(what); status \(page.status)")
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await wait("the image request to reach the server") { server.accepted == 1 }
+        try #require(!page.isLocked, "the request must still be in flight when the page locks")
+        try await wait("the lock") { page.isLocked }
+        try await wait("the outstanding connection to be cancelled") { server.closed == 1 }
+        try await waitUntilReady(page)
+        #expect(page.webView.hitTest(CGPoint(x: 100, y: 100)) != nil)
+        // The bridge script still ran once the stalled load was cancelled, so selection mirroring works.
+        let bridge = try await page.webView.evaluateJavaScript(
+            "typeof alasVisualSelect", in: nil, contentWorld: .world(name: VisualAidWebPolicy.bridgeWorldName))
+        #expect(bridge as? String == "function")
+    }
+
+    @MainActor
     @Test("a visual without a question never swaps its rules and is never blocked from clicks")
     func visualWithoutQuestionNeverLocks() async throws {
         let page = try makePage(locks: false)
@@ -225,4 +258,55 @@ extension VisualAidWebPolicyTests {
         }
         #expect(opened.map(\.absoluteString) == ["https://example.com/choice-b"])
     }
+}
+
+/// Accepts plain TCP connections and never answers them; counts how many it saw and how many closed.
+private final class HangingServer: @unchecked Sendable {
+    private let listener: NWListener
+    private let lock = NSLock()
+    private var acceptedCount = 0
+    private var closedCount = 0
+    var accepted: Int { lock.withLock { acceptedCount } }
+    var closed: Int { lock.withLock { closedCount } }
+
+    init() throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.lock.withLock { self?.acceptedCount += 1 }
+            connection.start(queue: .global())
+            self?.drain(connection)
+        }
+    }
+
+    /// Reads and discards whatever the client sends until it hangs up.
+    private func drain(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] _, _, isComplete, error in
+            if isComplete || error != nil {
+                self?.lock.withLock { self?.closedCount += 1 }
+                connection.cancel()
+            } else {
+                self?.drain(connection)
+            }
+        }
+    }
+
+    func port() async throws -> UInt16 {
+        let listener = listener
+        return try await withCheckedThrowingContinuation { continuation in
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    listener.stateUpdateHandler = nil
+                    continuation.resume(returning: listener.port?.rawValue ?? 0)
+                case .failed(let error):
+                    listener.stateUpdateHandler = nil
+                    continuation.resume(throwing: error)
+                default: break
+                }
+            }
+            listener.start(queue: .global())
+        }
+    }
+
+    func stop() { listener.cancel() }
 }
