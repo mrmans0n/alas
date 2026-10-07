@@ -727,7 +727,13 @@ private struct ACPSessionView: View {
             },
             showMinimap: showMinimap,
             collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
-            upstreamReferences: manager.upstreamReferences.store(for: worktree.path)
+            upstreamReferences: manager.upstreamReferences.store(for: worktree.path),
+            visualAidActions: ACPVisualAidActions(
+                answer: { visualId, answer in
+                    await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
+                },
+                popOut: { _ in }
+            )
         )
     }
 

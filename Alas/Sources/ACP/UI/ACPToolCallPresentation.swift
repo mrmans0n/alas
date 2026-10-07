@@ -40,6 +40,10 @@ struct ACPToolCallPresentation: Equatable, Sendable {
             return .init(label: "Viewed Image", iconSystemName: "photo.on.rectangle", style: .image)
         }
 
+        if name?.contains("visual_show") == true || lowerTitle.contains("visual_show") {
+            return .init(label: "Visual aid", iconSystemName: "rectangle.on.rectangle", style: .mcp)
+        }
+
         if toolCall.isMCPToolCall || name?.hasPrefix("mcp__") == true
             || lowerTitle.hasPrefix("mcp.") || lowerTitle.hasPrefix("mcp__") {
             return .init(

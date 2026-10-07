@@ -49,6 +49,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// `ACPToolCallGrouping`.
     var collapsesFinishedToolCalls: Bool = false
     var upstreamReferences: ACPUpstreamReferenceStore? = nil
+    var visualAidActions: ACPVisualAidActions = .readOnly
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -566,6 +567,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 if isActiveTurnRow || Self.hasLiveTool(in: renderRow, host: host) {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
+                // A parked graph would keep the visual's web page and its process alive.
+                if case .message(let row) = renderRow,
+                   transcript.messages.indices.contains(row.index),
+                   case .visualAid = transcript.messages[row.index] {
+                    specs[specs.count - 1].parksWhenReleased = false
+                }
                 // Fork divider follows its boundary row, as in the legacy list.
                 // Grouping breaks a run at that boundary (`groupingOptions`), so
                 // a bundle can end exactly there but never straddle it.
@@ -865,7 +872,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onRestoreCheckpoint: host.onRestoreCheckpoint,
                 messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
-                delegatedLabel: delegatedLabel(host: host, message: message)
+                delegatedLabel: delegatedLabel(host: host, message: message),
+                visualAidActions: host.visualAidActions
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —

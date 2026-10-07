@@ -73,6 +73,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// it folds in the sender's agent display name, which lives outside
     /// `message`.
     var delegatedLabel: String? = nil
+    /// Not compared, like the other callbacks: the host rebuilds the same
+    /// closures for a session.
+    var visualAidActions: ACPVisualAidActions = .readOnly
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
@@ -306,8 +309,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             EmptyView()
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
-        case .visualAid:
-            EmptyView()
+        case .visualAid(let visual):
+            ACPVisualAidCard(visual: visual, form: session.visualAidForm(for: visual), actions: visualAidActions)
         }
     }
 
