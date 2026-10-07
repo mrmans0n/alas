@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Features
 
 - Move ACP session takeover into the composer's bottom-left controls, matching peer transcripts instead of showing a separate read-only banner. Keep takeover available while initial connection waits for user input, and reject custom paste/drop edits in read-only composers.
+- Warn on a composer symbol badge when its declaration is gone, and show sent symbols in the transcript as badges that preview what was sent or the code now (#1835).
 
 ## [0.20.6] - 2026-10-07
 

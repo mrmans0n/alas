@@ -149,6 +149,118 @@ struct ACPSymbolReferenceTests {
         #expect(attachments[1].symbol == nil)
     }
 
+    @Test("the content hash helper reproduces the hash stamped on a snapshot")
+    func contentHashMatchesSnapshot() throws {
+        let restore = target("restore", .method, lines: 3...5)
+        let uri = ACPSymbolReference.uri(for: restore)
+        let expansion = ACPSymbolReference.expansion(
+            of: [.resourceLink(uri: uri, name: "SessionManager.restore()")],
+            sources: ["Sources/SessionManager.swift": Self.swiftSource],
+            worktreeRoot: URL(fileURLWithPath: "/tmp/wt"), embeddedContext: true)
+        let declaration = try #require(ACPSymbolReference.resolve(restore, source: Self.swiftSource).declaration)
+        #expect(expansion.snapshots[uri]?.contentHash == ACPSymbolReference.contentHash(of: declaration))
+        #expect(ACPSymbolReference.contentHash(of: "abc")
+            == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    @Test("a symbol mention is missing when its declaration or file is gone; others are ignored; files are read once")
+    func presenceMissing() async {
+        let present = ACPSymbolReference.uri(for: target("restore", .method, lines: 3...5))
+        let presentWithCode = ACPSymbolReference.uri(for: target("restore", .method, lines: 3...5, code: true))
+        let gone = ACPSymbolReference.uri(for: target("close", .method, lines: 3...5))
+        let unreadable = ACPSymbolReference.uri(for: ACPSymbolReference.Target(
+            path: "Sources/Other.swift", name: "run", kind: .function, container: nil, lineRange: 0...0, includeCode: false))
+        var reads: [String] = []
+        let missing = await ACPSymbolPresence.missing(
+            among: [present, presentWithCode, gone, unreadable, "file:///a.swift", "alas-session://abc", "not a uri"]
+        ) { path in
+            reads.append(path)
+            return path == "Sources/SessionManager.swift" ? Self.swiftSource : nil
+        }
+        #expect(missing == [gone, unreadable])
+        #expect(reads.sorted() == ["Sources/Other.swift", "Sources/SessionManager.swift"])
+    }
+
+    private static func liveFound(hash: String) -> ACPSymbolHoverPreview.Loaded {
+        .found(lineRange: 0...0, window: ACPSymbolHoverPreview.window(declaration: "x", startLine: 0), contentHash: hash)
+    }
+
+    private static func snapshot(excerpt: String?, hash: String = "h", found: Bool = true,
+                                 range: ClosedRange<Int> = 10...12) -> ACPSymbolSnapshot {
+        ACPSymbolSnapshot(lineRange: range, contentHash: found ? hash : "", excerpt: excerpt, truncated: false, found: found)
+    }
+
+    @Test("a sent badge's preview follows the snapshot and the file as it is now")
+    func sentPreviewCases() {
+        typealias Preview = ACPSymbolSentPreview
+        // Code sent, file unchanged: the excerpt, switchable to current once read.
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: "x"), live: nil)
+            == Preview(source: .sent, canShowCurrent: false, note: nil))
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: "x"), live: Self.liveFound(hash: "h"))
+            == Preview(source: .sent, canShowCurrent: true, note: nil))
+        // Code sent, file changed since.
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: "x"), live: Self.liveFound(hash: "other"))
+            == Preview(source: .sent, canShowCurrent: true, note: .changedSinceSent))
+        // Code sent, symbol gone now: the excerpt stays, with a note.
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: "x"), live: .missing)
+            == Preview(source: .sent, canShowCurrent: false, note: .noLongerFound))
+        // Code not sent: current code, noting a change.
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: nil), live: Self.liveFound(hash: "other"))
+            == Preview(source: .current, canShowCurrent: false, note: .changedSinceSent))
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: nil), live: Self.liveFound(hash: "h"))
+            == Preview(source: .current, canShowCurrent: false, note: nil))
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: nil), live: .missing)
+            == Preview(source: .current, canShowCurrent: false, note: .noLongerFound))
+        // Not found when sent wins over any live result.
+        #expect(Preview.make(snapshot: Self.snapshot(excerpt: nil, found: false), live: Self.liveFound(hash: "other"))
+            == Preview(source: .current, canShowCurrent: false, note: .notFoundWhenSent))
+        // Older messages have no snapshot: current code, no note.
+        #expect(Preview.make(snapshot: nil, live: Self.liveFound(hash: "other"))
+            == Preview(source: .current, canShowCurrent: false, note: nil))
+    }
+
+    @Test("a cut excerpt previews 40 lines from the sent start, and a fresh hash of the full code matches the stored one")
+    func sentWindowAndHashOfCutExcerpt() throws {
+        let full = (0..<500).map { "line \($0)" }.joined(separator: "\n")
+        let excerpt = ACPSymbolReference.excerpt(full)
+        #expect(excerpt.truncated)
+        let stored = ACPSymbolSnapshot(lineRange: 99...598, contentHash: ACPSymbolReference.contentHash(of: full),
+                                       excerpt: excerpt.text, truncated: true, found: true)
+        let window = try #require(ACPSymbolHoverPreview.sentWindow(from: stored))
+        #expect(window.firstLineNumber == 100)
+        #expect(window.shownLines == 40)
+        #expect(window.hiddenLines == excerpt.text.components(separatedBy: "\n").count - 40)
+        // The live code is the full declaration, so the cut excerpt must not read as a change.
+        let live = Self.liveFound(hash: ACPSymbolReference.contentHash(of: full))
+        #expect(ACPSymbolSentPreview.make(snapshot: stored, live: live).note == nil)
+        #expect(ACPSymbolHoverPreview.sentWindow(from: Self.snapshot(excerpt: nil)) == nil)
+    }
+
+    @Test("the sent badge counts code as included only when the snapshot carries it")
+    func asSentFollowsTheSnapshot() {
+        let requested = ACPSymbolReference.Target(path: "a.swift", name: "a", kind: .function, container: nil,
+                                                  lineRange: 10...12, includeCode: true)
+        // Code was asked for but the symbol was missing at send time: none went out.
+        #expect(!requested.asSent(snapshot: Self.snapshot(excerpt: nil, found: false)).includeCode)
+        #expect(requested.asSent(snapshot: Self.snapshot(excerpt: "x")).includeCode)
+        // Older messages have no snapshot: the link's own flag stands.
+        #expect(requested.asSent(snapshot: nil).includeCode)
+    }
+
+    // @MainActor: ACPSymbolSentHoverModel is main-actor UI state.
+    @Test("the sent popover goes back to the excerpt when Current disappears")
+    @MainActor func sentPopoverFallsBackToExcerpt() {
+        let target = ACPSymbolReference.Target(path: "a.swift", name: "a", kind: .function, container: nil,
+                                               lineRange: 10...12, includeCode: true)
+        let model = ACPSymbolSentHoverModel(target: target, snapshot: Self.snapshot(excerpt: "x"),
+                                            typography: .default, theme: nil)
+        model.applyLive(Self.liveFound(hash: "h"), theme: nil, animated: false)
+        model.shown = .current
+        model.applyLive(.missing, theme: nil, animated: false)
+        #expect(model.shown == .sent)
+        #expect(model.preview.note == .noLongerFound)
+    }
+
     @Test("transcript links carry the sent range, falling back to the inserted one")
     func openURL() throws {
         let target = ACPSymbolReference.Target(path: "Package.swift", name: "a", kind: .function,
@@ -194,7 +306,8 @@ struct ACPSymbolReferenceTests {
         }
         let declaration = (0..<lines).map { "line \($0)" }.joined(separator: "\n")
         model.apply(.found(lineRange: target.lineRange,
-                           window: ACPSymbolHoverPreview.window(declaration: declaration, startLine: 10)), theme: nil)
+                           window: ACPSymbolHoverPreview.window(declaration: declaration, startLine: 10),
+                           contentHash: "h"), theme: nil)
         guard case .found(let rendered) = model.state else {
             Issue.record("expected the found state")
             return
@@ -210,7 +323,7 @@ struct ACPSymbolReferenceTests {
     }
 
     private static func hoverFound(_ text: String) -> ACPSymbolHoverPreview.Loaded {
-        .found(lineRange: 0...0, window: ACPSymbolHoverPreview.window(declaration: text, startLine: 0))
+        .found(lineRange: 0...0, window: ACPSymbolHoverPreview.window(declaration: text, startLine: 0), contentHash: "h")
     }
 
     // @MainActor: ACPSymbolHoverCache is main-actor UI state.

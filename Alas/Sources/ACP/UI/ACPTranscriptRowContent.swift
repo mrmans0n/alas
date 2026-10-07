@@ -186,6 +186,14 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             && availableTrailingGutterWidth >= ACPMessageGutterLayout.inlineTimestampTrailingExtent
     }
 
+    /// Where symbol previews read files. A workspace checkout's symbol paths
+    /// are relative to the checkout root, which this row does not have, so a
+    /// preview there would read the wrong repository: it gets none.
+    private var symbolPreviewRoot: URL? {
+        if case .workspaceCheckout = session.owner { return nil }
+        return trustedImageRoot
+    }
+
     var body: some View {
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
@@ -222,7 +230,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                         contentMaxWidth: contentMaxWidth,
                         typography: typography,
                         session: session,
-                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false)
+                        chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false),
+                        worktreeRoot: symbolPreviewRoot
                     )
                 }
             }
@@ -282,6 +291,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     run: run,
                     typography: typography,
                     trustedImageRoot: trustedImageRoot,
+                    symbolPreviewRoot: symbolPreviewRoot,
                     onCancel: onCancelSubagent.map { cancel in
                         { cancel(descriptor.subagentSessionId) }
                     })
