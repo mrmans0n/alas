@@ -233,9 +233,6 @@ private struct ACPSessionView: View {
                 if let limit = session.usageLimit {
                     usageLimitBanner(limit, resumeAt: session.usageLimitResumeItem?.scheduledAt)
                 }
-                if manager.showsTakeoverBanner(sessionId: sessionId) {
-                    mirrorBanner()
-                }
                 if let err = session.lastError {
                     errorBanner(err)
                 } else if case .failed(let reason) = session.agentState,
@@ -384,7 +381,6 @@ private struct ACPSessionView: View {
     }
 
     private var isMirror: Bool { manager.isMirror(sessionId: sessionId) }
-    private var mirrorIsBusy: Bool { manager.mirrorIsBusy(sessionId: sessionId) }
 
     private var composerCanAcceptInput: Bool {
         guard !isMirror else { return false }
@@ -466,6 +462,14 @@ private struct ACPSessionView: View {
             if showsPreSessionUserInput {
                 messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                     .transition(.opacity)
+                if isMirror {
+                    composerView(
+                        placement: .bottom,
+                        contentMaxWidth: contentMaxWidth,
+                        typography: chatTypography
+                    )
+                    .padding(.trailing, showMinimap ? MinimapView.width : 0)
+                }
             } else if let phase = firstRunConnectingPhase {
                 introStateAndComposer(contentMaxWidth: contentMaxWidth) {
                     ACPFirstRunConnectingView(
@@ -904,8 +908,6 @@ private struct ACPSessionView: View {
             }
             return accepted
         }
-        .disabled(isMirror)
-        .opacity(isMirror ? 0.5 : 1)
     }
 
     @ViewBuilder
@@ -1092,31 +1094,6 @@ private struct ACPSessionView: View {
                 EmptyView()
             }
         }
-    }
-
-    @ViewBuilder
-    private func mirrorBanner() -> some View {
-        HStack(spacing: 6) {
-            if mirrorIsBusy {
-                ProgressView().controlSize(.small)
-                Text("Working in another window — read-only")
-            } else {
-                Image(systemName: "eye")
-                Text("Open in another window — read-only")
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .trailing) {
-            Button("Take over here") {
-                Task { await manager.takeOver(sessionId: sessionId) }
-            }
-                .controlSize(.small)
-                .padding(.trailing, 12)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(.quaternary)
     }
 
     @ViewBuilder

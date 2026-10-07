@@ -58,6 +58,7 @@ struct ACPInputField: NSViewRepresentable {
     var symbolMentions: ACPSymbolMentionSource? = nil
     /// Slash commands Alas handles itself, offered ahead of the agent's.
     var alasCommands: [ACPPromptSuggestion] = []
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -68,6 +69,7 @@ struct ACPInputField: NSViewRepresentable {
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.drawsBackground = false
+        textView.isEditable = isEnabled
         textView.backgroundColor = .clear
         textView.focusRingType = .none
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
@@ -118,7 +120,7 @@ struct ACPInputField: NSViewRepresentable {
         // `CenterPaneView` only renders the active tab), so this fires
         // every time the user swaps to this ACP tab.
         DispatchQueue.main.async { [weak textView] in
-            guard let textView, let window = textView.window else { return }
+            guard let textView, textView.isEditable, let window = textView.window else { return }
             window.makeFirstResponder(textView)
         }
         return scroll
@@ -145,11 +147,15 @@ struct ACPInputField: NSViewRepresentable {
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             if let tv = nsView.documentView as? ACPNSTextView,
-               let window = tv.window {
+               isEnabled, let window = tv.window {
                 window.makeFirstResponder(tv)
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.isEditable = isEnabled
+            if !isEnabled {
+                tv.dismissFloatingPanels()
+            }
             configureNextPrompt(tv)
             let baseFont = typography.appKitFont()
             let style = Self.codeBlockStyle(
@@ -161,8 +167,10 @@ struct ACPInputField: NSViewRepresentable {
             tv.markdownCodeBlockStyle = style
             context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
-            tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
-                                                  nativeSteering: session.canSteerRunningTurn)
+            tv.placeholderText = isEnabled
+                ? Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter,
+                                   nativeSteering: session.canSteerRunningTurn)
+                : "Read only until you take over"
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {
@@ -497,6 +505,7 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
+            guard textView.isEditable else { return }
             guard pendingImageFileInsertions == 0 else { return }
             guard pendingScheduledSubmitIDs.isEmpty else { return }
             flushPendingRestyleNow()
@@ -534,6 +543,7 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func insertQuote(_ message: String, into textView: NSTextView) {
+            guard textView.isEditable else { return }
             guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             if let textView = textView as? ACPNSTextView {
                 textView.dismissSlashPanel()
@@ -1358,6 +1368,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard isEditable else { return }
         invalidateNextPromptSuggestion()
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
         if let text = insertString as? String,
@@ -1482,6 +1493,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        guard isEditable else {
+            super.keyDown(with: event)
+            return
+        }
         typingAttributes = baseTypingAttributes
 
         // ⌃V parity with agent CLIs — paste an image when one is on the
@@ -1965,6 +1980,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
+        guard isEditable else { return false }
         invalidateNextPromptSuggestion()
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
@@ -2002,6 +2018,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func presentImagePicker() {
+        guard isEditable else { return }
         invalidateNextPromptSuggestion()
         imagePickerPresented = true
         onNextPromptStateChange(nextPromptInputState)
@@ -2116,6 +2133,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     private func insertImageFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
+        guard isEditable else { return }
         let coordinator = coordinator
         let generation = coordinator?.beginPendingImageFileInsertion()
         Task { @MainActor [weak self, weak coordinator] in
@@ -2129,7 +2147,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             for url in urls {
                 switch await Self.readImageFile(url) {
                 case .data(let data):
-                    guard let self else { return }
+                    guard let self, self.isEditable else { return }
                     if let generation,
                        coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
                     let beforeLength = self.textStorage?.length ?? 0
@@ -2177,6 +2195,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private var pasteboardHasImage: Bool { hasImage(in: NSPasteboard.general) }
 
     override func paste(_ sender: Any?) {
+        guard isEditable else { return }
         invalidateNextPromptSuggestion()
         if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
@@ -2388,6 +2407,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard isEditable else { return false }
         if type == Self.composerDraftPasteboardType, insertComposerDraft(from: pboard) { return true }
         return super.readSelection(from: pboard, type: type)
     }
@@ -2500,7 +2520,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     func insertPlainText(_ text: String) -> Bool {
-        guard let textStorage else { return false }
+        guard isEditable, let textStorage else { return false }
         let boundedRange = boundedSelectedRange(in: textStorage)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
@@ -2531,7 +2551,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// `Coordinator.extract` writes it where the chip sits.
     @discardableResult
     func insertPastedTextChip(_ content: String) -> Bool {
-        guard let textStorage else { return false }
+        guard isEditable, let textStorage else { return false }
         let range = boundedSelectedRange(in: textStorage)
         let attrs = baseTypingAttributes
         let ordinal = (pastedTextOrdinals(excluding: range).max() ?? 0) + 1
@@ -2560,7 +2580,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// editable text in one undoable edit. No chipification runs: the user
     /// asked for the raw text.
     func expandPastedTextChip(at range: NSRange) {
-        guard let textStorage, range.length == 1, NSMaxRange(range) <= textStorage.length,
+        guard isEditable, let textStorage, range.length == 1, NSMaxRange(range) <= textStorage.length,
               let chip = textStorage.attribute(.attachment, at: range.location, effectiveRange: nil)
                 as? ACPPastedTextChipAttachment
         else { return }
@@ -2606,6 +2626,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// than overwriting it.
     @discardableResult
     func replaceDictationRegion(_ text: String, isFinal: Bool) -> Bool {
+        guard isEditable else { return false }
         invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let target: NSRange
@@ -2644,6 +2665,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard isEditable else { return [] }
         invalidateNextPromptSuggestion()
         dropPending = true
         onNextPromptStateChange(nextPromptInputState)
@@ -2664,6 +2686,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             dropPending = false
             onNextPromptStateChange(nextPromptInputState)
         }
+        guard isEditable else { return false }
         let sessionIds = droppedSessionIds(in: sender.draggingPasteboard)
         if !sessionIds.isEmpty {
             // Drop at the pointer, like dropped text, once the lookup confirms
@@ -2686,7 +2709,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 for id in sessionIds {
                     if let session = await source?.candidate(id) { sessions.append(session) }
                 }
-                guard let self, !sessions.isEmpty else { return }
+                guard let self, self.isEditable, !sessions.isEmpty else { return }
                 if let generation, coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
                 // Typing or moving the caret while the lookup ran wins over
                 // the drop point, as for async image drops.
@@ -2728,6 +2751,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     private func insertMention(displayName name: String, uri: String) -> Bool {
+        guard isEditable else { return false }
         invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let attachment = ACPMentionChipAttachment(displayName: name, uri: uri)
@@ -2771,7 +2795,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     private func insertSlash(_ suggestion: ACPPromptSuggestion) {
-        guard let ts = textStorage else { return }
+        guard isEditable, let ts = textStorage else { return }
         let caret = selectedRange().location
         // Replace the live slash token (`/foo`) with the picked command
         // plus a trailing space so the user can immediately type the
