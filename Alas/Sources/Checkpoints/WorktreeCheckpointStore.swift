@@ -361,12 +361,13 @@ actor WorktreeCheckpointStore {
     }
 
     private func paths(_ lineageID: String) -> Layout {
-        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        // Public entry points validate first, so the fallback is never used.
+        let directory = root.appendingPathComponent(CheckpointLineage.storageKey(for: lineageID) ?? lineageID, isDirectory: true)
         return .init(root: directory, blobs: directory.appendingPathComponent("blobs", isDirectory: true), entries: directory.appendingPathComponent("entries", isDirectory: true), journals: directory.appendingPathComponent("journals", isDirectory: true), quarantine: directory.appendingPathComponent("quarantine", isDirectory: true), catalog: directory.appendingPathComponent("catalog.json"))
     }
 
     private func validate(_ lineageID: String) throws {
-        guard UUID(uuidString: lineageID)?.uuidString.lowercased() == lineageID else { throw CheckpointStoreError.invalidLineageID }
+        guard CheckpointLineage.storageKey(for: lineageID) != nil else { throw CheckpointStoreError.invalidLineageID }
     }
 
     private func prepare(_ lineageID: String) throws {

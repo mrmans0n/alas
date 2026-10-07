@@ -163,21 +163,9 @@ enum Paths {
     static var tabsDir: URL { appSupportRoot.appendingPathComponent("tabs", isDirectory: true) }
     static var checkpointsRoot: URL { appSupportRoot.appendingPathComponent("checkpoints", isDirectory: true) }
 
-    static func checkpointsDirectory(lineageID: String) throws -> URL {
-        guard let uuid = UUID(uuidString: lineageID),
-              lineageID == lineageID.lowercased(),
-              uuid.uuidString.lowercased() == lineageID
-        else { throw CheckpointPathsError.invalidLineageID }
-        return checkpointsRoot.appendingPathComponent(lineageID, isDirectory: true)
-    }
-
     static func ensureDirectoryExists(_ url: URL) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
-}
-
-enum CheckpointPathsError: Error, Equatable, Sendable {
-    case invalidLineageID
 }
 
 extension Paths {

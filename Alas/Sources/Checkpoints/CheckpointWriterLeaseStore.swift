@@ -47,10 +47,10 @@ struct CheckpointWriterLeaseStore: Sendable {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(record) else { return }
-        for lineageID in lineageIDs where validLineageID(lineageID) {
-            let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        for storageKey in lineageIDs.compactMap(CheckpointLineage.storageKey(for:)) {
+            let directory = root.appendingPathComponent(storageKey, isDirectory: true)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? data.write(to: leaseURL(lineageID: lineageID, sessionID: sessionID, instanceID: instanceID), options: [.atomic])
+            try? data.write(to: directory.appendingPathComponent(safeFileName(sessionID: sessionID, instanceID: instanceID)), options: [.atomic])
         }
     }
 
@@ -65,8 +65,8 @@ struct CheckpointWriterLeaseStore: Sendable {
     }
 
     func activeLeaseCount(lineageID: String, excludingInstanceID: String) -> Int {
-        guard validLineageID(lineageID) else { return 0 }
-        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        guard let storageKey = CheckpointLineage.storageKey(for: lineageID) else { return 0 }
+        let directory = root.appendingPathComponent(storageKey, isDirectory: true)
         guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
             return 0
         }
@@ -97,20 +97,10 @@ struct CheckpointWriterLeaseStore: Sendable {
         return persistentSessionNames.contains(zmxSessionName)
     }
 
-    private func leaseURL(lineageID: String, sessionID: String, instanceID: String) -> URL {
-        root
-            .appendingPathComponent(lineageID, isDirectory: true)
-            .appendingPathComponent(safeFileName(sessionID: sessionID, instanceID: instanceID))
-    }
-
     private func safeFileName(sessionID: String, instanceID: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let raw = "\(instanceID)-\(sessionID)"
         let sanitized = raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(sanitized) + ".json"
-    }
-
-    private func validLineageID(_ lineageID: String) -> Bool {
-        UUID(uuidString: lineageID)?.uuidString.lowercased() == lineageID
     }
 }
