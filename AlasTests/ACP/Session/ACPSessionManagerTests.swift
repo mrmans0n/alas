@@ -1696,6 +1696,40 @@ struct ACPSessionManagerTests {
         try assertStoredRowsMatchTranscript()
     }
 
+    @Test("a card kept after its first write failed for good never takes an answer, even once persistence recovers")
+    func keptCardWhoseFirstWriteFailedRefusesAnswers() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        runner.appendAndPersistSystemNotice("after the visual")
+        // Both the first write and its retry fail, and the notice behind the card keeps it in place.
+        rejectVisualAidWrites(store)
+        await initialWrite.release()
+        #expect(await show.value == false)
+        await runner.flushPersistence()
+        #expect(session.transcript.visualAid(id: visual.id) == visual)
+
+        dropVisualAidRejection(store)
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) == false)
+
+        await runner.flushPersistence()
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(try storedVisualAids(store, sessionId: session.id).isEmpty)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+    }
+
     @Test("a visual whose first write fails once is written again when rows were appended behind it")
     func failedVisualWriteWithRowsBehindIsRetriedOnce() async throws {
         let (manager, session, store, _) = try await attachedVisualAidManager()

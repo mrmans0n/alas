@@ -230,6 +230,10 @@ final class ACPSessionRunner {
     private var confirmedAwaitedWrites: Set<UUID> = []
     /// Visual aids whose first write is unresolved, with the answers waiting on it.
     private var unconfirmedVisualAids: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
+    /// Visual aids whose first write failed for good. One of these may still be in the transcript (a
+    /// ghost kept so the rows behind it do not shift) although the agent was told the visual failed
+    /// and may show it again, so it never takes an answer for the rest of the session.
+    private var failedFirstWriteVisualAidIDs: Set<UUID> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -4876,6 +4880,7 @@ extension ACPSessionRunner {
         guard holdsLeaseForWrite() else { return false }
         let before = session.transcript.messages.count
         unconfirmedVisualAids[visual.id] = []
+        failedFirstWriteVisualAidIDs.remove(visual.id)
         session.appendVisualAid(visual)
         var written = await awaitingWrite(ofRowAt: session.transcript.messages.count - 1) {
             persistFromIndex(before)
@@ -4895,6 +4900,7 @@ extension ACPSessionRunner {
                 }
             }
         }
+        if !written { failedFirstWriteVisualAidIDs.insert(visual.id) }
         for waiter in unconfirmedVisualAids.removeValue(forKey: visual.id) ?? [] {
             waiter.resume(returning: written)
         }
@@ -4902,12 +4908,12 @@ extension ACPSessionRunner {
     }
 
     /// Waits until the visual's first write is resolved and reports whether it was stored, or, once it
-    /// is resolved, whether the card is in the transcript. An answer must not start earlier: the card
+    /// is resolved, whether the card is in the transcript and its first write did not fail. An answer must not start earlier: the card
     /// appears in the transcript before that write is confirmed, and if it then fails at the tail the
     /// card is removed, which would also remove the row an already-queued answer had stored.
     func awaitVisualAidFirstWrite(id visualId: UUID) async -> Bool {
         guard unconfirmedVisualAids[visualId] != nil else {
-            return session.transcript.visualAid(id: visualId) != nil
+            return !failedFirstWriteVisualAidIDs.contains(visualId) && session.transcript.visualAid(id: visualId) != nil
         }
         return await withCheckedContinuation { continuation in
             unconfirmedVisualAids[visualId]?.append(continuation)
