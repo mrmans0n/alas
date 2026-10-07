@@ -29,6 +29,12 @@ enum ACPVisualAidQuestionForm {
         )
     }
 
+    /// Whether the question can still be edited and submitted here: it is unanswered and this process
+    /// may answer it. A mirror of a session another process drives only reads it.
+    static func isEditable(answer: ACPVisualAid.Answer?, canAnswer: Bool) -> Bool {
+        answer == nil && canAnswer
+    }
+
     /// The choice field when `choice` is exactly one of the option ids.
     static func choiceField(for choice: String, in request: ACPUserInputRequest) -> ACPUserInputField? {
         guard let field = request.fields.first(where: { $0.key == choiceKey }),

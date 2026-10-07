@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// What a visual aid card can ask its host to do.
@@ -7,9 +8,38 @@ struct ACPVisualAidActions {
     /// a failed send clears the answer on the transcript again.
     var answer: (UUID, ACPVisualAid.Answer) async -> Bool
     var popOut: (ACPVisualAid) -> Void
+    /// True while this process may answer. Read live on every render and every action, never captured
+    /// as a value: the rows that show a card are not re-created when writer ownership changes.
+    var canAnswer: () -> Bool
+    /// Fires when the host's state may have changed; the card re-reads `canAnswer`.
+    var changes: AnyPublisher<Void, Never>
 
     /// For hosts that only display transcripts.
-    static var readOnly: Self { .init(answer: { _, _ in false }, popOut: { _ in }) }
+    static var readOnly: Self {
+        .init(
+            answer: { _, _ in false }, popOut: { _ in }, canAnswer: { false },
+            changes: Empty(completeImmediately: false).eraseToAnyPublisher())
+    }
+
+    /// Answers go through `manager`, and only while this process drives `session` (the same
+    /// `isMirror` source the composer and the other callbacks use); a mirror shows the question read-only.
+    @MainActor
+    static func driven(
+        by manager: ACPSessionManager, session: ACPSession, popOut: @escaping (ACPVisualAid) -> Void
+    ) -> Self {
+        let sessionId = session.id
+        return .init(
+            answer: { [manager] visualId, answer in
+                await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
+            },
+            popOut: popOut,
+            canAnswer: { [manager] in !manager.isMirror(sessionId: sessionId) },
+            // `objectWillChange` fires before the change lands, so hop to the next main-queue turn to re-read.
+            changes: Publishers.Merge(manager.objectWillChange, session.objectWillChange)
+                .map { _ in () }
+                .receive(on: DispatchQueue.main)
+                .eraseToAnyPublisher())
+    }
 }
 
 /// A visual aid in the transcript (or filling a pop-out tab): the sandboxed
@@ -21,11 +51,24 @@ struct ACPVisualAidCard: View {
     let actions: ACPVisualAidActions
     var fillsHeight = false
 
+    @State private var canAnswer: Bool
     @Environment(\.theme) private var theme
     @State private var slot = UUID()
     @State private var page: VisualAidWebPage?
     @State private var paused = false
     @State private var sending = false
+
+    init(
+        visual: ACPVisualAid, form: ACPUserInputFormState?, sendStatus: ACPVisualAidSendStatus,
+        actions: ACPVisualAidActions, fillsHeight: Bool = false
+    ) {
+        self.visual = visual
+        self.form = form
+        self.sendStatus = sendStatus
+        self.actions = actions
+        self.fillsHeight = fillsHeight
+        _canAnswer = State(initialValue: actions.canAnswer())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,6 +89,8 @@ struct ACPVisualAidCard: View {
         .onAppear(perform: openPage)
         .onDisappear(perform: closePage)
         .onChange(of: theme) { page?.applyTheme(theme) }
+        .onReceive(actions.changes) { canAnswer = actions.canAnswer() }
+        .onChange(of: canAnswer) { installChoiceHandler() }
         .onChange(of: page?.status) { syncSelection() }
         .onChange(of: form?.selectionValues[ACPVisualAidQuestionForm.choiceKey]) { syncSelection() }
         .onChange(of: visual.answer) {
@@ -113,7 +158,9 @@ struct ACPVisualAidCard: View {
         case .dismissed:
             Text("Dismissed").font(.callout).foregroundStyle(theme.color("fg-muted")).padding(12)
         case nil:
-            if let form {
+            if !ACPVisualAidQuestionForm.isEditable(answer: visual.answer, canAnswer: canAnswer) {
+                readOnlyQuestion(question)
+            } else if let form {
                 VStack(alignment: .leading, spacing: 6) {
                     ACPUserInputPrompt(
                         formState: form,
@@ -131,6 +178,19 @@ struct ACPVisualAidCard: View {
         }
     }
 
+    /// A mirror cannot answer, so it shows what is asked and where to answer instead of the form.
+    private func readOnlyQuestion(_ question: ACPVisualAid.Question) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(question.prompt).font(.callout.weight(.semibold))
+            ForEach(question.options, id: \.id) { option in
+                Text("• " + option.label)
+            }
+            Text("Answer from the window that owns this session.").foregroundStyle(theme.color("fg-muted"))
+        }
+        .font(.callout)
+        .padding(12)
+    }
+
     private func respond(_ action: ACPUserInputAction, question: ACPVisualAid.Question) {
         let answer: ACPVisualAid.Answer
         switch action {
@@ -140,7 +200,7 @@ struct ACPVisualAidCard: View {
         case .decline, .cancel:
             answer = .dismissed(at: Date())
         }
-        guard !sending else { return }
+        guard !sending, actions.canAnswer() else { return }
         sending = true
         sendStatus.error = nil
         let visualID = visual.id
@@ -173,17 +233,18 @@ struct ACPVisualAidCard: View {
         VisualAidPageBudget.shared.release(slot)
     }
 
-    /// Page clicks edit the native form only while the question is open, and links open only once it is not.
+    /// Page clicks edit the native form only while the question is open and this process may answer it,
+    /// and links open only once it is not.
     private func installChoiceHandler() {
         guard let page else { return }
         page.externalLinksEnabled = VisualAidWebPolicy.allowsExternalLinks(
             hasQuestion: visual.question != nil, answer: visual.answer)
-        guard visual.answer == nil, let form else {
+        guard ACPVisualAidQuestionForm.isEditable(answer: visual.answer, canAnswer: canAnswer), let form else {
             page.onChoice = { _ in }
             return
         }
-        page.onChoice = { choice in
-            guard let field = ACPVisualAidQuestionForm.choiceField(for: choice, in: form.request) else { return }
+        page.onChoice = { [actions] choice in
+            guard actions.canAnswer(), let field = ACPVisualAidQuestionForm.choiceField(for: choice, in: form.request) else { return }
             form.toggle(choice, for: field)
         }
     }

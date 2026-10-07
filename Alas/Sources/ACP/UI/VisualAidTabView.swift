@@ -27,12 +27,7 @@ private struct VisualAidManagedTabView: View {
                 transcript: session.transcript,
                 session: session,
                 tab: tab,
-                actions: ACPVisualAidActions(
-                    answer: { [manager, sessionId = tab.sessionId] visualId, answer in
-                        await manager.answerVisualAid(id: visualId, answer: answer, in: sessionId)
-                    },
-                    popOut: { _ in }
-                )
+                actions: .driven(by: manager, session: session, popOut: { _ in })
             )
             .onAppear {
                 manager.retainSession(id: tab.sessionId)

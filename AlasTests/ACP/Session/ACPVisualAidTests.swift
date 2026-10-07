@@ -41,6 +41,17 @@ struct ACPVisualAidTests {
         #expect((field?.key == ACPVisualAidQuestionForm.choiceKey) == matches)
     }
 
+    @Test("a question can be edited only while it is unanswered and this process may answer it", arguments: [
+        (ACPVisualAid.Answer?.none, true, true),
+        (nil, false, false),
+        (.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 0)), true, false),
+        (.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 0)), false, false),
+        (.dismissed(at: Date(timeIntervalSince1970: 0)), true, false),
+    ] as [(ACPVisualAid.Answer?, Bool, Bool)])
+    func questionEditability(answer: ACPVisualAid.Answer?, canAnswer: Bool, editable: Bool) {
+        #expect(ACPVisualAidQuestionForm.isEditable(answer: answer, canAnswer: canAnswer) == editable)
+    }
+
     @Test("a multi-select answer keeps the question's option order")
     func multiSelectAnswerOrder() throws {
         let visual = Self.visual(allowMultiple: true)
