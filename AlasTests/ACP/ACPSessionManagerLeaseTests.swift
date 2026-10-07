@@ -348,6 +348,10 @@ import Foundation
         #expect(b.isMirror(sessionId: "local-b"))
         #expect(b.showsTakeoverBanner(sessionId: "local-b"))
         #expect(try storeB.loadLease(sessionId: "local-b") == nil)
+        await endpoint.expireLease()
+        _ = try await coordinatorB.observe(sessionId: "local-b",
+            key: .init(worktreePath: "/work", agentId: "claude", remoteSessionId: "conversation"))
+        #expect(b.showsTakeoverBanner(sessionId: "local-b"))
         _ = b.placeholderSession(id: "local-b")
         #expect(await b.takeOver(sessionId: "local-b"))
         _ = await a.heartbeatTick(sessionId: "local-a")
