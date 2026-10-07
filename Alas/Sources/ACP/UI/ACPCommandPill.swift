@@ -116,8 +116,8 @@ struct ACPAlasCommandBadge: View {
     }
 }
 
-/// Known slash commands in a message: the leading one the transcript renders
-/// as a pill, and every one the composer turns into a chip.
+/// Known slash commands in a message, shared by composer chips and
+/// transcript badges.
 enum ACPSlashCommand {
     /// A known slash command at the very start of a message.
     static func match(
@@ -537,14 +537,15 @@ final class ACPCommandChipHoverController {
     private var showWork: DispatchWorkItem?
     private var target: NSRange?
 
-    func scheduleShow(range: NSRange, suggestion: ACPPromptSuggestion, in textView: ACPNSTextView) {
+    func scheduleShow(range: NSRange, suggestion: ACPPromptSuggestion, in textView: NSTextView) {
         guard target != range else { return }
         hide()
         guard ACPCommandHoverCard.hasDetails(suggestion) else { return }
         target = range
         let work = DispatchWorkItem { [weak self, weak textView] in
             guard let self, let textView, self.target == range,
-                  let anchor = textView.imageChipAnchorRect(for: range) else { return }
+                  let anchor = (textView as? ACPNSTextView)?.imageChipAnchorRect(for: range)
+                    ?? textView.upstreamReferenceAnchorRect(for: range) else { return }
             let hosting = NSHostingController(rootView: ACPCommandHoverCard(suggestion: suggestion))
             let popover = NSPopover()
             popover.behavior = .transient
@@ -621,7 +622,7 @@ struct ACPCommandPill: View {
     }
 }
 
-/// User-message text with a leading known slash command rendered as a pill.
+/// User-message text with known commands rendered as badges.
 /// Observes only the session's command list, so a streaming transcript never
 /// re-renders this row.
 struct ACPUserMessageText: View {
@@ -662,6 +663,7 @@ struct ACPUserMessageText: View {
     var body: some View {
         let pasted = ACPPastedTextContents(text: text, spans: pastedSpans)
         content(pasted: pasted)
+            .environment(\.acpCommandSuggestions, suggestions)
             .environment(\.acpPastedTextContents, pasted)
             .environment(\.acpUpstreamReferenceChipping, chipping)
             .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
@@ -726,5 +728,86 @@ struct ACPUserMessageText: View {
                 typography: typography
             )
         }
+    }
+}
+
+private struct ACPCommandSuggestionsKey: EnvironmentKey {
+    static let defaultValue: [ACPPromptSuggestion] = []
+}
+
+extension EnvironmentValues {
+    /// Only user-message markdown turns advertised commands into inline badges.
+    var acpCommandSuggestions: [ACPPromptSuggestion] {
+        get { self[ACPCommandSuggestionsKey.self] }
+        set { self[ACPCommandSuggestionsKey.self] = newValue }
+    }
+}
+
+/// Image-backed counterpart to the composer's cell for TextKit 2 paragraphs.
+final class ACPTranscriptCommandChipAttachment: NSTextAttachment {
+    let suggestion: ACPPromptSuggestion
+
+    @MainActor
+    init(suggestion: ACPPromptSuggestion) {
+        self.suggestion = suggestion
+        super.init(data: nil, ofType: nil)
+        let cell = ACPCommandChipCell(
+            command: suggestion.command, isAlas: ACPAlasSlashCommand.isAlasCommand(suggestion)
+        )
+        let size = cell.cellSize
+        image = NSImage(size: size, flipped: true) { rect in
+            MainActor.assumeIsolated { cell.draw(withFrame: rect, in: nil) }
+            return true
+        }
+        bounds = NSRect(x: 0, y: ACPMentionChipMetrics.baselineOffset, width: size.width, height: size.height)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Inline command badges in submitted user-message markdown.
+enum ACPTranscriptCommandChip {
+    @MainActor
+    @discardableResult
+    static func chipify(_ rendered: NSMutableAttributedString, suggestions: [ACPPromptSuggestion]) -> Int {
+        guard !suggestions.isEmpty else { return 0 }
+        let source = rendered.string as NSString
+        // A submitted token is complete even at the end of a paragraph.
+        // Appending whitespace reuses the composer's exact token boundaries.
+        let targets = ACPSlashCommand.chipTargets(in: rendered.string + " ", suggestions: suggestions)
+            .filter { target in
+                var excluded = false
+                rendered.enumerateAttributes(in: target.range) { attributes, _, _ in
+                    if attributes[.link] != nil || attributes[.attachment] != nil
+                        || ACPMarkdownInlineRenderer.isInlineCode(attributes) {
+                        excluded = true
+                    }
+                }
+                return !excluded
+            }
+        for target in targets.reversed() {
+            guard let suggestion = suggestions.first(where: { $0.command == source.substring(with: target.range) }) else { continue }
+            let chip = NSMutableAttributedString(attachment: ACPTranscriptCommandChipAttachment(suggestion: suggestion))
+            var attributes = rendered.attributes(at: target.range.location, effectiveRange: nil)
+            attributes[.attachment] = nil
+            attributes[.commandChipName] = suggestion.command
+            chip.addAttributes(attributes, range: NSRange(location: 0, length: chip.length))
+            rendered.replaceCharacters(in: target.range, with: chip)
+        }
+        return targets.count
+    }
+
+    @MainActor
+    static func hit(at point: NSPoint, in textView: NSTextView) -> (range: NSRange, suggestion: ACPPromptSuggestion)? {
+        guard let storage = textView.textStorage else { return nil }
+        var hit: (range: NSRange, suggestion: ACPPromptSuggestion)?
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard let attachment = value as? ACPTranscriptCommandChipAttachment,
+                  let rect = textView.upstreamReferenceAnchorRect(for: range),
+                  rect.insetBy(dx: -1, dy: -1).contains(point) else { return }
+            hit = (range, attachment.suggestion)
+            stop.pointee = true
+        }
+        return hit
     }
 }
