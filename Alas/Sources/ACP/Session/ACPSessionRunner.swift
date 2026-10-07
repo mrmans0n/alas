@@ -4853,18 +4853,26 @@ extension ACPSessionRunner {
         return writtenAwaitedRowIDs.contains(rowID)
     }
 
-    /// Replace the visual aid with the same id in place and persist that row.
-    @discardableResult
-    func replaceAndPersistVisualAid(_ visual: ACPVisualAid) -> Bool {
+    /// Replace the visual aid with the same id in place and report whether
+    /// that row reached the store. The in-memory change happens before the
+    /// first suspension point, so a second answer already sees this one.
+    func replaceAndPersistVisualAidAwaitingResult(_ visual: ACPVisualAid) async -> Bool {
         guard holdsLeaseForWrite(),
               let index = session.transcript.messages.firstIndex(where: {
                   if case .visualAid(let existing) = $0 { return existing.id == visual.id }
                   return false
               })
         else { return false }
+        let rowID = messageRowID(index)
+        awaitedRowIDs.insert(rowID)
+        defer {
+            awaitedRowIDs.remove(rowID)
+            writtenAwaitedRowIDs.remove(rowID)
+        }
         session.transcript.replaceMessage(at: index, with: .visualAid(visual))
         persistIndices([index])
-        return true
+        await flushPersistence()
+        return writtenAwaitedRowIDs.contains(rowID)
     }
 
     /// Persist the row of a visual aid already changed in the transcript.

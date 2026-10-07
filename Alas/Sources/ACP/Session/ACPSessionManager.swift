@@ -8718,17 +8718,22 @@ extension ACPSessionManager {
 
     /// Store the user's answer on the visual and start sending it to the agent
     /// as a normal prompt, without awaiting the turn. Returns true once the
-    /// answer is stored (and for a dismissal, which sends nothing), false when
-    /// it could not be stored. The answer is stored first so a second submit
-    /// finds it answered; a send that reports failure clears it again. A send
-    /// whose callback never fires (superseded prompt) keeps the answer.
+    /// answer's row is confirmed written (and for a dismissal, which sends
+    /// nothing), false when it could not be stored. The in-memory answer is set
+    /// first so a second submit finds it answered; when the write fails the
+    /// answer is reverted, the card shows the send error, and nothing is sent.
+    /// A send that reports failure clears the answer too. A send whose callback
+    /// never fires (superseded prompt) keeps the answer.
     func answerVisualAid(id visualId: UUID, answer: ACPVisualAid.Answer, in sessionId: ACPSession.ID) async -> Bool {
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId),
               var visual = session.transcript.visualAid(id: visualId), visual.answer == nil
         else { return false }
         visual.answer = answer
-        guard runner.replaceAndPersistVisualAid(visual) else { return false }
+        guard await runner.replaceAndPersistVisualAidAwaitingResult(visual) else {
+            rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+            return false
+        }
         session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
         Task { @MainActor in

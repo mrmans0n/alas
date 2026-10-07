@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Alas
 
@@ -1522,6 +1523,20 @@ struct ACPSessionManagerTests {
         return (manager, session, store, client)
     }
 
+    /// Makes the store reject every later write of a `visual_aid` row, through
+    /// a second connection to the same file.
+    private func rejectVisualAidWrites(_ store: ACPSessionStore) {
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(store.path, &handle) == SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        let sql = """
+        CREATE TRIGGER reject_visual_aid BEFORE INSERT ON messages
+        WHEN NEW.kind = 'visual_aid'
+        BEGIN SELECT RAISE(ABORT, 'rejected'); END
+        """
+        #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+    }
+
     private func storedVisualAids(_ store: ACPSessionStore, sessionId: String) throws -> [ACPVisualAid] {
         try store.loadMessages(sessionId: sessionId).compactMap { stored in
             guard stored.kind == "visual_aid",
@@ -1562,12 +1577,28 @@ struct ACPSessionManagerTests {
 
         #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
-        await manager.runners[session.id]?.flushPersistence()
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
 
         #expect(await manager.answerVisualAid(id: visual.id, answer: .dismissed(at: Date()), in: session.id) == false)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
         // Dismissal sends no prompt to the agent.
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+    }
+
+    @Test("answerVisualAid reverts the answer and sends nothing when its row is not written")
+    func answerVisualAidRevertsWhenTheWriteFails() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        rejectVisualAidWrites(store)
+
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) == false)
+
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
 

@@ -349,15 +349,22 @@ Submit:
    separated, in the question's option order. The `Note:` line appears only
    when the note is non-empty.
 2. `ACPSessionManager.answerVisualAid` stores `answer = .answered(...)` on the
-   row and persists it. The card switches to a read-only summary, for example
-   "Answered: b, Two column". A second submit finds the row answered and does
-   nothing, which is what keeps it from sending twice.
-3. It starts `ACPSessionManager.sendPrompt`, the path the composer and the
+   row in memory at once and queues its write. The card switches to a
+   read-only summary, for example "Answered: b, Two column". A second submit
+   finds the row answered and does nothing, which is what keeps it from
+   sending twice.
+3. It waits until the runner confirms that exact row was written, the way
+   `showVisualAid` does, and only then starts `ACPSessionManager.sendPrompt`, the path the composer and the
    phone client use, so the answer shows as the user's own message and waits in
    the queue if a turn is running. `answerVisualAid` does not wait for the
    send to finish: `sendPrompt` reports back when the agent's turn ends, and
    not at all when a newer prompt supersedes this one or the connection is
    replaced, so waiting would hold the card, or hang.
+   If the write fails instead, the in-memory answer is reverted (only while
+   the row still holds the answer this call set), the card shows the inline
+   error "Couldn't send your answer. Try again.", nothing is sent, and
+   `answerVisualAid` returns false. A dismissal returns true once written and
+   sends nothing.
 4. If `sendPrompt` reports failure, the answer is cleared, on the session's
    transcript directly so it happens even when the runner is already gone, and
    persisted when a runner still holds the lease. The question becomes
