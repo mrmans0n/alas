@@ -15612,9 +15612,15 @@ extension AppState: RemoteSessionsProvider {
         }
         guard let stored else { return .failure("This session is no longer available.") }
         if stored.archived { return .failure("This session is archived.") }
+        // Appending activates the new tab; a peer's request must not switch
+        // the tab the host user is looking at.
+        let hostActiveTab = tabs.activeTabId(forWorktree: worktree.id)
         await openExistingACPSession(sessionId: id, worktree: worktree)
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
             return .failure("Could not open this session.")
+        }
+        if let hostActiveTab, tabs.tabs(forWorktree: worktree.id).contains(where: { $0.id == hostActiveTab }) {
+            tabs.activate(worktreeId: worktree.id, tabId: hostActiveTab)
         }
         // Opening hydrated the transcript, but a tab in a worktree the host is
         // not showing has no view to retain it. Balance that here so an idle

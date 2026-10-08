@@ -502,7 +502,10 @@ struct RemoteAppStateAccessTests {
         #expect(await overlappingClose.value == .success)
         #expect(!acpTabs(in: state).contains { $0.sessionId == id })
 
+        let hostActiveTab = state.tabs.activeTabId(forWorktree: worktreeId)
+        #expect(hostActiveTab != nil)
         #expect(await state.openSessionTab(for: id) == .success)
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == hostActiveTab)
         // No view retains the new tab here, so its hydrated transcript is not kept.
         #expect(manager.liveSession(for: id) == nil)
         #expect(await state.openSessionTab(for: id) == .success)
