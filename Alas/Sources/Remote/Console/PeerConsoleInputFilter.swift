@@ -1,13 +1,14 @@
 import Foundation
 
-/// Separates a viewer's keyboard input from bytes its terminal generated on
-/// its own.
+/// Separates a viewer's user input from bytes its terminal generated on its
+/// own.
 ///
 /// A remote console renders in a local Ghostty surface whose PTY bytes reach
-/// Alas through the bridge. Besides keys, navigation, and paste, Ghostty
-/// writes replies to queries in the stream (device attributes, cursor
-/// position, mode and color reports, focus and mouse reports). Those must
-/// never reach the shared console: the host's own terminal already answers.
+/// Alas through the bridge. Besides keys, navigation, paste, and the mouse
+/// reports a host program asked for, Ghostty writes replies to queries in the
+/// stream (device attributes, cursor position, mode and color reports) and
+/// focus reports about the viewer's own window. Those must never reach the
+/// shared console: the host's own terminal already answers.
 /// Modeled on upstream zmx's `isUserInput`, but filters rather than
 /// classifies, and keeps state so a sequence split across reads is handled.
 struct PeerConsoleInputFilter {
@@ -153,14 +154,20 @@ struct PeerConsoleInputFilter {
         let final = bytes[j]
         let length = j - start + 1
 
-        // Private markers (`<`, `=`, `>`, `?`) only appear in replies and
-        // SGR mouse reports: DA, DECRPM, kitty keyboard status.
+        // SGR mouse reports (`CSI < b;x;y M/m`) are the only user input with
+        // a private marker. Ghostty sends them only once a host program has
+        // enabled mouse tracking.
+        if params.first == UInt8(ascii: "<"), final == UInt8(ascii: "M") || final == UInt8(ascii: "m") {
+            return .keep(length)
+        }
+        // Every other private marker (`<`, `=`, `>`, `?`) is a reply: DA,
+        // DECRPM, kitty keyboard status.
         if let first = params.first, (0x3C...0x3F).contains(first) { return .drop(length) }
         switch final {
         case UInt8(ascii: "M"):
             // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
             // its coordinates as parameters.
-            guard params.isEmpty else { return .drop(length) }
+            guard params.isEmpty else { return .keep(length) }
             // X10, or UTF-8/1005: three coordinates follow, each one
             // character, which 1005 encodes as two bytes above 95.
             var end = start + length
@@ -168,7 +175,7 @@ struct PeerConsoleInputFilter {
                 guard end < bytes.count else { return .incomplete }
                 end += bytes[end] >= 0xC0 ? 2 : 1
             }
-            return end <= bytes.count ? .drop(end - start) : .incomplete
+            return end <= bytes.count ? .keep(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
             // Focus in/out.
             return params.isEmpty ? .drop(length) : .keep(length)

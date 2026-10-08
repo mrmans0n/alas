@@ -15,8 +15,13 @@ import Testing
         "\(esc)[97;5u",                                       // kitty-protocol Ctrl+a
         "\(esc)[200~pasted\ntext\(esc)[201~",                 // bracketed paste
         "\u{03}\u{7F}\t",                                     // Ctrl-C, backspace, tab
+        "\(esc)[<0;10;5M\(esc)[<0;10;5m",                     // SGR mouse press and release
+        "\(esc)[<64;10;5M",                                    // SGR wheel
+        "\(esc)[M !!",                                        // X10 mouse
+        "\(esc)[M \u{A0}!",                                   // UTF-8/1005 mouse (two-byte column)
+        "\(esc)[32;10;5M",                                     // rxvt/1015 mouse
     ])
-    func keyboardInputPassesThrough(input: String) {
+    func userInputPassesThrough(input: String) {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data(input.utf8)) == Data(input.utf8))
     }
@@ -32,15 +37,20 @@ import Testing
         "\(esc)]10;rgb:ffff/ffff/ffff\(esc)\\",               // OSC color reply, ST
         "\(esc)P1+r544e=787465726d\(esc)\\",                  // XTGETTCAP reply
         "\(esc)[I\(esc)[O",                                   // focus in/out
-        "\(esc)[<0;10;5M\(esc)[<0;10;5m",                     // SGR mouse
-        "\(esc)[M !!",                                        // X10 mouse
-        "\(esc)[M \u{A0}!",                                   // UTF-8/1005 mouse (two-byte column)
-        "\(esc)[32;10;5M",                                     // rxvt/1015 mouse
         "\(esc)[8;40;120t",                                   // window size report
     ])
     func terminalRepliesAreDropped(reply: String) {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data(reply.utf8)).isEmpty)
+    }
+
+    @Test func mouseReportsSplitAcrossReadsGoOutWholeAndOnce() {
+        var filter = PeerConsoleInputFilter()
+        #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
+        #expect(filter.filter(Data("0;5M".utf8)) == Data("\(Self.esc)[<0;10;5M".utf8))
+        // A 1005 report split inside a two-byte coordinate.
+        #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
+        #expect(filter.filter(Data([0xA0, 0x21])) == Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]))
     }
 
     @Test func repliesSplitAcrossReadsAreDroppedAndKeysAroundThemKept() {
