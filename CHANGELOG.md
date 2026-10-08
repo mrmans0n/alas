@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Show visual aids in the phone web client and let their questions be answered there (#1838).
-- Show each symbol's start line in the `@` picker and preview the highlighted symbol's code beside the picker, so overloads are easy to tell apart.
+- Show each symbol's start line in the `@` picker and preview the highlighted symbol's code beside the picker, so overloads are easy to tell apart (#1860).
 
 ### Fixes
 
