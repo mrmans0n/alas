@@ -102,29 +102,30 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
-    /// The lease in effect when the current lone ESC was held.
-    private var escapeLease: PeerConsoleControl?
+    /// The lease in effect when the current ambiguous prefix was held.
+    private var prefixLease: PeerConsoleControl?
 
-    /// A lone ESC is held until `flushEscape` decides it was the Escape key.
-    var hasPendingEscape: Bool { filter.hasPendingEscape }
+    /// An ambiguous ESC prefix is held until `flushAmbiguousPrefix` decides
+    /// it was a key.
+    var hasAmbiguousPrefix: Bool { filter.hasAmbiguousPrefix }
 
     /// Bytes always pass through the filter, even in view mode, so a reply
     /// that starts before control is granted is still recognized when it
     /// finishes after; only the holder's output is sent.
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         let keys = filter.filter(data)
-        escapeLease = filter.hasPendingEscape ? control : nil
+        prefixLease = filter.hasAmbiguousPrefix ? control : nil
         guard control.owner == .you else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
-    /// Releases a held ESC as the Escape key, but only under the lease it
-    /// was held under: an ESC from view mode, or one that crossed a
-    /// revoke and regrant, is discarded.
-    mutating func flushEscape(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
-        let keys = filter.flushEscape()
-        let lease = escapeLease
-        escapeLease = nil
+    /// Releases a held prefix as a key, but only under the lease it was held
+    /// under: one from view mode, or one that crossed a revoke and regrant,
+    /// is discarded.
+    mutating func flushAmbiguousPrefix(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
+        let keys = filter.flushAmbiguousPrefix()
+        let lease = prefixLease
+        prefixLease = nil
         guard control.owner == .you, lease?.owner == .you, lease?.generation == control.generation else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
@@ -335,14 +336,14 @@ final class PeerConsoleViewer {
     private func surfaceWrote(_ data: Data) {
         let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
         relay.relay(data, attachmentId: attachmentId, control: owner).forEach(send)
-        guard relay.hasPendingEscape else { return }
+        guard relay.hasAmbiguousPrefix else { return }
         escapeTimerToken += 1
         let token = escapeTimerToken
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.escapeTimeout)
             guard let self, token == escapeTimerToken else { return }
             let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
-            relay.flushEscape(attachmentId: attachmentId, control: owner).forEach(send)
+            relay.flushAmbiguousPrefix(attachmentId: attachmentId, control: owner).forEach(send)
         }
     }
 

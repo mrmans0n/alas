@@ -103,6 +103,7 @@ final class PeerConsoleHost {
     /// is restored, so queued peer input can no longer be accepted.
     func reclaim(_ consoleId: String) {
         guard let (holder, generation) = leases.reclaim(consoleId) else { return }
+        attachments[holder]?.discardQueuedInput()
         controllers[consoleId] = nil
         broadcastControl(consoleId, generation: generation, change: .reclaimed)
         logger.info("host reclaimed console from attachment \(holder, privacy: .public)")
@@ -205,6 +206,7 @@ final class PeerConsoleHost {
 
     private func revokeLease(of attachment: PeerConsoleAttachment, change: PeerConsoleControl.Change) {
         guard let generation = leases.release(attachment.consoleId, by: attachment.id) else { return }
+        attachment.discardQueuedInput()
         controllers[attachment.consoleId] = nil
         broadcastControl(attachment.consoleId, generation: generation, change: change)
         environment.setLocalInputSuppressed(attachment.consoleId, false)
@@ -271,6 +273,11 @@ final class PeerConsoleAttachment: @unchecked Sendable {
 
     func requestResync() {
         transition { $0.requestResync(.requested) }
+    }
+
+    /// The lease ended: input accepted under it but not yet written is dropped.
+    func discardQueuedInput() {
+        lock.withLock { client }?.discardQueuedInput()
     }
 
     func close() {

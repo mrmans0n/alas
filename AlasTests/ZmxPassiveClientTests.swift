@@ -138,6 +138,39 @@ import Testing
         #expect(events.all == [.closed(.overflow)])
     }
 
+    @Test func inputToAStalledDaemonNeverBlocksAndRevokedInputIsDropped() throws {
+        let pair = try ZmxSocketPair()
+        let client = ZmxPassiveClient(socket: ZmxIPCSocket(fd: pair.client), scrollbackRows: 0) { _ in }
+        client.start()
+        defer { client.close() }
+
+        // The daemon end is not read: writes stall, sends must not.
+        let chunk = Data(repeating: 0x61, count: 256 * 1024)
+        let started = ContinuousClock.now
+        var accepted = 0
+        while accepted < 64, client.send(chunk) { accepted += 1 }
+        #expect(ContinuousClock.now - started < .seconds(1))
+        // Queued input plus the one frame already being written.
+        #expect(accepted * chunk.count <= ZmxPassiveClient.maxQueuedInputBytes + chunk.count)
+
+        client.discardQueuedInput()
+        #expect(client.send(Data("END".utf8)))
+        var decoder = ZmxFrameDecoder()
+        var delivered = 0
+        var sawEnd = false
+        while !sawEnd {
+            for frame in try pair.readFrames(&decoder, count: 1) where frame.knownTag == .send {
+                if frame.payload == Data("END".utf8) {
+                    sawEnd = true
+                } else {
+                    delivered += frame.payload.count
+                }
+            }
+        }
+        // Only the write already in progress when the lease ended got through.
+        #expect(delivered <= chunk.count)
+    }
+
     @Test func connectingToMissingSocketNeverCreatesOne() throws {
         let path = NSTemporaryDirectory() + "zmx-missing-\(UUID().uuidString.prefix(8))"
         #expect(throws: ZmxIPCSocket.ConnectError.unavailable(errno: ENOENT)) {

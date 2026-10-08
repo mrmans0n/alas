@@ -45,6 +45,14 @@ final class ZmxPassiveClient: @unchecked Sendable {
     private var gate = ZmxSnapshotGate()
     private var captureCount = 0
     private var isClosed = false
+    /// Every write goes through this serial queue, so a daemon that stops
+    /// draining blocks this queue, never the caller (the main actor).
+    private let writer = DispatchQueue(label: "io.nlopez.alas.zmx-passive-writer")
+    private var queuedInputBytes = 0
+    /// Bumped by `discardQueuedInput`; queued input from an older epoch is
+    /// dropped instead of written.
+    private var inputEpoch = 0
+    static let maxQueuedInputBytes = 4 * 1024 * 1024
 
     init(
         socket: ZmxIPCSocket,
@@ -77,14 +85,40 @@ final class ZmxPassiveClient: @unchecked Sendable {
         return started
     }
 
-    /// Writes bytes to the session PTY via zmx `Send`.
+    /// Queues bytes for the session PTY via zmx `Send`, in order. Returns
+    /// false, without queueing, after close or once `maxQueuedInputBytes`
+    /// are waiting behind the frame being written to a daemon that is not
+    /// draining.
     @discardableResult
     func send(_ input: Data) -> Bool {
-        lock.lock()
-        let closed = isClosed
-        lock.unlock()
-        guard !closed, !input.isEmpty else { return false }
-        return socket.write(ZmxIPC.encode(.send, input))
+        guard !input.isEmpty else { return false }
+        let epoch: Int? = lock.withLock {
+            guard !isClosed, queuedInputBytes + input.count <= Self.maxQueuedInputBytes else { return nil }
+            queuedInputBytes += input.count
+            return inputEpoch
+        }
+        guard let epoch else { return false }
+        let frame = ZmxIPC.encode(.send, input)
+        writer.async { [self] in
+            let current = lock.withLock { () -> Bool in
+                // Discarded input already gave its bytes back.
+                guard inputEpoch == epoch else { return false }
+                queuedInputBytes -= input.count
+                return !isClosed
+            }
+            guard current else { return }
+            if !socket.write(frame) { finish(.targetExited) }
+        }
+        return true
+    }
+
+    /// Drops input accepted but not yet written. A revoked lease must not
+    /// deliver input queued under it; a write already in progress completes.
+    func discardQueuedInput() {
+        lock.withLock {
+            inputEpoch += 1
+            queuedInputBytes = 0
+        }
     }
 
     /// Detaches this client only; the session and its process keep running.
@@ -97,9 +131,9 @@ final class ZmxPassiveClient: @unchecked Sendable {
         captureCount += 1
         let token = captureCount
         lock.unlock()
-        guard socket.write(ZmxIPC.captureRequest(scrollbackRows: scrollbackRows)) else {
-            finish(.targetExited)
-            return
+        let frame = ZmxIPC.captureRequest(scrollbackRows: scrollbackRows)
+        writer.async { [self] in
+            if !socket.write(frame) { finish(.targetExited) }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + captureTimeout) { [weak self] in
             self?.captureDeadlinePassed(token: token)

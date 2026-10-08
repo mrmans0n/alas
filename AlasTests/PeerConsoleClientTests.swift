@@ -51,8 +51,17 @@ import Testing
         #expect(filter.filter(Data("[?62c".utf8)).isEmpty)
         // A lone ESC nothing followed is the Escape key.
         #expect(filter.filter(Data("\(Self.esc)".utf8)).isEmpty)
-        #expect(filter.flushEscape() == Data("\(Self.esc)".utf8))
-        #expect(filter.flushEscape().isEmpty)
+        #expect(filter.flushAmbiguousPrefix() == Data("\(Self.esc)".utf8))
+        #expect(filter.flushAmbiguousPrefix().isEmpty)
+    }
+
+    @Test(arguments: ["]", "P", "[", "O", "_"])
+    func altKeysThatLookLikeSequenceIntroducersAreReleasedOnTimeout(key: String) {
+        var filter = PeerConsoleInputFilter()
+        let alt = Data("\(Self.esc)\(key)".utf8)
+        #expect(filter.filter(alt).isEmpty)
+        #expect(filter.flushAmbiguousPrefix() == alt)
+        #expect(filter.filter(Data("x".utf8)) == Data("x".utf8))
     }
 
     @Test func oversizedReplyStringsAreDiscardedUntilTheirTerminator() {
@@ -62,7 +71,7 @@ import Testing
         let body = Data(repeating: UInt8(ascii: "A"), count: 200 * 1024)
         var kept = filter.filter(Data("k\(Self.esc)]52;c;".utf8) + body.prefix(100 * 1024))
         kept += filter.filter(body.suffix(100 * 1024) + Data("\(Self.esc)".utf8))
-        #expect(filter.flushEscape().isEmpty)
+        #expect(filter.flushAmbiguousPrefix().isEmpty)
         kept += filter.filter(Data("\\x".utf8))
         #expect(kept == Data("kx".utf8))
     }
@@ -129,11 +138,11 @@ import Testing
         // A held ESC is released only under the lease it was held under.
         let esc = Data("\u{1B}".utf8)
         #expect(relay.relay(esc, attachmentId: "a", control: control(.host, 4)).isEmpty)
-        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 5)).isEmpty)
+        #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 5)).isEmpty)
         #expect(relay.relay(esc, attachmentId: "a", control: control(.you, 5)).isEmpty)
-        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 7)).isEmpty)
+        #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 7)).isEmpty)
         #expect(relay.relay(esc, attachmentId: "a", control: control(.you, 3)).isEmpty)
-        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 3)) == [
+        #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 3)) == [
             .input(attachmentId: "a", generation: 3, sequence: 2, data: esc),
         ])
 

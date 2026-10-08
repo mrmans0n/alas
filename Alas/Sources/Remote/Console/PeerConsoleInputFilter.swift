@@ -45,9 +45,10 @@ struct PeerConsoleInputFilter {
             }
             switch Self.sequence(in: bytes, at: i) {
             case .incomplete:
-                // Includes a lone ESC: the bridge is a byte stream, so a reply
-                // can split right after its ESC. `flushEscape()` releases a
-                // lone ESC as the Escape key once nothing followed it.
+                // Includes a lone ESC or ESC plus one byte: the bridge is a
+                // byte stream, so a reply can split there. Those prefixes are
+                // also Escape and Alt+key, which `flushAmbiguousPrefix()`
+                // releases once nothing followed them.
                 if bytes.count - i <= Self.maxPending {
                     pending = Array(bytes[i...])
                 } else if Self.isStringIntroducer(bytes[i + 1]) {
@@ -64,8 +65,12 @@ struct PeerConsoleInputFilter {
         return kept
     }
 
-    /// Whether a lone ESC is waiting to be classified.
-    var hasPendingEscape: Bool { discarding == nil && pending == [Self.esc] }
+    /// Whether a lone ESC, or ESC plus one byte that could open a longer
+    /// sequence (`ESC ]`, `ESC P`, `ESC [`, `ESC O`, ...), is waiting to be
+    /// classified as a key or the start of a reply.
+    var hasAmbiguousPrefix: Bool {
+        discarding == nil && (1...2).contains(pending.count) && pending.first == Self.esc
+    }
 
     /// Stays inside a string sequence whose terminator has not arrived. A
     /// trailing ESC is kept so an ST split across reads is still recognized.
@@ -95,11 +100,12 @@ struct PeerConsoleInputFilter {
         return nil
     }
 
-    /// Called when no byte followed a lone ESC in time: it was the Escape key.
-    mutating func flushEscape() -> Data {
-        guard hasPendingEscape else { return Data() }
-        pending = []
-        return Data([Self.esc])
+    /// Called when nothing followed an ambiguous prefix in time: it was the
+    /// Escape key or an Alt+key, not a reply split across reads.
+    mutating func flushAmbiguousPrefix() -> Data {
+        guard hasAmbiguousPrefix else { return Data() }
+        defer { pending = [] }
+        return Data(pending)
     }
 
     private enum Sequence {
