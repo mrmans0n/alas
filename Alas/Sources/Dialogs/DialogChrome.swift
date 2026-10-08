@@ -182,26 +182,21 @@ extension DialogContainer where HeaderAccessory == EmptyView {
 }
 
 /// Icon-only affordance rendered in a dialog header's top-right corner.
+/// `isHighlighted` draws the accent beam to point at a one-click shortcut.
 struct DialogHeaderIconButton: View {
     let icon: String
     let tooltip: String
+    var isHighlighted: Bool = false
     let action: () -> Void
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Icon(name: icon, size: 13, color: hovering ? theme.color("fg") : theme.color("fg-muted"))
+            Icon(name: icon, size: 13, color: iconColor)
                 .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(hovering ? theme.color("bg-3") : Color.clear)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(hovering ? theme.color("line") : Color.clear, lineWidth: 0.5)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 6))
+                .dialogHeaderButtonChrome(hovering: hovering, theme: theme)
+                .aiBeam(isActive: isHighlighted)
         }
         .buttonStyle(.plain)
         // Pull the 26pt hit target up so the glyph optically centers on the title line.
@@ -209,6 +204,52 @@ struct DialogHeaderIconButton: View {
         .onHover { hovering = $0 }
         .help(tooltip)
         .accessibilityLabel(tooltip)
+    }
+
+    private var iconColor: Color {
+        if isHighlighted { return theme.color("accent") }
+        return hovering ? theme.color("fg") : theme.color("fg-muted")
+    }
+}
+
+/// A header-corner `…` that opens a native menu of rarely-changed options.
+struct DialogHeaderMenuButton<MenuContent: View>: View {
+    let tooltip: String
+    @ViewBuilder let content: () -> MenuContent
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        // `.button` + `.plain` keeps the label in SwiftUI; the borderless
+        // style hands it to AppKit, which ignores the theme color and draws
+        // the glyph at full label brightness.
+        Menu(content: content) {
+            Icon(name: "menu", size: 13, color: hovering ? theme.color("fg") : theme.color("fg-muted"))
+                .frame(width: 26, height: 26)
+                .dialogHeaderButtonChrome(hovering: hovering, theme: theme)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.top, -4)
+        .onHover { hovering = $0 }
+        .help(tooltip)
+        .accessibilityLabel(tooltip)
+    }
+}
+
+private extension View {
+    func dialogHeaderButtonChrome(hovering: Bool, theme: Theme) -> some View {
+        background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(hovering ? theme.color("bg-3") : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(hovering ? theme.color("line") : Color.clear, lineWidth: 0.5)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 

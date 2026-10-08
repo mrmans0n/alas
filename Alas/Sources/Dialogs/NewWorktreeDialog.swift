@@ -45,8 +45,12 @@ struct NewWorktreeDialog: View {
     @State private var issueDrivenProjectChangeID: String?
     @State private var nameSuggestionTask: Task<Void, Never>?
     @State private var namePrewarm = IssueWorktreeNamePrewarm()
+    /// A ticket link on the clipboard, re-read whenever Alas becomes active so
+    /// copying a link in the browser and coming back is enough.
+    @State private var clipboardTicket: IssueClipboardTicket?
 
     @Environment(\.theme) var theme
+    @Environment(\.openWindow) private var openWindow
 
     init(
         state: AppState,
@@ -72,9 +76,24 @@ struct NewWorktreeDialog: View {
             title: "New worktree",
             subtitle: subtitleText,
             headerAccessory: {
-                if issueState.draft == nil {
-                    DialogHeaderIconButton(icon: "paperclip", tooltip: "Attach issue…") {
-                        issueSheetPresentation = AttachIssuePresentation(draft: nil)
+                HStack(spacing: 2) {
+                    if issueState.draft == nil {
+                        DialogHeaderIconButton(
+                            icon: clipboardTicket?.iconName ?? "ticket",
+                            tooltip: clipboardTicket.map { "Attach ticket from clipboard: \($0.reference)" }
+                                ?? "Attach ticket…",
+                            isHighlighted: clipboardTicket != nil
+                        ) {
+                            issueSheetPresentation = AttachIssuePresentation(
+                                draft: nil,
+                                directReference: clipboardTicket?.reference
+                            )
+                        }
+                    }
+                    DialogHeaderMenuButton(tooltip: "More options") {
+                        Toggle("Run startup script", isOn: $runStartup)
+                        Divider()
+                        Button("Worktree settings…", action: openWorktreeSettings)
                     }
                 }
             },
@@ -113,7 +132,8 @@ struct NewWorktreeDialog: View {
                         focusOnAppear: true,
                         onSubmit: submitCreate,
                         disablesAutomaticTextSubstitutions: true,
-                        inputPolicy: .gitBranchName
+                        inputPolicy: .gitBranchName,
+                        onPaste: attachPastedTicket
                     )
                     .aiBeam(isActive: nameSuggestionTask != nil && issueState.isSuggestingName)
                 }
@@ -122,18 +142,11 @@ struct NewWorktreeDialog: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(theme.color("fg-dim"))
                 }
-                HStack(spacing: 10) {
-                    AlasToggle(on: $runStartup)
-                    Text("Run startup script after create").font(.system(size: 12))
-                        .foregroundColor(theme.color("fg"))
-                }
                 if ggStackAvailability != .hidden {
                     DialogField(label: Self.ggModeFieldLabel) {
                         ggModeSegmented
+                            .help(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
                     }
-                    Text(Self.ggModeDescription(mode: ggMode, createsGGStack: createsGGStack))
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("fg-dim"))
                     if createsGGStack, case .disabled(let hint) = ggStackAvailability {
                         Text(hint).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                     }
@@ -142,12 +155,13 @@ struct NewWorktreeDialog: View {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
                 issueAttachmentSection
-                DialogField(label: "Open after create") {
-                    HStack(spacing: 8) {
+                DialogField(label: "Start with") {
+                    HStack(spacing: 6) {
                         launchSurfaceSegmented
                         if openAfterCreate, !pickerAgents.isEmpty {
-                            launchAgentPicker
+                            launchAgentChip
                         }
+                        Spacer(minLength: 0)
                     }
                 }
                 if let createErrorMessage {
@@ -169,6 +183,7 @@ struct NewWorktreeDialog: View {
             )
         )
         .onAppear {
+            refreshClipboardTicket()
             if projectId.isEmpty {
                 projectId = Self.initialProjectId(
                     presetProjectId: presetProjectId,
@@ -184,6 +199,9 @@ struct NewWorktreeDialog: View {
             }
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshClipboardTicket()
         }
         .onDisappear {
             cancelNameSuggestion()
@@ -231,6 +249,7 @@ struct NewWorktreeDialog: View {
             AttachIssueDialog(
                 environment: attachIssueEnvironment(),
                 initialDraft: presentation.draft,
+                directReference: presentation.directReference,
                 onCancel: { issueSheetPresentation = nil },
                 onAttach: attachIssue
             )
@@ -367,11 +386,23 @@ struct NewWorktreeDialog: View {
         return GGConfigReader.defaultBase(repoPath: project.path)
     }
 
+    /// Where the worktree will land, once there is a name to place it; the
+    /// base branch is already in the field below.
     private var subtitleText: String {
         guard let project = state.projects.first(where: { $0.id == projectId }) else {
             return "Create a worktree."
         }
-        return "Create a worktree in \(project.name) branched from \(base)."
+        guard !activeName.isEmpty else { return "Create a worktree in \(project.name)." }
+        if let host = project.host { return "\(host):\(renderedPath)" }
+        return (renderedPath as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// A ticket link is never a branch name, so pasting one into the name
+    /// field attaches the ticket instead.
+    private func attachPastedTicket(_ text: String) -> Bool {
+        guard issueState.draft == nil, let ticket = IssueClipboardTicket(clipboardText: text) else { return false }
+        issueSheetPresentation = AttachIssuePresentation(draft: nil, directReference: ticket.reference)
+        return true
     }
 
     private var effectiveAutoLaunchAgent: AgentDefinition? {
@@ -926,7 +957,7 @@ struct NewWorktreeDialog: View {
         if let draft = issueState.draft {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Issue")
+                    Text("Ticket")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))
                     Text([draft.attachment.displayTitle, draft.kind?.displayName].compactMap { $0 }.joined(separator: " · "))
@@ -982,54 +1013,66 @@ struct NewWorktreeDialog: View {
         )
     }
 
-    private var launchAgentPicker: some View {
-        Picker("", selection: launchAgentSelection) {
-            if launchMode == .terminal {
-                Text("None").tag("none")
-            }
-            ForEach(pickerAgents) { agent in
-                Label {
-                    Text(agent.displayName)
-                } icon: {
-                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
-                }
-                .tag(agent.id)
-            }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .fixedSize()
-    }
-
-    private var launchAgentSelection: Binding<String> {
-        Binding(
-            get: { launchAgentId },
-            set: { newValue in
-                launchAgentId = newValue
+    /// The peer new-session sheet's agent chip: logo, name and a searchable list.
+    private var launchAgentChip: some View {
+        let items = launchAgentItems
+        return ACPSelectChip(
+            label: items.first { $0.id == launchAgentId }?.name ?? "",
+            placeholder: "Agent",
+            accent: theme.color("fg-muted"),
+            items: items,
+            selectedId: launchAgentId,
+            searchDescriptions: false,
+            searchIdentifiers: false,
+            fillsWidth: false,
+            onSelect: { item in
+                launchAgentId = item.id
                 issueState.recordLaunchPreferenceChangeAfterAttach()
             }
         )
     }
 
-    private var launchSurfaceSegmented: some View {
-        HStack(spacing: 0) {
-            AlasSegmentedControl(
-                selection: selectedLaunchSurfaceSegment,
-                options: [
-                    AlasSegmentedOption(id: .none, label: "No tab", icon: "circle.slash"),
-                    AlasSegmentedOption(id: .terminal, label: "Terminal", icon: "terminal"),
-                    AlasSegmentedOption(
-                        id: .acp,
-                        label: "Chat",
-                        icon: "sparkle",
-                        isEnabled: acpSegmentEnabled,
-                        disabledHelp: "Enable an ACP-capable agent in Settings → Agents."
-                    ),
-                ],
-                onSelect: selectLaunchSurface
+    /// A terminal can open without an agent; a chat cannot.
+    private var launchAgentItems: [ACPSelectChip.Item] {
+        let agents = pickerAgents.map { agent in
+            ACPSelectChip.Item(
+                id: agent.id,
+                name: agent.displayName,
+                description: nil,
+                icon: .image(AgentLogoView.menuImage(for: agent, size: 14))
             )
-            Spacer(minLength: 0)
         }
+        guard launchMode == .terminal else { return agents }
+        return [ACPSelectChip.Item(id: "none", name: "No agent", description: nil, icon: .system("terminal"))]
+            + agents
+    }
+
+    private func refreshClipboardTicket() {
+        clipboardTicket = IssueClipboardTicket(clipboardText: Clipboard.read())
+    }
+
+    private func openWorktreeSettings() {
+        state.pendingSettingsSection = .worktrees
+        openWindow(id: "settings")
+    }
+
+    private var launchSurfaceSegmented: some View {
+        AlasSegmentedControl(
+            selection: selectedLaunchSurfaceSegment,
+            options: [
+                AlasSegmentedOption(id: .none, label: "No tab", icon: "circle.slash"),
+                AlasSegmentedOption(id: .terminal, label: "Terminal", icon: "terminal"),
+                AlasSegmentedOption(
+                    id: .acp,
+                    label: "Chat",
+                    icon: "sparkle",
+                    isEnabled: acpSegmentEnabled,
+                    disabledHelp: "Enable an ACP-capable agent in Settings → Agents."
+                ),
+            ],
+            onSelect: selectLaunchSurface
+        )
+        .fixedSize()
     }
 
     private var selectedLaunchSurfaceSegment: NewWorktreeLaunchSurfaceSegment {

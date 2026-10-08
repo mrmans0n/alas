@@ -57,6 +57,52 @@ struct AttachIssueDialogModelTests {
         #expect(model.reference == "https://github.com/mrmans0n/alas/issues/42")
     }
 
+    @Test("a ticket link on the clipboard shows its code host's mark, else the ticket glyph", arguments: [
+        ("https://github.com/mrmans0n/alas/issues/42", "github"),
+        ("https://gitlab.com/acme/alas/-/issues/42", "gitlab"),
+        ("https://github.com/mrmans0n/alas/pull/42", "ticket"),
+        ("https://linear.app/acme/issue/ENG-1234/fix-login", "ticket"),
+    ])
+    func clipboardTicketIcon(clipboardText: String, iconName: String) {
+        #expect(IssueClipboardTicket(clipboardText: clipboardText)?.iconName == iconName)
+    }
+
+    @Test("a direct link resolves straight to confirmation, ignoring the clipboard")
+    func directReferenceSkipsEntry() async {
+        let fixture = Fixture(clipboardText: "https://example.com/issues/100")
+        let model = AttachIssueDialogModel(
+            environment: fixture.environment,
+            directReference: "https://github.com/mrmans0n/alas/issues/42"
+        )
+        #expect(model.resolvesDirectly)
+        #expect(model.reference == "https://github.com/mrmans0n/alas/issues/42")
+
+        await model.resolveDirectReference()
+
+        #expect(model.phase == .confirmation)
+        #expect(model.makeDraft()?.source == fixture.resolution.source)
+    }
+
+    @Test("a direct link that fails to resolve falls back to the entry step")
+    func failedDirectReferenceFallsBackToEntry() async {
+        let fixture = Fixture(resolutionFailure: .init(
+            fallback: Fixture.manualResolution(providerLabel: "Manual"),
+            message: "Could not read the page."
+        ))
+        let model = AttachIssueDialogModel(
+            environment: fixture.environment,
+            directReference: "https://linear.app/acme/issue/ENG-1234"
+        )
+
+        await model.resolveDirectReference()
+
+        #expect(model.phase == .entry)
+        #expect(!model.resolvesDirectly)
+        #expect(model.errorMessage == "Could not read the page.")
+        #expect(model.canContinueManually)
+        #expect(model.reference == "https://linear.app/acme/issue/ENG-1234")
+    }
+
     @Test("the selected project is exposed for issue autocomplete")
     func exposesSelectedProjectForIssueAutocomplete() {
         let fixture = Fixture(selectedProjectID: "alas")

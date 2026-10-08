@@ -50,10 +50,15 @@ final class AttachIssueDialogModel {
             canContinueManually = false
             errorMessage = nil
             promptIsUserOwned = false
+            resolvesDirectly = false
             resetKind()
         }
     }
     private(set) var phase: Phase = .entry
+    /// The sheet opened on a known link and skips the entry step: it shows the
+    /// confirmation layout while resolving. Cleared once resolution fails or
+    /// the user goes back to change the link, which lands on the entry step.
+    private(set) var resolvesDirectly = false
     private(set) var resolved: ResolvedIssue?
     private(set) var projectID: String?
     var title = "" {
@@ -79,7 +84,14 @@ final class AttachIssueDialogModel {
 
     private let environment: Environment
 
-    init(environment: Environment, initialDraft: AttachedIssueDraft? = nil) {
+    /// `directReference` opens on that link and resolves it right away;
+    /// `initialDraft` reopens an attached ticket. Otherwise the entry step
+    /// starts prefilled from the clipboard.
+    init(
+        environment: Environment,
+        initialDraft: AttachedIssueDraft? = nil,
+        directReference: String? = nil
+    ) {
         self.environment = environment
         if let initialDraft {
             reference = initialDraft.source.canonicalURL.absoluteString
@@ -98,9 +110,19 @@ final class AttachIssueDialogModel {
             promptIsUserOwned = initialDraft.prompt
                 != IssuePromptBuilder.build(source: initialDraft.source, kind: initialDraft.kind)
             phase = .confirmation
+        } else if let directReference {
+            reference = directReference
+            resolvesDirectly = true
         } else {
             reference = IssueClipboardPrefill.candidate(from: environment.clipboardText()) ?? ""
         }
+    }
+
+    /// Starts resolving the link the sheet was opened on. Runs once: after a
+    /// failure or a change of link the user drives resolution from the entry step.
+    func resolveDirectReference() async {
+        guard resolvesDirectly, phase == .entry else { return }
+        await resolve()
     }
 
     var branchSeed: String {
@@ -133,12 +155,14 @@ final class AttachIssueDialogModel {
         } catch let failure as IssueResolutionFailure {
             guard accepts(capturedGeneration, reference: capturedReference) else { return }
             phase = .entry
+            resolvesDirectly = false
             fallback = failure.fallback
             canContinueManually = true
             errorMessage = failure.message
         } catch {
             guard accepts(capturedGeneration, reference: capturedReference) else { return }
             phase = .entry
+            resolvesDirectly = false
             errorMessage = error.localizedDescription
         }
     }
@@ -151,6 +175,7 @@ final class AttachIssueDialogModel {
     func cancelResolution() {
         generation += 1
         phase = .entry
+        resolvesDirectly = false
         resolved = nil
         fallback = nil
         canContinueManually = false
