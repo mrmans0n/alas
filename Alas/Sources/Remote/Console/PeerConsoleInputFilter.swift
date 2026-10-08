@@ -217,6 +217,10 @@ struct PeerConsoleMouseModeTracker {
 
     private(set) var hostFormat = Format.x10
     private(set) var hostEvents = Events.none
+    /// False after a snapshot left several format modes set: the snapshot
+    /// lists set modes in a fixed order, not the order that selected the
+    /// active one. The next live format change settles it again.
+    private(set) var formatKnown = true
     /// Mouse modes currently set, and as last saved with `CSI ? n s`.
     private var modesSet: Set<Int> = []
     private var savedSet: Set<Int> = []
@@ -235,7 +239,14 @@ struct PeerConsoleMouseModeTracker {
     static let sgrOverride = Data("\u{1B}[?1006h".utf8)
 
     /// Whether the host program wants mouse events, in SGR format.
-    var hostWantsSGRMouse: Bool { hostEvents != .none && hostFormat == .sgr }
+    var hostWantsSGRMouse: Bool { formatKnown && hostEvents != .none && hostFormat == .sgr }
+
+    /// Follows a snapshot. Its mode list cannot say which of several set
+    /// format modes was selected last, so that case leaves the format unknown.
+    mutating func observeSnapshot(_ data: Data) {
+        _ = observe(data)
+        if modesSet.filter({ Self.formats[$0] != nil }).count > 1 { formatKnown = false }
+    }
 
     /// Returns whether `data` set, reset, saved, restored, or cleared any
     /// mouse mode.
@@ -273,6 +284,7 @@ struct PeerConsoleMouseModeTracker {
             guard byte == UInt8(ascii: "c") else { return false }
             hostFormat = .x10
             hostEvents = .none
+            formatKnown = true
             modesSet = []
             savedSet = []
             return true
@@ -324,6 +336,7 @@ struct PeerConsoleMouseModeTracker {
         if enabled { modesSet.insert(mode) } else { modesSet.remove(mode) }
         if let format = Self.formats[mode] {
             hostFormat = enabled ? format : .x10
+            formatKnown = true
         } else if let events = Self.events[mode] {
             hostEvents = enabled ? events : .none
         }

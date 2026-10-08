@@ -114,8 +114,12 @@ struct PeerConsoleInputRelay {
     /// Feeds in-order output as soon as it is accepted, even while the write
     /// gate holds it: mouse reports are forwarded only while the host program
     /// wants mouse events and itself uses SGR.
-    mutating func observeHostOutput(_ data: Data) {
-        _ = hostMouse.observe(data)
+    mutating func observeHostOutput(_ data: Data, isSnapshot: Bool = false) {
+        if isSnapshot {
+            hostMouse.observeSnapshot(data)
+        } else {
+            _ = hostMouse.observe(data)
+        }
         filter.forwardsMouse = hostMouse.hostWantsSGRMouse
     }
 
@@ -286,7 +290,7 @@ final class PeerConsoleViewer {
         case .snapshot(_, let sequence, _, let data):
             order.snapshot(sequence: sequence)
             let snapshot = Self.resetBeforeSnapshot + data
-            relay.observeHostOutput(snapshot)
+            relay.observeHostOutput(snapshot, isSnapshot: true)
             deliver(writeGate.snapshot(snapshot))
             phase = .live
         case .output(_, let sequence, let data):
