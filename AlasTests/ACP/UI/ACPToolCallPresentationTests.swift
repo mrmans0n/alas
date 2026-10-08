@@ -125,6 +125,16 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .mcp)
     }
 
+    @Test("a named tool whose title merely mentions visual_show is not the visual tool", arguments: [
+        ("rg visual_show Alas/", "Bash"),
+        ("Read visual_show.md", "Read"),
+    ] as [(String, String)])
+    func namedToolsAreNotMistakenForVisualShow(title: String, name: String) {
+        let call = toolCall(title: title, name: name)
+        #expect(!ACPToolCallPresentation.isVisualShow(call))
+        #expect(ACPToolCallPresentation.resolve(call).label != "Visual aid")
+    }
+
     @Test("guardian review title maps to review presentation")
     func guardianReviewPresentation() {
         let presentation = ACPToolCallPresentation.resolve(toolCall(

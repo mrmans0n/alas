@@ -20,11 +20,15 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     }
 
     /// The same match for fields that arrive outside a `ToolCall`, such as a
-    /// permission request's tool call.
+    /// permission request's tool call. A stable tool name decides on its own;
+    /// the title is only consulted when the adapter sent no name, so an
+    /// ordinary call whose title mentions `visual_show` (a search for it, say)
+    /// is not mistaken for the visual tool.
     static func isVisualShow(name: String?, title: String?) -> Bool {
-        let lowerTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return (!trimmedName.isEmpty && trimmedName.contains("visual_show")) || lowerTitle.contains("visual_show")
+        if !trimmedName.isEmpty { return trimmedName.contains("visual_show") }
+        let lowerTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lowerTitle.contains("visual_show")
     }
 
     static func resolve(_ toolCall: ACPMessage.ToolCall) -> ACPToolCallPresentation {
