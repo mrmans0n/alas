@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixes
 
+- Turn spaces into `-` and reject invalid characters while typing a branch name in the peer new-worktree sheet, matching the local dialog.
 - Keep agent logos at compact menu size in the peer session overflow menu instead of expanding rows to the assets' native dimensions.
 
 ### 🏗️ Internal

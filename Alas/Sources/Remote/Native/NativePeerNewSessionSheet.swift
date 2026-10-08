@@ -151,7 +151,8 @@ struct NativePeerNewSessionSheet: View {
                 monospaced: true,
                 focusOnAppear: true,
                 onSubmit: create,
-                disablesAutomaticTextSubstitutions: true
+                disablesAutomaticTextSubstitutions: true,
+                inputPolicy: .gitBranchName
             )
         }
         if let message = NativePeerNewSession.branchValidationMessage(branch) {
