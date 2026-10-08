@@ -188,6 +188,7 @@ final class ACPSessionRunner {
     var beforePersistenceForTesting: (@MainActor () async -> Void)?
     var onPersistenceFlushForTesting: (@MainActor () -> Void)?
     var activePromptIDForTesting: Int? { activePromptID }
+    func visualAidFirstWriteWaiterCountForTesting(id: UUID) -> Int { unconfirmedVisualAids[id]?.count ?? 0 }
 #endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?

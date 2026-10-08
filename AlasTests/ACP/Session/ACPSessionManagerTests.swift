@@ -1951,8 +1951,11 @@ struct ACPSessionManagerTests {
         let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
         await initialWrite.waitUntilEntered()
         let answer = ACPVisualAid.Answer.dismissed(at: Date(timeIntervalSince1970: 1))
+        // Unstructured tasks may start in any order; queue the second answer only behind the first.
         let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 1 })
         let second = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: .dismissed(at: Date(timeIntervalSince1970: 2)), in: session.id) }
+        #expect(await awaitCondition { runner.visualAidFirstWriteWaiterCountForTesting(id: visual.id) == 2 })
         await initialWrite.release()
 
         #expect(await show.value)
