@@ -30,7 +30,7 @@ struct AppStateCLIRoutingTests {
         initialBranch: String = "main"
     ) async throws -> (AppState, ProjectConfig, Worktree) {
         let repo = try await makeRepo(name: name, initialBranch: initialBranch)
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#000000")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
@@ -43,7 +43,7 @@ struct AppStateCLIRoutingTests {
         let file = repo.appendingPathComponent("a.txt")
         try "hello\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#000000")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
@@ -677,7 +677,7 @@ struct AppStateCLIRoutingTests {
     }
 
     @Test func routeTerminalOpenURLReturnsFalseForUnknownSession() async throws {
-        let state = AppState()
+        let state = AppState(store: MemoryStore())
         let handled = state.routeTerminalOpenURL(rawURL: "anything", sessionId: "missing")
         #expect(handled == false)
     }

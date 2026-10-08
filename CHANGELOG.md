@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Show visual aids in the phone web client and let their questions be answered there (#1838).
 
+### 🏗️ Internal
+
+- Keep CLI routing tests from reading or writing the developer's persisted projects.
+
 ## [0.20.7] - 2026-10-08
 
 ### ✨ Features
