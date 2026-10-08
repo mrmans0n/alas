@@ -251,6 +251,20 @@ import Testing
             .input(attachmentId: "a", generation: 3, sequence: 4, data: paste.suffix(1)),
         ])
     }
+
+    @Test func forwardingFollowsAcceptedOutputEvenBeforeItReachesTheSurface() {
+        var relay = PeerConsoleInputRelay()
+        let lease = PeerConsoleControl(owner: .you, generation: 1, change: .current)
+        let click = Data("\u{1B}[<0;10;5M".utf8)
+        relay.observeHostOutput(Data("\u{1B}[?1000;1006h".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        // The host turns SGR off; the bytes may still be held by the write
+        // gate, but forwarding already stops.
+        relay.observeHostOutput(Data("\u{1B}[?1006l".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        // The surface still gets its SGR override when the bytes arrive.
+        #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))
+    }
 }
 
 @Suite struct PeerConsoleBridgeTests {

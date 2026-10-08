@@ -104,15 +104,25 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
-    private var mouseMode = PeerConsoleMouseModeTracker()
+    /// The host program's mouse format as of the latest accepted output,
+    /// which decides whether mouse reports are forwarded.
+    private var hostMouse = PeerConsoleMouseModeTracker()
+    /// The same format as of the bytes the surface has been handed, which
+    /// decides where the SGR override goes.
+    private var surfaceMouse = PeerConsoleMouseModeTracker()
 
-    /// Feeds output written to the surface and returns it with the surface
-    /// kept in SGR mouse format after every host format change. Mouse
-    /// reports are forwarded only while the host program itself uses SGR.
-    mutating func observeOutput(_ data: Data) -> Data {
-        let output = mouseMode.forcingSGR(data)
-        filter.forwardsMouse = mouseMode.hostFormat == .sgr
-        return output
+    /// Feeds in-order output as soon as it is accepted, even while the write
+    /// gate holds it: mouse reports are forwarded only while the host program
+    /// itself uses SGR.
+    mutating func observeHostOutput(_ data: Data) {
+        _ = hostMouse.observe(data)
+        filter.forwardsMouse = hostMouse.hostFormat == .sgr
+    }
+
+    /// Returns output about to reach the surface with the surface kept in
+    /// SGR mouse format after every host format change.
+    mutating func prepareForSurface(_ data: Data) -> Data {
+        surfaceMouse.forcingSGR(data)
     }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.
@@ -275,11 +285,15 @@ final class PeerConsoleViewer {
             gridChanged()
         case .snapshot(_, let sequence, _, let data):
             order.snapshot(sequence: sequence)
-            deliver(writeGate.snapshot(Self.resetBeforeSnapshot + data))
+            let snapshot = Self.resetBeforeSnapshot + data
+            relay.observeHostOutput(snapshot)
+            deliver(writeGate.snapshot(snapshot))
             phase = .live
         case .output(_, let sequence, let data):
             switch order.output(sequence: sequence) {
-            case .write: deliver(writeGate.output(data))
+            case .write:
+                relay.observeHostOutput(data)
+                deliver(writeGate.output(data))
             case .drop: break
             case .resync: send(.resync(attachmentId: attachmentId))
             }
@@ -355,7 +369,7 @@ final class PeerConsoleViewer {
         guard let bridge else { return }
         // The surface always reports the mouse in SGR, whatever the host
         // selected, so input never needs mode-dependent decoding.
-        guard !bridge.write(relay.observeOutput(data)) else { return }
+        guard !bridge.write(relay.prepareForSurface(data)) else { return }
         order = PeerConsoleStreamOrder()
         send(.resync(attachmentId: attachmentId))
     }
