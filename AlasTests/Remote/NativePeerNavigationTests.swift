@@ -13,6 +13,7 @@ struct NativePeerNavigationTests {
         var sessionCarryingPeers: [FederatedPeerInfo] = [.init(serverId: "B", name: "Mac B")]
         var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
         func sendToPeer(_ message: RemoteClientMessage, serverId: String) {}
+        func peerSupports(_ capability: String, serverId: String) -> Bool { true }
         func receive(_ message: RemoteServerMessage) {
             onFederationEvent?(.message(serverId: "B", message))
         }

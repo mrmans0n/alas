@@ -176,6 +176,10 @@ final class RemoteSessionGateway {
             if let session = provider.session(for: id) {
                 await sendSnapshot(id: id, session: session)
             }
+        case .openSessionTab(let id):
+            reportTabAction(await provider.openSessionTab(for: id), sessionId: id)
+        case .closeSessionTab(let id):
+            reportTabAction(await provider.closeSessionTab(for: id), sessionId: id)
         case .sendPrompt(let id, let text, let attachments, let intent):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
@@ -408,6 +412,18 @@ final class RemoteSessionGateway {
                     sessionId: id, path: path, reason: reason,
                     byteSize: byteSize, message: message))
             }
+        }
+    }
+
+    /// Success refreshes the list now, as session creation does, so clients
+    /// see the new `isActive` without waiting for the poll.
+    private func reportTabAction(_ result: RemoteSessionTabActionResult, sessionId: String) {
+        switch result {
+        case .success:
+            send(.sessionTabActionSucceeded(sessionId: sessionId))
+            refreshSessionList()
+        case .failure(let message):
+            send(.sessionTabActionFailed(sessionId: sessionId, message: message))
         }
     }
 

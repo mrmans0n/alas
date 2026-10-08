@@ -478,6 +478,123 @@ struct RemoteAppStateAccessTests {
         #expect(tab.title == "Persisted Title")
     }
 
+    @Test func remoteSessionTabActionsOpenAndCloseAStoredSessionOnTheHost() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "history-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "History", in: manager)
+
+        // A close arriving while an open is suspended in hydration waits for
+        // it instead of finding no tab and letting the open add one after.
+        let overlappingOpen = Task { await state.openSessionTab(for: id) }
+        let overlappingClose = Task { await state.closeSessionTab(for: id) }
+        #expect(await overlappingOpen.value == .success)
+        #expect(await overlappingClose.value == .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+
+        let hostActiveTab = state.tabs.activeTabId(forWorktree: worktreeId)
+        #expect(hostActiveTab != nil)
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == hostActiveTab)
+        // No view retains the new tab here, so its hydrated transcript is not kept.
+        #expect(manager.liveSession(for: id) == nil)
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(acpTabs(in: state).filter { $0.sessionId == id }.count == 1)
+        #expect(await state.sessionSummaries().first { $0.id == id }?.isActive == true)
+
+        #expect(await state.closeSessionTab(for: id) == .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+        let closed = try #require(await state.sessionSummaries().first { $0.id == id })
+        #expect(!closed.isActive)
+        #expect(state.canReopenClosedTab)
+    }
+
+    @Test(arguments: [true, false])
+    func remoteOpenSessionTabRejectsASessionArchivedOrDeletedByAnotherProcess(archived: Bool) async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "archived-elsewhere-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "Stale", in: manager)
+        if archived {
+            try await manager.persistence.setArchived(id: id, archived: true)
+        } else {
+            try await manager.persistence.deleteSession(id: id)
+        }
+        #expect(manager.sessionRows.contains { $0.id == id && !$0.archived })
+
+        #expect(await state.openSessionTab(for: id) == .failure(
+            archived ? "This session is archived." : "This session is no longer available."))
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+    }
+
+    @Test func remoteOpenSessionTabUsesTheTitleRenamedByAnotherProcess() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "renamed-elsewhere-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "Old Title", in: manager)
+        #expect(await manager.persistedSessionRow(id: id)?.title == "Old Title")
+        var renamed = try #require(try await manager.persistence.loadSession(id: id))
+        renamed.title = "New Title"
+        try await manager.persistence.upsertSession(renamed)
+
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(acpTabs(in: state).first { $0.sessionId == id }?.title == "New Title")
+    }
+
+    @Test(arguments: [true, false])
+    func remoteSessionTabActionsFailForArchivedOrUnknownSessions(archived: Bool) async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "gone-\(UUID().uuidString)"
+        if archived {
+            try await seedStoredSession(id: id, title: "Archived", archived: true, in: manager)
+        }
+
+        #expect(await state.openSessionTab(for: id) != .success)
+        #expect(await state.closeSessionTab(for: id) != .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+    }
+
     @Test func remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate() async throws {
         var cleanupWorktreeId: String?
         defer {

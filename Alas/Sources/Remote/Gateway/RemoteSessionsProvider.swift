@@ -27,6 +27,13 @@ protocol RemoteSessionsProvider: AnyObject {
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
     func isWriter(for id: String) -> Bool
     func takeOver(for id: String) async
+    /// Opens a stored session as a tab in its worktree without selecting that
+    /// worktree. Succeeds without change when the tab is already open.
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult
+    /// Closes the session's tab with the same teardown and reopen history as
+    /// a local close, minus the confirmation the requesting Mac already ran.
+    /// The session stays in recent history.
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult
     /// `onResult` fires once with the final outcome (false = refused now or
     /// failed delivery later); the gateway emits `promptRejected` on false so
     /// the client can restore the text instead of losing it.
@@ -92,6 +99,13 @@ extension RemoteSessionsProvider {
     }
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
         .failure(reason: .unknown, message: "Commit inspection is unavailable.")
+    }
+
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        .failure("Opening session tabs is unavailable.")
+    }
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        .failure("Closing session tabs is unavailable.")
     }
 
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}

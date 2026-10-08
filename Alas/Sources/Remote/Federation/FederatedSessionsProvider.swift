@@ -165,6 +165,11 @@ final class FederatedSessionsProvider {
     /// A new downstream needs these independently of the upstream gateway's
     /// per-connection request de-duplication.
     private var pendingRequests: [String: PendingPeerRequests] = [:]
+    /// Namespaced session id → downstreams waiting on a tab action, oldest
+    /// first. The peer answers each action exactly once, in order, so each
+    /// reply goes to the head; the asker need not be subscribed. A detached
+    /// requester stays as nil so the next reply still lines up.
+    private var tabActionRequesters: [String: [UUID?]] = [:]
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
@@ -211,6 +216,9 @@ final class FederatedSessionsProvider {
         }
         removeComparisonRequests(for: id)
         removePeerRequests(for: id)
+        for (namespaced, queue) in tabActionRequesters where queue.contains(id) {
+            tabActionRequesters[namespaced] = queue.map { $0 == id ? nil : $0 }
+        }
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -255,6 +263,19 @@ final class FederatedSessionsProvider {
         case .unsubscribe:
             removeSubscriber(downstream.id, from: namespaced)
         default:
+            switch message {
+            case .openSessionTab, .closeSessionTab:
+                // An older peer would drop the request without a reply.
+                guard links.peerSupports(PeerSessionTabsCapability.v1, serverId: target.serverId) else {
+                    downstream.send(.sessionTabActionFailed(
+                        sessionId: namespaced,
+                        message: "\(activePeers[target.serverId]?.name ?? "This Mac") needs a newer Alas to open or close tabs."))
+                    return true
+                }
+                tabActionRequesters[namespaced, default: []].append(downstream.id)
+            default:
+                break
+            }
             let forwarded = message.replacingSessionId(target.sessionId)
             if let key = comparisonRequestKey(for: message, namespacedSessionId: namespaced) {
                 var queue = comparisonRequests[key, default: []]
@@ -334,6 +355,16 @@ final class FederatedSessionsProvider {
                     break
                 }
                 let routed = message.replacingSessionId(namespaced)
+                switch message {
+                case .sessionTabActionSucceeded, .sessionTabActionFailed:
+                    guard var queue = tabActionRequesters[namespaced], !queue.isEmpty else { return }
+                    let requester = queue.removeFirst()
+                    tabActionRequesters[namespaced] = queue.isEmpty ? nil : queue
+                    requester.flatMap { downstreams[$0]?.value }?.send(routed)
+                    return
+                default:
+                    break
+                }
                 if let key = comparisonResponseKey(for: message, namespacedSessionId: namespaced),
                    deliverComparisonReply(routed, for: key) {
                     return
@@ -361,6 +392,13 @@ final class FederatedSessionsProvider {
             }
             for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
                 pendingRequests[namespaced] = nil
+            }
+            for namespaced in Array(tabActionRequesters.keys) where namespaced.hasPrefix(prefix) {
+                let failure = RemoteServerMessage.sessionTabActionFailed(
+                    sessionId: namespaced, message: Self.peerUnavailableMessage)
+                for id in tabActionRequesters.removeValue(forKey: namespaced) ?? [] {
+                    id.flatMap { downstreams[$0]?.value }?.send(failure)
+                }
             }
             comparisonRequests = comparisonRequests.filter { !$0.key.sessionId.hasPrefix(prefix) }
             for key in Array(peerRequests.keys) where key.serverId == serverId {
