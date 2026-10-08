@@ -119,6 +119,12 @@ import Testing
         #expect(gate.gridChanged(surfaceFits: true) == nil)
     }
 
+    @Test func theLargestCaptureWithItsResetPrefixIsHeldNotResynced() {
+        var gate = PeerConsoleWriteGate()
+        let snapshot = PeerConsoleViewer.resetBeforeSnapshot + Data(count: ZmxIPC.maxPayloadLength)
+        #expect(gate.snapshot(snapshot) == .hold(armFallback: true))
+    }
+
     @Test func fallbackReleasesHeldBytesForASurfaceThatNeverFits() {
         var gate = PeerConsoleWriteGate()
         #expect(gate.snapshot(Data("late".utf8)) == .hold(armFallback: true))

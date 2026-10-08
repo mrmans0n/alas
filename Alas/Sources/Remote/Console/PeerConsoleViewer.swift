@@ -38,7 +38,9 @@ struct PeerConsoleStreamOrder {
 /// bytes wait until the grid fits. A snapshot supersedes anything held.
 struct PeerConsoleWriteGate {
     /// Held bytes beyond this are dropped and a fresh snapshot is needed.
-    static let maxHeldBytes = 8 * 1024 * 1024
+    /// Room for the largest capture zmx can send, its reset prefix, and the
+    /// output that follows it while the grid settles.
+    static let maxHeldBytes = ZmxIPC.maxPayloadLength + 1024 * 1024
 
     enum Result: Equatable {
         case write(Data)
@@ -191,7 +193,7 @@ final class PeerConsoleViewer {
     ) throws -> AlasGhostty.SurfaceView
 
     /// Clears the surface and its scrollback before a snapshot replaces it.
-    static let resetBeforeSnapshot = Data("\u{1B}c\u{1B}[3J".utf8)
+    nonisolated static let resetBeforeSnapshot = Data("\u{1B}c\u{1B}[3J".utf8)
 
     let serverId: String
     let consoleId: String
