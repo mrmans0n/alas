@@ -14329,8 +14329,9 @@ final class AppState {
             projectsManager.operationState(for: worktree)
         ) else { return }
         // Another open may have added the tab, or the worktree may have been
-        // removed, while this one was suspended.
+        // removed or its manager torn down (Close All), while this one was suspended.
         guard self.worktree(withId: worktree.id) != nil,
+              acpManagers[.worktree(worktree.id)] === mgr,
               openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id, activate: activate)
