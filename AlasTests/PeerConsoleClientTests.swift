@@ -291,6 +291,7 @@ import Testing
         #expect(relay.relay(Data("ls".utf8) + reply, attachmentId: "a", control: control(.you, 3)) == [
             .input(attachmentId: "a", generation: 3, sequence: 1, data: Data("ls".utf8)),
         ])
+        #expect(relay.flushBatch(attachmentId: "a", control: control(.you, 3)).isEmpty)
         #expect(relay.relay(reply, attachmentId: "a", control: control(.you, 3)).isEmpty)
         // A reply that starts in view mode and ends after control is
         // granted is still dropped whole.
@@ -314,45 +315,81 @@ import Testing
         #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 3)) == [
             .input(attachmentId: "a", generation: 3, sequence: 2, data: esc),
         ])
+    }
 
-        let paste = Data(repeating: 0x61, count: PeerConsoleInputRelay.maxChunk + 1)
-        let chunks = relay.relay(paste, attachmentId: "a", control: control(.you, 3))
-        #expect(chunks == [
-            .input(attachmentId: "a", generation: 3, sequence: 3, data: paste.prefix(PeerConsoleInputRelay.maxChunk)),
-            .input(attachmentId: "a", generation: 3, sequence: 4, data: paste.suffix(1)),
+    @Test func aPasteInSmallReadsGoesOutInChunksAndALoneKeyAtOnce() {
+        var relay = PeerConsoleInputRelay()
+        let lease = control(.you, 1)
+        let paste = Data((0..<96 * 1024).map { UInt8(ascii: "a") + UInt8($0 % 26) })
+        var sent: [PeerConsoleRequest] = []
+        // The surface writes a paste in pieces of about 68 bytes.
+        for offset in stride(from: 0, to: paste.count, by: 68) {
+            sent += relay.relay(paste[offset..<min(offset + 68, paste.count)], attachmentId: "a", control: lease)
+        }
+        sent += relay.flushBatch(attachmentId: "a", control: lease)
+        #expect(sent.count == 3)
+        #expect(sent.compactMap(\.inputData).allSatisfy { $0.count <= PeerConsoleInputRelay.maxChunk })
+        #expect(sent.compactMap(\.inputData).reduce(Data(), +) == paste)
+        // A window that gathered nothing closes, so the next key is not delayed.
+        #expect(relay.flushBatch(attachmentId: "a", control: lease).isEmpty)
+        #expect(relay.relay(Data("k".utf8), attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+    }
+
+    @Test func batchedKeysOnlyLeaveUnderTheLeaseTheyWereTypedUnder() {
+        var relay = PeerConsoleInputRelay()
+        #expect(relay.relay(Data("a".utf8), attachmentId: "a", control: control(.you, 1)).count == 1)
+        #expect(relay.relay(Data("b".utf8), attachmentId: "a", control: control(.you, 1)).isEmpty)
+        // A regrant drops keys batched under the previous grant.
+        #expect(relay.relay(Data("c".utf8), attachmentId: "a", control: control(.you, 2)).isEmpty)
+        #expect(relay.flushBatch(attachmentId: "a", control: control(.you, 2)) == [
+            .input(attachmentId: "a", generation: 2, sequence: 2, data: Data("c".utf8)),
         ])
+        // A revoke before the window elapses drops the batch and closes it.
+        #expect(relay.relay(Data("d".utf8), attachmentId: "a", control: control(.you, 2)).isEmpty)
+        #expect(relay.flushBatch(attachmentId: "a", control: control(.host, 3)).isEmpty)
+        #expect(!relay.isBatchWindowOpen)
+        // A released Escape joins the batch behind keys typed before it.
+        let lease = control(.you, 4)
+        #expect(relay.relay(Data("e".utf8), attachmentId: "a", control: lease).count == 1)
+        #expect(relay.relay(Data("f\u{1B}".utf8), attachmentId: "a", control: lease).isEmpty)
+        #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: lease).isEmpty)
+        #expect(relay.flushBatch(attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("f\u{1B}".utf8)])
     }
 
     @Test func forwardingFollowsAcceptedOutputEvenBeforeItReachesTheSurface() {
         var relay = PeerConsoleInputRelay()
         let lease = PeerConsoleControl(owner: .you, generation: 1, change: .current)
         let click = Data("\u{1B}[<0;10;5M".utf8)
+        // Each read waits out its batch window, so it is judged on its own.
+        func forwarded(_ data: Data) -> [PeerConsoleRequest] {
+            relay.relay(data, attachmentId: "a", control: lease) + relay.flushBatch(attachmentId: "a", control: lease)
+        }
         relay.observeHostOutput(Data("\u{1B}[?1000;1006h".utf8))
-        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        #expect(forwarded(click).count == 1)
         // The host turns SGR off; the bytes may still be held by the write
         // gate, but forwarding already stops.
         relay.observeHostOutput(Data("\u{1B}[?1006l".utf8))
-        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        #expect(forwarded(click).isEmpty)
         // Likewise when it stops wanting mouse events while keeping SGR.
         relay.observeHostOutput(Data("\u{1B}[?1006h".utf8))
-        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        #expect(forwarded(click).count == 1)
         relay.observeHostOutput(Data("\u{1B}[?1000l".utf8))
-        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        #expect(forwarded(click).isEmpty)
         // A gap in the output stops forwarding until the snapshot rebuilds
         // the modes the missing bytes may have changed.
         relay.observeHostOutput(Data("\u{1B}[?1000h".utf8))
         relay.forgetHostModes()
-        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        #expect(forwarded(click).isEmpty)
         relay.observeHostOutput(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8), isSnapshot: true)
-        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        #expect(forwarded(click).count == 1)
         // A legacy report the surface emits before the override lands is
         // dropped whole, sized by the format the surface was just told.
         _ = relay.prepareForSurface(Data("\u{1B}[?1005h".utf8))
         let utf8Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]) + Data("k".utf8)
-        #expect(relay.relay(utf8Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+        #expect(forwarded(utf8Report).compactMap(\.inputData) == [Data("k".utf8)])
         _ = relay.prepareForSurface(Data("\u{1B}[?1005l".utf8))
         let x10Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0]) + Data("k".utf8)
-        #expect(relay.relay(x10Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+        #expect(forwarded(x10Report).compactMap(\.inputData) == [Data("k".utf8)])
         // The surface still gets its SGR override when the bytes arrive.
         #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))
     }
