@@ -54,6 +54,18 @@ import Testing
         #expect(filter.flushEscape() == Data("\(Self.esc)".utf8))
         #expect(filter.flushEscape().isEmpty)
     }
+
+    @Test func oversizedReplyStringsAreDiscardedUntilTheirTerminator() {
+        var filter = PeerConsoleInputFilter()
+        // A huge OSC 52 clipboard reply, split across reads, with an ST
+        // whose ESC ends one read and whose backslash starts the next.
+        let body = Data(repeating: UInt8(ascii: "A"), count: 200 * 1024)
+        var kept = filter.filter(Data("k\(Self.esc)]52;c;".utf8) + body.prefix(100 * 1024))
+        kept += filter.filter(body.suffix(100 * 1024) + Data("\(Self.esc)".utf8))
+        #expect(filter.flushEscape().isEmpty)
+        kept += filter.filter(Data("\\x".utf8))
+        #expect(kept == Data("kx".utf8))
+    }
 }
 
 @Suite struct PeerConsoleStreamOrderTests {
@@ -104,15 +116,22 @@ import Testing
         // granted is still dropped whole.
         #expect(relay.relay(Data("\u{1B}[".utf8), attachmentId: "a", control: control(.host, 4)).isEmpty)
         #expect(relay.relay(Data("?62c".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
-        // A held ESC is not released once control is gone.
-        #expect(relay.relay(Data("\u{1B}".utf8), attachmentId: "a", control: control(.you, 3)).isEmpty)
-        #expect(relay.flushEscape(attachmentId: "a", control: control(.host, 4)).isEmpty)
+        // A held ESC is released only under the lease it was held under.
+        let esc = Data("\u{1B}".utf8)
+        #expect(relay.relay(esc, attachmentId: "a", control: control(.host, 4)).isEmpty)
+        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 5)).isEmpty)
+        #expect(relay.relay(esc, attachmentId: "a", control: control(.you, 5)).isEmpty)
+        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 7)).isEmpty)
+        #expect(relay.relay(esc, attachmentId: "a", control: control(.you, 3)).isEmpty)
+        #expect(relay.flushEscape(attachmentId: "a", control: control(.you, 3)) == [
+            .input(attachmentId: "a", generation: 3, sequence: 2, data: esc),
+        ])
 
         let paste = Data(repeating: 0x61, count: PeerConsoleInputRelay.maxChunk + 1)
         let chunks = relay.relay(paste, attachmentId: "a", control: control(.you, 3))
         #expect(chunks == [
-            .input(attachmentId: "a", generation: 3, sequence: 2, data: paste.prefix(PeerConsoleInputRelay.maxChunk)),
-            .input(attachmentId: "a", generation: 3, sequence: 3, data: paste.suffix(1)),
+            .input(attachmentId: "a", generation: 3, sequence: 3, data: paste.prefix(PeerConsoleInputRelay.maxChunk)),
+            .input(attachmentId: "a", generation: 3, sequence: 4, data: paste.suffix(1)),
         ])
     }
 }

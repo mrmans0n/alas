@@ -12,16 +12,31 @@ import Foundation
 /// classifies, and keeps state so a sequence split across reads is handled.
 struct PeerConsoleInputFilter {
     private static let esc: UInt8 = 0x1B
-    /// An unterminated string sequence longer than this is discarded.
+    /// An incomplete sequence is buffered up to this size. A longer string
+    /// sequence (OSC, DCS, ...) is discarded as it streams instead.
     private static let maxPending = 64 * 1024
+    /// Bound on discarding one unterminated string sequence, so a reply that
+    /// never terminates cannot swallow input forever.
+    static let maxDiscard = 16 * 1024 * 1024
 
     private var pending: [UInt8] = []
+    /// Bytes of an oversized string sequence already discarded; nil while
+    /// not inside one.
+    private var discarding: Int?
 
     mutating func filter(_ chunk: Data) -> Data {
         let bytes = pending + chunk
         pending = []
         var kept = Data()
         var i = 0
+        if let discarded = discarding {
+            guard let end = Self.stringEnd(in: bytes, from: 0) else {
+                continueDiscarding(bytes, alreadyDiscarded: discarded)
+                return kept
+            }
+            discarding = nil
+            i = end
+        }
         while i < bytes.count {
             guard bytes[i] == Self.esc else {
                 kept.append(bytes[i])
@@ -35,6 +50,8 @@ struct PeerConsoleInputFilter {
                 // lone ESC as the Escape key once nothing followed it.
                 if bytes.count - i <= Self.maxPending {
                     pending = Array(bytes[i...])
+                } else if Self.isStringIntroducer(bytes[i + 1]) {
+                    continueDiscarding(bytes[i...], alreadyDiscarded: 0)
                 }
                 return kept
             case .keep(let length):
@@ -48,7 +65,35 @@ struct PeerConsoleInputFilter {
     }
 
     /// Whether a lone ESC is waiting to be classified.
-    var hasPendingEscape: Bool { pending == [Self.esc] }
+    var hasPendingEscape: Bool { discarding == nil && pending == [Self.esc] }
+
+    /// Stays inside a string sequence whose terminator has not arrived. A
+    /// trailing ESC is kept so an ST split across reads is still recognized.
+    private mutating func continueDiscarding(_ bytes: some BidirectionalCollection<UInt8>, alreadyDiscarded: Int) {
+        let total = alreadyDiscarded + bytes.count
+        guard total <= Self.maxDiscard else {
+            discarding = nil
+            return
+        }
+        discarding = total
+        if bytes.last == Self.esc { pending = [Self.esc] }
+    }
+
+    private static func isStringIntroducer(_ byte: UInt8) -> Bool {
+        [UInt8(ascii: "]"), UInt8(ascii: "P"), UInt8(ascii: "_"), UInt8(ascii: "^"), UInt8(ascii: "X")].contains(byte)
+    }
+
+    /// Index just past the BEL or ST that ends a string sequence, scanning
+    /// from `start`; nil when the terminator has not arrived.
+    private static func stringEnd(in bytes: [UInt8], from start: Int) -> Int? {
+        var j = start
+        while j < bytes.count {
+            if bytes[j] == 0x07 { return j + 1 }
+            if bytes[j] == esc, j + 1 < bytes.count, bytes[j + 1] == UInt8(ascii: "\\") { return j + 2 }
+            j += 1
+        }
+        return nil
+    }
 
     /// Called when no byte followed a lone ESC in time: it was the Escape key.
     mutating func flushEscape() -> Data {
@@ -68,17 +113,9 @@ struct PeerConsoleInputFilter {
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
             return controlSequence(in: bytes, at: start)
-        case UInt8(ascii: "]"), UInt8(ascii: "P"), UInt8(ascii: "_"), UInt8(ascii: "^"), UInt8(ascii: "X"):
+        case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
-            var j = start + 2
-            while j < bytes.count {
-                if bytes[j] == 0x07 { return .drop(j - start + 1) }
-                if bytes[j] == esc, j + 1 < bytes.count, bytes[j + 1] == UInt8(ascii: "\\") {
-                    return .drop(j - start + 2)
-                }
-                j += 1
-            }
-            return .incomplete
+            return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
         case UInt8(ascii: "O"):
             // SS3: application-mode cursor and F1-F4 keys.
             return start + 2 < bytes.count ? .keep(3) : .incomplete

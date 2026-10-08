@@ -92,6 +92,8 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
+    /// The lease in effect when the current lone ESC was held.
+    private var escapeLease: PeerConsoleControl?
 
     /// A lone ESC is held until `flushEscape` decides it was the Escape key.
     var hasPendingEscape: Bool { filter.hasPendingEscape }
@@ -101,13 +103,19 @@ struct PeerConsoleInputRelay {
     /// finishes after; only the holder's output is sent.
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         let keys = filter.filter(data)
+        escapeLease = filter.hasPendingEscape ? control : nil
         guard control.owner == .you else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
+    /// Releases a held ESC as the Escape key, but only under the lease it
+    /// was held under: an ESC from view mode, or one that crossed a
+    /// revoke and regrant, is discarded.
     mutating func flushEscape(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         let keys = filter.flushEscape()
-        guard control.owner == .you else { return [] }
+        let lease = escapeLease
+        escapeLease = nil
+        guard control.owner == .you, lease?.owner == .you, lease?.generation == control.generation else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
@@ -172,6 +180,8 @@ final class PeerConsoleViewer {
     @ObservationIgnored private let send: @MainActor (PeerConsoleRequest) -> Void
     @ObservationIgnored private var order = PeerConsoleStreamOrder()
     @ObservationIgnored private var relay = PeerConsoleInputRelay()
+    /// Only the newest Escape timer may release a held ESC.
+    @ObservationIgnored private var escapeTimerToken = 0
     @ObservationIgnored private var writeGate = PeerConsoleWriteGate()
 
     var isControlling: Bool { phase == .live && control.owner == .you }
@@ -302,9 +312,11 @@ final class PeerConsoleViewer {
         let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
         relay.relay(data, attachmentId: attachmentId, control: owner).forEach(send)
         guard relay.hasPendingEscape else { return }
+        escapeTimerToken += 1
+        let token = escapeTimerToken
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.escapeTimeout)
-            guard let self else { return }
+            guard let self, token == escapeTimerToken else { return }
             let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
             relay.flushEscape(attachmentId: attachmentId, control: owner).forEach(send)
         }
