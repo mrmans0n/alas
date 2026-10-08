@@ -310,6 +310,13 @@
     return selected.length === 0 && note === "" ? null : { selected, note };
   }
 
+  // `submitted` (this phone sent an answer that may still be rolled back) survives a snapshot rebuild only
+  // when the rebuilt row is answered: a later rollback must still report the failed send. An unanswered
+  // row means the snapshot already shows the outcome, so the card starts idle and re-answerable.
+  function restoreSubmitted(visual, stashedSubmitted) {
+    return stashedSubmitted === true && !!visual && !!visual.answer;
+  }
+
   // A srcdoc iframe fires `load` once for its own document, so any further load means the page navigated the
   // frame itself (scripted navigation cannot be stopped by cancelling click defaults). Calls onNavigated once.
   function guardFrameNavigation(frame, onNavigated) {
@@ -332,7 +339,7 @@
   globalThis.RemoteVisualAid = {
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
-    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft,
+    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft, restoreSubmitted,
     shouldSwallowLinkClick, applyRejection, newRequestId, navigationFromMessage,
   };
 })();

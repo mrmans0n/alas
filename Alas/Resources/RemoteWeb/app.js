@@ -859,7 +859,7 @@ function resetChangesAndFilesDOM() {
 function openSession(id) {
   clearSessionSheetsForOpen();
   const sameSession = currentSession === id;
-  if (!sameSession) visualDrafts.clear();   // drafts belong to one session
+  if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }   // drafts and answered flags belong to one session
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); markStopping(false);
@@ -1293,7 +1293,7 @@ function clearSessionSheetsForOpen() {
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
-  resetVisualCards(false); visualDrafts.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers and drafts
+  resetVisualCards(false); visualDrafts.clear(); visualSubmitted.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers, drafts and answered flags
   messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hidePlan(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
@@ -1960,6 +1960,7 @@ function applySnapshot(msg) {
   box.innerHTML = "";
   messages = new Map(); messageNodes = new Map();
   msg.messages.forEach(m => insertMessage(m, open));
+  visualSubmitted.clear();   // every card the snapshot recreated consumed its entry; the rest left the transcript
   requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   syncStreamingState(msg.streamingState);
 }
@@ -3103,14 +3104,18 @@ function takeOver() {
 }
 
 const visualDrafts = new Map();  // sessionId:visualId -> draft kept across a transcript resync of the same session
+const visualSubmitted = new Set();   // sessionId:visualId of cards THIS phone answered; same keying and lifetime as the drafts
 
-// A snapshot settles an in-flight submit (pending, submitted, error reset with the card) but keeps what the
-// user picked or typed: `keepDrafts` stashes it before the cards are dropped.
+// A snapshot settles an in-flight submit (pending, error reset with the card) but keeps what the user picked or
+// typed, and which cards this phone answered: `keepDrafts` stashes both before the cards are dropped. The
+// answered flag is stashed even without a draft, so a later rollback still reports the failed send.
 function resetVisualCards(keepDrafts) {
   if (keepDrafts && currentSession) {
     visualCards.forEach((card, id) => {
+      const key = currentSession + ":" + id;
       const draft = RemoteVisualAid.stashDraft(card);
-      if (draft) visualDrafts.set(currentSession + ":" + id, draft);
+      if (draft) visualDrafts.set(key, draft);
+      if (card.submitted === true) visualSubmitted.add(key);
     });
   }
   if (visualObserver) visualObserver.disconnect();
@@ -3141,6 +3146,8 @@ function renderVisualAid(m) {
   const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
                  selected: [], note: "", pending: false, submitted: false, requestId: null, paused: false, blocked: false, error: "", signature: "" };
   const draftKey = currentSession + ":" + visual.id;
+  card.submitted = RemoteVisualAid.restoreSubmitted(visual, visualSubmitted.has(draftKey));
+  visualSubmitted.delete(draftKey);   // a live card carries it; an unanswered row already shows the outcome
   const restored = RemoteVisualAid.restoreDraft(visual, visualDrafts.get(draftKey));
   visualDrafts.delete(draftKey);   // an answered row or a changed question drops it; a restored one lives on the card
   if (restored) { card.selected = restored.selected; card.note = restored.note; }

@@ -255,6 +255,37 @@ assert.equal(V.trimNote("a\u200Bb"), "a\u200Bb", "only the edges are trimmed");
   assert.deepEqual(V.restoreDraft(single, { ...singleDraft, selected: ["a", "b"] }), { selected: ["a"], note: "" }, "single choice keeps one");
 }
 
+// Submit provenance across a snapshot rebuild.
+{
+  assert.equal(V.restoreSubmitted(answeredRow, true), true, "answered row keeps provenance");
+  assert.equal(V.restoreSubmitted({ answer: { kind: "dismissed" } }, true), true, "dismissed row keeps provenance");
+  assert.equal(V.restoreSubmitted(unansweredRow, true), false, "unanswered row already shows the outcome");
+  assert.equal(V.restoreSubmitted(answeredRow, false), false, "never submitted stays false");
+  assert.equal(V.restoreSubmitted(answeredRow, undefined), false, "no stash entry");
+  assert.equal(V.restoreSubmitted(unansweredRow, false), false);
+
+  // This phone answers, a snapshot rebuilds the card, then the prompt fails and the row rolls back.
+  let card = { pending: true, submitted: true, error: "" };
+  card = { ...card, ...V.nextCardState(card, answeredRow) };                       // accepted answer delta
+  assert.equal(card.submitted, true);
+  const stashed = card.submitted === true;                                           // resetVisualCards(true)
+  card = { pending: false, error: "", submitted: V.restoreSubmitted(answeredRow, stashed) };   // rebuilt from the answered snapshot row
+  assert.equal(card.submitted, true, "provenance survives the rebuild");
+  const failed = V.nextCardState(card, unansweredRow);                               // rollback delta
+  assert.deepEqual(failed, { pending: false, submitted: false, error: V.FAILED_TEXT }, "this phone's send is reported failed");
+
+  // An observer never submitted: another client's answer, a snapshot, then its rollback shows no error.
+  let observer = { pending: false, submitted: false, error: "" };
+  observer = { ...observer, ...V.nextCardState(observer, answeredRow) };
+  observer = { pending: false, error: "", submitted: V.restoreSubmitted(answeredRow, observer.submitted === true) };
+  assert.equal(observer.submitted, false);
+  assert.deepEqual(V.nextCardState(observer, unansweredRow), { pending: false, submitted: false, error: "" }, "the observer reports nothing");
+
+  // A snapshot that already shows the rollback drops the provenance: the card is idle and re-answerable.
+  const rolledBack = { pending: false, error: "", submitted: V.restoreSubmitted(unansweredRow, true) };
+  assert.deepEqual(V.nextCardState(rolledBack, unansweredRow), { pending: false, submitted: false, error: "" });
+}
+
 // buildDocument: a stub parser records what the module inserts. The real DOMParser behavior is
 // covered in RemoteWebAssetTests with WebKit.
 const inserted = [];

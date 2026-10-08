@@ -1779,6 +1779,7 @@ struct RemoteWebAssetTests {
         let body = app[start..<end]
         let reset = try #require(body.range(of: "resetVisualCards(false)"), "Back drops the cards without stashing drafts")
         #expect(body.contains("visualDrafts.clear()"), "leaving counts as a different session")
+        #expect(body.contains("visualSubmitted.clear()"), "leaving also forgets which cards this phone answered")
         #expect(body.contains(#"$("messages").innerHTML = """#), "the mounted iframes leave the DOM")
         let hide = try #require(body.range(of: #"$("transcript").classList.add("hidden")"#))
         #expect(reset.lowerBound < hide.lowerBound)
@@ -1798,11 +1799,28 @@ struct RemoteWebAssetTests {
         let body = app[snapshot...].prefix(1500)
         #expect(body.contains("resetVisualCards(true)"), "a snapshot keeps drafts")
         let reset = try #require(app.range(of: "function resetVisualCards(")).lowerBound
-        let resetBody = app[reset...].prefix(700)
+        let resetBody = app[reset...].prefix(900)
         let stash = try #require(resetBody.range(of: "RemoteVisualAid.stashDraft(card)")).lowerBound
         let clear = try #require(resetBody.range(of: "visualCards.clear()")).lowerBound
         #expect(stash < clear, "stash before the cards are cleared")
-        #expect(app.contains("if (!sameSession) visualDrafts.clear();"), "a different session starts with no drafts")
+        #expect(app.contains("if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }"), "a different session starts with no drafts or answered flags")
+    }
+
+    @Test func visualAidSnapshotKeepsSubmitProvenanceForRebuiltCards() throws {
+        let app = try asset("app.js")
+        let reset = try #require(app.range(of: "function resetVisualCards(")).lowerBound
+        let resetBody = app[reset...].prefix(900)
+        let stash = try #require(resetBody.range(of: "if (card.submitted === true) visualSubmitted.add(key)")).lowerBound
+        let clear = try #require(resetBody.range(of: "visualCards.clear()")).lowerBound
+        #expect(stash < clear, "an answered card is recorded before the cards are cleared, with or without a draft")
+        let render = try #require(app.range(of: "function renderVisualAid(")).lowerBound
+        let renderBody = app[render...].prefix(1800)
+        #expect(renderBody.contains("card.submitted = RemoteVisualAid.restoreSubmitted(visual, visualSubmitted.has(draftKey))"))
+        let snapshot = try #require(app.range(of: "function applySnapshot(")).lowerBound
+        let snapshotBody = app[snapshot...].prefix(1500)
+        let rebuilt = try #require(snapshotBody.range(of: "msg.messages.forEach(m => insertMessage(m, open))")).lowerBound
+        let prune = try #require(snapshotBody.range(of: "visualSubmitted.clear()")).lowerBound
+        #expect(rebuilt < prune, "entries whose card the snapshot did not recreate are dropped after the rebuild")
     }
 
     @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
