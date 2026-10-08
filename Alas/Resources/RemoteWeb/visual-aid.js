@@ -57,6 +57,10 @@
   function bridgeScript(id) {
     return `(() => {
       const id = ${JSON.stringify(id)};
+      // The first listener the page gets. pagehide fires when a navigation commits, before the new document
+      // runs anything, and does not depend on the load event (a page can hold a subresource open forever).
+      // Not beforeunload: that also fires for navigations that end as a 204 or a download and stay on this page.
+      addEventListener("pagehide", () => parent.postMessage({ alasVisual: true, id, navigating: true }, "*"), true);
       const post = () => parent.postMessage({ alasVisual: true, id, height: Math.ceil(document.documentElement.getBoundingClientRect().height) }, "*");
       const observer = new ResizeObserver(post);
       observer.observe(document.documentElement);
@@ -157,6 +161,12 @@
   function heightFromMessage(data, expectedId, source, expectedSource) {
     if (!data || data.alasVisual !== true || data.id !== expectedId || source !== expectedSource) return null;
     return clampHeight(data.height);
+  }
+
+  // The source document is unloading because it navigated itself. Same trust rule as heightFromMessage.
+  function navigationFromMessage(data, expectedId, source, expectedSource) {
+    return !!data && data.alasVisual === true && data.id === expectedId && data.navigating === true &&
+      !!expectedSource && source === expectedSource;
   }
 
   function toggleSelection(question, selected, optionId) {
@@ -314,6 +324,6 @@
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
     buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft,
-    shouldSwallowLinkClick, applyRejection,
+    shouldSwallowLinkClick, applyRejection, navigationFromMessage,
   };
 })();

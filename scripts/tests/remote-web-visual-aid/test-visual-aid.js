@@ -56,6 +56,17 @@ assert.equal(V.heightFromMessage({ alasVisual: true, id: "other", height: 300 },
 assert.equal(V.heightFromMessage({ id: ID, height: 300 }, ID, win, win), null, "missing marker");
 assert.equal(V.heightFromMessage(null, ID, win, win), null);
 
+// Navigation message: the source document unloaded because it navigated itself.
+const nav = (extra = {}) => ({ alasVisual: true, id: ID, navigating: true, ...extra });
+assert.equal(V.navigationFromMessage(nav(), ID, win, win), true);
+assert.equal(V.navigationFromMessage(nav(), ID, other, win), false, "wrong source");
+assert.equal(V.navigationFromMessage(nav({ id: "other" }), ID, win, win), false, "wrong id");
+assert.equal(V.navigationFromMessage(nav({ alasVisual: undefined }), ID, win, win), false, "missing marker");
+assert.equal(V.navigationFromMessage(nav({ navigating: undefined }), ID, win, win), false, "not a navigation");
+assert.equal(V.navigationFromMessage({ alasVisual: true, id: ID, height: 300 }, ID, win, win), false, "a height message");
+assert.equal(V.navigationFromMessage(nav(), ID, undefined, undefined), false, "no frame window");
+assert.equal(V.navigationFromMessage(null, ID, win, win), false);
+
 // Selection and submit rules.
 assert.deepEqual(V.toggleSelection(question(false), ["a"], "b"), ["b"]);
 assert.deepEqual(V.toggleSelection(question(false), ["a"], "a"), ["a"]);
@@ -269,6 +280,14 @@ assert.equal(inserted[0].httpEquiv, "Content-Security-Policy");
 assert.equal(inserted[0].content, V.CSP);
 assert.match(inserted[1].textContent, /RTC/, "the lockdown script comes second");
 assert.ok(inserted[2].textContent.includes(JSON.stringify(ID)), "the bridge script carries the id");
+{
+  const bridge = inserted[2].textContent;
+  assert.ok(bridge.includes('addEventListener("pagehide"'), "the bridge reports its document unloading");
+  assert.ok(bridge.includes("navigating: true") && bridge.includes(", true);"), "capture phase");
+  assert.ok(!bridge.includes('addEventListener("beforeunload"'), "beforeunload also fires for 204 and download navigations");
+  assert.ok(bridge.indexOf("pagehide") < bridge.indexOf("ResizeObserver"), "registered before anything else in the bridge");
+  assert.ok(inserted.indexOf(inserted[2]) < inserted.length, "the bridge is prepended ahead of agent content");
+}
 assert.throws(() => V.buildDocument("<p>x</p>", "</script><script>", () => stubDoc(true)));
 
 console.log("visual-aid tests passed");

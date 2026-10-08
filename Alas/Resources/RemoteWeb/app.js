@@ -1293,6 +1293,7 @@ function clearSessionSheetsForOpen() {
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
+  resetVisualCards(false); visualDrafts.clear(); $("messages").innerHTML = "";   // leaving a session ends its frames, timers and drafts
   messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hidePlan(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
@@ -3203,16 +3204,19 @@ function mountVisualFrame(card) {
     frame.classList.add("is-inert");
   }
   frame.style.height = card.height + "px";
-  RemoteVisualAid.guardFrameNavigation(frame, () => {   // registered before attaching, so the first load is counted
-    if (card.frame !== frame) return;
-    frame.remove();
-    visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, card.id);
-    card.blocked = true;   // never remounted automatically: a looping script would hammer
-    showVisualPlaceholder(card, RemoteVisualAid.BLOCKED_TEXT, false);
-  });
+  RemoteVisualAid.guardFrameNavigation(frame, () => blockVisualFrame(card, frame));   // registered before attaching, so the first load is counted
   frame.srcdoc = srcdoc;
   card.frame = frame;
   card.host.replaceChildren(frame);
+}
+
+// The frame navigated itself: drop it at once and never mount it again automatically (a looping script would hammer).
+function blockVisualFrame(card, frame) {
+  if (card.blocked || card.frame !== frame) return;
+  frame.remove();
+  visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, card.id);
+  card.blocked = true;
+  showVisualPlaceholder(card, RemoteVisualAid.BLOCKED_TEXT, false);
 }
 
 function observeVisualCard(card) {
@@ -3251,6 +3255,10 @@ window.addEventListener("message", (event) => {
   if (!data || typeof data.id !== "string") return;
   const card = visualCards.get(data.id);
   if (!card || !card.frame) return;
+  if (RemoteVisualAid.navigationFromMessage(data, card.id, event.source, card.frame.contentWindow)) {
+    blockVisualFrame(card, card.frame);
+    return;
+  }
   const height = RemoteVisualAid.heightFromMessage(data, card.id, event.source, card.frame.contentWindow);
   if (height === null) return;
   card.height = height;

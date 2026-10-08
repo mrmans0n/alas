@@ -1710,10 +1710,11 @@ struct RemoteWebAssetTests {
         #expect(hash == "", "a visual link click must not navigate to an anchor")
     }
 
-    /// Mounts a sandboxed srcdoc frame built by the real module and guarded by the real `guardFrameNavigation`,
-    /// reporting page events through a script message handler so the Swift side can poll without sleeping.
+    /// Mounts a sandboxed srcdoc frame built by the real module, reporting page events through a script message
+    /// handler so the Swift side can poll without sleeping. With `guarded`, the real `guardFrameNavigation` (the
+    /// load counter) is attached too; without it only the bridge's own `navigating` message can report a move.
     @MainActor
-    private func mountGuardedVisual(html: String, until stop: (FrameProbe) -> Bool) async throws -> FrameProbe {
+    private func mountVisual(html: String, guarded: Bool, until stop: (FrameProbe) -> Bool) async throws -> FrameProbe {
         let module = try asset("visual-aid.js")
         let probe = FrameProbe()
         let configuration = WKWebViewConfiguration()
@@ -1725,15 +1726,18 @@ struct RemoteWebAssetTests {
         _ = try await webView.callAsyncJavaScript(
             #"""
             const post = (m) => webkit.messageHandlers.probe.postMessage(m);
-            addEventListener("message", (e) => { if (e.data && e.data.alasVisual) post("heard"); });
+            addEventListener("message", (e) => {
+              if (!e.data || !e.data.alasVisual) return;
+              post(e.data.navigating === true ? "navigating" : "heard");
+            });
             const parse = (s) => new DOMParser().parseFromString(s, "text/html");
             const frame = document.createElement("iframe");
             frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
             frame.addEventListener("load", () => post("load"));
-            RemoteVisualAid.guardFrameNavigation(frame, () => post("navigated"));
+            if (guarded) RemoteVisualAid.guardFrameNavigation(frame, () => post("navigated"));
             frame.srcdoc = RemoteVisualAid.buildDocument(html, "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
             document.body.appendChild(frame);
-            """#, arguments: ["html": html], contentWorld: .page)
+            """#, arguments: ["html": html, "guarded": guarded], contentWorld: .page)
         #expect(await awaitCondition { stop(probe) }, "events: \(probe.events)")
         configuration.userContentController.removeScriptMessageHandler(forName: "probe")
         return probe
@@ -1741,17 +1745,51 @@ struct RemoteWebAssetTests {
 
     @MainActor
     @Test func visualAidGuardCatchesAFrameThatNavigatesItself() async throws {
-        let probe = try await mountGuardedVisual(
+        let probe = try await mountVisual(
             html: "<p>x</p><script>setTimeout(function () { location.href = 'about:blank#moved'; }, 0);</script>",
+            guarded: true,
             until: { $0.events.contains("navigated") })
         #expect(probe.events.filter { $0 == "navigated" }.count == 1)
     }
 
     @MainActor
     @Test func visualAidGuardLeavesAFrameThatStaysPutAlone() async throws {
-        let probe = try await mountGuardedVisual(html: "<p>stays</p>", until: { $0.events.contains("heard") })
+        let probe = try await mountVisual(html: "<p>stays</p>", guarded: true, until: { $0.events.contains("heard") })
         #expect(probe.events.filter { $0 == "load" }.count == 1)
         #expect(!probe.events.contains("navigated"))
+        #expect(!probe.events.contains("navigating"), "a document that stays put never reports unloading")
+    }
+
+    /// The load-count guard is not attached, so only the bridge's pagehide message can report the move: the
+    /// detection does not depend on a second `load` ever firing.
+    @MainActor
+    @Test func visualAidBridgeReportsASelfNavigationWithoutAnyLoadGuard() async throws {
+        let probe = try await mountVisual(
+            html: "<p>x</p><script>setTimeout(function () { location.href = 'about:blank#moved'; }, 0);</script>",
+            guarded: false,
+            until: { $0.events.contains("navigating") })
+        #expect(probe.events.filter { $0 == "navigating" }.count == 1)
+        #expect(!probe.events.contains("navigated"))
+    }
+
+    @Test func visualAidLeavingASessionTearsDownItsFrames() throws {
+        let app = try asset("app.js")
+        let start = try #require(app.range(of: "function showSessions(")).lowerBound
+        let end = try #require(app.range(of: "\n}", range: start..<app.endIndex)).upperBound
+        let body = app[start..<end]
+        let reset = try #require(body.range(of: "resetVisualCards(false)"), "Back drops the cards without stashing drafts")
+        #expect(body.contains("visualDrafts.clear()"), "leaving counts as a different session")
+        #expect(body.contains(#"$("messages").innerHTML = """#), "the mounted iframes leave the DOM")
+        let hide = try #require(body.range(of: #"$("transcript").classList.add("hidden")"#))
+        #expect(reset.lowerBound < hide.lowerBound)
+        // Every way out of a session goes through showSessions: it is the only place the open session is cleared,
+        // and the close and server-switch paths call it.
+        #expect(app.components(separatedBy: "currentSession = null;").count == 2, "only showSessions leaves a session")
+        #expect(app.contains("case \"sessionClosed\": if (msg.sessionId === currentSession) showSessions();"))
+        let switching = try #require(app.range(of: "function resetServerScopedState(")).lowerBound
+        #expect(app[switching...].prefix(200).contains("if (currentSession) showSessions();"))
+        // A socket reconnect re-opens the same session and keeps today's stash-and-restore.
+        #expect(app.contains("resetVisualCards(sameSession)"))
     }
 
     @Test func visualAidSnapshotStashesDraftsBeforeDroppingCards() throws {
