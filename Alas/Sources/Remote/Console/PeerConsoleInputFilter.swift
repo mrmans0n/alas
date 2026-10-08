@@ -21,9 +21,9 @@ struct PeerConsoleInputFilter {
     static let maxDiscard = 16 * 1024 * 1024
 
     private var pending: [UInt8] = []
-    /// Whether the host program enabled UTF-8 mouse coordinates (mode 1005);
-    /// see `PeerConsoleMouseModeTracker`. Decides how `CSI M` reports end.
-    var utf8MouseCoordinates = false
+    /// Whether SGR mouse reports go through: true while the host program
+    /// asked for SGR mouse input (mode 1006); see `PeerConsoleMouseModeTracker`.
+    var forwardsMouse = false
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
@@ -47,7 +47,7 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i, utf8Mouse: utf8MouseCoordinates) {
+            switch Self.sequence(in: bytes, at: i, forwardsMouse: forwardsMouse) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -127,11 +127,11 @@ struct PeerConsoleInputFilter {
         case incomplete
     }
 
-    private static func sequence(in bytes: [UInt8], at start: Int, utf8Mouse: Bool) -> Sequence {
+    private static func sequence(in bytes: [UInt8], at start: Int, forwardsMouse: Bool) -> Sequence {
         guard start + 1 < bytes.count else { return .incomplete }
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
-            return controlSequence(in: bytes, at: start, utf8Mouse: utf8Mouse)
+            return controlSequence(in: bytes, at: start, forwardsMouse: forwardsMouse)
         case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
             return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
@@ -144,7 +144,7 @@ struct PeerConsoleInputFilter {
         }
     }
 
-    private static func controlSequence(in bytes: [UInt8], at start: Int, utf8Mouse: Bool) -> Sequence {
+    private static func controlSequence(in bytes: [UInt8], at start: Int, forwardsMouse: Bool) -> Sequence {
         var j = start + 2
         let paramsStart = j
         while j < bytes.count, (0x30...0x3F).contains(bytes[j]) { j += 1 }
@@ -157,29 +157,24 @@ struct PeerConsoleInputFilter {
         let final = bytes[j]
         let length = j - start + 1
 
-        // SGR mouse reports (`CSI < b;x;y M/m`) are the only user input with
-        // a private marker. Ghostty sends them only once a host program has
-        // enabled mouse tracking.
+        // SGR mouse reports (`CSI < b;x;y M/m`), the only format the viewer's
+        // surface emits, and the only user input with a private marker. They
+        // are self-delimiting, so no mode is needed to find where they end.
         if params.first == UInt8(ascii: "<"), final == UInt8(ascii: "M") || final == UInt8(ascii: "m") {
-            return .keep(length)
+            return forwardsMouse ? .keep(length) : .drop(length)
         }
         // Every other private marker (`<`, `=`, `>`, `?`) is a reply: DA,
         // DECRPM, kitty keyboard status.
         if let first = params.first, (0x3C...0x3F).contains(first) { return .drop(length) }
         switch final {
         case UInt8(ascii: "M"):
-            // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
-            // its coordinates as parameters.
-            guard params.isEmpty else { return .keep(length) }
-            // X10 or UTF-8/1005: three coordinates follow. Raw X10 uses one
-            // byte each; 1005 encodes values above 95 as two-byte UTF-8, so
-            // only the active mode, not byte shapes, can tell them apart.
-            var end = start + length
-            for _ in 0..<3 {
-                guard end < bytes.count else { return .incomplete }
-                end += utf8Mouse && bytes[end] >= 0xC0 ? 2 : 1
-            }
-            return end <= bytes.count ? .keep(end - start) : .incomplete
+            // Legacy mouse reports, never forwarded: the viewer keeps its
+            // surface in SGR format, so these only appear in the instant a
+            // host format change is being overridden. No key encoding ends
+            // in `M`. rxvt/1015 carries coordinates as parameters.
+            guard params.isEmpty else { return .drop(length) }
+            // X10: three coordinate bytes follow.
+            return start + length + 3 <= bytes.count ? .drop(length + 3) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
             // Focus in/out.
             return params.isEmpty ? .drop(length) : .keep(length)
@@ -196,61 +191,89 @@ struct PeerConsoleInputFilter {
     }
 }
 
-/// Follows the mouse coordinate encoding a host program selects with
-/// `CSI ? 1005 h` / `CSI ? 1005 l`, by watching the output written to the
-/// viewer's surface. Handles multi-parameter forms and sequences split
-/// across writes; RIS (`ESC c`), sent before every snapshot, resets it.
+/// The mouse format a host program selected (`CSI ? 1005/1006/1015/1016
+/// h/l`), followed in the output written to the viewer's surface. Handles
+/// combined mode changes of any length and sequences split across writes;
+/// RIS (`ESC c`), sent before every snapshot, resets it.
 struct PeerConsoleMouseModeTracker {
+    enum Format: Equatable {
+        case x10, utf8, sgr, urxvt, sgrPixels
+    }
+
     private enum State {
         case ground, escape, controlSequence, privateParameters
     }
 
-    private(set) var utf8Coordinates = false
+    private(set) var hostFormat = Format.x10
     private var state = State.ground
-    /// Digits of the parameter being read; longer than any mode number
-    /// means it cannot be 1005.
+    /// Digits of the parameter being read, capped just past four digits so
+    /// longer numbers never match a mode.
     private var parameter: [UInt8] = []
-    private var names1005 = false
-    private static let mode1005 = Array("1005".utf8)
+    /// Format modes named so far in the current sequence, applied in order
+    /// once its final byte says set or reset.
+    private var named: [Format] = []
 
-    mutating func observe(_ data: Data) {
-        for byte in data { step(byte) }
+    /// Returns whether `data` set, reset, or cleared any mouse format mode,
+    /// which the viewer answers by forcing its own surface back to SGR.
+    mutating func observe(_ data: Data) -> Bool {
+        var changed = false
+        for byte in data where step(byte) { changed = true }
+        return changed
     }
 
-    /// Streams `ESC [ ? p1 ; p2 ... h/l` one parameter at a time, so a long
-    /// combined mode change is still recognized.
-    private mutating func step(_ byte: UInt8) {
+    private mutating func step(_ byte: UInt8) -> Bool {
         if byte == 0x1B {
             state = .escape
-            return
+            return false
         }
         switch state {
         case .ground:
-            return
+            return false
         case .escape:
-            if byte == UInt8(ascii: "c") { utf8Coordinates = false }
             state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
+            guard byte == UInt8(ascii: "c") else { return false }
+            hostFormat = .x10
+            return true
         case .controlSequence:
-            guard byte == UInt8(ascii: "?") else {
-                state = .ground
-                return
-            }
+            state = byte == UInt8(ascii: "?") ? .privateParameters : .ground
             parameter = []
-            names1005 = false
-            state = .privateParameters
+            named = []
+            return false
         case .privateParameters:
             switch byte {
             case UInt8(ascii: "0")...UInt8(ascii: "9"):
-                if parameter.count <= Self.mode1005.count { parameter.append(byte) }
+                if parameter.count <= 4 { parameter.append(byte) }
+                return false
             case UInt8(ascii: ";"), UInt8(ascii: ":"):
-                names1005 = names1005 || parameter == Self.mode1005
-                parameter = []
+                nameCurrentParameter()
+                return false
             case UInt8(ascii: "h"), UInt8(ascii: "l"):
-                if names1005 || parameter == Self.mode1005 { utf8Coordinates = byte == UInt8(ascii: "h") }
+                nameCurrentParameter()
                 state = .ground
+                for format in named {
+                    if byte == UInt8(ascii: "h") {
+                        hostFormat = format
+                    } else if hostFormat == format {
+                        hostFormat = .x10
+                    }
+                }
+                return !named.isEmpty
             default:
                 state = .ground
+                return false
             }
         }
+    }
+
+    private mutating func nameCurrentParameter() {
+        let format: Format? = switch String(decoding: parameter, as: UTF8.self) {
+        case "1005": .utf8
+        case "1006": .sgr
+        case "1015": .urxvt
+        case "1016": .sgrPixels
+        default: nil
+        }
+        parameter = []
+        if let format, named.count < 8 { named.append(format) }
     }
 }

@@ -15,11 +15,6 @@ import Testing
         "\(esc)[97;5u",                                       // kitty-protocol Ctrl+a
         "\(esc)[200~pasted\ntext\(esc)[201~",                 // bracketed paste
         "\u{03}\u{7F}\t",                                     // Ctrl-C, backspace, tab
-        "\(esc)[<0;10;5M\(esc)[<0;10;5m",                     // SGR mouse press and release
-        "\(esc)[<64;10;5M",                                    // SGR wheel
-        "\(esc)[M !!",                                        // X10 mouse
-        "\(esc)[M \u{A0}!",                                   // UTF-8/1005 mouse (two-byte column)
-        "\(esc)[32;10;5M",                                     // rxvt/1015 mouse
     ])
     func userInputPassesThrough(input: String) {
         var filter = PeerConsoleInputFilter()
@@ -38,32 +33,26 @@ import Testing
         "\(esc)P1+r544e=787465726d\(esc)\\",                  // XTGETTCAP reply
         "\(esc)[I\(esc)[O",                                   // focus in/out
         "\(esc)[8;40;120t",                                   // window size report
+        "\(esc)[<0;10;5M",                                    // SGR mouse the host did not ask for
+        "\(esc)[M !!",                                        // legacy X10 mouse
+        "\(esc)[32;10;5M",                                     // legacy rxvt/1015 mouse
     ])
     func terminalRepliesAreDropped(reply: String) {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data(reply.utf8)).isEmpty)
     }
 
-    @Test(arguments: [
-        ([0x1B, 0x5B, 0x4D, 0x20, 0xC0, 0x21], false),       // raw X10, column 160
-        ([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0], false),       // raw X10 whose bytes look like UTF-8
-        ([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21], true),  // UTF-8/1005, two-byte column
-    ] as [([UInt8], Bool)])
-    func mouseCoordinatesFollowTheHostsEncoding(report: [UInt8], utf8: Bool) {
+    @Test func sgrMouseReportsGoThroughOnlyWhileTheHostUsesSGR() {
         var filter = PeerConsoleInputFilter()
-        filter.utf8MouseCoordinates = utf8
-        #expect(filter.filter(Data(report) + Data("k".utf8)) == Data(report) + Data("k".utf8))
-        #expect(!filter.hasPending)
-    }
-
-    @Test func mouseReportsSplitAcrossReadsGoOutWholeAndOnce() {
-        var filter = PeerConsoleInputFilter()
+        let press = Data("\(Self.esc)[<0;10;5M\(Self.esc)[<0;10;5m\(Self.esc)[<64;10;5M".utf8)
+        #expect(filter.filter(press).isEmpty)
+        filter.forwardsMouse = true
+        #expect(filter.filter(press) == press)
+        // A report split across reads goes out whole and only once.
         #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
         #expect(filter.filter(Data("0;5M".utf8)) == Data("\(Self.esc)[<0;10;5M".utf8))
-        // A 1005 report split inside a two-byte coordinate.
-        filter.utf8MouseCoordinates = true
-        #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
-        #expect(filter.filter(Data([0xA0, 0x21])) == Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]))
+        // Legacy formats are never forwarded.
+        #expect(filter.filter(Data("\(Self.esc)[M !!k".utf8)) == Data("k".utf8))
     }
 
     @Test func repliesSplitAcrossReadsAreDroppedAndKeysAroundThemKept() {
@@ -112,24 +101,27 @@ import Testing
 }
 
 @Suite struct PeerConsoleMouseModeTrackerTests {
-    @Test func followsMode1005AcrossSplitsAndResets() {
+    @Test func followsTheHostsMouseFormatAcrossSplitsAndResets() {
         var tracker = PeerConsoleMouseModeTracker()
-        tracker.observe(Data("\u{1B}[?1000;10".utf8))
-        #expect(!tracker.utf8Coordinates)
-        tracker.observe(Data("05h text".utf8))
-        #expect(tracker.utf8Coordinates)
-        tracker.observe(Data("\u{1B}[?10050l\u{1B}[1005l".utf8))
-        #expect(tracker.utf8Coordinates)
-        tracker.observe(Data("\u{1B}c".utf8))
-        #expect(!tracker.utf8Coordinates)
-        tracker.observe(Data("\u{1B}[?1005h\u{1B}[?1005l".utf8))
-        #expect(!tracker.utf8Coordinates)
+        func observe(_ output: String) -> Bool { tracker.observe(Data(output.utf8)) }
+        #expect(tracker.hostFormat == .x10)
+        #expect(!observe("\u{1B}[?1000;10"))
+        #expect(observe("06h text"))
+        #expect(tracker.hostFormat == .sgr)
+        // Unrelated or malformed modes are not format changes.
+        #expect(!observe("\u{1B}[?2004h\u{1B}[?10060l\u{1B}[1006l"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?1015h"))
+        #expect(tracker.hostFormat == .urxvt)
+        // Resetting a format that is not active leaves the current one.
+        #expect(observe("\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .urxvt)
+        #expect(observe("\u{1B}c"))
+        #expect(tracker.hostFormat == .x10)
         // A combined mode change far longer than any fixed buffer.
-        let long = String(repeating: "1000;", count: 30) + "1005h"
-        tracker.observe(Data("\u{1B}[?\(long)".utf8))
-        #expect(tracker.utf8Coordinates)
-        tracker.observe(Data("\u{1B}[?100500h".utf8))
-        #expect(tracker.utf8Coordinates)
+        let long = String(repeating: "1000;", count: 30) + "1006h"
+        #expect(observe("\u{1B}[?\(long)"))
+        #expect(tracker.hostFormat == .sgr)
     }
 }
 

@@ -106,11 +106,13 @@ struct PeerConsoleInputRelay {
     private var sequence = 0
     private var mouseMode = PeerConsoleMouseModeTracker()
 
-    /// Feeds output written to the surface, so mouse reports the surface
-    /// writes back are decoded in the encoding the host program selected.
-    mutating func observeOutput(_ data: Data) {
-        mouseMode.observe(data)
-        filter.utf8MouseCoordinates = mouseMode.utf8Coordinates
+    /// Feeds output written to the surface. Mouse reports are forwarded only
+    /// while the host program uses SGR, the format the surface is kept in.
+    /// Returns whether the output changed the host's mouse format.
+    mutating func observeOutput(_ data: Data) -> Bool {
+        let changed = mouseMode.observe(data)
+        filter.forwardsMouse = mouseMode.hostFormat == .sgr
+        return changed
     }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.
@@ -202,6 +204,8 @@ final class PeerConsoleViewer {
 
     /// Clears the surface and its scrollback before a snapshot replaces it.
     nonisolated static let resetBeforeSnapshot = Data("\u{1B}c\u{1B}[3J".utf8)
+    /// Selects SGR mouse reports on the local surface only; never sent to the host.
+    static let sgrMouseFormat = Data("\u{1B}[?1006h".utf8)
 
     let serverId: String
     let consoleId: String
@@ -243,12 +247,9 @@ final class PeerConsoleViewer {
         self.title = title
         self.send = send
         do {
-            // Both callbacks hop to the main actor in arrival order, so the
-            // mouse mode changes before input the surface encoded after it.
-            let bridge = try PeerConsoleBridge(
-                onWritten: { [weak self] data in Task { @MainActor in self?.relay.observeOutput(data) } },
-                onInput: { [weak self] data in Task { @MainActor in self?.surfaceWrote(data) } }
-            )
+            let bridge = try PeerConsoleBridge { [weak self] data in
+                Task { @MainActor in self?.surfaceWrote(data) }
+            }
             self.bridge = bridge
             surface = try makeSurface(bridge.command.executable, bridge.command.args) { [weak self] in
                 Task { @MainActor in self?.end("The local terminal closed.", notifyHost: true) }
@@ -354,6 +355,10 @@ final class PeerConsoleViewer {
     /// continue: drop output until a fresh snapshot replaces the screen.
     private func writeToSurface(_ data: Data) {
         guard let bridge else { return }
+        var data = data
+        // The surface always reports the mouse in SGR, whatever the host
+        // selected, so input never needs mode-dependent decoding.
+        if relay.observeOutput(data) { data += Self.sgrMouseFormat }
         guard !bridge.write(data) else { return }
         order = PeerConsoleStreamOrder()
         send(.resync(attachmentId: attachmentId))
