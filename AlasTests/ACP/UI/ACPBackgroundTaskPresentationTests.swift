@@ -52,4 +52,18 @@ struct ACPBackgroundTaskPresentationTests {
     func elapsedText(interval: TimeInterval, expected: String) {
         #expect(ACPBackgroundTaskPresentation.elapsedText(interval) == expected)
     }
+
+    @Test("transcript detail prefers the summary and skips text that repeats the name", arguments: [
+        (nil, "make test", nil),
+        (nil, " make test\n", nil),
+        ("3 tests failed", "make test", "3 tests failed"),
+        ("make test", "Runs the unit tests", "Runs the unit tests"),
+        ("", nil, nil),
+    ] as [(String?, String?, String?)])
+    func transcriptDetail(summary: String?, description: String?, expected: String?) {
+        var task = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "t", name: "make test")
+        task.summary = summary
+        task.description = description
+        #expect(ACPBackgroundTaskPresentation.transcriptDetail(task) == expected)
+    }
 }
