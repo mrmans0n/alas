@@ -45,14 +45,6 @@ private final class QueueDispatchHandoffTracker: @unchecked Sendable {
         }
     }
 
-    /// Whether a queued prompt's request may have reached the agent: one whose dispatch is still waiting for, or was
-    /// cancelled before, the transport handoff never did.
-    func mayHaveHandedOff(_ itemId: UUID) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return states[itemId] != .provenancePending && states[itemId] != .cancelled
-    }
-
     func takeUnhandedItemIDs() -> Set<UUID> {
         lock.lock()
         defer { lock.unlock() }
@@ -68,6 +60,31 @@ private final class QueueDispatchHandoffTracker: @unchecked Sendable {
     func finish(_ itemId: UUID) {
         lock.lock()
         states[itemId] = nil
+        lock.unlock()
+    }
+}
+
+/// Prompts whose request crossed the transport handoff, marked from the transport's own callback, which may run off
+/// the main actor and before the prompt's continuation does.
+private final class PromptHandoffs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var promptIDs: Set<Int> = []
+
+    func mark(_ promptID: Int) {
+        lock.lock()
+        promptIDs.insert(promptID)
+        lock.unlock()
+    }
+
+    func contains(_ promptID: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return promptIDs.contains(promptID)
+    }
+
+    func forget(below promptID: Int) {
+        lock.lock()
+        promptIDs = promptIDs.filter { $0 >= promptID }
         lock.unlock()
     }
 }
@@ -155,9 +172,9 @@ final class ACPSessionRunner {
     /// prompt still bounds an earlier one's cost after it was reported or dropped.
     private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
-    private var unreportedPrompts: [
-        Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool, queuedItemId: UUID?)
-    ] = [:]
+    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
+    /// Which of them reached the transport; see `takeUnreportedUsage`.
+    private let promptHandoffs = PromptHandoffs()
     /// Finished prompts' usage, by prompt id, held until every prompt sent before them has reported: a session's
     /// turns are recorded in the order they were sent, each turn's cost being measured from the one before.
     private var heldUsage: [Int: ACPTurnCompletion] = [:]
@@ -2026,13 +2043,13 @@ final class ACPSessionRunner {
     /// The connection is being replaced, and with it this runner: the results its prompts still wait for will not
     /// come. Returns every turn not reported yet, in the order sent; one without its result is a cancelled turn
     /// without tokens. The caller records them, since this runner's reports no longer count once it is replaced.
-    /// A queued prompt whose dispatch never crossed the transport handoff is no turn: teardown keeps it from going.
+    /// A prompt that never crossed the transport handoff is no turn: the agent never got it.
     func takeUnreportedUsage() -> [ACPTurnCompletion] {
-        for (promptID, prompt) in unreportedPrompts {
-            if let itemId = prompt.queuedItemId, !queueDispatchHandoffTracker.mayHaveHandedOff(itemId) {
-                unreportedPrompts[promptID] = nil
-            } else {
+        for promptID in unreportedPrompts.keys {
+            if promptHandoffs.contains(promptID) {
                 heldUsage[promptID] = supersededTurnUsage(promptID, quota: nil, result: .cancelled)
+            } else {
+                unreportedPrompts[promptID] = nil
             }
         }
         defer { heldUsage = [:] }
@@ -2052,6 +2069,8 @@ final class ACPSessionRunner {
         sentStreamStarts[promptID] = streamStart
         // ponytail: only the newest bound anything, the few prompts still waiting being older than them.
         if sentStreamStarts.count > 16, let oldest = sentStreamStarts.keys.min() { sentStreamStarts[oldest] = nil }
+        // Only prompts not reported yet are ever asked about.
+        promptHandoffs.forget(below: unreportedPrompts.keys.min() ?? promptID)
     }
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
@@ -4395,8 +4414,7 @@ extension ACPSessionRunner {
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
-                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel,
-                        false, queuedItemId)
+                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
                     self.noteSent(promptID, streamStart: self.activePromptStreamStart)
                     self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
@@ -4417,7 +4435,8 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
-                    onTransportHandoff: { [weak self] in
+                    onTransportHandoff: { [weak self, promptHandoffs] in
+                        promptHandoffs.mark(promptID)
                         Task { @MainActor in
                             guard let self, !self.stopped, self.isConnectionCurrent(),
                                   self.activePromptID == promptID,
@@ -4668,7 +4687,7 @@ extension ACPSessionRunner {
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
-                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true, nil)
+                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
                 self.noteSent(promptID, streamStart: self.connection.client.yieldedUpdateCount)
                 return true
             }
@@ -4682,7 +4701,9 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
+                let promptOutcome = try await self.connection.prompt(
+                    sessionId: remoteId, blocks: [.text(prompt)],
+                    onTransportHandoff: { [promptHandoffs] in promptHandoffs.mark(promptID) })
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
