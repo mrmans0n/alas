@@ -938,8 +938,10 @@ struct RemoteProtocolTests {
     @Test func onlySendPromptAndTakeOverAreDriveOrdering() {
         #expect(RemoteClientMessage.sendPrompt(sessionId: "s", text: "hi", attachments: [], intent: "auto").isDriveOrdering)
         #expect(RemoteClientMessage.takeOver(sessionId: "s").isDriveOrdering)
-        #expect(RemoteClientMessage.visualAidResponse(
-            sessionId: "s", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil).isDriveOrdering)
+        for (action, ordering) in [("answer", true), ("dismiss", false), ("wave", false)] {
+            #expect(RemoteClientMessage.visualAidResponse(
+                sessionId: "s", visualId: "V", action: action, selectedOptionIds: [], note: nil).isDriveOrdering == ordering, "\(action)")
+        }
         #expect(!RemoteClientMessage.subscribe(sessionId: "s").isDriveOrdering)
         #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isDriveOrdering)
         #expect(!RemoteClientMessage.stop(sessionId: "s").isDriveOrdering)

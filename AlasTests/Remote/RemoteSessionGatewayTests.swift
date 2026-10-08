@@ -1808,6 +1808,9 @@ struct RemoteSessionGatewayTests {
         ("invalid", true, false, "answer", ["a", "b"], nil),
         ("invalid", true, false, "answer", ["a"], String(repeating: "x", count: 2001)),
         ("invalid", true, false, "wave", ["a"], nil),
+        ("invalid", true, true, "answer", ["a", "b", "c", "d", "e", "f", "g", "h", "i"], nil),
+        ("invalid", true, false, "answer", [String(repeating: "a", count: 300)], nil),
+        ("invalid", true, false, "answer", ["a"], String(repeating: "x", count: 100_000)),
     ])
     func invalidVisualResponsesAreRejectedWithoutCallingTheManager(
         reason: String, isWriter: Bool, allowMultiple: Bool, action: String, ids: [String], note: String?
@@ -1822,6 +1825,19 @@ struct RemoteSessionGatewayTests {
                                            selectedOptionIds: ids, note: note))
         #expect(visualRejection(sent) == reason)
         #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test(arguments: [
+        (["a", "b", "c", "d", "e", "f", "g", "h"], Optional<String>.none, false),
+        (["a", "b", "c", "d", "e", "f", "g", "h", "i"], nil, true),
+        ([String(repeating: "a", count: 64)], nil, false),
+        ([String(repeating: "a", count: 256)], nil, false),
+        ([String(repeating: "a", count: 257)], nil, true),
+        (["a"], String(repeating: "x", count: 8064), false),
+        (["a"], String(repeating: "x", count: 8065), true),
+    ])
+    func visualResponseBoundsRejectOversizedInputBeforeAnyWork(ids: [String], note: String?, exceeds: Bool) {
+        #expect(RemoteVisualAidLimits.exceedsBounds(ids: ids, note: note) == exceeds)
     }
 
     @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {

@@ -1073,6 +1073,8 @@ final class RemoteSessionGateway {
         else { return reject("notFound") }
         guard let question = visual.question, visual.answer == nil else { return reject("alreadyAnswered") }
 
+        guard !RemoteVisualAidLimits.exceedsBounds(ids: selectedOptionIds, note: note) else { return reject("invalid") }
+
         let answer: ACPVisualAid.Answer
         switch action {
         case "dismiss":
@@ -1435,4 +1437,18 @@ final class RemoteSessionGateway {
 @MainActor
 private final class RemoteRefusalWindowBox {
     var value = true
+}
+
+/// Cheap size bounds for a `visualAidResponse`, checked before the handler builds a `Set` or trims the
+/// note, so a hostile client cannot make the main actor hash or scan megabytes. `utf8.count` is O(1) for
+/// native strings, and four bytes per character is the most any limit can need; the exact checks follow.
+enum RemoteVisualAidLimits {
+    static let maxNoteUTF8Bytes = ACPVisualAidQuestionForm.noteMaxLength * 4 + 64
+    static let maxIdUTF8Bytes = ACPVisualAid.Limits.optionIdMaxCharacters * 4
+
+    static func exceedsBounds(ids: [String], note: String?) -> Bool {
+        ids.count > ACPVisualAid.Limits.optionCount.upperBound
+            || ids.contains { $0.utf8.count > maxIdUTF8Bytes }
+            || (note?.utf8.count ?? 0) > maxNoteUTF8Bytes
+    }
 }
