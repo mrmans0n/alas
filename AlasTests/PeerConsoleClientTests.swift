@@ -149,6 +149,9 @@ import Testing
         #expect(relay.relay(Data("\u{1B}]11;rgb".utf8), attachmentId: "a", control: control(.host, 4)).isEmpty)
         #expect(relay.relay(Data(":00/".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
         #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 5)).isEmpty)
+        // A key split across reads does not complete under a newer lease.
+        #expect(relay.relay(Data("\u{1B}[1;".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
+        #expect(relay.relay(Data("5C".utf8), attachmentId: "a", control: control(.you, 6)).isEmpty)
         // A held ESC is released only under the lease it was held under.
         let esc = Data("\u{1B}".utf8)
         #expect(relay.relay(esc, attachmentId: "a", control: control(.host, 4)).isEmpty)

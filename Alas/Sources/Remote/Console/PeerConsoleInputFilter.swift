@@ -69,6 +69,10 @@ struct PeerConsoleInputFilter {
     /// ESC, ESC plus one byte (`ESC [`, `ESC O`, ...), or an unterminated
     /// string whose introducer is also an Alt+key (`ESC ]`, `ESC P`, ...)
     /// that typing may have followed.
+    /// Whether any bytes are held for the next read: an incomplete sequence
+    /// or an oversized reply still being discarded.
+    var hasPending: Bool { !pending.isEmpty || discarding != nil }
+
     var hasAmbiguousPrefix: Bool {
         guard discarding == nil, pending.first == Self.esc else { return false }
         return pending.count <= 2 || Self.isStringIntroducer(pending[1])

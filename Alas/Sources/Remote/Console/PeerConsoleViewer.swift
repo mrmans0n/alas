@@ -102,8 +102,9 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
-    /// The lease in effect when the current ambiguous prefix was held.
-    private var prefixLease: PeerConsoleControl?
+    /// The lease in effect when the filter's currently held bytes began.
+    /// Bytes held under one lease never go out under another.
+    private var pendingLease: PeerConsoleControl?
 
     /// An ambiguous ESC prefix is held until `flushAmbiguousPrefix` decides
     /// it was a key.
@@ -113,16 +114,19 @@ struct PeerConsoleInputRelay {
     /// that starts before control is granted is still recognized when it
     /// finishes after; only the holder's output is sent.
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
-        let wasAmbiguous = filter.hasAmbiguousPrefix
+        let heldUnder = filter.hasPending ? pendingLease : nil
         let keys = filter.filter(data)
-        // The lease is the one in effect when the prefix began; a grant
-        // that lands mid-prefix must not adopt it.
-        if !filter.hasAmbiguousPrefix {
-            prefixLease = nil
-        } else if !wasAmbiguous {
-            prefixLease = control
+        // A sequence begun under another lease (view mode, or before a
+        // revoke and regrant) must not complete under this one. Dropping the
+        // whole read is conservative: keys typed during a control change
+        // may be lost, but none cross a lease.
+        let crossesLease = heldUnder.map { !Self.sameLease($0, control) } ?? false
+        if !filter.hasPending {
+            pendingLease = nil
+        } else if heldUnder == nil {
+            pendingLease = control
         }
-        guard control.owner == .you else { return [] }
+        guard control.owner == .you, !crossesLease else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
@@ -131,12 +135,16 @@ struct PeerConsoleInputRelay {
     /// is discarded.
     mutating func flushAmbiguousPrefix(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         let keys = filter.flushAmbiguousPrefix()
-        let lease = prefixLease
+        let lease = pendingLease
         // Keys re-filtered behind an Alt prefix can leave another prefix,
         // held under the same lease.
-        prefixLease = filter.hasAmbiguousPrefix ? lease : nil
-        guard control.owner == .you, lease?.owner == .you, lease?.generation == control.generation else { return [] }
+        pendingLease = filter.hasPending ? lease : nil
+        guard control.owner == .you, let lease, Self.sameLease(lease, control) else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
+    }
+
+    private static func sameLease(_ a: PeerConsoleControl, _ b: PeerConsoleControl) -> Bool {
+        a.owner == b.owner && a.generation == b.generation
     }
 
     private mutating func requests(
