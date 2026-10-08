@@ -137,40 +137,11 @@ struct NativePeerSidebarView: View {
                     ForEach(repos) { repo in
                         repoGroup(repo, peer: group)
                     }
-                    consoleRows(peer: group)
                 }
                 // Puts each repo's chevron under the peer's tile, one level
                 // in, the way worktrees sit under their repo.
                 .padding(.leading, 19)
             }
-        }
-    }
-
-    /// The peer's shareable consoles, including ones in worktrees that have
-    /// no agent session and so no row above.
-    @ViewBuilder
-    private func consoleRows(peer: NativePeerGroup) -> some View {
-        let consoles = client.consoles?.consoles[peer.serverId] ?? []
-        if !consoles.isEmpty {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Consoles")
-                    .textCase(.uppercase)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundColor(theme.color("fg-faint"))
-                    .padding(.leading, 7)
-                    .padding(.top, 6)
-                ForEach(consoles, id: \.consoleId) { console in
-                    NativePeerConsoleRow(
-                        console: console,
-                        isSelected: client.consoles?.viewer.map {
-                            $0.serverId == peer.serverId && $0.consoleId == console.consoleId
-                        } ?? false,
-                        onSelect: { client.selectConsole(serverId: peer.serverId, consoleId: console.consoleId) }
-                    )
-                }
-            }
-            .padding(.trailing, 6)
         }
     }
 
@@ -199,7 +170,11 @@ struct NativePeerSidebarView: View {
                             worktree: worktree,
                             peerName: peer.name,
                             selectedSessionId: client.selectedSessionId,
-                            onSelect: { client.select($0) }
+                            selectedConsoleId: client.consoles?.viewer.flatMap {
+                                $0.serverId == peer.serverId ? $0.consoleId : nil
+                            },
+                            onSelect: { client.select($0) },
+                            onSelectConsole: { client.selectConsole(serverId: peer.serverId, consoleId: $0) }
                         )
                     }
                 }
@@ -402,18 +377,46 @@ private struct NativePeerRepoHeaderRow: View {
 }
 
 /// A peer worktree, drawn with `WorktreeRowView`'s two-line metrics: branch
-/// and agent tiles on line 1, status chip, diff and age on line 2.
+/// plus agent and console tiles on line 1, status chip, diff and age on line 2.
 private struct NativePeerWorktreeRow: View {
     let worktree: NativePeerWorktreeGroup
     let peerName: String
     let selectedSessionId: String?
+    /// The console being viewed, if it is on this row's peer.
+    let selectedConsoleId: String?
     let onSelect: (String) -> Void
+    let onSelectConsole: (String) -> Void
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
     private var isSelected: Bool {
-        guard let selectedSessionId else { return false }
-        return worktree.sessions.contains { $0.id == selectedSessionId }
+        worktree.sessions.contains { $0.id == selectedSessionId }
+            || worktree.consoles.contains { $0.consoleId == selectedConsoleId }
+    }
+
+    /// Sessions first, then consoles, sharing the visible-badge limit.
+    private enum Badge: Identifiable {
+        case session(RemoteSessionSummary)
+        case console(PeerConsoleSummary)
+
+        var id: String {
+            switch self {
+            case .session(let session): "session:\(session.id)"
+            case .console(let console): "console:\(console.consoleId)"
+            }
+        }
+    }
+
+    private var badges: [Badge] {
+        worktree.sessions.map(Badge.session) + worktree.consoles.map(Badge.console)
+    }
+
+    private func activate() {
+        if let session = worktree.primarySession {
+            onSelect(session.id)
+        } else if let console = worktree.consoles.first {
+            onSelectConsole(console.consoleId)
+        }
     }
 
     var body: some View {
@@ -456,7 +459,7 @@ private struct NativePeerWorktreeRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { onSelect(worktree.primarySession.id) }
+        .onTapGesture(perform: activate)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
@@ -471,10 +474,14 @@ private struct NativePeerWorktreeRow: View {
                         .foregroundColor(theme.color(status.colorToken))
                 }
                 .fixedSize()
-            } else if worktree.sessions.count == 1 {
+            } else if worktree.sessions.count == 1, let session = worktree.primarySession {
                 // Nothing to report, so the chat's own title fills the slot a
                 // status chip would take.
-                Text(worktree.primarySession.title)
+                Text(session.title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else if worktree.sessions.isEmpty, worktree.consoles.count == 1 {
+                Text(worktree.consoles[0].title)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -516,36 +523,58 @@ private struct NativePeerWorktreeRow: View {
     }
 
     private var agentBadges: some View {
-        let visible = WorktreeRowView.visibleHarnessSessionCount(for: worktree.sessions.count)
+        let badges = badges
+        let visible = WorktreeRowView.visibleHarnessSessionCount(for: badges.count)
         return HStack(spacing: 4) {
-            ForEach(worktree.sessions.prefix(visible), id: \.id) { session in
-                NativePeerAgentBadge(
-                    session: session,
-                    isSelected: session.id == selectedSessionId,
-                    onActivate: { onSelect(session.id) }
-                )
+            ForEach(badges.prefix(visible)) { badge in
+                switch badge {
+                case .session(let session):
+                    NativePeerAgentBadge(
+                        session: session,
+                        isSelected: session.id == selectedSessionId,
+                        onActivate: { onSelect(session.id) }
+                    )
+                case .console(let console):
+                    NativePeerConsoleBadge(
+                        console: console,
+                        isSelected: console.consoleId == selectedConsoleId,
+                        onActivate: { onSelectConsole(console.consoleId) }
+                    )
+                }
             }
-            if worktree.sessions.count > visible {
-                let hidden = Array(worktree.sessions.dropFirst(visible))
+            if badges.count > visible {
+                let hiddenBadges = Array(badges.dropFirst(visible))
+                let hidden = hiddenBadges.compactMap {
+                    if case .session(let session) = $0 { session } else { nil }
+                }
                 Menu {
-                    ForEach(hidden, id: \.id) { session in
-                        Button {
-                            onSelect(session.id)
-                        } label: {
-                            Label {
-                                Text(session.title)
-                            } icon: {
-                                if let agent = AgentKind(rawValue: session.agentId) {
-                                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
-                                } else {
-                                    Image(systemName: "sparkles")
+                    ForEach(hiddenBadges) { badge in
+                        switch badge {
+                        case .session(let session):
+                            Button {
+                                onSelect(session.id)
+                            } label: {
+                                Label {
+                                    Text(session.title)
+                                } icon: {
+                                    if let agent = AgentKind(rawValue: session.agentId) {
+                                        Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+                                    } else {
+                                        Image(systemName: "sparkles")
+                                    }
                                 }
                             }
+                            .badge(Self.overflowBadgeText(for: session).map(Text.init))
+                        case .console(let console):
+                            Button {
+                                onSelectConsole(console.consoleId)
+                            } label: {
+                                Label(console.title, systemImage: Icon.symbol(for: "terminal"))
+                            }
                         }
-                        .badge(Self.overflowBadgeText(for: session).map(Text.init))
                     }
                 } label: {
-                    Text("+\(hidden.count)")
+                    Text("+\(hiddenBadges.count)")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(theme.color("fg-dim"))
                         .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
@@ -560,16 +589,28 @@ private struct NativePeerWorktreeRow: View {
                 // idle history, which draws no chrome at all.
                 .modifier(OptionalBadgeChrome(
                     surface: Self.overflowSurface(for: hidden),
-                    isSelected: hidden.contains { $0.id == selectedSessionId }
+                    isSelected: hiddenBadges.contains {
+                        switch $0 {
+                        case .session(let session): session.id == selectedSessionId
+                        case .console(let console): console.consoleId == selectedConsoleId
+                        }
+                    }
                 ))
-                .accessibilityLabel("\(hidden.count) more sessions")
+                .accessibilityLabel("\(hiddenBadges.count) more")
             }
         }
     }
 
     private var accessibilityLabel: String {
-        let detail = NativePeerSessionRowPresentation(row: worktree.primarySession).detail
-        return "\(worktree.title), \(detail), \(peerName) peer session"
+        var parts = [worktree.title]
+        if let session = worktree.primarySession {
+            parts.append(NativePeerSessionRowPresentation(row: session).detail)
+        }
+        if !worktree.consoles.isEmpty {
+            parts.append(worktree.consoles.count == 1 ? "1 console" : "\(worktree.consoles.count) consoles")
+        }
+        parts.append("\(peerName) peer worktree")
+        return parts.joined(separator: ", ")
     }
 
     /// The overflow chip's aggregate surface: mixed when the hidden sessions
@@ -693,56 +734,25 @@ private struct NativePeerAttentionCount: View {
     }
 }
 
-/// One console on a paired Mac, opened in the center pane on tap.
-struct NativePeerConsoleRow: View {
+/// A console on a peer's worktree, drawn with the terminal symbol local
+/// terminal tabs use. Opens in the center pane on tap.
+private struct NativePeerConsoleBadge: View {
     let console: PeerConsoleSummary
     let isSelected: Bool
-    let onSelect: () -> Void
+    let onActivate: () -> Void
     @Environment(\.theme) private var theme
-    @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "terminal")
-                .font(.system(size: 10))
-                .foregroundColor(theme.color("fg-faint"))
-                .frame(width: 12)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(console.title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let location {
-                    Text(location)
-                        .font(.system(size: 10))
-                        .foregroundColor(theme.color("fg-dim"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            Spacer(minLength: 0)
+        Button(action: onActivate) {
+            Image(systemName: Icon.symbol(for: "terminal"))
+                .resizable()
+                .scaledToFit()
+                .foregroundColor(theme.color(isSelected ? "fg" : "fg-muted"))
+                .frame(width: HarnessSessionBadge.logoSize, height: HarnessSessionBadge.logoSize)
+                .frame(width: HarnessSessionBadge.diameter, height: HarnessSessionBadge.diameter)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 9).fill(theme.color("accent-soft"))
-            } else if hovering {
-                RoundedRectangle(cornerRadius: 9).fill(theme.color("bg-3").opacity(0.55))
-            }
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(perform: onSelect)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel([console.title, location].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityAddTraits(.isButton)
-    }
-
-    private var location: String? {
-        let parts = [console.projectName, console.worktreeName].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        .buttonStyle(.plain)
+        .help("Console · \(console.title)")
+        .accessibilityLabel("Console \(console.title)")
     }
 }

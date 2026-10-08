@@ -47,15 +47,16 @@ struct NativePeerGroup: Identifiable, Equatable {
     let name: String
     let state: NativePeerState
     let sessions: [RemoteSessionSummary]
+    var consoles: [PeerConsoleSummary] = []
     let attentionCount: Int
 
     var id: String { serverId }
 
-    /// The peer's sessions folded into the same repo → worktree shape the
-    /// local sidebar uses, so a peer reads like another Mac's workspace tree
-    /// rather than a flat list of chats.
+    /// The peer's sessions and consoles folded into the same repo → worktree
+    /// shape the local sidebar uses, so a peer reads like another Mac's
+    /// workspace tree rather than a flat list of chats.
     func repos(ordering: AppConfig.WorktreeSortMode) -> [NativePeerRepoGroup] {
-        NativePeerRepoGroup.build(sessions: sessions, ordering: ordering)
+        NativePeerRepoGroup.build(sessions: sessions, consoles: consoles, ordering: ordering)
     }
 }
 
@@ -80,47 +81,70 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
     /// grouping on it merges unrelated repos — group on `projectId` instead,
     /// falling back to a shared sentinel only for sessions with no project
     /// metadata at all.
-    private static func repoKey(for session: RemoteSessionSummary) -> String {
-        session.projectId.map { "id:\($0)" } ?? unassignedKey
+    private static func repoKey(projectId: String?) -> String {
+        // A console in a workspace checkout reports an empty id.
+        guard let projectId, !projectId.isEmpty else { return unassignedKey }
+        return "id:\(projectId)"
     }
 
-    /// Groups sessions by project, then by worktree. Repos keep the order of
-    /// their most recently updated session, which is the order `sessions`
-    /// already arrives in. Worktrees follow the local sidebar's rule: the main
-    /// worktree is pinned first, the rest are sorted by `ordering`. `.manual`
-    /// has no peer-side order to follow, so it keeps arrival order.
+    /// Groups sessions and consoles by project, then by worktree. Repos keep
+    /// the order of their most recently updated session, which is the order
+    /// `sessions` already arrives in; repos with only consoles have no
+    /// recency to go by and follow in the order the peer listed them.
+    /// Worktrees follow the local sidebar's rule: the main worktree is pinned
+    /// first, the rest are sorted by `ordering`. `.manual` has no peer-side
+    /// order to follow, so it keeps arrival order.
     static func build(
         sessions: [RemoteSessionSummary],
+        consoles: [PeerConsoleSummary] = [],
         ordering: AppConfig.WorktreeSortMode = .lastUpdateDesc
     ) -> [NativePeerRepoGroup] {
         var repoOrder: [String] = []
         var repoNames: [String: String] = [:]
         var worktreeOrder: [String: [String]] = [:]
-        var buckets: [String: [String: [RemoteSessionSummary]]] = [:]
-        for session in sessions {
-            let repo = repoKey(for: session)
-            // Worktree keys are namespaced by repo identity too, so a
-            // worktree id or path that happens to repeat across two
-            // differently-identified projects still can't merge sessions.
-            let key = "\(repo)\u{1F}\(NativePeerWorktreeGroup.key(for: session))"
-            if buckets[repo] == nil {
+        var sessionBuckets: [String: [RemoteSessionSummary]] = [:]
+        var consoleBuckets: [String: [PeerConsoleSummary]] = [:]
+        // Worktree keys are namespaced by repo identity too, so a worktree id
+        // or path that happens to repeat across two differently-identified
+        // projects still can't merge rows.
+        func place(repo: String, worktreeKey: String, name: @autoclosure () -> String) -> String {
+            let key = "\(repo)\u{1F}\(worktreeKey)"
+            if repoNames[repo] == nil {
                 repoOrder.append(repo)
-                buckets[repo] = [:]
-                repoNames[repo] = session.worktree?.projectName ?? unassignedName
+                repoNames[repo] = name()
             }
-            if buckets[repo]?[key] == nil {
+            if sessionBuckets[key] == nil, consoleBuckets[key] == nil {
                 worktreeOrder[repo, default: []].append(key)
             }
-            buckets[repo]?[key, default: []].append(session)
+            return key
+        }
+        for session in sessions {
+            let key = place(
+                repo: repoKey(projectId: session.projectId),
+                worktreeKey: NativePeerWorktreeGroup.key(for: session),
+                name: session.worktree?.projectName ?? unassignedName
+            )
+            sessionBuckets[key, default: []].append(session)
+        }
+        for console in consoles {
+            let key = place(
+                repo: repoKey(projectId: console.projectId),
+                worktreeKey: NativePeerWorktreeGroup.key(for: console),
+                name: console.worktree?.projectName ?? console.projectName ?? unassignedName
+            )
+            consoleBuckets[key, default: []].append(console)
         }
         return repoOrder.map { repo in
             NativePeerRepoGroup(
                 id: repo,
                 name: repoNames[repo] ?? unassignedName,
                 worktrees: NativePeerWorktreeGroup.sorted(
-                    (worktreeOrder[repo] ?? []).compactMap { key in
-                        guard let rows = buckets[repo]?[key], !rows.isEmpty else { return nil }
-                        return NativePeerWorktreeGroup(id: key, sessions: rows)
+                    (worktreeOrder[repo] ?? []).map { key in
+                        NativePeerWorktreeGroup(
+                            id: key,
+                            sessions: sessionBuckets[key] ?? [],
+                            consoles: consoleBuckets[key] ?? []
+                        )
                     },
                     ordering: ordering
                 )
@@ -133,6 +157,8 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let id: String
     /// Most recently updated first.
     let sessions: [RemoteSessionSummary]
+    /// In the order the peer listed them, which is creation order.
+    var consoles: [PeerConsoleSummary] = []
 
     static let waitingStatuses: Set<String> = ["awaitingPermission", "awaitingInput"]
 
@@ -142,7 +168,18 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         return "session:\(session.id)"
     }
 
-    var worktree: RemoteWorktreeSummary? { sessions.lazy.compactMap(\.worktree).first }
+    /// Must agree with `key(for: RemoteSessionSummary)` so a console joins
+    /// its worktree's session row instead of drawing a second one.
+    static func key(for console: PeerConsoleSummary) -> String {
+        if let worktreeId = console.worktreeId, !worktreeId.isEmpty { return "id:\(worktreeId)" }
+        if let path = console.worktree?.path, !path.isEmpty { return "path:\(path)" }
+        return "console:\(console.consoleId)"
+    }
+
+    /// Sessions' summaries come first: only they carry git metrics.
+    var worktree: RemoteWorktreeSummary? {
+        sessions.lazy.compactMap(\.worktree).first ?? consoles.lazy.compactMap(\.worktree).first
+    }
     var isMain: Bool { worktree?.isMain == true }
 
     /// Main first, then `ordering` over the rest — the same shape as
@@ -172,15 +209,18 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         }
         return main + sortedOthers
     }
-    /// The session a click on the row opens.
-    var primarySession: RemoteSessionSummary { sessions[0] }
+    /// The session a click on the row opens. Nil for a worktree that only
+    /// has consoles; the click opens `consoles.first` instead.
+    var primarySession: RemoteSessionSummary? { sessions.first }
     var updatedAt: Int64 { sessions.map(\.updatedAt).max() ?? 0 }
     var attentionCount: Int { sessions.count { Self.waitingStatuses.contains($0.status) } }
 
     var title: String {
         if let branch = worktree?.branch, !branch.isEmpty { return branch }
         if let name = worktree?.worktreeName, !name.isEmpty { return name }
-        return primarySession.title
+        if let primarySession { return primarySession.title }
+        if let name = consoles.first?.worktreeName, !name.isEmpty { return name }
+        return consoles.first?.title ?? ""
     }
 
     /// Mirrors `WorktreeRowView.StatusPresentation`: waiting outranks
@@ -205,7 +245,13 @@ struct NativePeerSidebarSnapshot: Equatable {
 
     var attentionCount: Int { attentionRows.count }
 
-    static func build(peers: [RemoteHelloPeer], rows: [RemoteSessionSummary]) -> Self {
+    /// `consoles` is keyed by peer `serverId`; like sessions, they are only
+    /// shown for peers whose link is online.
+    static func build(
+        peers: [RemoteHelloPeer],
+        rows: [RemoteSessionSummary],
+        consoles: [String: [PeerConsoleSummary]] = [:]
+    ) -> Self {
         var uniqueRows: [String: [String: RemoteSessionSummary]] = [:]
         for row in rows {
             guard let owner = row.serverId,
@@ -232,6 +278,7 @@ struct NativePeerSidebarSnapshot: Equatable {
                 name: peer.name,
                 state: state,
                 sessions: sessions,
+                consoles: state.carriesSessions ? consoles[peer.serverId] ?? [] : [],
                 attentionCount: sessions.count { waitingStatuses.contains($0.status) }
             )
         }.sorted { ($0.name, $0.serverId) < ($1.name, $1.serverId) }

@@ -40,7 +40,16 @@ extension AppState {
                     projectName: names?.project.name,
                     worktreeName: names?.worktree.name,
                     rows: console.size.rows,
-                    columns: console.size.columns
+                    columns: console.size.columns,
+                    // No git metrics: this list is built synchronously on every poll.
+                    worktree: names.map {
+                        RemoteWorktreeSummaryBuilder.make(
+                            projectName: $0.project.name,
+                            worktree: $0.worktree,
+                            isMain: projectsManager.isMain($0.worktree, in: $0.project),
+                            metrics: .unavailable
+                        )
+                    }
                 )
             }
     }

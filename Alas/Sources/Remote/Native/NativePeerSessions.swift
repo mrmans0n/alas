@@ -74,6 +74,14 @@ final class NativePeerSessions {
         self.peers = peers
         self.comparisonMode = comparisonMode
         self.consoles = consoles
+        consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
+    }
+
+    /// Only the sidebar model: console lists change nothing a selected
+    /// session depends on, so the rest of `refresh()` is not needed.
+    private func rebuildSnapshot() {
+        guard downstream != nil else { return }
+        snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries, consoles: consoles?.consoles ?? [:])
     }
 
     var selectedRow: RemoteSessionSummary? {
@@ -132,7 +140,7 @@ final class NativePeerSessions {
 
     func refresh() {
         guard downstream != nil else { return }
-        snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries)
+        rebuildSnapshot()
         consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
         reconcileNewSession()
         if let pending = pendingCreatedSessionId,

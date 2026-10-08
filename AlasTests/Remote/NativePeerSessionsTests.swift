@@ -278,6 +278,29 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == nil)
     }
 
+    @Test func aChangedConsoleListRebuildsTheSidebarWithoutASessionListChange() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let consoles = NativePeerConsoles(
+            send: { _, _ in }, supportsConsoles: { _ in true },
+            makeSurface: { _, _, _ in throw CancellationError() }
+        )
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            consoles: consoles
+        )
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        let summary = PeerConsoleSummary(
+            consoleId: "c", title: "zsh", worktreeId: "w", projectId: "p",
+            projectName: "alas", worktreeName: "w", rows: 24, columns: 80)
+
+        consoles.receive(serverId: "B", .list(consoles: [summary]))
+
+        #expect(client.snapshot.groups.first?.consoles == [summary])
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
