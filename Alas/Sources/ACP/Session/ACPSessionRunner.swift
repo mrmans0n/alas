@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 #if DEBUG
 typealias ACPRemoteFileWriteForTesting = @MainActor (
@@ -560,7 +561,7 @@ final class ACPSessionRunner {
             // the unexpected stream-end.
             if Task.isCancelled || !self.isConnectionCurrent() { return }
             self.turnPublicationGeneration += 1
-            self.pendingCompletedOutputBoundary?.successfulTurn = nil
+            self.discardPendingSuccessfulTurn("start: connection ended unexpectedly")
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
@@ -1728,7 +1729,7 @@ final class ACPSessionRunner {
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("stop")
         localTitleTask?.cancel()
         localTitleTask = nil
         flushPendingIncomingUpdates(
@@ -1910,7 +1911,7 @@ final class ACPSessionRunner {
     func invalidateActivePrompt() {
         invalidateNativeSteering()
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("invalidateActivePrompt")
         if let promptID = activePromptID {
             cancelledPromptIDs.insert(promptID)
             activePromptID = nil
@@ -2475,7 +2476,7 @@ final class ACPSessionRunner {
             return sent
         }
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("userCancel")
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.clearRetryStatus()
         // Capture the prompt + queue head the user INTENDED to stop
@@ -3452,7 +3453,7 @@ extension ACPSessionRunner {
             return
         }
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("steer")
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         let interruptedBackgroundWake = session.queue.first.map {
             $0.status == .sending && $0.backgroundTaskWake != nil
@@ -3616,7 +3617,7 @@ extension ACPSessionRunner {
         steeringSawActive = detachedSteeringTurn && lastSteeringThreadStatus == "active"
         steeringSawActiveAfterIdle = false
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("steerRunningTurn")
         onPromptWorkChanged?()
 
         Task { [weak self] in
@@ -4082,7 +4083,7 @@ extension ACPSessionRunner {
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("sendNow")
         flushPendingIncomingUpdates()
         session.clearRetryStatus()
         let promptID = session.allocatePromptID()
@@ -4451,7 +4452,10 @@ extension ACPSessionRunner {
                                       delegatedSource == nil,
                                       pendingForkContext == nil,
                                       !self.cancelledPromptIDs.contains(promptID)
-                                else { return nil }
+                                else {
+                                    nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: normalUserTurn=\(normalUserTurn) delegated=\(delegatedSource != nil) forkContext=\(pendingForkContext != nil) cancelled=\(self.cancelledPromptIDs.contains(promptID))")
+                                    return nil
+                                }
                                 return NextPromptCompletedTurn(
                                     sessionID: self.sessionId,
                                     incarnation: self.session.incarnation,
@@ -4461,7 +4465,12 @@ extension ACPSessionRunner {
                                 )
                             }
                         )
+                        if completionUserMessageID == nil {
+                            nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: no recorded user message")
+                        }
                         self.onPromptWorkChanged?()
+                    } else {
+                        nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: no longer the active prompt (newerActive=\(hasNewerActivePrompt), cancelled=\(wasCancelled))")
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -4573,7 +4582,7 @@ extension ACPSessionRunner {
     ) -> Bool {
         guard !nativeForkBarrierActive, !session.holdsPromptsForDelegatedSelection else { return false }
         turnPublicationGeneration += 1
-        pendingCompletedOutputBoundary?.successfulTurn = nil
+        discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()
         let promptID = session.allocatePromptID()
         activePromptID = promptID
@@ -4735,7 +4744,12 @@ extension ACPSessionRunner {
         guard !nativeSteeringInProgress, !detachedSteeringTurn,
               let boundary = pendingCompletedOutputBoundary,
               appliedUpdateCount >= boundary.updateCount
-        else { return }
+        else {
+            if let turn = pendingCompletedOutputBoundary?.successfulTurn {
+                nextPromptLogger.debug("prompt \(turn.promptID) waiting: steering=\(self.nativeSteeringInProgress || self.detachedSteeringTurn) updatesApplied=\(self.appliedUpdateCount)/\(self.pendingCompletedOutputBoundary?.updateCount ?? 0)")
+            }
+            return
+        }
         pendingCompletedOutputBoundary = nil
         flushStreamingPersist()
         // markCompletedOutputBoundary() materialises any held replay candidate
@@ -4746,42 +4760,39 @@ extension ACPSessionRunner {
         if session.transcript.messages.count > before {
             persistFromIndex(before)
         }
-        guard activePromptID == nil else { return }
+        guard activePromptID == nil else {
+            if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: another prompt is active") }
+            return
+        }
         // The turn's updates have drained: its echoes have all arrived.
         session.endSymbolExpansionEchoTurn()
         session.transcript.streamingState = .idle
-        guard flushQueueWhenReady else { return }
+        guard flushQueueWhenReady else {
+            if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: queue flush deferred") }
+            return
+        }
         flushQueueIfIdle()
-        guard let turn = boundary.successfulTurn,
-              !stopped, holdsLeaseForWrite(),
-              session.agentState == .ready,
-              activePromptID == nil,
-              session.queue.isEmpty,
-              session.transcript.pendingPermission == nil,
-              session.transcript.pendingQuestion == nil,
-              session.transcript.pendingPlan == nil,
-              session.transcript.pendingUserInputs.isEmpty,
-              !steerInProgress,
-              !nativeForkBarrierActive
-        else { return }
+        guard let turn = boundary.successfulTurn else { return }
+        if let blocker = successfulTurnBlocker() {
+            nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: \(blocker, privacy: .public)")
+            return
+        }
         let publicationGeneration = turnPublicationGeneration
         let publicationTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.flushPersistence()
-            guard !self.stopped,
-                  self.turnPublicationGeneration == publicationGeneration,
-                  self.holdsLeaseForWrite(),
-                  self.session.agentState == .ready,
-                  self.session.nextPromptID == turn.promptID + 1,
-                  self.activePromptID == nil,
-                  self.session.queue.isEmpty,
-                  self.session.transcript.pendingPermission == nil,
-                  self.session.transcript.pendingQuestion == nil,
-                  self.session.transcript.pendingPlan == nil,
-                  self.session.transcript.pendingUserInputs.isEmpty,
-                  !self.steerInProgress,
-                  !self.nativeForkBarrierActive
-            else { return }
+            if self.turnPublicationGeneration != publicationGeneration {
+                nextPromptLogger.notice("prompt \(turn.promptID) dropped before publishing: superseded")
+                return
+            }
+            if self.session.nextPromptID != turn.promptID + 1 {
+                nextPromptLogger.notice("prompt \(turn.promptID) dropped before publishing: a newer prompt was allocated")
+                return
+            }
+            if let blocker = self.successfulTurnBlocker() {
+                nextPromptLogger.notice("prompt \(turn.promptID) dropped before publishing: \(blocker, privacy: .public)")
+                return
+            }
             self.onSuccessfulTurn(NextPromptCompletedTurn(
                 sessionID: turn.sessionID,
                 incarnation: turn.incarnation,
@@ -4959,6 +4970,29 @@ extension ACPSessionRunner {
     /// without a lease), gating is disabled and writes always proceed.
     private func holdsLeaseForWrite() -> Bool {
         canWrite()
+    }
+
+    /// Names the first condition that keeps a finished turn from being offered a next-prompt suggestion.
+    private func successfulTurnBlocker() -> String? {
+        if stopped { return "runner stopped" }
+        if !holdsLeaseForWrite() { return "write lease not held" }
+        if session.agentState != .ready { return "agent not ready" }
+        if activePromptID != nil { return "another prompt is active" }
+        if !session.queue.isEmpty { return "queue not empty" }
+        if session.transcript.pendingPermission != nil { return "pending permission" }
+        if session.transcript.pendingQuestion != nil { return "pending question" }
+        if session.transcript.pendingPlan != nil { return "pending plan" }
+        if !session.transcript.pendingUserInputs.isEmpty { return "pending user input" }
+        if steerInProgress { return "steer in progress" }
+        if nativeForkBarrierActive { return "native fork barrier" }
+        return nil
+    }
+
+    private func discardPendingSuccessfulTurn(_ reason: String) {
+        if let turn = pendingCompletedOutputBoundary?.successfulTurn {
+            nextPromptLogger.notice("prompt \(turn.promptID) discarded: \(reason, privacy: .public)")
+        }
+        pendingCompletedOutputBoundary?.successfulTurn = nil
     }
 
     /// Cached authority is enough for in-memory updates and persistence fences,

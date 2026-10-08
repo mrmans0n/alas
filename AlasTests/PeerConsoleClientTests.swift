@@ -16,7 +16,7 @@ import Testing
         "\(esc)[200~pasted\ntext\(esc)[201~",                 // bracketed paste
         "\u{03}\u{7F}\t",                                     // Ctrl-C, backspace, tab
     ])
-    func keyboardInputPassesThrough(input: String) {
+    func userInputPassesThrough(input: String) {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data(input.utf8)) == Data(input.utf8))
     }
@@ -32,15 +32,58 @@ import Testing
         "\(esc)]10;rgb:ffff/ffff/ffff\(esc)\\",               // OSC color reply, ST
         "\(esc)P1+r544e=787465726d\(esc)\\",                  // XTGETTCAP reply
         "\(esc)[I\(esc)[O",                                   // focus in/out
-        "\(esc)[<0;10;5M\(esc)[<0;10;5m",                     // SGR mouse
-        "\(esc)[M !!",                                        // X10 mouse
-        "\(esc)[M \u{A0}!",                                   // UTF-8/1005 mouse (two-byte column)
-        "\(esc)[32;10;5M",                                     // rxvt/1015 mouse
         "\(esc)[8;40;120t",                                   // window size report
+        "\(esc)[<0;10;5M",                                    // SGR mouse the host did not ask for
+        "\(esc)[M !!",                                        // legacy X10 mouse
+        "\(esc)[32;10;5M",                                     // legacy rxvt/1015 mouse
     ])
     func terminalRepliesAreDropped(reply: String) {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data(reply.utf8)).isEmpty)
+    }
+
+    @Test func sgrMouseReportsGoThroughOnlyWhileTheHostUsesSGR() {
+        var filter = PeerConsoleInputFilter()
+        let press = Data("\(Self.esc)[<0;10;5M\(Self.esc)[<0;10;5m\(Self.esc)[<64;10;5M".utf8)
+        #expect(filter.filter(press).isEmpty)
+        filter.forwardedMouseEvents = .any
+        #expect(filter.filter(press) == press)
+        // A report split across reads goes out whole and only once.
+        #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
+        #expect(filter.filter(Data("0;5M".utf8)) == Data("\(Self.esc)[<0;10;5M".utf8))
+        // Legacy formats are never forwarded.
+        #expect(filter.filter(Data("\(Self.esc)[M !!k".utf8)) == Data("k".utf8))
+    }
+
+    @Test(arguments: [
+        // (button code, release, events, forwarded)
+        (0, false, .x10, true), (0, true, .x10, false), (64, false, .x10, true),
+        (0, true, .normal, true), (64, false, .normal, true), (32, false, .normal, false),
+        (32, false, .button, true), (35, false, .button, false), (96, false, .button, true),
+        (163, false, .button, true),
+        (35, false, .any, true), (0, false, .none, false),
+    ] as [(Int, Bool, PeerConsoleMouseModeTracker.Events, Bool)])
+    func sgrMouseReportsMatchTheHostsTrackingMode(
+        button: Int, release: Bool, events: PeerConsoleMouseModeTracker.Events, forwarded: Bool
+    ) {
+        let parameters = Array("\(button);10;5".utf8)
+        #expect(PeerConsoleInputFilter.sgrMouseReport(parameters, release: release, isWanted: events) == forwarded)
+    }
+
+    @Test func aSplitLegacyReportKeepsTheEncodingItStartedIn() {
+        var filter = PeerConsoleInputFilter()
+        filter.legacyMouseUTF8 = true
+        #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
+        // The surface is told to leave 1005 before the rest arrives.
+        filter.legacyMouseUTF8 = false
+        #expect(filter.filter(Data([0xA0, 0x21]) + Data("k".utf8)) == Data("k".utf8))
+        // Only that report keeps the old encoding: a raw report after it in
+        // the same read is sized as X10.
+        filter.legacyMouseUTF8 = true
+        #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
+        filter.legacyMouseUTF8 = false
+        let rest = Data([0xA0, 0x21, 0x1B, 0x5B, 0x4D, 0x20, 0xC5, 0x21]) + Data("k".utf8)
+        #expect(filter.filter(rest) == Data("k".utf8))
     }
 
     @Test func repliesSplitAcrossReadsAreDroppedAndKeysAroundThemKept() {
@@ -85,6 +128,107 @@ import Testing
         #expect(filter.flushAmbiguousPrefix().isEmpty)
         kept += filter.filter(Data("\\x".utf8))
         #expect(kept == Data("kx".utf8))
+    }
+}
+
+@Suite struct PeerConsoleMouseModeTrackerTests {
+    @Test func aSnapshotWithSeveralModesOfAGroupSetLeavesThemUnknownUntilLiveOutputSettlesThem() {
+        var tracker = PeerConsoleMouseModeTracker()
+        // Ghostty serializes set modes in fixed order, so this could have
+        // been 1006 then 1005 (UTF-8 active) as easily as the reverse.
+        tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1005h\u{1B}[?1006h".utf8))
+        #expect(!tracker.hostWantsSGRMouse)
+        let live = tracker.observe(Data("\u{1B}[?1006h".utf8))
+        #expect(live && tracker.hostWantsSGRMouse)
+        // RIS clears every mode, which is a known state again.
+        tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1005h\u{1B}[?1006h".utf8))
+        _ = tracker.observe(Data("\u{1B}c".utf8))
+        #expect(tracker.formatKnown && tracker.hostFormat == .x10)
+        // The same holds for event modes: 1003 then 1000 replays as 1000, 1003.
+        tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1003h\u{1B}[?1006h".utf8))
+        #expect(!tracker.hostWantsSGRMouse)
+        let liveEvents = tracker.observe(Data("\u{1B}[?1000h".utf8))
+        #expect(liveEvents && tracker.hostWantsSGRMouse)
+        // A snapshot with a single format set is unambiguous.
+        tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8))
+        #expect(tracker.hostWantsSGRMouse)
+    }
+
+    @Test func sgrIsForcedRightAfterEachFormatChangeInsideAChunk() {
+        var tracker = PeerConsoleMouseModeTracker()
+        let sgr = "\u{1B}[?1006h"
+        let output = tracker.forcingSGR(Data("a\u{1B}[?1005hbig tail\u{1B}cb\u{1B}[?25lc".utf8))
+        #expect(output == Data("a\u{1B}[?1005h\(sgr)big tail\u{1B}c\(sgr)b\u{1B}[?25lc".utf8))
+        #expect(tracker.hostFormat == .x10)
+        let unchanged = Data("plain\u{1B}[?2004h".utf8)
+        let passedThrough = tracker.forcingSGR(unchanged)
+        #expect(passedThrough == unchanged)
+    }
+
+    @Test func followsTheHostsMouseFormatAcrossSplitsAndResets() {
+        var tracker = PeerConsoleMouseModeTracker()
+        func observe(_ output: String) -> Bool { tracker.observe(Data(output.utf8)) }
+        #expect(tracker.hostFormat == .x10)
+        #expect(!observe("\u{1B}[?1000;10"))
+        #expect(observe("06h text"))
+        #expect(tracker.hostFormat == .sgr)
+        // Unrelated or malformed modes are not format changes.
+        #expect(!observe("\u{1B}[?2004h\u{1B}[?10060l\u{1B}[1006l"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?1015h"))
+        #expect(tracker.hostFormat == .urxvt)
+        // As in Ghostty, resetting any format mode falls back to X10.
+        #expect(observe("\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(observe("\u{1B}c"))
+        #expect(tracker.hostFormat == .x10)
+        // Up to Ghostty's 24 parameters apply; one more drops the sequence.
+        let fullest = String(repeating: "1000;", count: 23) + "1006h"
+        #expect(observe("\u{1B}[?\(fullest)"))
+        #expect(tracker.hostFormat == .sgr)
+        let tooMany = String(repeating: "1;", count: 24) + "1005h"
+        #expect(!observe("\u{1B}[?\(tooMany)"))
+        #expect(tracker.hostFormat == .sgr)
+        // Every recognized parameter counts, however many come first.
+        #expect(observe("\u{1B}[?" + String(repeating: "1005;", count: 9) + "1006l"))
+        #expect(tracker.hostFormat == .x10)
+        // Save and restore around a temporary change.
+        #expect(observe("\u{1B}[?1006h\u{1B}[?1006s\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(observe("\u{1B}[?1006r"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?1005s\u{1B}[?1005h"))
+        #expect(tracker.hostFormat == .utf8)
+        #expect(observe("\u{1B}[?1005r"))
+        #expect(tracker.hostFormat == .x10)
+        // Parameters are numbers: zero padding names the same mode, and
+        // values past any mode number never match one.
+        #expect(observe("\u{1B}[?01006h"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?0001006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(!observe("\u{1B}[?99991006h\u{1B}[?1006000000h"))
+        #expect(tracker.hostFormat == .x10)
+        // Colon sub-parameters make Ghostty ignore a mode sequence.
+        #expect(!observe("\u{1B}[?1005:0h"))
+        #expect(tracker.hostFormat == .x10)
+        // Embedded C0 controls and DEL do not end a sequence; CAN does.
+        #expect(observe("\u{1B}[?1005\u{07}h"))
+        #expect(tracker.hostFormat == .utf8)
+        #expect(observe("\u{1B}[?10\u{7F}06h"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(!observe("\u{1B}[?1005\u{18}h"))
+        #expect(tracker.hostFormat == .sgr)
+        // Event modes follow the same rules in their own group.
+        #expect(observe("\u{1B}[?1002h"))
+        #expect(tracker.hostEvents == .button)
+        #expect(observe("\u{1B}[?1000l"))
+        #expect(tracker.hostEvents == .none)
+        // A mode saved while another format was selected is still saved set.
+        #expect(observe("\u{1B}[?1006h\u{1B}[?1015h\u{1B}[?1006s\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(observe("\u{1B}[?1006r"))
+        #expect(tracker.hostFormat == .sgr)
     }
 }
 
@@ -178,6 +322,40 @@ import Testing
             .input(attachmentId: "a", generation: 3, sequence: 4, data: paste.suffix(1)),
         ])
     }
+
+    @Test func forwardingFollowsAcceptedOutputEvenBeforeItReachesTheSurface() {
+        var relay = PeerConsoleInputRelay()
+        let lease = PeerConsoleControl(owner: .you, generation: 1, change: .current)
+        let click = Data("\u{1B}[<0;10;5M".utf8)
+        relay.observeHostOutput(Data("\u{1B}[?1000;1006h".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        // The host turns SGR off; the bytes may still be held by the write
+        // gate, but forwarding already stops.
+        relay.observeHostOutput(Data("\u{1B}[?1006l".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        // Likewise when it stops wanting mouse events while keeping SGR.
+        relay.observeHostOutput(Data("\u{1B}[?1006h".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        relay.observeHostOutput(Data("\u{1B}[?1000l".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        // A gap in the output stops forwarding until the snapshot rebuilds
+        // the modes the missing bytes may have changed.
+        relay.observeHostOutput(Data("\u{1B}[?1000h".utf8))
+        relay.forgetHostModes()
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        relay.observeHostOutput(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8), isSnapshot: true)
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        // A legacy report the surface emits before the override lands is
+        // dropped whole, sized by the format the surface was just told.
+        _ = relay.prepareForSurface(Data("\u{1B}[?1005h".utf8))
+        let utf8Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]) + Data("k".utf8)
+        #expect(relay.relay(utf8Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+        _ = relay.prepareForSurface(Data("\u{1B}[?1005l".utf8))
+        let x10Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0]) + Data("k".utf8)
+        #expect(relay.relay(x10Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+        // The surface still gets its SGR override when the bytes arrive.
+        #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))
+    }
 }
 
 @Suite struct PeerConsoleBridgeTests {
@@ -243,5 +421,11 @@ import Testing
         // Only newly online peers are asked again.
         consoles.peersChanged(online: ["srv-old", "srv-new"])
         #expect(sent.count == 2)
+    }
+}
+
+private extension PeerConsoleRequest {
+    var inputData: Data? {
+        if case .input(_, _, _, let data) = self { data } else { nil }
     }
 }

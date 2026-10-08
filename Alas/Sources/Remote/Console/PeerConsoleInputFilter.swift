@@ -1,13 +1,14 @@
 import Foundation
 
-/// Separates a viewer's keyboard input from bytes its terminal generated on
-/// its own.
+/// Separates a viewer's user input from bytes its terminal generated on its
+/// own.
 ///
 /// A remote console renders in a local Ghostty surface whose PTY bytes reach
-/// Alas through the bridge. Besides keys, navigation, and paste, Ghostty
-/// writes replies to queries in the stream (device attributes, cursor
-/// position, mode and color reports, focus and mouse reports). Those must
-/// never reach the shared console: the host's own terminal already answers.
+/// Alas through the bridge. Besides keys, navigation, paste, and the mouse
+/// reports a host program asked for, Ghostty writes replies to queries in the
+/// stream (device attributes, cursor position, mode and color reports) and
+/// focus reports about the viewer's own window. Those must never reach the
+/// shared console: the host's own terminal already answers.
 /// Modeled on upstream zmx's `isUserInput`, but filters rather than
 /// classifies, and keeps state so a sequence split across reads is handled.
 struct PeerConsoleInputFilter {
@@ -20,12 +21,22 @@ struct PeerConsoleInputFilter {
     static let maxDiscard = 16 * 1024 * 1024
 
     private var pending: [UInt8] = []
+    /// Which SGR mouse reports go through: the events the host program asked
+    /// for while it uses SGR (mode 1006), `.none` otherwise; see
+    /// `PeerConsoleMouseModeTracker`.
+    var forwardedMouseEvents = PeerConsoleMouseModeTracker.Events.none
+    /// Whether the surface was last told to use UTF-8/1005 mouse
+    /// coordinates. Only sizes the legacy reports it can emit in the instant
+    /// before the SGR override lands, so they are dropped whole.
+    var legacyMouseUTF8 = false
+    private var pendingLegacyUTF8 = false
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
 
     mutating func filter(_ chunk: Data) -> Data {
         let bytes = pending + chunk
+        let resumesPending = !pending.isEmpty
         pending = []
         var kept = Data()
         var i = 0
@@ -43,7 +54,10 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i) {
+            // A report split across reads keeps the encoding it started in;
+            // anything after it uses the current one.
+            let legacyUTF8 = resumesPending && i == 0 ? pendingLegacyUTF8 : legacyMouseUTF8
+            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents, legacyUTF8: legacyUTF8) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -51,6 +65,7 @@ struct PeerConsoleInputFilter {
                 // releases once nothing followed them.
                 if bytes.count - i <= Self.maxPending {
                     pending = Array(bytes[i...])
+                    pendingLegacyUTF8 = legacyUTF8
                 } else if Self.isStringIntroducer(bytes[i + 1]) {
                     continueDiscarding(bytes[i...], alreadyDiscarded: 0)
                 }
@@ -123,11 +138,16 @@ struct PeerConsoleInputFilter {
         case incomplete
     }
 
-    private static func sequence(in bytes: [UInt8], at start: Int) -> Sequence {
+    private static func sequence(
+        in bytes: [UInt8],
+        at start: Int,
+        mouseEvents: PeerConsoleMouseModeTracker.Events,
+        legacyUTF8: Bool
+    ) -> Sequence {
         guard start + 1 < bytes.count else { return .incomplete }
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
-            return controlSequence(in: bytes, at: start)
+            return controlSequence(in: bytes, at: start, mouseEvents: mouseEvents, legacyUTF8: legacyUTF8)
         case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
             return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
@@ -140,7 +160,35 @@ struct PeerConsoleInputFilter {
         }
     }
 
-    private static func controlSequence(in bytes: [UInt8], at start: Int) -> Sequence {
+    /// Whether an SGR report (`b;x;y` after the `<`) is an event the host's
+    /// tracking mode asked for, so a surface still in an older, broader mode
+    /// cannot send events the host has stopped expecting.
+    static func sgrMouseReport(
+        _ parameters: some Collection<UInt8>,
+        release: Bool,
+        isWanted events: PeerConsoleMouseModeTracker.Events
+    ) -> Bool {
+        let digits = parameters.prefix { $0 != UInt8(ascii: ";") }
+        guard let button = Int(String(decoding: digits, as: UTF8.self)) else { return false }
+        let motion = button & 32 != 0
+        // Low bits 3 mean "no button" only outside the wheel (64) and
+        // extended-button (128) groups, which reuse them for buttons.
+        let noButtonHeld = button & 3 == 3 && button & (64 | 128) == 0
+        switch events {
+        case .none: return false
+        case .x10: return !motion && !release
+        case .normal: return !motion
+        case .button: return !motion || !noButtonHeld
+        case .any: return true
+        }
+    }
+
+    private static func controlSequence(
+        in bytes: [UInt8],
+        at start: Int,
+        mouseEvents: PeerConsoleMouseModeTracker.Events,
+        legacyUTF8: Bool
+    ) -> Sequence {
         var j = start + 2
         let paramsStart = j
         while j < bytes.count, (0x30...0x3F).contains(bytes[j]) { j += 1 }
@@ -153,20 +201,29 @@ struct PeerConsoleInputFilter {
         let final = bytes[j]
         let length = j - start + 1
 
-        // Private markers (`<`, `=`, `>`, `?`) only appear in replies and
-        // SGR mouse reports: DA, DECRPM, kitty keyboard status.
+        // SGR mouse reports (`CSI < b;x;y M/m`), the only format the viewer's
+        // surface emits, and the only user input with a private marker. They
+        // are self-delimiting, so no mode is needed to find where they end.
+        if params.first == UInt8(ascii: "<"), final == UInt8(ascii: "M") || final == UInt8(ascii: "m") {
+            let release = final == UInt8(ascii: "m")
+            return sgrMouseReport(params.dropFirst(), release: release, isWanted: mouseEvents) ? .keep(length) : .drop(length)
+        }
+        // Every other private marker (`<`, `=`, `>`, `?`) is a reply: DA,
+        // DECRPM, kitty keyboard status.
         if let first = params.first, (0x3C...0x3F).contains(first) { return .drop(length) }
         switch final {
         case UInt8(ascii: "M"):
-            // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
-            // its coordinates as parameters.
+            // Legacy mouse reports, never forwarded: the viewer keeps its
+            // surface in SGR format, so these only appear in the instant a
+            // host format change is being overridden. No key encoding ends
+            // in `M`. rxvt/1015 carries coordinates as parameters.
             guard params.isEmpty else { return .drop(length) }
-            // X10, or UTF-8/1005: three coordinates follow, each one
-            // character, which 1005 encodes as two bytes above 95.
+            // X10 or UTF-8/1005: three coordinates follow, one byte each in
+            // X10 and UTF-8 characters in the format the surface was told.
             var end = start + length
             for _ in 0..<3 {
                 guard end < bytes.count else { return .incomplete }
-                end += bytes[end] >= 0xC0 ? 2 : 1
+                end += legacyUTF8 && bytes[end] >= 0xC0 ? 2 : 1
             }
             return end <= bytes.count ? .drop(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
@@ -181,6 +238,187 @@ struct PeerConsoleInputFilter {
             return .drop(length)
         default:
             return .keep(length)
+        }
+    }
+}
+
+/// The host program's mouse modes, followed in the output written to the
+/// viewer's surface: which events it wants (`CSI ? 9/1000/1002/1003`) and in
+/// which format (`CSI ? 1005/1006/1015/1016`), with `h` set, `l` reset, `s`
+/// save, and `r` restore. Mirrors Ghostty: every mode has its own set and
+/// saved bit, setting one selects it within its group, and resetting or
+/// restoring-unset any of them falls back to no events or X10 format.
+/// Handles combined mode changes of any length and sequences split across
+/// writes; RIS (`ESC c`), sent before every snapshot, clears everything.
+struct PeerConsoleMouseModeTracker {
+    enum Format: Equatable {
+        case x10, utf8, sgr, urxvt, sgrPixels
+    }
+
+    enum Events: Equatable {
+        case none, x10, normal, button, any
+    }
+
+    private enum State {
+        case ground, escape, controlSequence, privateParameters
+    }
+
+    private static let formats: [Int: Format] = [1005: .utf8, 1006: .sgr, 1015: .urxvt, 1016: .sgrPixels]
+    private static let events: [Int: Events] = [9: .x10, 1000: .normal, 1002: .button, 1003: .any]
+
+    private(set) var hostFormat = Format.x10
+    private(set) var hostEvents = Events.none
+    /// False after a snapshot left several modes of one group set: the
+    /// snapshot lists set modes in a fixed order, not the order that selected
+    /// the active one. The next live change to that group settles it again.
+    private(set) var formatKnown = true
+    private(set) var eventsKnown = true
+    /// Mouse modes currently set, and as last saved with `CSI ? n s`.
+    private var modesSet: Set<Int> = []
+    private var savedSet: Set<Int> = []
+    private var state = State.ground
+    /// Numeric value of the parameter being read, as Ghostty parses it
+    /// (`01006` is 1006); saturates so long digit runs never overflow or
+    /// wrap into a mode number.
+    private var parameter = 0
+    private static let parameterLimit = 100_000
+    /// Mouse modes named so far in the current sequence, last occurrence
+    /// last, applied once its final byte says what to do. At most eight.
+    private var named: [Int] = []
+    /// Set by a colon (Ghostty accepts colon sub-parameters only for SGR) or
+    /// by too many parameters: either way Ghostty ignores the whole sequence.
+    private var ignored = false
+    private var separators = 0
+    /// Ghostty's `Parser.MAX_PARAMS`: a sequence with this many separators
+    /// or more is dropped instead of dispatched.
+    private static let maxParameters = 24
+
+    /// Selects SGR mouse reports on the viewer's own surface; never sent to
+    /// the host.
+    static let sgrOverride = Data("\u{1B}[?1006h".utf8)
+
+    /// Whether the host program wants mouse events, in SGR format.
+    var hostWantsSGRMouse: Bool {
+        formatKnown && eventsKnown && hostEvents != .none && hostFormat == .sgr
+    }
+
+    /// Follows a snapshot. Its mode list cannot say which of several set
+    /// modes in a group was selected last, so that case leaves the group
+    /// unknown.
+    mutating func observeSnapshot(_ data: Data) {
+        _ = observe(data)
+        if modesSet.filter({ Self.formats[$0] != nil }).count > 1 { formatKnown = false }
+        if modesSet.filter({ Self.events[$0] != nil }).count > 1 { eventsKnown = false }
+    }
+
+    /// Returns whether `data` set, reset, saved, restored, or cleared any
+    /// mouse mode.
+    mutating func observe(_ data: Data) -> Bool {
+        var changed = false
+        for byte in data where step(byte) { changed = true }
+        return changed
+    }
+
+    /// Follows `data` and returns it with `sgrOverride` inserted right after
+    /// every mouse mode change, so the surface never reports the mouse in
+    /// another format while it is still consuming the rest of `data`.
+    mutating func forcingSGR(_ data: Data) -> Data {
+        var output = Data()
+        var start = data.startIndex
+        for index in data.indices where step(data[index]) {
+            let end = data.index(after: index)
+            output += data[start..<end] + Self.sgrOverride
+            start = end
+        }
+        guard start != data.startIndex else { return data }
+        return output + data[start...]
+    }
+
+    private mutating func step(_ byte: UInt8) -> Bool {
+        if byte == 0x1B {
+            state = .escape
+            return false
+        }
+        // As in Ghostty's VT parser: CAN and SUB abort a sequence, other C0
+        // controls and DEL are executed or ignored without leaving it.
+        if byte == 0x18 || byte == 0x1A {
+            state = .ground
+            return false
+        }
+        if byte < 0x20 || byte == 0x7F { return false }
+        switch state {
+        case .ground:
+            return false
+        case .escape:
+            state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
+            guard byte == UInt8(ascii: "c") else { return false }
+            hostFormat = .x10
+            hostEvents = .none
+            formatKnown = true
+            eventsKnown = true
+            modesSet = []
+            savedSet = []
+            return true
+        case .controlSequence:
+            state = byte == UInt8(ascii: "?") ? .privateParameters : .ground
+            parameter = 0
+            named = []
+            ignored = false
+            separators = 0
+            return false
+        case .privateParameters:
+            switch byte {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"):
+                parameter = min(parameter * 10 + Int(byte - UInt8(ascii: "0")), Self.parameterLimit)
+                return false
+            case UInt8(ascii: ";"):
+                separators += 1
+                if separators >= Self.maxParameters { ignored = true }
+                nameCurrentParameter()
+                return false
+            case UInt8(ascii: ":"):
+                ignored = true
+                return false
+            case UInt8(ascii: "h"), UInt8(ascii: "l"), UInt8(ascii: "s"), UInt8(ascii: "r"):
+                nameCurrentParameter()
+                state = .ground
+                guard !ignored else { return false }
+                for mode in named { apply(byte, to: mode) }
+                return !named.isEmpty
+            default:
+                state = .ground
+                return false
+            }
+        }
+    }
+
+    private mutating func nameCurrentParameter() {
+        let mode = parameter
+        parameter = 0
+        guard Self.formats[mode] != nil || Self.events[mode] != nil else { return }
+        named.removeAll { $0 == mode }
+        named.append(mode)
+    }
+
+    private mutating func apply(_ action: UInt8, to mode: Int) {
+        switch action {
+        case UInt8(ascii: "s"):
+            if modesSet.contains(mode) { savedSet.insert(mode) } else { savedSet.remove(mode) }
+        case UInt8(ascii: "r"):
+            set(mode, savedSet.contains(mode))
+        default:
+            set(mode, action == UInt8(ascii: "h"))
+        }
+    }
+
+    private mutating func set(_ mode: Int, _ enabled: Bool) {
+        if enabled { modesSet.insert(mode) } else { modesSet.remove(mode) }
+        if let format = Self.formats[mode] {
+            hostFormat = enabled ? format : .x10
+            formatKnown = true
+        } else if let events = Self.events[mode] {
+            hostEvents = enabled ? events : .none
+            eventsKnown = true
         }
     }
 }
