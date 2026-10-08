@@ -141,6 +141,17 @@ struct PeerConsoleInputFilter {
         }
     }
 
+    /// Bytes in one mouse coordinate: two for a valid two-byte UTF-8 lead
+    /// (0xC0 and 0xC1 never are) followed by a continuation byte, otherwise
+    /// one. Nil when a lead is the last byte read, so the caller waits.
+    /// ponytail: a raw X10 report past column 161 whose row byte happens to
+    /// be 0x80...0xBF (rows 96...159) reads as one 1005 character.
+    private static func mouseCoordinateWidth(_ bytes: [UInt8], at index: Int) -> Int? {
+        guard (0xC2...0xDF).contains(bytes[index]) else { return 1 }
+        guard index + 1 < bytes.count else { return nil }
+        return (0x80...0xBF).contains(bytes[index + 1]) ? 2 : 1
+    }
+
     private static func controlSequence(in bytes: [UInt8], at start: Int) -> Sequence {
         var j = start + 2
         let paramsStart = j
@@ -168,12 +179,15 @@ struct PeerConsoleInputFilter {
             // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
             // its coordinates as parameters.
             guard params.isEmpty else { return .keep(length) }
-            // X10, or UTF-8/1005: three coordinates follow, each one
-            // character, which 1005 encodes as two bytes above 95.
+            // X10, or UTF-8/1005: three coordinates follow. Raw X10 uses one
+            // byte each, reaching 0xC0 and above past column 159; 1005
+            // encodes values above 95 as a two-byte UTF-8 character.
             var end = start + length
             for _ in 0..<3 {
-                guard end < bytes.count else { return .incomplete }
-                end += bytes[end] >= 0xC0 ? 2 : 1
+                guard end < bytes.count, let width = mouseCoordinateWidth(bytes, at: end) else {
+                    return .incomplete
+                }
+                end += width
             }
             return end <= bytes.count ? .keep(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):

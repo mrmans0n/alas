@@ -44,6 +44,17 @@ import Testing
         #expect(filter.filter(Data(reply.utf8)).isEmpty)
     }
 
+    @Test(arguments: [
+        [0x1B, 0x5B, 0x4D, 0x20, 0xC0, 0x21],      // raw X10, column 160
+        [0x1B, 0x5B, 0x4D, 0x20, 0xD5, 0x21],      // raw X10, high column then low row
+        [0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21], // UTF-8/1005, two-byte column
+    ] as [[UInt8]])
+    func mouseCoordinatesAreSizedByEncoding(report: [UInt8]) {
+        var filter = PeerConsoleInputFilter()
+        #expect(filter.filter(Data(report) + Data("k".utf8)) == Data(report) + Data("k".utf8))
+        #expect(!filter.hasPending)
+    }
+
     @Test func mouseReportsSplitAcrossReadsGoOutWholeAndOnce() {
         var filter = PeerConsoleInputFilter()
         #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
