@@ -1151,6 +1151,26 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == "B:new")
     }
 
+    @Test func aWorktreesNewSessionPreselectsItEvenWithNoTabOpen() throws {
+        let (links, client, _, _) = startedClientWithPeerRepo()
+        let history = RemoteSessionSummary(id: "s", title: "s", agentId: "claude", status: "idle", canDrive: true,
+                                           isActive: false, projectId: "p", worktreeId: "w1",
+                                           worktree: projectRow("s").worktree)
+        links.receive(.sessionList(sessions: [history]), from: "B")
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        let selection = NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id)
+        // Its only session is history, so selecting the worktree opens no tab.
+        client.selectWorktree(selection)
+        #expect(client.selectedTab == nil)
+
+        client.beginNewSession(in: selection)
+
+        #expect(client.newSession?.projectId == "p")
+        #expect(client.newSessionDefaultWorktreeId == "w1")
+        links.offline("B")
+        #expect(client.newSessionTarget(in: selection) == nil)
+    }
+
     @Test func aRefusedCreateKeepsTheSheetWithTheReason() {
         let (links, client, peer, repo) = startedClientWithPeerRepo()
         client.beginNewSession(peer: peer, repo: repo)

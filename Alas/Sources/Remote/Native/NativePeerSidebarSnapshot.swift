@@ -40,6 +40,16 @@ enum NativePeerState: Equatable {
         case .unavailable: "Unavailable"
         }
     }
+
+    /// Theme token for the presence dot drawn beside the peer's laptop.
+    var presenceColorToken: String {
+        switch self {
+        case .online: "add"
+        case .connecting: "mod"
+        case .tokenRevoked, .identityMismatch, .incompatible: "del"
+        case .offline, .identityUnproven, .idle, .unavailable: "fg-faint"
+        }
+    }
 }
 
 struct NativePeerGroup: Identifiable, Equatable {
@@ -159,6 +169,19 @@ enum NativePeerTab: Hashable {
     case console(String)
 }
 
+/// A peer worktree's tab with the session or console row it stands for.
+enum NativePeerTabRow: Identifiable {
+    case session(RemoteSessionSummary)
+    case console(PeerConsoleSummary)
+
+    var id: NativePeerTab {
+        switch self {
+        case .session(let session): .session(session.id)
+        case .console(let console): .console(console.consoleId)
+        }
+    }
+}
+
 /// A peer worktree, by the peer's `serverId` and `NativePeerWorktreeGroup.id`.
 struct NativePeerWorktreeSelection: Hashable {
     let serverId: String
@@ -193,6 +216,10 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         sessions.lazy.compactMap(\.worktree).first ?? consoles.lazy.compactMap(\.worktree).first
     }
     var isMain: Bool { worktree?.isMain == true }
+    /// The peer's own worktree id; nil when its rows carry none.
+    var peerWorktreeId: String? {
+        (sessions.map(\.worktreeId) + consoles.map(\.worktreeId)).lazy.compactMap { $0 }.first { !$0.isEmpty }
+    }
 
     /// Main first, then `ordering` over the rest — the same shape as
     /// `ProjectsManager.sortedWorktrees`. Ties fall back to the id.
@@ -222,6 +249,16 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         return main + sortedOthers
     }
     var tabs: [NativePeerTab] { Self.tabs(sessions: sessions, consoles: consoles) }
+
+    /// `tabs` with their rows, in the same order.
+    var tabRows: [NativePeerTabRow] {
+        tabs.compactMap { tab in
+            switch tab {
+            case .session(let id): sessions.first { $0.id == id }.map(NativePeerTabRow.session)
+            case .console(let id): consoles.first { $0.consoleId == id }.map(NativePeerTabRow.console)
+            }
+        }
+    }
 
     /// The host's open tabs: active sessions and consoles, in the host's tab
     /// order. Panes of one split tab share an index and keep their listed

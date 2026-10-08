@@ -5,7 +5,6 @@ import SwiftUI
 /// transcript uses, so a mirrored session reads like a native tab.
 struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
-    let agentLookup: (String) -> AgentDefinition?
     var typography: ACPChatTypography = .default
     var collapsesFinishedToolCalls = false
     @Environment(\.theme) private var theme
@@ -15,25 +14,8 @@ struct NativePeerSessionView: View {
     private var canDrive: Bool { online && client.transcript?.canDrive == true }
     private var sessionKey: String { client.selectedSessionId ?? "peer-transcript" }
 
-    private var selectedAgentID: String? {
-        guard let agentID = client.selectedRow?.agentId,
-              !agentID.isEmpty, agentID != "none"
-        else { return nil }
-        return agentID
-    }
-
-    private var selectedAgent: AgentDefinition? {
-        guard let selectedAgentID else { return nil }
-        return agentLookup(selectedAgentID) ?? AgentBuiltins.entry(id: selectedAgentID)
-    }
-
-    private var selectedAgentAccessibilityLabel: String {
-        "Agent: \(selectedAgent?.displayName ?? selectedAgentID ?? "Unknown")"
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            header
             if let transcript = client.transcript {
                 GeometryReader { proxy in
                     let contentMaxWidth = ACPChatLayout.contentMaxWidth(forChatColumnWidth: proxy.size.width)
@@ -58,53 +40,6 @@ struct NativePeerSessionView: View {
                 startPoint: .top, endPoint: .bottom
             )
         )
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "desktopcomputer")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme.color("fg-muted"))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(client.selectedRow?.title ?? "Peer session")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(theme.color("fg"))
-                    .lineLimit(1)
-                HStack(alignment: .center, spacing: 5) {
-                    Text([client.selectedPeer?.name, client.selectedRow?.worktree?.projectName,
-                          client.selectedRow?.worktree?.worktreeName,
-                          client.selectedRow?.worktree?.branch]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("fg-muted"))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    selectedAgentLogo
-                }
-            }
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(theme.color("bg-1").opacity(0.7))
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(theme.color("line")).frame(height: 0.5)
-        }
-    }
-
-    @ViewBuilder
-    private var selectedAgentLogo: some View {
-        if let selectedAgent {
-            AgentLogoView(agent: selectedAgent, size: 13)
-                .accessibilityLabel(selectedAgentAccessibilityLabel)
-        } else if selectedAgentID != nil {
-            Image(systemName: "sparkles")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(theme.color("fg-muted"))
-                .frame(width: 13, height: 13)
-                .accessibilityLabel(selectedAgentAccessibilityLabel)
-        }
     }
 
     // MARK: - Transcript
