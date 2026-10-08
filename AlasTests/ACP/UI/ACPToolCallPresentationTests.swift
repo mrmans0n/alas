@@ -122,6 +122,8 @@ struct ACPToolCallPresentationTests {
         ("x", "alas.visual_show"),
         ("x", "alas/visual_show"),
         ("x", "MCP__Alas__Visual_Show"),
+        ("x", "alas.visual_show({\"title\": \"t\"})"),
+        ("alas.visual_show({\"title\": \"t\"})", nil),
     ] as [(String, String?)])
     func visualShowPresentation(title: String, name: String?) {
         let presentation = ACPToolCallPresentation.resolve(toolCall(title: title, name: name))
@@ -136,6 +138,18 @@ struct ACPToolCallPresentationTests {
     ] as [(String, String)])
     func namedToolsAreNotMistakenForVisualShow(title: String, name: String) {
         let call = toolCall(title: title, name: name)
+        #expect(!ACPToolCallPresentation.isVisualShow(call))
+        #expect(ACPToolCallPresentation.resolve(call).label != "Visual aid")
+    }
+
+    @Test("an unnamed call whose title merely mentions visual_show is not the visual tool", arguments: [
+        "rg visual_show Alas/",
+        "Read visual_show.md",
+        "grep -rn alas.visual_show Alas/",
+        "cat docs/visual_show",
+    ])
+    func unnamedCommandsMentioningVisualShowAreOrdinary(title: String) {
+        let call = toolCall(title: title, name: nil)
         #expect(!ACPToolCallPresentation.isVisualShow(call))
         #expect(ACPToolCallPresentation.resolve(call).label != "Visual aid")
     }
