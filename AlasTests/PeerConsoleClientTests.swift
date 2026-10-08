@@ -60,6 +60,7 @@ import Testing
         (0, false, .x10, true), (0, true, .x10, false), (64, false, .x10, true),
         (0, true, .normal, true), (64, false, .normal, true), (32, false, .normal, false),
         (32, false, .button, true), (35, false, .button, false), (96, false, .button, true),
+        (163, false, .button, true),
         (35, false, .any, true), (0, false, .none, false),
     ] as [(Int, Bool, PeerConsoleMouseModeTracker.Events, Bool)])
     func sgrMouseReportsMatchTheHostsTrackingMode(

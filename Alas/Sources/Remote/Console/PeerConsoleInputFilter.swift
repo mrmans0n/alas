@@ -160,7 +160,9 @@ struct PeerConsoleInputFilter {
         let digits = parameters.prefix { $0 != UInt8(ascii: ";") }
         guard let button = Int(String(decoding: digits, as: UTF8.self)) else { return false }
         let motion = button & 32 != 0
-        let noButtonHeld = button & 3 == 3 && button & 64 == 0
+        // Low bits 3 mean "no button" only outside the wheel (64) and
+        // extended-button (128) groups, which reuse them for buttons.
+        let noButtonHeld = button & 3 == 3 && button & (64 | 128) == 0
         switch events {
         case .none: return false
         case .x10: return !motion && !release
