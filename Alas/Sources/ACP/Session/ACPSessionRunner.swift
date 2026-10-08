@@ -4374,7 +4374,10 @@ extension ACPSessionRunner {
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
-                    guard self.isConnectionCurrent() else { return }
+                    guard self.isConnectionCurrent() else {
+                        nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: its connection was replaced or detached")
+                        return
+                    }
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     // Read-only here (not `.remove`): `deferCompletedOutputBoundaryUntilUpdatesDrain`'s
