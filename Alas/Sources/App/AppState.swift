@@ -703,6 +703,8 @@ final class AppState {
     /// Built on first peer console request; see `AppState+PeerConsoles`.
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
+    /// Last queued remote tab action per session id; see `serializedSessionTabAction`.
+    @ObservationIgnored var remoteSessionTabActionTails: [String: (token: UUID, done: Task<Void, Never>)] = [:]
     @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
@@ -14318,6 +14320,8 @@ final class AppState {
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else { return }
+        // Another open may have added the tab while this one was suspended.
+        guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
     }
@@ -15561,6 +15565,33 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        await serializedSessionTabAction(for: id) { await self.openSessionTabNow(for: id) }
+    }
+
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        await serializedSessionTabAction(for: id) { self.closeSessionTabNow(for: id) }
+    }
+
+    /// Runs remote tab actions for one session one at a time across every
+    /// connection, so two opens cannot both append a tab and a close cannot
+    /// report success while an earlier open is still about to add one.
+    private func serializedSessionTabAction(
+        for id: String,
+        _ action: @escaping @MainActor () async -> RemoteSessionTabActionResult
+    ) async -> RemoteSessionTabActionResult {
+        let previous = remoteSessionTabActionTails[id]?.done
+        let token = UUID()
+        let run = Task { @MainActor in
+            await previous?.value
+            return await action()
+        }
+        remoteSessionTabActionTails[id] = (token, Task { _ = await run.value })
+        let result = await run.value
+        if remoteSessionTabActionTails[id]?.token == token { remoteSessionTabActionTails[id] = nil }
+        return result
+    }
+
+    private func openSessionTabNow(for id: String) async -> RemoteSessionTabActionResult {
         let worktree: Worktree
         switch remoteSessionTabWorktree(for: id) {
         case .found(let found): worktree = found
@@ -15575,7 +15606,7 @@ extension AppState: RemoteSessionsProvider {
         return .success
     }
 
-    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+    private func closeSessionTabNow(for id: String) -> RemoteSessionTabActionResult {
         let worktree: Worktree
         switch remoteSessionTabWorktree(for: id) {
         case .found(let found): worktree = found

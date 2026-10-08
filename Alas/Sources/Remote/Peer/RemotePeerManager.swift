@@ -1152,6 +1152,10 @@ extension RemotePeerManager: FederatedPeerLinks {
             .map { FederatedPeerInfo(serverId: $0.serverId, name: $0.name) }
     }
 
+    func peerSupports(_ capability: String, serverId: String) -> Bool {
+        capabilities[serverId]?.contains(capability) == true
+    }
+
     func sendToPeer(_ message: RemoteClientMessage, serverId: String) {
         guard let peer = peers.first(where: { $0.serverId == serverId }),
               carriesSessions(peerId: peer.id) else { return }

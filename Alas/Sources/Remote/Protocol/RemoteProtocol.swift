@@ -570,9 +570,12 @@ enum RemoteServerMessage: Equatable, Sendable {
     /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
     /// `requestId` echoes the response's token when it carried one.
     case visualAidRejected(sessionId: String, visualId: String, reason: String, requestId: String? = nil)
+    /// The host opened or closed the tab for `sessionId`. Every tab action
+    /// gets exactly one of these two replies, in request order; the session
+    /// list refresh that follows a success carries the new `isActive`.
+    case sessionTabActionSucceeded(sessionId: String)
     /// The host could not open or close the tab for `sessionId` (unknown id,
-    /// archived row, or worktree gone). Success has no reply; the session
-    /// list refresh carries the new `isActive`.
+    /// archived row, worktree gone, or a peer that does not serve tab actions).
     case sessionTabActionFailed(sessionId: String, message: String)
     case sessionConfig(RemoteSessionConfig)
     case sessionRenamed(sessionId: String, title: String)
@@ -738,6 +741,8 @@ extension RemoteServerMessage: Codable {
                 reason: try c.decode(String.self, forKey: .reason),
                 requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
         case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "sessionTabActionSucceeded":
+            self = .sessionTabActionSucceeded(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sessionTabActionFailed":
             self = .sessionTabActionFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -976,6 +981,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(v, forKey: .visualId)
             try c.encode(r, forKey: .reason)
             try c.encodeIfPresent(requestId, forKey: .requestId)
+        case .sessionTabActionSucceeded(let s):
+            try c.encode("sessionTabActionSucceeded", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
         case .sessionTabActionFailed(let s, let message):
             try c.encode("sessionTabActionFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)

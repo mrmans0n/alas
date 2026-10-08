@@ -420,6 +420,7 @@ final class RemoteSessionGateway {
     private func reportTabAction(_ result: RemoteSessionTabActionResult, sessionId: String) {
         switch result {
         case .success:
+            send(.sessionTabActionSucceeded(sessionId: sessionId))
             refreshSessionList()
         case .failure(let message):
             send(.sessionTabActionFailed(sessionId: sessionId, message: message))

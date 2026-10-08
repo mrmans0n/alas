@@ -79,6 +79,9 @@ struct RemoteProtocolTests {
         let wire = try #require(JSONSerialization.jsonObject(
             with: JSONEncoder().encode(RemoteClientMessage.closeSessionTab(sessionId: "s"))) as? [String: Any])
         #expect(wire["type"] as? String == "closeSessionTab")
+        let succeeded = RemoteServerMessage.sessionTabActionSucceeded(sessionId: "s")
+        #expect(try roundTrip(succeeded) == succeeded)
+        #expect(succeeded.replacingSessionId("peer:s") == .sessionTabActionSucceeded(sessionId: "peer:s"))
         let failed = RemoteServerMessage.sessionTabActionFailed(sessionId: "s", message: "This session is archived.")
         #expect(try roundTrip(failed) == failed)
         #expect(failed.replacingSessionId("peer:s")

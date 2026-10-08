@@ -25,6 +25,8 @@ struct FederatedSessionsProviderTests {
             onFederationEvent?(.message(serverId: serverId, message))
         }
         func sent(to serverId: String) -> [RemoteClientMessage] { sent.filter { $0.serverId == serverId }.map(\.message) }
+        var olderPeers: Set<String> = []
+        func peerSupports(_ capability: String, serverId: String) -> Bool { !olderPeers.contains(serverId) }
     }
 
     @MainActor
@@ -169,21 +171,40 @@ struct FederatedSessionsProviderTests {
         #expect(client.received == [.visualAidRejected(sessionId: "srv-b:s1", visualId: "V", reason: "notWriter", requestId: "r-1")])
     }
 
-    @Test func aTabActionFailureReachesTheUnsubscribedRequesterOnly() {
+    @Test func tabActionRepliesReachEachUnsubscribedRequesterInOrder() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
-        let requester = Client()
-        let bystander = Client()
-        provider.attach(requester.downstream)
-        provider.attach(bystander.downstream)
+        let first = Client()
+        let second = Client()
+        provider.attach(first.downstream)
+        provider.attach(second.downstream)
         links.goOnline("srv-b", name: "Mac B")
         links.sent.removeAll()
-        #expect(provider.route(.closeSessionTab(sessionId: "srv-b:s1"), from: requester.downstream))
-        #expect(links.sent(to: "srv-b") == [.closeSessionTab(sessionId: "s1")])
+        #expect(provider.route(.openSessionTab(sessionId: "srv-b:s1"), from: first.downstream))
+        #expect(provider.route(.closeSessionTab(sessionId: "srv-b:s1"), from: second.downstream))
+        #expect(links.sent(to: "srv-b") == [.openSessionTab(sessionId: "s1"), .closeSessionTab(sessionId: "s1")])
+        links.receive(.sessionTabActionSucceeded(sessionId: "s1"), from: "srv-b")
         links.receive(.sessionTabActionFailed(sessionId: "s1", message: "gone"), from: "srv-b")
-        links.receive(.sessionTabActionFailed(sessionId: "s1", message: "stale"), from: "srv-b")
-        #expect(requester.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
-        #expect(bystander.received.isEmpty)
+        links.receive(.sessionTabActionFailed(sessionId: "s1", message: "unasked"), from: "srv-b")
+        #expect(first.received == [.sessionTabActionSucceeded(sessionId: "srv-b:s1")])
+        #expect(second.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
+    }
+
+    @Test func tabActionsForAPeerWithoutTheCapabilityFailWithoutBeingSent() {
+        let links = FakeLinks()
+        links.olderPeers = ["srv-b"]
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        #expect(provider.route(.openSessionTab(sessionId: "srv-b:s1"), from: client.downstream))
+        #expect(links.sent(to: "srv-b").isEmpty)
+        guard case .sessionTabActionFailed(let id, _) = client.received.first else {
+            Issue.record("expected sessionTabActionFailed, got \(client.received)")
+            return
+        }
+        #expect(id == "srv-b:s1")
     }
 
     @Test func twoClientsShareOneUpstreamSubscriptionAndBothGetFrames() {

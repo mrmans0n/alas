@@ -95,7 +95,7 @@ extension RemoteServerMessage {
              .permissionResolved(let id, _), .questionRequest(let id, _), .questionResolved(let id, _),
              .planRequest(let id, _), .planResolved(let id, _), .elicitationRequest(let id, _),
              .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id), .visualAidRejected(let id, _, _, _),
-             .sessionTabActionFailed(let id, _),
+             .sessionTabActionSucceeded(let id), .sessionTabActionFailed(let id, _),
              .sessionRenamed(let id, _), .queueState(let id, _), .queueEditRestored(let id, _, _),
              .changeList(let id, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
              .fileDiffResult(let id, _, _, _, _, _), .fileDiffFailed(let id, _, _, _, _),
@@ -141,6 +141,7 @@ extension RemoteServerMessage {
         case .elicitationResolved(_, let r): return .elicitationResolved(sessionId: new, requestId: r)
         case .sessionClosed: return .sessionClosed(sessionId: new)
         case .promptRejected: return .promptRejected(sessionId: new)
+        case .sessionTabActionSucceeded: return .sessionTabActionSucceeded(sessionId: new)
         case .sessionTabActionFailed(_, let message): return .sessionTabActionFailed(sessionId: new, message: message)
         case .visualAidRejected(_, let visualId, let reason, let requestId):
             return .visualAidRejected(sessionId: new, visualId: visualId, reason: reason, requestId: requestId)

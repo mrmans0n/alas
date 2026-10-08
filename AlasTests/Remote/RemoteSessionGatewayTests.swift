@@ -1555,7 +1555,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.openSessionTab(sessionId: "s1"))
         await Task.yield()
-        #expect(sent == [.sessionList(sessions: provider.summaries)])
+        #expect(sent == [.sessionTabActionSucceeded(sessionId: "s1"), .sessionList(sessions: provider.summaries)])
 
         sent.removeAll()
         provider.tabActionResult = .failure("This session is archived.")

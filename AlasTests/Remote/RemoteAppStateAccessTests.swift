@@ -494,8 +494,11 @@ struct RemoteAppStateAccessTests {
         let id = "history-\(UUID().uuidString)"
         try await seedStoredSession(id: id, title: "History", in: manager)
 
-        #expect(await state.openSessionTab(for: id) == .success)
-        #expect(await state.openSessionTab(for: id) == .success)
+        // Two connections opening at once must not both append a tab.
+        let firstOpen = Task { await state.openSessionTab(for: id) }
+        let secondOpen = Task { await state.openSessionTab(for: id) }
+        #expect(await firstOpen.value == .success)
+        #expect(await secondOpen.value == .success)
         #expect(acpTabs(in: state).filter { $0.sessionId == id }.count == 1)
         #expect(await state.sessionSummaries().first { $0.id == id }?.isActive == true)
 
