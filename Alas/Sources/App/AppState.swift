@@ -15608,6 +15608,8 @@ extension AppState: RemoteSessionsProvider {
         }
         // `sessionRows` can predate an archive or delete made by another Alas
         // process, so only a fresh, unarchived stored row may be opened.
+        // Queued writes (e.g. a new session's upsert) must land before the read.
+        await manager.flushPersistence()
         let stored: ACPSessionRow?
         do {
             stored = try await manager.persistence.loadSession(id: id)
