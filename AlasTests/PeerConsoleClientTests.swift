@@ -144,6 +144,11 @@ import Testing
         // granted is still dropped whole.
         #expect(relay.relay(Data("\u{1B}[".utf8), attachmentId: "a", control: control(.host, 4)).isEmpty)
         #expect(relay.relay(Data("?62c".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
+        // A reply that starts in view mode and keeps streaming after a grant
+        // keeps its view-mode lease, so the timeout cannot release it.
+        #expect(relay.relay(Data("\u{1B}]11;rgb".utf8), attachmentId: "a", control: control(.host, 4)).isEmpty)
+        #expect(relay.relay(Data(":00/".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
+        #expect(relay.flushAmbiguousPrefix(attachmentId: "a", control: control(.you, 5)).isEmpty)
         // A held ESC is released only under the lease it was held under.
         let esc = Data("\u{1B}".utf8)
         #expect(relay.relay(esc, attachmentId: "a", control: control(.host, 4)).isEmpty)

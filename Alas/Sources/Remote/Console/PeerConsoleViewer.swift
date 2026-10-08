@@ -113,8 +113,15 @@ struct PeerConsoleInputRelay {
     /// that starts before control is granted is still recognized when it
     /// finishes after; only the holder's output is sent.
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
+        let wasAmbiguous = filter.hasAmbiguousPrefix
         let keys = filter.filter(data)
-        prefixLease = filter.hasAmbiguousPrefix ? control : nil
+        // The lease is the one in effect when the prefix began; a grant
+        // that lands mid-prefix must not adopt it.
+        if !filter.hasAmbiguousPrefix {
+            prefixLease = nil
+        } else if !wasAmbiguous {
+            prefixLease = control
+        }
         guard control.owner == .you else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
@@ -377,6 +384,7 @@ final class PeerConsoleViewer {
         case .restartRequired:
             "This console runs on an older terminal daemon. Restart the console on the host Mac to share it."
         case .unauthorized: "This Mac does not share consoles with you."
+        case .limitReached: "Too many consoles are open from this Mac. Close one and try again."
         case .protocolError: "The console stream failed."
         case .localOverflow: "The console produced more output than could be relayed."
         case .unknown: "The console ended."

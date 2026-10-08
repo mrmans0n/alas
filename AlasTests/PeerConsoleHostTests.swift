@@ -118,6 +118,17 @@ import Testing
         #expect(fixture.connectCount == 0)
     }
 
+    @Test func attachmentsPerPeerAreBoundedBeforeAnySocketOpens() {
+        let fixture = Fixture()
+        let peer = FakePeer()
+        for index in 0...PeerConsoleHost.maxAttachmentsPerLink {
+            fixture.host.handle(.attach(consoleId: "c", attachmentId: "a\(index)", scrollbackRows: 0), from: peer.link)
+        }
+        let over = "a\(PeerConsoleHost.maxAttachmentsPerLink)"
+        #expect(peer.events.all.last == .detached(attachmentId: over, reason: .limitReached))
+        #expect(fixture.connectCount == PeerConsoleHost.maxAttachmentsPerLink)
+    }
+
     @Test func snapshotPrecedesLiveOutputAndTargetExitDetaches() async throws {
         let fixture = Fixture()
         let peer = FakePeer()

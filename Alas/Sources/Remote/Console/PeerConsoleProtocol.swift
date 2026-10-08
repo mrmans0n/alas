@@ -61,6 +61,8 @@ enum PeerConsoleDetachReason: String, Codable, Sendable {
     case restartRequired
     /// This host does not serve peer consoles to this connection.
     case unauthorized
+    /// Too many attachments are open from this connection or in total.
+    case limitReached
     case protocolError
     case localOverflow
     case unknown

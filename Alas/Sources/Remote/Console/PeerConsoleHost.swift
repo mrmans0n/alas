@@ -49,6 +49,10 @@ final class PeerConsoleHost {
     }
 
     static let maxScrollbackRows = 10_000
+    /// Each attachment holds a socket, a reader thread, and buffers. A viewer
+    /// keeps one open at a time, so these only stop a misbehaving peer.
+    static let maxAttachmentsPerLink = 4
+    static let maxAttachments = 16
     /// Largest accepted input message (a big paste); larger input is rejected.
     static let maxInputBytes = 1024 * 1024
 
@@ -132,6 +136,11 @@ final class PeerConsoleHost {
     private func attach(consoleId: String, attachmentId: String, scrollbackRows: Int, link: PeerConsoleLink) {
         guard attachments[attachmentId] == nil else {
             link.send(.detached(attachmentId: attachmentId, reason: .protocolError))
+            return
+        }
+        guard attachments.count < Self.maxAttachments,
+              attachments.values.filter({ $0.link === link }).count < Self.maxAttachmentsPerLink else {
+            link.send(.detached(attachmentId: attachmentId, reason: .limitReached))
             return
         }
         guard let target = environment.resolve(consoleId) else {
