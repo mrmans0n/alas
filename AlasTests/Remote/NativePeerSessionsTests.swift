@@ -313,6 +313,33 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
     }
 
+    @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let consoles = NativePeerConsoles(
+            send: { _, _ in }, supportsConsoles: { _ in true },
+            makeSurface: { _, _, _ in throw CancellationError() }
+        )
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            consoles: consoles
+        )
+        client.start()
+        consoles.receive(serverId: "B", .list(consoles: [PeerConsoleSummary(
+            consoleId: "c", title: "zsh", worktreeId: "w", projectId: "p",
+            projectName: "alas", worktreeName: "w", rows: 24, columns: 80)]))
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        let selection = NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id)
+        client.selectWorktree(selection)
+        #expect(client.selectedTab == .console("c"))
+
+        consoles.receive(serverId: "B", .list(consoles: []))
+
+        #expect(client.selectedTab == nil)
+        #expect(client.selectedWorktree == selection)
+    }
+
     @Test func aChangedConsoleListRebuildsTheSidebarWithoutASessionListChange() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

@@ -151,11 +151,19 @@ final class NativePeerSessions {
         let selected = selectedTab
         // Until the peer's console list arrives, its consoles are unknown, not closed.
         if case .console = selected, consoles?.consoles[selection.serverId] == nil { return }
-        // A worktree missing outright means the peer's rows are gone, not
-        // that its tabs closed; `refresh()` marks the selection unavailable.
-        guard let worktree = worktree(selection) else { return }
+        let current: [NativePeerTab]
+        if let worktree = worktree(selection) {
+            current = worktree.tabs
+        } else if case .console = selected {
+            // The console list is known (checked above), so its last console closed.
+            current = []
+        } else {
+            // Missing session rows mean the peer's list dropped, not that its
+            // tabs closed; `refresh()` marks the selection unavailable.
+            return
+        }
         let previous = selectedWorktreeTabs
-        selectedWorktreeTabs = worktree.tabs
+        selectedWorktreeTabs = current
         let next = NativePeerWorktreeGroup.reconciledTab(selected, previous: previous, current: selectedWorktreeTabs)
         guard next != selected else { return }
         if let next {
