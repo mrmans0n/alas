@@ -498,6 +498,53 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
+    /// A stopped turn whose result comes only after the next turn finished is still recorded first, so the next turn's
+    /// cost is measured from it: the next turn's usage waits for it, until its result comes or the wait is over.
+    @Test(arguments: [true, false])
+    func aStoppedTurnIsRecordedBeforeTheTurnAfterIt(settles: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let waited = AsyncGate()
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in await waited.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : second).wait()
+            return Data("{}".utf8)
+        }
+        func cost(_ amount: Double) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: amount, currency: "USD"))))
+        }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        mock.emit(cost(0.5))
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 })
+        mock.emit(cost(0.8))
+        await second.open()
+        #expect(await awaitCondition { completions.count == 2 })
+        #expect(usage.isEmpty)
+        await (settles ? first : waited).open()
+        #expect(await awaitCondition { usage.count == 2 })
+        #expect(usage.map(\.result) == [.cancelled, .completed])
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        #expect(await usage.last?.cost?.resolve()?.amount == 0.8)
+        // B ended when it finished, not when A let its usage go.
+        #expect(try #require(usage.last?.endedAt) <= #require(usage.first?.endedAt))
+        await first.open()
+        await waited.open()
+    }
+
     /// A stopped turn keeps its own cost however many the next turn sends before its result arrives.
     @Test func aStoppedTurnKeepsItsCostThroughManyOfTheNextTurns() async throws {
         var usage: [ACPTurnCompletion] = []

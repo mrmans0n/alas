@@ -148,6 +148,9 @@ final class ACPSessionRunner {
     private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
     private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
+    /// Finished prompts' usage, by prompt id, held until every prompt sent before them has reported: a session's
+    /// turns are recorded in the order they were sent, each turn's cost being measured from the one before.
+    private var heldUsage: [Int: ACPTurnCompletion] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
@@ -1971,6 +1974,7 @@ final class ACPSessionRunner {
             quota: quota,
             cost: turnCost(streamStart: activePromptStreamStart),
             sentAt: unreportedPrompts[promptID]?.sentAt,
+            endedAt: Self.now(),
             model: unreportedPrompts[promptID]?.model
         )
         activePromptStartedAt = nil
@@ -1981,7 +1985,7 @@ final class ACPSessionRunner {
         guard unreportedPrompts[promptID] != nil else { return }
         guard usageAwaitsResult else {
             unreportedPrompts[promptID] = nil
-            onTurnUsage?(completion)
+            reportUsageInOrder(promptID, completion)
             return
         }
         reportUsageWithoutResult(promptID)
@@ -1990,8 +1994,34 @@ final class ACPSessionRunner {
     /// When a prompt goes out, in epoch milliseconds, later than any before it: usage history orders turns by it, so
     /// two prompts sent within one millisecond still get their order.
     private func nextSentAt() -> Int64 {
-        lastSentAt = max(Int64(Date().timeIntervalSince1970 * 1000), lastSentAt + 1)
+        lastSentAt = max(Self.now(), lastSentAt + 1)
         return lastSentAt
+    }
+
+    private static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    /// Reports a prompt's usage once every prompt sent before it has reported, and with it any later ones it held.
+    private func reportUsageInOrder(_ promptID: Int, _ completion: ACPTurnCompletion) {
+        heldUsage[promptID] = completion
+        reportHeldUsage()
+    }
+
+    private func reportHeldUsage() {
+        let waitingFor = unreportedPrompts.keys.min() ?? .max
+        for promptID in heldUsage.keys.sorted() where promptID < waitingFor {
+            if let completion = heldUsage.removeValue(forKey: promptID) { onTurnUsage?(completion) }
+        }
+    }
+
+    /// The connection is being replaced, and with it this runner: the results its prompts still wait for will not
+    /// come. Returns every turn not reported yet, in the order sent; one without its result is a cancelled turn
+    /// without tokens. The caller records them, since this runner's reports no longer count once it is replaced.
+    func takeUnreportedUsage() -> [ACPTurnCompletion] {
+        for promptID in unreportedPrompts.keys {
+            heldUsage[promptID] = supersededTurnUsage(promptID, quota: nil, result: .cancelled)
+        }
+        defer { heldUsage = [:] }
+        return heldUsage.sorted { $0.key < $1.key }.map(\.value)
     }
 
     /// A turn's cost is the newest entry before the next prompt went out, so of the entries between two sends only
@@ -2014,6 +2044,7 @@ final class ACPSessionRunner {
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
         if case ACPClientError.jsonrpc = error { return }
         unreportedPrompts[promptID] = nil
+        reportHeldUsage()
     }
 
     /// Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or after
@@ -2032,14 +2063,21 @@ final class ACPSessionRunner {
     private func reportSupersededTurnUsage(
         _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result = .cancelled
     ) {
-        guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return }
-        onTurnUsage?(ACPTurnCompletion(
+        guard let completion = supersededTurnUsage(promptID, quota: quota, result: result) else { return }
+        reportUsageInOrder(promptID, completion)
+    }
+
+    private func supersededTurnUsage(
+        _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result
+    ) -> ACPTurnCompletion? {
+        guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return nil }
+        return ACPTurnCompletion(
             sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
             quota: quota,
             // Capped where the first later prompt was sent; one still preparing has not started its usage.
             cost: turnCost(
                 streamStart: prompt.streamStart, end: sentStreamStarts.filter { $0.key > promptID }.map(\.value).min()),
-            sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
+            sentAt: prompt.sentAt, endedAt: Self.now(), model: prompt.model, recovery: prompt.recovery)
     }
 
     /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
@@ -4347,7 +4385,9 @@ extension ACPSessionRunner {
                     self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
-                    if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
+                    // Usage it holds counts too, or a result that never comes would hold every later turn's.
+                    if self.unreportedPrompts.count + self.heldUsage.count > 8,
+                       let oldest = self.unreportedPrompts.keys.min() {
                         self.reportSupersededTurnUsage(oldest, quota: nil)
                     }
                     return true

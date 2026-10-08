@@ -1645,6 +1645,32 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.interruptedQueueSessionIds().isEmpty)
     }
 
+    @Test("a turn in flight when the connection restarts is still recorded as usage, without its result")
+    func restartRecordsTheInterruptedTurnsUsage() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-restarted")
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-restarted")
+        let (never, keepOpen) = AsyncStream<Void>.makeStream()
+        defer { keepOpen.finish() }
+        client.scriptAsync(method: "session/prompt") { _ in
+            for await _ in never {}
+            throw CancellationError()
+        }
+        var usage: [ACPTurnCompletion] = []
+        let manager = manager(store: store, client: client, onTurnUsage: { usage.append($0) })
+        let session = manager.createSession(id: "restarted", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
+        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+
+        await manager.restartConnection(to: session.id)
+
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.sentAt != nil && usage.first?.quota == nil)
+    }
+
     @Test("a direct send interrupted by a restart is continued only with the setting on", arguments: [true, false])
     func interruptedDirectSendIsContinuedAtLaunch(settingOn: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -6258,7 +6284,8 @@ struct ACPSessionManagerAttachRestoreTests {
         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         delegatedReasoningRefreshTimeout: Duration = .seconds(5),
-        continueInterruptedSessions: Bool = false
+        continueInterruptedSessions: Bool = false,
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
@@ -6266,6 +6293,7 @@ struct ACPSessionManagerAttachRestoreTests {
             store: store,
             continueInterruptedSessions: { continueInterruptedSessions },
             onQueueChanged: onQueueChanged,
+            onTurnUsage: onTurnUsage,
             onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },

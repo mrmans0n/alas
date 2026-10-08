@@ -251,17 +251,18 @@ Sent after each turn of the plugin's project is recorded, with the turn as
 `usage/turns` returns it. It needs `usage.read`. Turns of other projects, and
 of multi-project workspaces, are not sent; read them with `"scope": "all"`.
 
+A session's turns are recorded in the order they were sent. A stopped turn
+waits up to 10 seconds for its result, which carries its tokens, so a turn
+that finishes during that wait is recorded, and sent, after it.
+
 ### Known limits
 
-- A turn in flight when the agent connection is restarted or lost gets no history
-  row.
-- A stopped turn whose result arrives after the next turn's is recorded with
-  its tokens but no `cost`: the next turn's `cost` already includes it.
+- A turn in flight when Alas restarts the agent connection is recorded as
+  `cancelled`, without tokens. One in flight when the connection is lost gets
+  no history row.
 - An update the agent sends right after a turn's result, while Alas is busy,
   can count toward that turn, so its cost may include the next turn's first
   cost growth.
-
-All are tracked in https://github.com/mrmans0n/alas/issues/1764.
 
 ### Errors
 

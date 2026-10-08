@@ -7917,6 +7917,10 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
+        // The old runner lost ownership above, so its reports are dropped: a turn in flight gets its row here.
+        for usage in oldRunner?.takeUnreportedUsage() ?? [] {
+            onTurnUsage?(usage)
+        }
         replacementAttempt.retiringRunner = oldRunner
         let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         let oldAttemptConnection = oldAttempt?.connection
