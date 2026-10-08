@@ -33,6 +33,11 @@ for (const [html, expected] of [
   ["<html>", true],
   ["<html/>", true],
   ["<!DOCTYPE\nhtml>", true],
+  // Swift Character.isWhitespace, not JS \s (VisualAidWebPolicyTests.fullDocumentDetection).
+  ["\uFEFF<html>", false],
+  ["\u0085<html>", true],
+  ["<html\u0085>", true],
+  ["<html\uFEFF>", false],
 ]) {
   assert.equal(V.isFullDocument(html), expected, JSON.stringify(html));
 }
@@ -104,6 +109,21 @@ assert.equal(V.parseVisual(JSON.stringify({ id: ID, title: "t", html: "x", quest
 assert.equal(V.parseVisual(JSON.stringify(visual())).id, ID);
 assert.equal(V.parseVisual(JSON.stringify({ id: ID, title: "t", html: "x" })).question, undefined);
 
+for (const bad of [
+  { question: { ...question(), allowMultiple: "false" } },
+  { answer: { kind: "answered", selectedOptionIds: [1] } },
+  { answer: { kind: "mystery" } },
+  { answer: { kind: "answered", selectedOptionIds: ["a"], note: 5 } },
+]) assert.equal(V.parseVisual(JSON.stringify(visual(bad))), null, JSON.stringify(bad));
+assert.ok(V.parseVisual(JSON.stringify(visual({ answer: { kind: "answered", selectedOptionIds: ["a"] } }))));
+assert.ok(V.parseVisual(JSON.stringify(visual({ answer: { kind: "dismissed" }, question: null }))));
+
+// Note length counts grapheme clusters like Swift String.count.
+assert.equal(V.canSubmit(question(false), ["a"], "😀".repeat(2000)), true);
+assert.equal(V.canSubmit(question(false), ["a"], "😀".repeat(2001)), false);
+assert.equal(V.noteLength("👨‍👩‍👧‍👦"), 1);
+assert.equal(V.noteLength("  hi  "), 2);
+
 // Rejections.
 assert.equal(V.rejectionText("failed"), "Couldn't send your answer. Try again.");
 assert.equal(V.rejectionText("notWriter"), "Take over this session to answer.");
@@ -135,6 +155,20 @@ const stubDoc = (hasHead) => {
     createElement: (tag) => (tag === "head" ? head : node(tag)),
   };
 };
+const doctypeOut = (doctype) => {
+  const d = stubDoc(true);
+  d.doctype = doctype;
+  return V.buildDocument("<p>x</p>", ID, () => d);
+};
+assert.ok(doctypeOut(null).startsWith("<html>"), "no doctype stays none");
+assert.ok(doctypeOut({ name: "html", publicId: "", systemId: "" }).startsWith("<!DOCTYPE html><html>"));
+assert.ok(doctypeOut({ name: "html", publicId: "-//W3C//DTD HTML 4.01//EN", systemId: "" })
+  .startsWith('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN"><html>'));
+assert.ok(doctypeOut({ name: "html", publicId: "p", systemId: "http://x/d.dtd" })
+  .startsWith('<!DOCTYPE html PUBLIC "p" "http://x/d.dtd"><html>'));
+assert.ok(doctypeOut({ name: "html", publicId: "", systemId: "about:legacy" })
+  .startsWith('<!DOCTYPE html SYSTEM "about:legacy"><html>'));
+assert.ok(doctypeOut({ name: "html", publicId: 'a"b', systemId: "" }).includes('"a&quot;b"'));
 const out = V.buildDocument("<p>x</p>", ID, () => stubDoc(true));
 assert.ok(out.startsWith("<!DOCTYPE html>"));
 assert.equal(inserted[0].httpEquiv, "Content-Security-Policy");

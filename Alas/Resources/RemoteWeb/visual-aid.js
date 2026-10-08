@@ -69,11 +69,16 @@
     })();`;
   }
 
+  // Swift Character.isWhitespace (Unicode White_Space). JS \s differs: it includes U+FEFF and excludes U+0085.
+  const WS = "[\\t\\n\\u000B\\u000C\\r \\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]";
+  const LEADING_WS = new RegExp("^" + WS + "+");
+  const IS_WS = new RegExp("^" + WS + "$");
+
   // The desktop rule: after whitespace and comments, a doctype or <html followed by whitespace, ">" or "/".
   function isFullDocument(html) {
     let rest = String(html);
     for (;;) {
-      rest = rest.replace(/^\s+/, "");
+      rest = rest.replace(LEADING_WS, "");
       if (!rest.startsWith("<!--")) break;
       const end = rest.indexOf("-->");
       if (end < 0) return false;
@@ -83,8 +88,17 @@
     return ["<!doctype", "<html"].some((token) => {
       if (!opening.startsWith(token)) return false;
       const next = opening.charAt(token.length);
-      return next === "" || /\s/.test(next) || next === ">" || next === "/";
+      return next === "" || IS_WS.test(next) || next === ">" || next === "/";
     });
+  }
+
+  // Keep public and system ids: dropping them would switch a quirks-mode document to standards mode.
+  function serializeDoctype(dt) {
+    const quote = (v) => `"${String(v).replace(/"/g, "&quot;")}"`;
+    let out = `<!DOCTYPE ${dt.name}`;
+    if (dt.publicId) out += ` PUBLIC ${quote(dt.publicId)}` + (dt.systemId ? ` ${quote(dt.systemId)}` : "");
+    else if (dt.systemId) out += ` SYSTEM ${quote(dt.systemId)}`;
+    return out + ">";
   }
 
   function buildDocument(html, id, parse) {
@@ -107,19 +121,29 @@
     bridge.textContent = bridgeScript(id);
     // First in <head>, so they run before anything the agent wrote.
     head.prepend(csp, lockdown, bridge);
-    const doctype = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}>` : "";
+    const doctype = doc.doctype ? serializeDoctype(doc.doctype) : "";
     return doctype + doc.documentElement.outerHTML;
+  }
+
+  const isString = (x) => typeof x === "string";
+  function validQuestion(q) {
+    return !!q && typeof q === "object" && isString(q.prompt) && typeof q.allowMultiple === "boolean" &&
+      Array.isArray(q.options) && q.options.length > 0 &&
+      q.options.every((o) => o && isString(o.id) && isString(o.label));
+  }
+  function validAnswer(a) {
+    if (!a || typeof a !== "object") return false;
+    if (a.kind === "dismissed") return true;
+    return a.kind === "answered" && Array.isArray(a.selectedOptionIds) && a.selectedOptionIds.every(isString) &&
+      (a.note == null || isString(a.note));
   }
 
   function parseVisual(json) {
     let v;
     try { v = JSON.parse(json); } catch (_) { return null; }
-    if (!v || typeof v.id !== "string" || !UUID.test(v.id) || typeof v.title !== "string" || typeof v.html !== "string") return null;
-    if (v.question != null) {
-      const q = v.question;
-      if (typeof q.prompt !== "string" || !Array.isArray(q.options) || q.options.length === 0) return null;
-      if (!q.options.every((o) => o && typeof o.id === "string" && typeof o.label === "string")) return null;
-    }
+    if (!v || !isString(v.id) || !UUID.test(v.id) || !isString(v.title) || !isString(v.html)) return null;
+    if (v.question != null && !validQuestion(v.question)) return null;
+    if (v.answer != null && !validAnswer(v.answer)) return null;
     return v;
   }
 
@@ -140,9 +164,17 @@
     return selected.includes(optionId) ? selected.filter((id) => id !== optionId) : selected.concat(optionId);
   }
 
+  // The Mac counts extended grapheme clusters (Swift String.count); UTF-16 length would disagree.
+  const segmenter = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+  function noteLength(text) {
+    const t = String(text || "").trim();
+    if (segmenter) { let n = 0; for (const _ of segmenter.segment(t)) n++; return n; }
+    return Array.from(t).length;
+  }
+
   function canSubmit(question, selected, note) {
     if (selected.length === 0 || (!question.allowMultiple && selected.length !== 1)) return false;
-    return String(note || "").trim().length <= NOTE_MAX;
+    return noteLength(note) <= NOTE_MAX;
   }
 
   function buildResponse(sessionId, visual, action, selected, note) {
@@ -204,7 +236,7 @@
 
   globalThis.RemoteVisualAid = {
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, FRAME_CSS,
-    isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, canSubmit,
+    isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
     buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame,
   };
 })();
