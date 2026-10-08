@@ -8,15 +8,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
-- Let ACP agents show HTML visuals inline in the transcript through the `visual_show` MCP tool, with an optional multiple-choice question answered from a native card.
 - Show visual aids in the phone web client and let their questions be answered there (#1838).
-- Move ACP session takeover into the composer's bottom-left controls, matching peer transcripts instead of showing a separate read-only banner. Keep takeover available while initial connection waits for user input, and reject custom paste/drop edits in read-only composers.
-- Warn on a composer symbol badge when its declaration is gone, and show sent symbols in the transcript as badges that preview what was sent or the code now (#1835).
 
-### Fixes
+## [0.20.7] - 2026-10-08
 
-- Keep cached review status and publish actions steady during local filesystem refreshes instead of flashing loading feedback on every inspection.
-- Keep the GG Prepare card and stack presentation visible during shared-ref refreshes after verifying the live branch and HEAD still match the cached snapshot. Refresh changed local identities before reloading GG, and invalidate inactive cached panes.
+### ✨ Features
+
+- Keep approved catalog plugins trusted across updates that request no new permissions, and present only newly requested access when approval is required (#1828).
+- Move ACP session takeover into the composer's bottom-left controls, matching peer transcripts while preserving read-only safeguards (#1830).
+- Make Workspaces generally available by removing the preview flag and its disabled-state paths (#1831).
+- Let ACP agents show sandboxed HTML visuals inline in the transcript through the `visual_show` MCP tool, with optional questions answered from a native card (#1832).
+- Open a worktree's Workspace checkout directly from its sidebar label or context menu (#1833).
+- Warn when a composer symbol declaration is gone, and preview sent or current code from symbol badges in the transcript (#1835).
+- View paired Macs' zmx-backed consoles and, with an explicit lease, control them over the existing peer connection without SSH or Remote Login (#1840).
+
+### 🐛 Fixes
+
+- Describe checkpoint-blocked Workspace checkout deletion instead of reporting an opaque error (#1834).
+- Keep Workspace navigation compiling after removal of the preview flag (#1836).
+- Keep cached review status and publish actions steady during local filesystem refreshes instead of flashing loading feedback on every inspection (#1837).
+- Preserve the GG Prepare card and stack presentation during shared-ref refreshes when the live branch and HEAD still match the cached snapshot, and invalidate changed repository identities before reloading (#1837).
 
 ## [0.20.6] - 2026-10-07
 
