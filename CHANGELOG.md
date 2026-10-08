@@ -14,6 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Keep agent logos at compact menu size in the peer session overflow menu instead of expanding rows to the assets' native dimensions.
 
+### 🏗️ Internal
+
+- Keep CLI routing tests from reading or writing the developer's persisted projects.
+
 ## [0.20.7] - 2026-10-08
 
 ### ✨ Features
