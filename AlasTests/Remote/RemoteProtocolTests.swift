@@ -60,13 +60,29 @@ struct RemoteProtocolTests {
             == .console(.detached(attachmentId: "a", reason: .unknown)))
     }
 
-    @Test func helloAdvertisesPeerConsoleCapability() throws {
+    @Test func helloAdvertisesPeerCapabilities() throws {
         let advertised = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n"))
         guard case .hello(_, _, _, _, _, let capabilities) = try roundTrip(advertised) else {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == [PeerConsoleCapability.v1])
+        #expect(capabilities == [PeerConsoleCapability.v1, PeerSessionTabsCapability.v1])
+    }
+
+    @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {
+        let requests: [RemoteClientMessage] = [.openSessionTab(sessionId: "s"), .closeSessionTab(sessionId: "s")]
+        for request in requests {
+            #expect(try roundTrip(request) == request)
+            #expect(request.sessionId == "s")
+            #expect(request.replacingSessionId("peer:s").sessionId == "peer:s")
+        }
+        let wire = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(RemoteClientMessage.closeSessionTab(sessionId: "s"))) as? [String: Any])
+        #expect(wire["type"] as? String == "closeSessionTab")
+        let failed = RemoteServerMessage.sessionTabActionFailed(sessionId: "s", message: "This session is archived.")
+        #expect(try roundTrip(failed) == failed)
+        #expect(failed.replacingSessionId("peer:s")
+            == .sessionTabActionFailed(sessionId: "peer:s", message: "This session is archived."))
     }
 
     @Test func commitInspectionMessagesPreserveRevisionAndSessionRouting() throws {

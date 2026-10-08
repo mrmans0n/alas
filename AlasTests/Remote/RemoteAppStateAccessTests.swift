@@ -478,6 +478,58 @@ struct RemoteAppStateAccessTests {
         #expect(tab.title == "Persisted Title")
     }
 
+    @Test func remoteSessionTabActionsOpenAndCloseAStoredSessionOnTheHost() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "history-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "History", in: manager)
+
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(acpTabs(in: state).filter { $0.sessionId == id }.count == 1)
+        #expect(await state.sessionSummaries().first { $0.id == id }?.isActive == true)
+
+        #expect(await state.closeSessionTab(for: id) == .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+        let closed = try #require(await state.sessionSummaries().first { $0.id == id })
+        #expect(!closed.isActive)
+        #expect(state.canReopenClosedTab)
+    }
+
+    @Test(arguments: [true, false])
+    func remoteSessionTabActionsFailForArchivedOrUnknownSessions(archived: Bool) async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "gone-\(UUID().uuidString)"
+        if archived {
+            try await seedStoredSession(id: id, title: "Archived", archived: true, in: manager)
+        }
+
+        #expect(await state.openSessionTab(for: id) != .success)
+        #expect(await state.closeSessionTab(for: id) != .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+    }
+
     @Test func remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate() async throws {
         var cleanupWorktreeId: String?
         defer {

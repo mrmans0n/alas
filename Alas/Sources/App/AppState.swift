@@ -9274,15 +9274,20 @@ final class AppState {
            !confirmCloseTab(prompt) {
             return
         }
+        closeTabRecordingHistory(worktreeId: worktreeId, projectId: projectId, tab: tab)
+    }
+
+    /// Closes `tab` and records it so the user can reopen it.
+    private func closeTabRecordingHistory(worktreeId: String, projectId: String?, tab: Tab) {
         closedTabHistory.record(ClosedTabEntry(
             snapshot: .worktree(
                 worktreeID: worktreeId,
                 projectID: projectId ?? worktree(withId: worktreeId)?.projectId,
                 tab: tab
             ),
-            placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
+            placement: .init(tabID: tab.id, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
         ))
-        closeTab(worktreeId: worktreeId, tabId: tabId)
+        closeTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
     private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
@@ -15553,6 +15558,56 @@ extension AppState: RemoteSessionsProvider {
             await mgr.takeOver(sessionId: id)
             return
         }
+    }
+
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        let worktree: Worktree
+        switch remoteSessionTabWorktree(for: id) {
+        case .found(let found): worktree = found
+        case .failed(let message): return .failure(message)
+        }
+        // Already open is success, and must not focus the tab on the host.
+        if openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil { return .success }
+        await openExistingACPSession(sessionId: id, worktree: worktree)
+        guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
+            return .failure("Could not open this session.")
+        }
+        return .success
+    }
+
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        let worktree: Worktree
+        switch remoteSessionTabWorktree(for: id) {
+        case .found(let found): worktree = found
+        case .failed(let message): return .failure(message)
+        }
+        let open = tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .acpSession(let state) = tab { return state.sessionId == id }
+            return false
+        }
+        guard let open else { return .success }
+        // No confirmation here: the requesting Mac already asked its user.
+        closeTabRecordingHistory(worktreeId: worktree.id, projectId: worktree.projectId, tab: open)
+        return .success
+    }
+
+    private enum RemoteSessionTabWorktree {
+        case found(Worktree)
+        case failed(String)
+    }
+
+    /// The worktree whose manager owns `id` as a live or unarchived recent session.
+    private func remoteSessionTabWorktree(for id: String) -> RemoteSessionTabWorktree {
+        for mgr in acpManagers.values {
+            let row = mgr.sessionRows.first { $0.id == id }
+            guard row != nil || mgr.liveSession(for: id) != nil else { continue }
+            if row?.archived == true { return .failed("This session is archived.") }
+            guard let worktree = worktree(withId: mgr.worktreeId) else {
+                return .failed("This session's worktree is no longer available.")
+            }
+            return .found(worktree)
+        }
+        return .failed("This session is no longer available.")
     }
 
     /// `onResult` fires once (false when no manager owns the id, the manager

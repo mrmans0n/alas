@@ -31,6 +31,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var autoRuns: [(id: String, enabled: Bool)] = []
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
+    var tabActions: [String] = []
+    var tabActionResult: RemoteSessionTabActionResult = .success
     var configs: [String: RemoteSessionConfig] = [:]
     var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
     var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
@@ -252,6 +254,14 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        tabActions.append("open \(id)")
+        return tabActionResult
+    }
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        tabActions.append("close \(id)")
+        return tabActionResult
+    }
     var pauseTakeOver = false   // suspends INSIDE the gateway's own await, unlike pauseSessionSummaries's detached fetch
     var takeOverCallCount = 0
     private var takeOverContinuation: CheckedContinuation<Void, Never>?
@@ -1534,6 +1544,25 @@ struct RemoteSessionGatewayTests {
         #expect(provider.renamed.map(\.title) == ["Renamed"])
         #expect(sent.contains(.sessionRenamed(sessionId: "s1", title: "Renamed")))
         #expect(sent.contains(.sessionList(sessions: provider.summaries)))
+        #expect(provider.sessionSummariesCallCount == 1)
+    }
+
+    @Test func sessionTabActionsRefreshTheListOnSuccessAndReportFailure() async {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "S", agentId: "claude", status: "idle", canDrive: false)]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.openSessionTab(sessionId: "s1"))
+        await Task.yield()
+        #expect(sent == [.sessionList(sessions: provider.summaries)])
+
+        sent.removeAll()
+        provider.tabActionResult = .failure("This session is archived.")
+        await gw.handle(.closeSessionTab(sessionId: "s1"))
+        await Task.yield()
+        #expect(sent == [.sessionTabActionFailed(sessionId: "s1", message: "This session is archived.")])
+        #expect(provider.tabActions == ["open s1", "close s1"])
         #expect(provider.sessionSummariesCallCount == 1)
     }
 

@@ -169,6 +169,23 @@ struct FederatedSessionsProviderTests {
         #expect(client.received == [.visualAidRejected(sessionId: "srv-b:s1", visualId: "V", reason: "notWriter", requestId: "r-1")])
     }
 
+    @Test func aTabActionFailureReachesTheUnsubscribedRequesterOnly() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let requester = Client()
+        let bystander = Client()
+        provider.attach(requester.downstream)
+        provider.attach(bystander.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        links.sent.removeAll()
+        #expect(provider.route(.closeSessionTab(sessionId: "srv-b:s1"), from: requester.downstream))
+        #expect(links.sent(to: "srv-b") == [.closeSessionTab(sessionId: "s1")])
+        links.receive(.sessionTabActionFailed(sessionId: "s1", message: "gone"), from: "srv-b")
+        links.receive(.sessionTabActionFailed(sessionId: "s1", message: "stale"), from: "srv-b")
+        #expect(requester.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
+        #expect(bystander.received.isEmpty)
+    }
+
     @Test func twoClientsShareOneUpstreamSubscriptionAndBothGetFrames() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)

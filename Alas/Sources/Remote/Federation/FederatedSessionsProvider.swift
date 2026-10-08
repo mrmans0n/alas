@@ -165,6 +165,10 @@ final class FederatedSessionsProvider {
     /// A new downstream needs these independently of the upstream gateway's
     /// per-connection request de-duplication.
     private var pendingRequests: [String: PendingPeerRequests] = [:]
+    /// Namespaced session id → downstreams that asked to open or close its
+    /// tab. Only a failure replies, and the asker may not be subscribed, so
+    /// the failure goes to these as well as to subscribers.
+    private var tabActionRequesters: [String: Set<UUID>] = [:]
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
@@ -211,6 +215,10 @@ final class FederatedSessionsProvider {
         }
         removeComparisonRequests(for: id)
         removePeerRequests(for: id)
+        for (namespaced, ids) in tabActionRequesters where ids.contains(id) {
+            let remaining = ids.subtracting([id])
+            tabActionRequesters[namespaced] = remaining.isEmpty ? nil : remaining
+        }
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -255,6 +263,12 @@ final class FederatedSessionsProvider {
         case .unsubscribe:
             removeSubscriber(downstream.id, from: namespaced)
         default:
+            switch message {
+            case .openSessionTab, .closeSessionTab:
+                tabActionRequesters[namespaced, default: []].insert(downstream.id)
+            default:
+                break
+            }
             let forwarded = message.replacingSessionId(target.sessionId)
             if let key = comparisonRequestKey(for: message, namespacedSessionId: namespaced) {
                 var queue = comparisonRequests[key, default: []]
@@ -334,6 +348,14 @@ final class FederatedSessionsProvider {
                     break
                 }
                 let routed = message.replacingSessionId(namespaced)
+                if case .sessionTabActionFailed = message {
+                    let requesters = tabActionRequesters.removeValue(forKey: namespaced) ?? []
+                    pruneDeadDownstreams()
+                    for id in requesters.union(subscribers[namespaced] ?? []) {
+                        downstreams[id]?.value?.send(routed)
+                    }
+                    return
+                }
                 if let key = comparisonResponseKey(for: message, namespacedSessionId: namespaced),
                    deliverComparisonReply(routed, for: key) {
                     return
@@ -361,6 +383,9 @@ final class FederatedSessionsProvider {
             }
             for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
                 pendingRequests[namespaced] = nil
+            }
+            for namespaced in Array(tabActionRequesters.keys) where namespaced.hasPrefix(prefix) {
+                tabActionRequesters[namespaced] = nil
             }
             comparisonRequests = comparisonRequests.filter { !$0.key.sessionId.hasPrefix(prefix) }
             for key in Array(peerRequests.keys) where key.serverId == serverId {
