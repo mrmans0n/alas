@@ -65,11 +65,13 @@ struct PeerConsoleInputFilter {
         return kept
     }
 
-    /// Whether a lone ESC, or ESC plus one byte that could open a longer
-    /// sequence (`ESC ]`, `ESC P`, `ESC [`, `ESC O`, ...), is waiting to be
-    /// classified as a key or the start of a reply.
+    /// Whether held bytes could still be keys rather than a reply: a lone
+    /// ESC, ESC plus one byte (`ESC [`, `ESC O`, ...), or an unterminated
+    /// string whose introducer is also an Alt+key (`ESC ]`, `ESC P`, ...)
+    /// that typing may have followed.
     var hasAmbiguousPrefix: Bool {
-        discarding == nil && (1...2).contains(pending.count) && pending.first == Self.esc
+        guard discarding == nil, pending.first == Self.esc else { return false }
+        return pending.count <= 2 || Self.isStringIntroducer(pending[1])
     }
 
     /// Stays inside a string sequence whose terminator has not arrived. A
@@ -100,12 +102,15 @@ struct PeerConsoleInputFilter {
         return nil
     }
 
-    /// Called when nothing followed an ambiguous prefix in time: it was the
-    /// Escape key or an Alt+key, not a reply split across reads.
+    /// Called when an ambiguous prefix was not completed in time. Replies
+    /// arrive whole within microseconds, so it was Escape or an Alt+key; any
+    /// keys typed after an Alt string introducer are filtered normally.
     mutating func flushAmbiguousPrefix() -> Data {
         guard hasAmbiguousPrefix else { return Data() }
-        defer { pending = [] }
-        return Data(pending)
+        let held = pending
+        pending = []
+        guard held.count > 2 else { return Data(held) }
+        return Data(held.prefix(2)) + filter(Data(held.dropFirst(2)))
     }
 
     private enum Sequence {

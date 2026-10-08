@@ -78,12 +78,17 @@ final class PeerConsoleHost {
             revokeLease(of: attachment, change: .released)
         case .input(let attachmentId, let generation, let sequence, let data):
             let attachment = attachment(attachmentId, of: link)
-            let accepted = attachment.map {
+            let leased = attachment.map {
                 data.count <= Self.maxInputBytes
                     && leases.accepts($0.consoleId, from: attachmentId, generation: generation)
-                    && $0.send(input: data)
             } ?? false
+            let accepted = leased && attachment?.send(input: data) == true
             link.send(.inputAck(attachmentId: attachmentId, sequence: sequence, accepted: accepted))
+            // The console is not taking input (stalled or gone). Keystrokes
+            // after a gap would be wrong, so control ends visibly instead.
+            if leased, !accepted, let attachment {
+                revokeLease(of: attachment, change: .revoked)
+            }
         case .resync(let attachmentId):
             attachment(attachmentId, of: link)?.requestResync()
         case .detach(let attachmentId):

@@ -137,6 +137,22 @@ import Testing
         ])
     }
 
+    @Test func inputTheConsoleCannotTakeEndsControlVisibly() {
+        let fixture = Fixture()
+        let peer = FakePeer()
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: peer.link)
+        fixture.host.handle(.takeControl(attachmentId: "a"), from: peer.link)
+        // The daemon end never reads, so the client's input queue fills.
+        let paste = Data(count: PeerConsoleHost.maxInputBytes)
+        for sequence in 1...8 where !peer.acks("a").contains(false) {
+            fixture.host.handle(.input(attachmentId: "a", generation: 1, sequence: sequence, data: paste), from: peer.link)
+        }
+        #expect(peer.acks("a").last == false)
+        #expect(peer.control("a").last == PeerConsoleControl(owner: .host, generation: 2, change: .revoked))
+        #expect(fixture.suppressed == [true, false])
+        #expect(fixture.host.controllers.isEmpty)
+    }
+
     @Test func controlIsExclusiveGenerationScopedAndEnforcedByTheHost() async throws {
         let fixture = Fixture()
         let owner = FakePeer()

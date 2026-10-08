@@ -38,7 +38,7 @@ struct NativePeerConsoleView: View {
 
     /// The host grid in points, plus one cell of slack for Ghostty's padding.
     private var gridExtent: CGSize? {
-        guard let rows = viewer.rows, let columns = viewer.columns, let cell = viewer.surface?.cellSize else {
+        guard let rows = viewer.rows, let columns = viewer.columns, let cell = viewer.cellSize else {
             return nil
         }
         return CGSize(width: CGFloat(columns + 1) * cell.width, height: CGFloat(rows + 1) * cell.height)

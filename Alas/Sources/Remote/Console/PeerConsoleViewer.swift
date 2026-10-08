@@ -125,7 +125,9 @@ struct PeerConsoleInputRelay {
     mutating func flushAmbiguousPrefix(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         let keys = filter.flushAmbiguousPrefix()
         let lease = prefixLease
-        prefixLease = nil
+        // Keys re-filtered behind an Alt prefix can leave another prefix,
+        // held under the same lease.
+        prefixLease = filter.hasAmbiguousPrefix ? lease : nil
         guard control.owner == .you, lease?.owner == .you, lease?.generation == control.generation else { return [] }
         return requests(for: keys, attachmentId: attachmentId, control: control)
     }
@@ -185,6 +187,9 @@ final class PeerConsoleViewer {
     private(set) var rows: Int?
     private(set) var columns: Int?
     private(set) var control = PeerConsoleControl(owner: .host, generation: 0, change: .current)
+    /// The local surface's cell size in points, refreshed whenever its grid
+    /// changes (window placement, font zoom) so the view re-fits the grid.
+    private(set) var cellSize: CGSize?
 
     @ObservationIgnored private(set) var surface: AlasGhostty.SurfaceView?
     @ObservationIgnored private var bridge: PeerConsoleBridge?
@@ -311,6 +316,7 @@ final class PeerConsoleViewer {
     }
 
     private func gridChanged() {
+        if let size = surface?.cellSize, size != cellSize { cellSize = size }
         guard let rows, let columns, let grid = surface?.gridSize else { return }
         let fits = grid.rows >= rows && grid.columns >= columns
         if let data = writeGate.gridChanged(surfaceFits: fits) { writeToSurface(data) }
@@ -336,6 +342,10 @@ final class PeerConsoleViewer {
     private func surfaceWrote(_ data: Data) {
         let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
         relay.relay(data, attachmentId: attachmentId, control: owner).forEach(send)
+        scheduleAmbiguousPrefixFlush()
+    }
+
+    private func scheduleAmbiguousPrefixFlush() {
         guard relay.hasAmbiguousPrefix else { return }
         escapeTimerToken += 1
         let token = escapeTimerToken
@@ -344,6 +354,8 @@ final class PeerConsoleViewer {
             guard let self, token == escapeTimerToken else { return }
             let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
             relay.flushAmbiguousPrefix(attachmentId: attachmentId, control: owner).forEach(send)
+            // Keys typed after an Alt prefix may hold another prefix.
+            scheduleAmbiguousPrefixFlush()
         }
     }
 

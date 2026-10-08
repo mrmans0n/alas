@@ -64,6 +64,15 @@ import Testing
         #expect(filter.filter(Data("x".utf8)) == Data("x".utf8))
     }
 
+    @Test func keysTypedRightAfterAnAltStringIntroducerAreReleasedTogether() {
+        var filter = PeerConsoleInputFilter()
+        #expect(filter.filter(Data("\(Self.esc)]".utf8)).isEmpty)
+        #expect(filter.filter(Data("ab".utf8)).isEmpty)
+        #expect(filter.flushAmbiguousPrefix() == Data("\(Self.esc)]ab".utf8))
+        // A terminated string in the same window is still a reply.
+        #expect(filter.filter(Data("\(Self.esc)]11;rgb:0/0/0\u{07}c".utf8)) == Data("c".utf8))
+    }
+
     @Test func oversizedReplyStringsAreDiscardedUntilTheirTerminator() {
         var filter = PeerConsoleInputFilter()
         // A huge OSC 52 clipboard reply, split across reads, with an ST
