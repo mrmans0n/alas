@@ -11,10 +11,13 @@ struct AlasField: View {
     var isEnabled: Bool = true
     var disablesAutomaticTextSubstitutions: Bool = false
     var inputPolicy: AlasFieldInputPolicy? = nil
+    /// Sees pasted text before the field does; returning true consumes it.
+    var onPaste: ((String) -> Bool)? = nil
     @Environment(\.theme) var theme
 
     var body: some View {
-        if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions || inputPolicy != nil {
+        if focusOnAppear || onSubmit != nil || disablesAutomaticTextSubstitutions || inputPolicy != nil
+            || onPaste != nil {
             AlasNSTextField(
                 text: $text,
                 placeholder: placeholder,
@@ -23,7 +26,8 @@ struct AlasField: View {
                 onSubmit: onSubmit,
                 isEnabled: isEnabled,
                 disablesAutomaticTextSubstitutions: disablesAutomaticTextSubstitutions,
-                inputPolicy: inputPolicy
+                inputPolicy: inputPolicy,
+                onPaste: onPaste
             )
             .alasFieldChrome(theme: theme)
         } else {
@@ -62,9 +66,10 @@ extension View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    /// Marks a field whose contents a local model is still computing: the
-    /// border takes the accent tint and a short beam of light travels around
-    /// it. Reduce Motion keeps only the tint.
+    /// Marks a field whose contents a local model is still computing, or a
+    /// control offering a one-click shortcut: the border takes the accent
+    /// tint and a short beam of light travels around it. Reduce Motion keeps
+    /// only the tint.
     func aiBeam(isActive: Bool, cornerRadius: CGFloat = 6) -> some View {
         overlay {
             if isActive {
@@ -132,6 +137,7 @@ private struct AlasNSTextField: NSViewRepresentable {
     var isEnabled: Bool
     var disablesAutomaticTextSubstitutions: Bool
     var inputPolicy: AlasFieldInputPolicy?
+    var onPaste: ((String) -> Bool)?
 
     func makeNSView(context: Context) -> AlasNSTextFieldView {
         let field = AlasNSTextFieldView()
@@ -151,6 +157,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         field.isEnabled = isEnabled
         field.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
         field.inputPolicy = inputPolicy
+        field.onPaste = onPaste
         return field
     }
 
@@ -159,6 +166,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         nsView.isEnabled = isEnabled
         nsView.disablesAutomaticTextSubstitutions = disablesAutomaticTextSubstitutions
         nsView.inputPolicy = inputPolicy
+        nsView.onPaste = onPaste
         if nsView.placeholderString != placeholder { nsView.placeholderString = placeholder }
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string
@@ -271,6 +279,9 @@ class AlasNSTextFieldView: NSTextField {
     var inputPolicy: AlasFieldInputPolicy? {
         didSet { (cell as? AlasNSTextFieldCell)?.inputPolicy = inputPolicy }
     }
+    var onPaste: ((String) -> Bool)? {
+        didSet { (cell as? AlasNSTextFieldCell)?.onPaste = onPaste }
+    }
 
     /// Acquires first responder and moves the caret to the end of the
     /// current text, synchronously, in a single call. Acquiring first
@@ -326,6 +337,9 @@ final class AlasNSTextFieldCell: NSTextFieldCell {
             isolatedFieldEditor.inputPolicy = inputPolicy
         }
     }
+    var onPaste: ((String) -> Bool)? {
+        didSet { isolatedFieldEditor.onPaste = onPaste }
+    }
 
     private lazy var isolatedFieldEditor: AlasFieldEditor = {
         let editor = AlasFieldEditor()
@@ -334,7 +348,7 @@ final class AlasNSTextFieldCell: NSTextFieldCell {
     }()
 
     override func fieldEditor(for controlView: NSView) -> NSTextView? {
-        disablesAutomaticTextSubstitutions || inputPolicy != nil
+        disablesAutomaticTextSubstitutions || inputPolicy != nil || onPaste != nil
             ? isolatedFieldEditor : super.fieldEditor(for: controlView)
     }
 
@@ -367,8 +381,12 @@ enum AlasFieldInputPolicy {
 /// edit. Leave marked text, selection, deletion, and undo/redo to AppKit.
 final class AlasFieldEditor: NSTextView {
     var inputPolicy: AlasFieldInputPolicy?
+    var onPaste: ((String) -> Bool)?
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if let text = pboard.string(forType: .string), onPaste?(text) == true {
+            return true
+        }
         guard inputPolicy == .gitBranchName, let text = pboard.string(forType: .string) else {
             return super.readSelection(from: pboard, type: type)
         }
