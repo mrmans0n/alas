@@ -84,16 +84,26 @@ import Testing
 @Suite struct PeerConsoleWriteGateTests {
     @Test func bytesWaitUntilTheSurfaceCoversTheHostGrid() {
         var gate = PeerConsoleWriteGate()
-        #expect(gate.output(Data("stale".utf8)) == .hold)
-        // A snapshot supersedes held output.
-        #expect(gate.snapshot(Data("S".utf8)) == .hold)
-        #expect(gate.output(Data("o".utf8)) == .hold)
+        // Nothing is held before the first snapshot, so no fallback is armed.
+        #expect(gate.fallback() == nil)
+        #expect(gate.output(Data("stale".utf8)) == .hold(armFallback: true))
+        // A snapshot supersedes held output and starts a new hold.
+        #expect(gate.snapshot(Data("S".utf8)) == .hold(armFallback: true))
+        #expect(gate.output(Data("o".utf8)) == .hold(armFallback: false))
         #expect(gate.gridChanged(surfaceFits: false) == nil)
         #expect(gate.gridChanged(surfaceFits: true) == Data("So".utf8))
+        #expect(gate.fallback() == nil)
         #expect(gate.output(Data("live".utf8)) == .write(Data("live".utf8)))
         _ = gate.gridChanged(surfaceFits: false)
         #expect(gate.output(Data(count: PeerConsoleWriteGate.maxHeldBytes + 1)) == .resync)
         #expect(gate.gridChanged(surfaceFits: true) == nil)
+    }
+
+    @Test func fallbackReleasesHeldBytesForASurfaceThatNeverFits() {
+        var gate = PeerConsoleWriteGate()
+        #expect(gate.snapshot(Data("late".utf8)) == .hold(armFallback: true))
+        #expect(gate.fallback() == Data("late".utf8))
+        #expect(gate.output(Data("next".utf8)) == .write(Data("next".utf8)))
     }
 }
 
@@ -155,6 +165,21 @@ import Testing
 
         bridge.close()
         #expect(socket.read() == Data())
+    }
+
+    @Test func aSurfaceThatStopsDrainingIsBoundedThenRecovers() async throws {
+        let bridge = try PeerConsoleBridge(maxPendingBytes: 256 * 1024) { _ in }
+        defer { bridge.close() }
+        let socket = try ZmxIPCSocket.connect(path: bridge.socketPath)
+        // Nobody reads: the socket buffer fills, then the bridge's queue.
+        let chunk = Data(repeating: 0x61, count: 64 * 1024)
+        var accepted = 0
+        while accepted < 64, bridge.write(chunk) { accepted += 1 }
+        #expect(accepted < 64)
+
+        let drain = Task.detached { while let data = socket.read(), !data.isEmpty {} }
+        defer { drain.cancel() }
+        try await eventually("bridge drains") { bridge.write(Data("x".utf8)) }
     }
 }
 

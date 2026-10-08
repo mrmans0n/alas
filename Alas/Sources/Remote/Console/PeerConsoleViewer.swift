@@ -42,7 +42,9 @@ struct PeerConsoleWriteGate {
 
     enum Result: Equatable {
         case write(Data)
-        case hold
+        /// `armFallback` is true when this starts a hold, so the caller can
+        /// start a timer for a surface that never reports a fitting grid.
+        case hold(armFallback: Bool)
         case resync
     }
 
@@ -58,6 +60,7 @@ struct PeerConsoleWriteGate {
 
     mutating func output(_ data: Data) -> Result {
         if fits { return .write(data) }
+        let startsHold = held.isEmpty
         held.append(data)
         heldBytes += data.count
         guard heldBytes <= Self.maxHeldBytes else {
@@ -65,7 +68,14 @@ struct PeerConsoleWriteGate {
             heldBytes = 0
             return .resync
         }
-        return .hold
+        return .hold(armFallback: startsHold)
+    }
+
+    /// The fallback timer fired: show held bytes rather than nothing. A
+    /// no-op when they were already written.
+    mutating func fallback() -> Data? {
+        guard !held.isEmpty else { return nil }
+        return gridChanged(surfaceFits: true)
     }
 
     /// The surface or host grid changed. Returns held bytes, in order, once
@@ -183,6 +193,9 @@ final class PeerConsoleViewer {
     /// Only the newest Escape timer may release a held ESC.
     @ObservationIgnored private var escapeTimerToken = 0
     @ObservationIgnored private var writeGate = PeerConsoleWriteGate()
+    @ObservationIgnored private var fallbackToken = 0
+    /// How long held bytes wait for the surface to reach the host grid.
+    static let gridFallback: Duration = .seconds(2)
 
     var isControlling: Bool { phase == .live && control.owner == .you }
 
@@ -216,13 +229,6 @@ final class PeerConsoleViewer {
         }
         surface.setReadOnly(true)
         surface.onGridSizeChange = { [weak self] _, _ in self?.gridChanged() }
-        // Fallback for a surface that never reports a resize (hidden view):
-        // show the bytes rather than nothing.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard let self, let data = writeGate.gridChanged(surfaceFits: true) else { return }
-            bridge?.write(data)
-        }
         send(.attach(consoleId: consoleId, attachmentId: attachmentId, scrollbackRows: scrollbackRows))
     }
 
@@ -285,8 +291,18 @@ final class PeerConsoleViewer {
 
     private func deliver(_ result: PeerConsoleWriteGate.Result) {
         switch result {
-        case .write(let data): bridge?.write(data)
-        case .hold: break
+        case .write(let data): writeToSurface(data)
+        case .hold(let armFallback):
+            guard armFallback else { return }
+            // For a surface that never reports a fitting grid (hidden view),
+            // show the bytes rather than nothing.
+            fallbackToken += 1
+            let token = fallbackToken
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Self.gridFallback)
+                guard let self, token == fallbackToken, let data = writeGate.fallback() else { return }
+                writeToSurface(data)
+            }
         case .resync:
             order = PeerConsoleStreamOrder()
             send(.resync(attachmentId: attachmentId))
@@ -296,7 +312,15 @@ final class PeerConsoleViewer {
     private func gridChanged() {
         guard let rows, let columns, let grid = surface?.gridSize else { return }
         let fits = grid.rows >= rows && grid.columns >= columns
-        if let data = writeGate.gridChanged(surfaceFits: fits) { bridge?.write(data) }
+        if let data = writeGate.gridChanged(surfaceFits: fits) { writeToSurface(data) }
+    }
+
+    /// A surface that stopped draining has lost bytes, so the stream cannot
+    /// continue: drop output until a fresh snapshot replaces the screen.
+    private func writeToSurface(_ data: Data) {
+        guard bridge?.write(data) == false else { return }
+        order = PeerConsoleStreamOrder()
+        send(.resync(attachmentId: attachmentId))
     }
 
     private func apply(_ control: PeerConsoleControl) {

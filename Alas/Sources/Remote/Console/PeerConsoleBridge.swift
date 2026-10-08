@@ -18,6 +18,11 @@ final class PeerConsoleBridge: @unchecked Sendable {
     private var connection: Int32 = -1
     private var queued: [Data] = []
     private var isClosed = false
+    /// Bytes accepted by `write` but not yet written to `nc`.
+    private var pendingBytes = 0
+    /// Bound on `pendingBytes`. Host credit only covers the network, so a
+    /// surface that stops draining would otherwise grow this without limit.
+    private let maxPendingBytes: Int
 
     /// The command line the surface runs. The socket path is passed as `$0`
     /// so it never needs quoting inside the script.
@@ -26,7 +31,8 @@ final class PeerConsoleBridge: @unchecked Sendable {
     }
 
     /// `onInput` runs on a background thread with bytes the surface wrote.
-    init(onInput: @escaping @Sendable (Data) -> Void) throws {
+    init(maxPendingBytes: Int = 16 * 1024 * 1024, onInput: @escaping @Sendable (Data) -> Void) throws {
+        self.maxPendingBytes = maxPendingBytes
         var template = Array("/tmp/alas-pc.XXXXXX".utf8CString)
         guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -57,16 +63,28 @@ final class PeerConsoleBridge: @unchecked Sendable {
     }
 
     /// Queues bytes for the surface, in order. Bytes written before `nc`
-    /// connects are delivered once it does.
-    func write(_ data: Data) {
-        guard !data.isEmpty else { return }
+    /// connects are delivered once it does. Returns false, dropping `data`,
+    /// once the surface has fallen `maxPendingBytes` behind; the caller then
+    /// needs a fresh snapshot rather than a continuation.
+    @discardableResult
+    func write(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return true }
+        let accepted = lock.withLock {
+            guard !isClosed, pendingBytes + data.count <= maxPendingBytes else { return false }
+            pendingBytes += data.count
+            return true
+        }
+        guard accepted else { return false }
         writes.async { [self] in
             lock.lock()
             let fd = connection
             if fd < 0, !isClosed { queued.append(data) }
             lock.unlock()
-            if fd >= 0 { Self.writeAll(fd, data) }
+            guard fd >= 0 else { return }
+            Self.writeAll(fd, data)
+            lock.withLock { pendingBytes -= data.count }
         }
+        return true
     }
 
     /// Ends the surface's `nc` and removes the socket directory.
@@ -98,6 +116,7 @@ final class PeerConsoleBridge: @unchecked Sendable {
             queued = []
             lock.unlock()
             if !closed { backlog.forEach { Self.writeAll(fd, $0) } }
+            lock.withLock { pendingBytes -= backlog.reduce(0) { $0 + $1.count } }
         }
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         while true {
