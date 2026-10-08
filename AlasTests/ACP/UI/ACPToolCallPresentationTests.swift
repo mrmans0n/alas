@@ -117,6 +117,11 @@ struct ACPToolCallPresentationTests {
     @Test("visual_show reads as a visual aid, not a generic MCP call", arguments: [
         ("mcp__alas__visual_show", "mcp__alas__visual_show"),
         ("alas.visual_show", nil),
+        ("alas/visual_show", nil),
+        ("visual_show", "visual_show"),
+        ("x", "alas.visual_show"),
+        ("x", "alas/visual_show"),
+        ("x", "MCP__Alas__Visual_Show"),
     ] as [(String, String?)])
     func visualShowPresentation(title: String, name: String?) {
         let presentation = ACPToolCallPresentation.resolve(toolCall(title: title, name: name))
@@ -133,6 +138,21 @@ struct ACPToolCallPresentationTests {
         let call = toolCall(title: title, name: name)
         #expect(!ACPToolCallPresentation.isVisualShow(call))
         #expect(ACPToolCallPresentation.resolve(call).label != "Visual aid")
+    }
+
+    @Test("near-miss tool names are not the visual tool, as name or as title", arguments: [
+        "mcp__foo__visual_showcase",
+        "visual_show_backup",
+        "my_visual_show_tool",
+        "xvisual_show",
+    ])
+    func nearMissesAreNotVisualShow(text: String) {
+        let named = toolCall(title: "x", name: text)
+        #expect(!ACPToolCallPresentation.isVisualShow(named))
+        #expect(ACPToolCallPresentation.resolve(named).label != "Visual aid")
+        let titled = toolCall(title: text, name: nil)
+        #expect(!ACPToolCallPresentation.isVisualShow(titled))
+        #expect(ACPToolCallPresentation.resolve(titled).label != "Visual aid")
     }
 
     @Test("guardian review title maps to review presentation")

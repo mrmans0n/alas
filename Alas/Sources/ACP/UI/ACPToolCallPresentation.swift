@@ -26,9 +26,17 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     /// is not mistaken for the visual tool.
     static func isVisualShow(name: String?, title: String?) -> Bool {
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedName.isEmpty { return trimmedName.contains("visual_show") }
-        let lowerTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lowerTitle.contains("visual_show")
+        if !trimmedName.isEmpty { return namesVisualShowTool(trimmedName) }
+        return namesVisualShowTool(title ?? "")
+    }
+
+    /// True when a token of `text` is exactly `visual_show` or an MCP-qualified
+    /// `…__visual_show`. Tokens split on every character outside `[a-z0-9_]`, so
+    /// `alas.visual_show` matches while `visual_showcase` and `visual_show_backup` do not.
+    private static func namesVisualShowTool(_ text: String) -> Bool {
+        text.lowercased()
+            .split(whereSeparator: { !($0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_")) })
+            .contains { $0 == "visual_show" || $0.hasSuffix("__visual_show") }
     }
 
     static func resolve(_ toolCall: ACPMessage.ToolCall) -> ACPToolCallPresentation {
