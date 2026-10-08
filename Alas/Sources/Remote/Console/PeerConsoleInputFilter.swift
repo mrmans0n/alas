@@ -212,9 +212,11 @@ struct PeerConsoleMouseModeTracker {
     private var modesSet: Set<Format> = []
     private var savedSet: Set<Format> = []
     private var state = State.ground
-    /// Digits of the parameter being read, capped just past four digits so
-    /// longer numbers never match a mode.
-    private var parameter: [UInt8] = []
+    /// Numeric value of the parameter being read, as Ghostty parses it
+    /// (`01006` is 1006); saturates so long digit runs never overflow or
+    /// wrap into a mode number.
+    private var parameter = 0
+    private static let parameterLimit = 100_000
     /// Format modes named so far in the current sequence, last occurrence
     /// last, applied once its final byte says what to do. At most four.
     private var named: [Format] = []
@@ -263,13 +265,13 @@ struct PeerConsoleMouseModeTracker {
             return true
         case .controlSequence:
             state = byte == UInt8(ascii: "?") ? .privateParameters : .ground
-            parameter = []
+            parameter = 0
             named = []
             return false
         case .privateParameters:
             switch byte {
             case UInt8(ascii: "0")...UInt8(ascii: "9"):
-                if parameter.count <= 4 { parameter.append(byte) }
+                parameter = min(parameter * 10 + Int(byte - UInt8(ascii: "0")), Self.parameterLimit)
                 return false
             case UInt8(ascii: ";"), UInt8(ascii: ":"):
                 nameCurrentParameter()
@@ -287,14 +289,14 @@ struct PeerConsoleMouseModeTracker {
     }
 
     private mutating func nameCurrentParameter() {
-        let format: Format? = switch String(decoding: parameter, as: UTF8.self) {
-        case "1005": .utf8
-        case "1006": .sgr
-        case "1015": .urxvt
-        case "1016": .sgrPixels
+        let format: Format? = switch parameter {
+        case 1005: .utf8
+        case 1006: .sgr
+        case 1015: .urxvt
+        case 1016: .sgrPixels
         default: nil
         }
-        parameter = []
+        parameter = 0
         guard let format else { return }
         named.removeAll { $0 == format }
         named.append(format)

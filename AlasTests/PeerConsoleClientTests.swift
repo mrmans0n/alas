@@ -145,6 +145,14 @@ import Testing
         #expect(tracker.hostFormat == .utf8)
         #expect(observe("\u{1B}[?1005r"))
         #expect(tracker.hostFormat == .x10)
+        // Parameters are numbers: zero padding names the same mode, and
+        // values past any mode number never match one.
+        #expect(observe("\u{1B}[?01006h"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?0001006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(!observe("\u{1B}[?99991006h\u{1B}[?1006000000h"))
+        #expect(tracker.hostFormat == .x10)
         // A mode saved while another format was selected is still saved set.
         #expect(observe("\u{1B}[?1006h\u{1B}[?1015h\u{1B}[?1006s\u{1B}[?1006l"))
         #expect(tracker.hostFormat == .x10)
