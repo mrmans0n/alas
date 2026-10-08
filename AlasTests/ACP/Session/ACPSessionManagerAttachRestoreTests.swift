@@ -1266,10 +1266,12 @@ struct ACPSessionManagerAttachRestoreTests {
         let oldService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
         let replacementService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
         var serviceFactoryCalls = 0
+        var usage: [ACPTurnCompletion] = []
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            onTurnUsage: { usage.append($0) },
             setupEvaluator: { _ in .ready },
             brokerServiceFactory: {
                 serviceFactoryCalls += 1
@@ -1311,6 +1313,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.queue.first?.deliveryUncertain == false)
         #expect(await oldService.sent.filter { $0.method == "session/prompt" }.isEmpty)
         #expect(try store.loadQueue(sessionId: session.id).first?.dispatchedBrokerGeneration == nil)
+        // Never handed off, so it is no turn: the detach records no usage for it.
+        #expect(usage.isEmpty)
 
         let reopenedSession = try #require(manager.placeholderSession(id: session.id))
         await manager.hydrateIfNeeded(id: reopenedSession.id)

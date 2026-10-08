@@ -7929,9 +7929,9 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
-        recordUnreportedUsage(of: oldRunner)
         replacementAttempt.retiringRunner = oldRunner
         let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForTeardown() ?? []
+        recordUnreportedUsage(of: oldRunner)
         let oldAttemptConnection = oldAttempt?.connection
         let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
         let oldBrokerClient = oldAttempt?.brokerClient ?? (oldConnection?.client as? ACPBrokerClient)
@@ -9571,7 +9571,6 @@ extension ACPSessionManager {
         let remoteSessionId = attaching?.remoteSessionId ?? session?.remoteSessionId
         let runner = runners.removeValue(forKey: sessionId) ?? attempt?.retiringRunner
         attempt?.retiringRunner = nil
-        recordUnreportedUsage(of: runner)
         let remoteCloseConnection: ACPConnection? = if attempt?.connectionIsInitializedForRemoteClose == true {
             attemptConnection ?? attaching?.connection ?? runner?.connection
         } else {
@@ -9585,6 +9584,7 @@ extension ACPSessionManager {
             sessionCapabilities
         }
         let unhandedQueueDispatches = runner?.takeUnhandedQueueDispatchesForTeardown() ?? []
+        recordUnreportedUsage(of: runner)
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
         // `connection.shutdown()` await below — if `agentState` is still

@@ -45,6 +45,14 @@ private final class QueueDispatchHandoffTracker: @unchecked Sendable {
         }
     }
 
+    /// Whether a queued prompt's request may have reached the agent: one whose dispatch is still waiting for, or was
+    /// cancelled before, the transport handoff never did.
+    func mayHaveHandedOff(_ itemId: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return states[itemId] != .provenancePending && states[itemId] != .cancelled
+    }
+
     func takeUnhandedItemIDs() -> Set<UUID> {
         lock.lock()
         defer { lock.unlock() }
@@ -147,7 +155,9 @@ final class ACPSessionRunner {
     /// prompt still bounds an earlier one's cost after it was reported or dropped.
     private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
-    private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
+    private var unreportedPrompts: [
+        Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool, queuedItemId: UUID?)
+    ] = [:]
     /// Finished prompts' usage, by prompt id, held until every prompt sent before them has reported: a session's
     /// turns are recorded in the order they were sent, each turn's cost being measured from the one before.
     private var heldUsage: [Int: ACPTurnCompletion] = [:]
@@ -2016,9 +2026,14 @@ final class ACPSessionRunner {
     /// The connection is being replaced, and with it this runner: the results its prompts still wait for will not
     /// come. Returns every turn not reported yet, in the order sent; one without its result is a cancelled turn
     /// without tokens. The caller records them, since this runner's reports no longer count once it is replaced.
+    /// A queued prompt whose dispatch never crossed the transport handoff is no turn: teardown keeps it from going.
     func takeUnreportedUsage() -> [ACPTurnCompletion] {
-        for promptID in unreportedPrompts.keys {
-            heldUsage[promptID] = supersededTurnUsage(promptID, quota: nil, result: .cancelled)
+        for (promptID, prompt) in unreportedPrompts {
+            if let itemId = prompt.queuedItemId, !queueDispatchHandoffTracker.mayHaveHandedOff(itemId) {
+                unreportedPrompts[promptID] = nil
+            } else {
+                heldUsage[promptID] = supersededTurnUsage(promptID, quota: nil, result: .cancelled)
+            }
         }
         defer { heldUsage = [:] }
         return heldUsage.sorted { $0.key < $1.key }.map(\.value)
@@ -4380,7 +4395,8 @@ extension ACPSessionRunner {
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
                     self.unreportedPrompts[promptID] = (
-                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel, false)
+                        self.activePromptStartedAt ?? sentAt, sentAt, self.activePromptStreamStart, self.session.currentModel,
+                        false, queuedItemId)
                     self.noteSent(promptID, streamStart: self.activePromptStreamStart)
                     self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
@@ -4652,7 +4668,7 @@ extension ACPSessionRunner {
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
-                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
+                    sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true, nil)
                 self.noteSent(promptID, streamStart: self.connection.client.yieldedUpdateCount)
                 return true
             }
