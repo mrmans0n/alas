@@ -91,6 +91,16 @@ struct RootView: View {
                     )
                 )
             }
+            // Here rather than in the peers sidebar, so the peer tab strip's
+            // "+" still opens it while the sidebar is hidden.
+            .sheet(item: Binding(
+                get: { state.nativePeerSessions?.newSession },
+                set: { if $0 == nil { state.nativePeerSessions?.cancelNewSession() } }
+            )) { _ in
+                if let client = state.nativePeerSessions {
+                    NativePeerNewSessionSheet(client: client)
+                }
+            }
             .sheet(item: $editingWorkspace) { workspace in
                 EditWorkspaceDialog(
                     state: state,
@@ -315,7 +325,35 @@ struct RootView: View {
         hasRightPaneRail: Bool,
         rightPaneStartupSuppressed: Bool
     ) -> some View {
-        if let client = state.nativePeerSessions, client.selectedSessionId != nil {
+        if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+            VStack(spacing: 0) {
+                if let selection = client.selectedWorktree {
+                    NativePeerTabBar(
+                        client: client,
+                        selection: selection,
+                        agentLookup: { state.agent(id: $0) },
+                        sidebarHidden: !state.config.sidebarVisible,
+                        onRevealSidebar: {
+                            state.config.sidebarVisible = true
+                            state.saveConfig()
+                        }
+                    )
+                }
+                peerCenterContent(client)
+            }
+        } else {
+            worktreeCenterContent(
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
+            )
+        }
+    }
+
+    /// The selected peer tab's content. A peer document opens over it.
+    @ViewBuilder
+    private func peerCenterContent(_ client: NativePeerSessions) -> some View {
+        if client.selectedSessionId != nil {
             if let document = client.workspace.document {
                 NativePeerDocumentView(
                     document: document,
@@ -328,7 +366,6 @@ struct RootView: View {
             } else {
                 NativePeerSessionView(
                     client: client,
-                    agentLookup: { state.agent(id: $0) },
                     typography: ACPChatTypography(
                         fontFamily: state.config.agents.chatFontFamily,
                         fontSize: state.config.agents.chatFontSize
@@ -337,27 +374,19 @@ struct RootView: View {
                 )
                 .id(client.selectedSessionId)
             }
-        } else if let consoles = state.nativePeerSessions?.consoles, let viewer = consoles.viewer {
+        } else if let consoles = client.consoles, let viewer = consoles.viewer {
             NativePeerConsoleView(
                 viewer: viewer,
-                peerName: state.nativePeerSessions?.snapshot.groups.first { $0.serverId == viewer.serverId }?.name
-                    ?? "a paired Mac",
                 onReconnect: { consoles.reconnect() }
             )
             .id(viewer.attachmentId)
-        } else if state.nativePeerSessions?.selectedWorktree != nil {
+        } else {
             ContentUnavailableView(
                 "No Open Tabs",
                 systemImage: "rectangle.stack",
                 description: Text("This worktree has no agent or console tabs open on the peer.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            worktreeCenterContent(
-                effectiveRightPaneVisible: effectiveRightPaneVisible,
-                hasRightPaneRail: hasRightPaneRail,
-                rightPaneStartupSuppressed: rightPaneStartupSuppressed
-            )
         }
     }
 

@@ -5,7 +5,6 @@ import SwiftUI
 /// asking the host to resize.
 struct NativePeerConsoleView: View {
     let viewer: PeerConsoleViewer
-    let peerName: String
     let onReconnect: () -> Void
     @Environment(\.theme) private var theme
 
@@ -44,16 +43,11 @@ struct NativePeerConsoleView: View {
         return CGSize(width: CGFloat(columns + 1) * cell.width, height: CGFloat(rows + 1) * cell.height)
     }
 
+    /// Control of the host's terminal. Title and peer live in the tab strip.
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "terminal")
-                .foregroundColor(theme.color("fg-muted"))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(viewer.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(1)
-                Text(subtitle)
+            if let rows = viewer.rows, let columns = viewer.columns {
+                Text("\(columns)×\(rows), size set by the host")
                     .font(.system(size: 10.5))
                     .foregroundColor(theme.color("fg-dim"))
                     .lineLimit(1)
@@ -65,16 +59,8 @@ struct NativePeerConsoleView: View {
             controlButton
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(theme.color("bg-2"))
-    }
-
-    private var subtitle: String {
-        var parts = ["on \(peerName)"]
-        if let rows = viewer.rows, let columns = viewer.columns {
-            parts.append("\(columns)×\(rows), size set by the host")
-        }
-        return parts.joined(separator: " · ")
     }
 
     private var controlLabel: String {

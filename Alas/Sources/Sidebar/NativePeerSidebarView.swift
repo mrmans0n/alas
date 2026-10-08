@@ -57,12 +57,6 @@ struct NativePeerSidebarView: View {
             }
             .onAppear { expandNewPeers() }
             .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
-            .sheet(item: Binding(
-                get: { client.newSession },
-                set: { if $0 == nil { client.cancelNewSession() } }
-            )) { _ in
-                NativePeerNewSessionSheet(client: client)
-            }
         }
     }
 
@@ -259,20 +253,11 @@ private struct NativePeerHeaderRow: View {
             .compositingGroup()
             .overlay(alignment: .bottomTrailing) {
                 Circle()
-                    .fill(theme.color(presenceColorToken))
+                    .fill(theme.color(group.state.presenceColorToken))
                     .frame(width: 6, height: 6)
                     .offset(x: 2, y: 2)
             }
             .accessibilityHidden(true)
-    }
-
-    private var presenceColorToken: String {
-        switch group.state {
-        case .online: "add"
-        case .connecting: "mod"
-        case .tokenRevoked, .identityMismatch, .incompatible: "del"
-        case .offline, .identityUnproven, .idle, .unavailable: "fg-faint"
-        }
     }
 
     @ViewBuilder
@@ -389,35 +374,6 @@ private struct NativePeerWorktreeRow: View {
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
-    /// The worktree's tabs in the host's order, sharing the visible-badge limit.
-    private enum Badge: Identifiable {
-        case session(RemoteSessionSummary)
-        case console(PeerConsoleSummary)
-
-        var id: String {
-            switch self {
-            case .session(let session): "session:\(session.id)"
-            case .console(let console): "console:\(console.consoleId)"
-            }
-        }
-
-        var tab: NativePeerTab {
-            switch self {
-            case .session(let session): .session(session.id)
-            case .console(let console): .console(console.consoleId)
-            }
-        }
-    }
-
-    private var badges: [Badge] {
-        worktree.tabs.compactMap { tab in
-            switch tab {
-            case .session(let id): worktree.sessions.first { $0.id == id }.map(Badge.session)
-            case .console(let id): worktree.consoles.first { $0.consoleId == id }.map(Badge.console)
-            }
-        }
-    }
-
     var body: some View {
         let status = worktree.status
         VStack(alignment: .leading, spacing: 2) {
@@ -521,8 +477,9 @@ private struct NativePeerWorktreeRow: View {
         .padding(.leading, 19)
     }
 
+    /// The worktree's tabs in the host's order, sharing the visible-badge limit.
     private var agentBadges: some View {
-        let badges = badges
+        let badges = worktree.tabRows
         let visible = WorktreeRowView.visibleHarnessSessionCount(for: badges.count)
         return HStack(spacing: 4) {
             ForEach(badges.prefix(visible)) { badge in
@@ -530,14 +487,14 @@ private struct NativePeerWorktreeRow: View {
                 case .session(let session):
                     NativePeerAgentBadge(
                         session: session,
-                        isSelected: badge.tab == selectedTab,
-                        onActivate: { onSelectTab(badge.tab) }
+                        isSelected: badge.id == selectedTab,
+                        onActivate: { onSelectTab(badge.id) }
                     )
                 case .console(let console):
                     NativePeerConsoleBadge(
                         console: console,
-                        isSelected: badge.tab == selectedTab,
-                        onActivate: { onSelectTab(badge.tab) }
+                        isSelected: badge.id == selectedTab,
+                        onActivate: { onSelectTab(badge.id) }
                     )
                 }
             }
@@ -551,7 +508,7 @@ private struct NativePeerWorktreeRow: View {
                         switch badge {
                         case .session(let session):
                             Button {
-                                onSelectTab(badge.tab)
+                                onSelectTab(badge.id)
                             } label: {
                                 Label {
                                     Text(session.title)
@@ -566,7 +523,7 @@ private struct NativePeerWorktreeRow: View {
                             .badge(Self.overflowBadgeText(for: session).map(Text.init))
                         case .console(let console):
                             Button {
-                                onSelectTab(badge.tab)
+                                onSelectTab(badge.id)
                             } label: {
                                 Label(console.title, systemImage: Icon.symbol(for: "terminal"))
                             }
@@ -588,7 +545,7 @@ private struct NativePeerWorktreeRow: View {
                 // idle history, which draws no chrome at all.
                 .modifier(OptionalBadgeChrome(
                     surface: Self.overflowSurface(for: hidden),
-                    isSelected: hiddenBadges.contains { $0.tab == selectedTab }
+                    isSelected: hiddenBadges.contains { $0.id == selectedTab }
                 ))
                 .accessibilityLabel("\(hiddenBadges.count) more")
             }

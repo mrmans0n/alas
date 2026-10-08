@@ -364,6 +364,26 @@ final class NativePeerSessions {
         requestNewSessionOptions()
     }
 
+    /// The peer and repo a new session in `selection` belongs to. Nil while
+    /// the peer is offline or for a worktree outside any of its projects.
+    func newSessionTarget(in selection: NativePeerWorktreeSelection) -> (peer: NativePeerGroup, repo: NativePeerRepoGroup)? {
+        guard let peer = snapshot.groups.first(where: { $0.serverId == selection.serverId }),
+              peer.state.carriesSessions,
+              let repo = peer.repos(ordering: .manual).first(where: { repo in
+                  repo.worktrees.contains { $0.id == selection.worktreeId }
+              }),
+              repo.projectId != nil
+        else { return nil }
+        return (peer, repo)
+    }
+
+    /// Opens the new-session sheet on the selected worktree's repo, which
+    /// preselects that worktree.
+    func beginNewSession(in selection: NativePeerWorktreeSelection) {
+        guard let target = newSessionTarget(in: selection) else { return }
+        beginNewSession(peer: target.peer, repo: target.repo)
+    }
+
     func createNewSession(worktreeId: String, agentId: String, modelId: String?, effortId: String?) {
         guard let request = newSession, request.phase != .creating, let downstream else { return }
         newSession?.phase = .creating
@@ -395,10 +415,11 @@ final class NativePeerSessions {
         newSession = nil
     }
 
-    /// The selected session's worktree, when it belongs to the sheet's peer.
+    /// The selected worktree, when it belongs to the sheet's peer.
     var newSessionDefaultWorktreeId: String? {
-        guard let request = newSession, selectedPeer?.serverId == request.serverId else { return nil }
-        return selectedRow?.worktreeId
+        guard let request = newSession, let selectedWorktree, selectedWorktree.serverId == request.serverId
+        else { return nil }
+        return worktree(selectedWorktree)?.peerWorktreeId
     }
 
     private func requestNewSessionOptions() {

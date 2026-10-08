@@ -272,4 +272,15 @@ struct NativePeerSidebarSnapshotTests {
         ])
         #expect(idle.status == nil)
     }
+
+    @Test(arguments: [
+        ("streaming", ActivityState.busy),
+        ("awaitingPermission", .permissionRequest),
+        ("awaitingInput", .awaitingInput),
+        ("idle", nil),
+        ("somethingNewer", nil),
+    ] as [(String, ActivityState?)])
+    func peerSessionTabsTintLikeLocalTabs(status: String, expected: ActivityState?) {
+        #expect(row("s", peer: "b", status: status).tabActivityState == expected)
+    }
 }
