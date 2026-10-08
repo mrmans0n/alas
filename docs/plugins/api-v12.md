@@ -258,8 +258,9 @@ that finishes during that wait is recorded, and sent, after it.
 ### Known limits
 
 - A turn in flight when Alas restarts the agent connection is recorded as
-  `cancelled`, without tokens. One in flight when the connection is lost gets
-  no history row.
+  `cancelled`, without tokens. One in flight when the connection is lost is
+  recorded the same way when Alas reconnects, or gets no history row if its
+  prompt failed with the connection first.
 - An update the agent sends right after a turn's result, while Alas is busy,
   can count toward that turn, so its cost may include the next turn's first
   cost growth.

@@ -4422,7 +4422,13 @@ extension ACPSessionRunner {
                     // Usage it holds counts too, or a result that never comes would hold every later turn's.
                     if self.unreportedPrompts.count + self.heldUsage.count > 8,
                        let oldest = self.unreportedPrompts.keys.min() {
-                        self.reportSupersededTurnUsage(oldest, quota: nil)
+                        // One that never reached the transport is no turn, and only goes.
+                        if self.promptHandoffs.contains(oldest) {
+                            self.reportSupersededTurnUsage(oldest, quota: nil)
+                        } else {
+                            self.unreportedPrompts[oldest] = nil
+                            self.reportHeldUsage()
+                        }
                     }
                     return true
                 }) else {
