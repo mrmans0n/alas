@@ -84,6 +84,16 @@ enum ACPBackgroundTaskPresentation {
         let base = total == 1 ? "1 background task" : "\(total) background tasks"
         return paused > 0 ? "\(base) · \(paused) paused" : base
     }
+
+    /// Text shown under the command when a transcript row is expanded: the
+    /// summary, else the description. Either is skipped when it only repeats
+    /// the task name, which adapters commonly send for shell commands.
+    static func transcriptDetail(_ task: ACPBackgroundTask) -> String? {
+        let name = task.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [task.summary, task.description]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && $0 != name }
+    }
 }
 
 extension ACPSession {
@@ -218,23 +228,9 @@ struct ACPBackgroundTaskTray: View {
         .frame(width: 11, height: 11)
     }
 
-    @ViewBuilder
     private func commandText(_ task: ACPBackgroundTask) -> some View {
-        if let parts = ACPBackgroundTaskPresentation.commandParts(task.name) {
-            (Text(parts.head).foregroundColor(theme.color("fg"))
-                + Text(parts.arguments.isEmpty ? "" : " " + parts.arguments).foregroundColor(theme.color("fg-dim")))
-                .font(.system(size: 11.5, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(task.name)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("fg"))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        ACPBackgroundTaskName(name: task.name)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -243,6 +239,132 @@ struct ACPBackgroundTaskTray: View {
             StopTaskButton(taskName: task.name) { stop(task.id) }
         } else {
             Color.clear.frame(width: 18, height: 18)
+        }
+    }
+}
+
+/// A task name in one truncated line: shell commands in monospace with the
+/// arguments dimmed, prose names in the regular font.
+private struct ACPBackgroundTaskName: View {
+    let name: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Group {
+            if let parts = ACPBackgroundTaskPresentation.commandParts(name) {
+                (Text(parts.head).foregroundColor(theme.color("fg"))
+                    + Text(parts.arguments.isEmpty ? "" : " " + parts.arguments).foregroundColor(theme.color("fg-dim")))
+                    .font(.system(size: 11.5, design: .monospaced))
+            } else {
+                Text(name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color("fg"))
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+}
+
+/// Transcript row for a background task, styled like a collapsed tool call:
+/// label, command chip, duration and status glyph. Expanding reveals the full
+/// command, the task's summary and any stop error.
+struct ACPBackgroundTaskTranscriptRow: View {
+    let task: ACPBackgroundTask
+
+    @State private var expanded = false
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 11))
+                        .frame(width: 16)
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .accessibilityHidden(true)
+                    Text("Background")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    ACPBackgroundTaskName(name: task.name)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 4))
+                    Spacer(minLength: 6)
+                    if let finishedAt = task.finishedAt {
+                        Text(ACPToolCallDurationFormatter.string(for: finishedAt.timeIntervalSince(task.startedAt)))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.color("fg-faint"))
+                            .lineLimit(1)
+                    }
+                    status
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .padding(.horizontal, expanded ? 10 : 0)
+                .padding(.vertical, expanded ? 7 : 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Background task \(task.name), \(task.state)")
+
+            if expanded {
+                Divider().background(theme.color("line-soft"))
+                details
+            }
+        }
+        .background(expanded ? theme.color("bg-1").opacity(0.5) : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("bg-4"), lineWidth: 0.5)
+                .opacity(expanded ? 1 : 0)
+        )
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: task.name)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(theme.color("fg-dim"))
+            if let detail = ACPBackgroundTaskPresentation.transcriptDetail(task) {
+                Text(verbatim: detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color("fg-muted"))
+            }
+            if let error = task.stopError {
+                Text(verbatim: error)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.color("del"))
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(theme.color("bg-0").opacity(0.55))
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch task.state {
+        case "completed":
+            EmptyView()
+        case "failed":
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(theme.color("del"))
+        case "stopped", "lost":
+            Image(systemName: "stop.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(theme.color("fg-faint"))
+        case "paused":
+            Image(systemName: "pause.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(theme.color("warn"))
+        default:
+            Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 11, height: 11)
         }
     }
 }
