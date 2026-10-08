@@ -58,6 +58,8 @@ final class MentionSymbolPreviewModel: ObservableObject {
     var place: (() -> MentionSymbolPreviewPlacement.Side?)?
 
     static let showDelay: Duration = .milliseconds(150)
+    /// How long a symbol stays highlighted before its code is read.
+    static let readDelay: Duration = .milliseconds(80)
     static let motion = Animation.easeOut(duration: 0.18)
 
     private let root: URL
@@ -66,6 +68,7 @@ final class MentionSymbolPreviewModel: ObservableObject {
     private var shownSymbol: SymbolEntry?
     private var pending: MentionSymbolPreviewRequest?
     private var showTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
 
     init(root: URL, theme: Theme?, typography: ACPChatTypography) {
         self.root = root
@@ -110,6 +113,8 @@ final class MentionSymbolPreviewModel: ObservableObject {
     private func hide() {
         showTask?.cancel()
         showTask = nil
+        loadTask?.cancel()
+        loadTask = nil
         pending = nil
         shownSymbol = nil
         guard card != nil else { return }
@@ -129,10 +134,15 @@ final class MentionSymbolPreviewModel: ObservableObject {
         if let cached { model.apply(cached, theme: theme) }
         shownSymbol = symbol
         withAnimation(animated ? Self.motion : nil) { card = model }
-        // Not cancelled when the highlight moves on: a finished read still
-        // fills the cache for the next time the row is highlighted.
-        Task { [weak self] in
-            guard let loaded = await ACPSymbolHoverPreview.load(target, root: root) else { return }
+        // The read starts only once the highlight rests `readDelay` on the
+        // row, and moving on cancels it, so holding an arrow key over a long
+        // list reads only the rows it stops on (a read is an SSH command on
+        // a remote worktree).
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.readDelay)
+            guard !Task.isCancelled,
+                  let loaded = await ACPSymbolHoverPreview.load(target, root: root) else { return }
             cache.store(loaded, root: root, target: target)
             guard let self, self.card === model, loaded != cached else { return }
             model.apply(loaded, theme: theme, animated: true)
