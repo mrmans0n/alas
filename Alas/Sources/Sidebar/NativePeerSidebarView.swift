@@ -166,15 +166,15 @@ struct NativePeerSidebarView: View {
             if !collapsed {
                 VStack(spacing: 1) {
                     ForEach(repo.worktrees) { worktree in
+                        let selection = NativePeerWorktreeSelection(serverId: peer.serverId, worktreeId: worktree.id)
+                        let isSelected = client.selectedWorktree == selection
                         NativePeerWorktreeRow(
                             worktree: worktree,
                             peerName: peer.name,
-                            selectedSessionId: client.selectedSessionId,
-                            selectedConsoleId: client.consoles?.viewer.flatMap {
-                                $0.serverId == peer.serverId ? $0.consoleId : nil
-                            },
-                            onSelect: { client.select($0) },
-                            onSelectConsole: { client.selectConsole(serverId: peer.serverId, consoleId: $0) }
+                            isSelected: isSelected,
+                            selectedTab: isSelected ? client.selectedTab : nil,
+                            onSelect: { client.selectWorktree(selection) },
+                            onSelectTab: { client.selectTab($0, in: selection) }
                         )
                     }
                 }
@@ -381,20 +381,15 @@ private struct NativePeerRepoHeaderRow: View {
 private struct NativePeerWorktreeRow: View {
     let worktree: NativePeerWorktreeGroup
     let peerName: String
-    let selectedSessionId: String?
-    /// The console being viewed, if it is on this row's peer.
-    let selectedConsoleId: String?
-    let onSelect: (String) -> Void
-    let onSelectConsole: (String) -> Void
+    let isSelected: Bool
+    /// The worktree's selected tab; nil unless `isSelected`.
+    let selectedTab: NativePeerTab?
+    let onSelect: () -> Void
+    let onSelectTab: (NativePeerTab) -> Void
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
-    private var isSelected: Bool {
-        worktree.sessions.contains { $0.id == selectedSessionId }
-            || worktree.consoles.contains { $0.consoleId == selectedConsoleId }
-    }
-
-    /// Sessions first, then consoles, sharing the visible-badge limit.
+    /// The worktree's tabs in the host's order, sharing the visible-badge limit.
     private enum Badge: Identifiable {
         case session(RemoteSessionSummary)
         case console(PeerConsoleSummary)
@@ -405,17 +400,21 @@ private struct NativePeerWorktreeRow: View {
             case .console(let console): "console:\(console.consoleId)"
             }
         }
+
+        var tab: NativePeerTab {
+            switch self {
+            case .session(let session): .session(session.id)
+            case .console(let console): .console(console.consoleId)
+            }
+        }
     }
 
     private var badges: [Badge] {
-        worktree.sessions.map(Badge.session) + worktree.consoles.map(Badge.console)
-    }
-
-    private func activate() {
-        if let session = worktree.primarySession {
-            onSelect(session.id)
-        } else if let console = worktree.consoles.first {
-            onSelectConsole(console.consoleId)
+        worktree.tabs.compactMap { tab in
+            switch tab {
+            case .session(let id): worktree.sessions.first { $0.id == id }.map(Badge.session)
+            case .console(let id): worktree.consoles.first { $0.consoleId == id }.map(Badge.console)
+            }
         }
     }
 
@@ -459,7 +458,7 @@ private struct NativePeerWorktreeRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(perform: activate)
+        .onTapGesture(perform: onSelect)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(.isButton)
@@ -474,7 +473,7 @@ private struct NativePeerWorktreeRow: View {
                         .foregroundColor(theme.color(status.colorToken))
                 }
                 .fixedSize()
-            } else if worktree.sessions.count == 1, let session = worktree.primarySession {
+            } else if worktree.sessions.count == 1, let session = worktree.sessions.first {
                 // Nothing to report, so the chat's own title fills the slot a
                 // status chip would take.
                 Text(session.title)
@@ -531,14 +530,14 @@ private struct NativePeerWorktreeRow: View {
                 case .session(let session):
                     NativePeerAgentBadge(
                         session: session,
-                        isSelected: session.id == selectedSessionId,
-                        onActivate: { onSelect(session.id) }
+                        isSelected: badge.tab == selectedTab,
+                        onActivate: { onSelectTab(badge.tab) }
                     )
                 case .console(let console):
                     NativePeerConsoleBadge(
                         console: console,
-                        isSelected: console.consoleId == selectedConsoleId,
-                        onActivate: { onSelectConsole(console.consoleId) }
+                        isSelected: badge.tab == selectedTab,
+                        onActivate: { onSelectTab(badge.tab) }
                     )
                 }
             }
@@ -552,7 +551,7 @@ private struct NativePeerWorktreeRow: View {
                         switch badge {
                         case .session(let session):
                             Button {
-                                onSelect(session.id)
+                                onSelectTab(badge.tab)
                             } label: {
                                 Label {
                                     Text(session.title)
@@ -567,7 +566,7 @@ private struct NativePeerWorktreeRow: View {
                             .badge(Self.overflowBadgeText(for: session).map(Text.init))
                         case .console(let console):
                             Button {
-                                onSelectConsole(console.consoleId)
+                                onSelectTab(badge.tab)
                             } label: {
                                 Label(console.title, systemImage: Icon.symbol(for: "terminal"))
                             }
@@ -589,12 +588,7 @@ private struct NativePeerWorktreeRow: View {
                 // idle history, which draws no chrome at all.
                 .modifier(OptionalBadgeChrome(
                     surface: Self.overflowSurface(for: hidden),
-                    isSelected: hiddenBadges.contains {
-                        switch $0 {
-                        case .session(let session): session.id == selectedSessionId
-                        case .console(let console): console.consoleId == selectedConsoleId
-                        }
-                    }
+                    isSelected: hiddenBadges.contains { $0.tab == selectedTab }
                 ))
                 .accessibilityLabel("\(hiddenBadges.count) more")
             }
@@ -603,7 +597,7 @@ private struct NativePeerWorktreeRow: View {
 
     private var accessibilityLabel: String {
         var parts = [worktree.title]
-        if let session = worktree.primarySession {
+        if let session = worktree.sessions.first {
             parts.append(NativePeerSessionRowPresentation(row: session).detail)
         }
         if !worktree.consoles.isEmpty {

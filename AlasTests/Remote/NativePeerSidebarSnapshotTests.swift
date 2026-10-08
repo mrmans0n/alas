@@ -97,7 +97,6 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos.map(\.name) == ["alas", "cpcl", NativePeerRepoGroup.unassignedName])
         #expect(repos[0].worktrees.count == 2)
         #expect(repos[0].worktrees[0].sessions.map(\.id) == ["b:s1", "b:s3"])
-        #expect(repos[0].worktrees[0].primarySession?.id == "b:s1")
         #expect(repos[0].worktrees[0].title == "feat")
         #expect(repos[0].worktrees[0].updatedAt == 30)
         #expect(repos[0].attentionCount == 1)
@@ -205,7 +204,6 @@ struct NativePeerSidebarSnapshotTests {
 
         #expect(repos.map(\.name) == ["alas", "cpcl"])
         #expect(repos[0].worktrees.map(\.title) == ["main", "feat"])
-        #expect(repos[0].worktrees[0].primarySession == nil)
         #expect(repos[1].worktrees.map(\.title) == ["legacy"])
     }
 
@@ -216,6 +214,43 @@ struct NativePeerSidebarSnapshotTests {
 
         #expect(repos.count == 1)
         #expect(repos[0].projectId == nil)
+    }
+
+    @Test func tabsFollowTheHostsTabOrderAndSkipHistory() {
+        func session(_ id: String, tab: Int?, active: Bool = true) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: false, isActive: active, tabIndex: tab)
+        }
+        func console(_ id: String, tab: Int?) -> PeerConsoleSummary {
+            PeerConsoleSummary(
+                consoleId: id, title: "zsh", worktreeId: "w", projectId: nil, projectName: nil,
+                worktreeName: nil, rows: 24, columns: 80, tabIndex: tab)
+        }
+
+        // c1 and c2 are panes of one split tab, listed in pane order.
+        #expect(NativePeerWorktreeGroup.tabs(
+            sessions: [session("s2", tab: 2), session("old", tab: nil, active: false), session("s1", tab: 1)],
+            consoles: [console("c3", tab: 3), console("c1", tab: 0), console("c2", tab: 0)]
+        ) == [.console("c1"), .console("c2"), .session("s1"), .session("s2"), .console("c3")])
+        // An older host sends no index: sessions as given, then consoles.
+        #expect(NativePeerWorktreeGroup.tabs(
+            sessions: [session("s2", tab: nil), session("old", tab: nil, active: false), session("s1", tab: nil)],
+            consoles: [console("c1", tab: nil)]
+        ) == [.session("s2"), .session("s1"), .console("c1")])
+    }
+
+    @Test(arguments: [
+        ("b", ["a", "c"], "a"),       // the tab before it
+        ("a", ["b", "c"], "b"),       // it was first: the new first tab
+        ("c", ["a"], "a"),            // skips a neighbour that also closed
+        ("b", [], nil),               // nothing left
+        ("b", ["a", "b"], "b"),       // still open
+        ("x", ["a"], "x"),            // never one of the tabs: left alone
+    ] as [(String, [String], String?)])
+    func aClosedTabHandsSelectionToItsNeighbour(selected: String, current: [String], expected: String?) {
+        let tab = NativePeerTab.session
+        #expect(NativePeerWorktreeGroup.reconciledTab(
+            tab(selected), previous: ["a", "b", "c"].map(tab), current: current.map(tab)
+        ) == expected.map(tab))
     }
 
     @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {

@@ -299,7 +299,9 @@ struct RootView: View {
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
             peerSessionId: state.nativePeerSessions?.selectedSessionId,
             peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil,
-            peerConsoleSelected: state.nativePeerSessions?.consoles?.viewer != nil
+            peerSelectedWithoutSession: state.nativePeerSessions.map {
+                $0.selectedSessionId == nil && ($0.selectedWorktree != nil || $0.consoles?.viewer != nil)
+            } ?? false
         ).resolve()
     }
 
@@ -343,6 +345,13 @@ struct RootView: View {
                 onReconnect: { consoles.reconnect() }
             )
             .id(viewer.attachmentId)
+        } else if state.nativePeerSessions?.selectedWorktree != nil {
+            ContentUnavailableView(
+                "No Open Tabs",
+                systemImage: "rectangle.stack",
+                description: Text("This worktree has no agent or console tabs open on the peer.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             worktreeCenterContent(
                 effectiveRightPaneVisible: effectiveRightPaneVisible,

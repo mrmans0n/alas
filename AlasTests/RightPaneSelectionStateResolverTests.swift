@@ -36,11 +36,11 @@ struct RightPaneSelectionStateResolverTests {
 
     @Test(arguments: [
         ("B:s" as String?, false),   // peer session without a worktree
-        (nil as String?, true),      // peer console
+        (nil as String?, true),      // peer console, or a worktree with no tabs
     ])
     func peerSelectionWithoutWorktreeContentHidesTheRailRatherThanShowingTheStaleWorktree(
         peerSessionId: String?,
-        peerConsoleSelected: Bool
+        peerSelectedWithoutSession: Bool
     ) {
         let project = ProjectConfig(id: "p", name: "P", path: "/tmp/p", color: "#fff", addedAt: .distantPast)
         let wt = Worktree(id: "wt", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/p"), status: .clean, lastActivity: .distantPast)
@@ -52,7 +52,7 @@ struct RightPaneSelectionStateResolverTests {
             projectsManager: manager,
             peerSessionId: peerSessionId,
             peerSessionHasWorktree: false,
-            peerConsoleSelected: peerConsoleSelected
+            peerSelectedWithoutSession: peerSelectedWithoutSession
         )
         #expect(resolver.resolve() == .empty)
     }

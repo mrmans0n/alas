@@ -16,6 +16,16 @@ final class NativePeerSessions {
     private(set) var pendingPrompt: String?
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
+    /// The peer worktree shown in the center pane. Set with no selected tab
+    /// when the worktree has none open.
+    private(set) var selectedWorktree: NativePeerWorktreeSelection?
+    /// The selected worktree's tabs as of the last snapshot, so a tab the
+    /// host closes can be replaced by its neighbour.
+    @ObservationIgnored private var selectedWorktreeTabs: [NativePeerTab] = []
+    /// The tab last used in each worktree during this app run.
+    @ObservationIgnored private var lastTabs: [NativePeerWorktreeSelection: NativePeerTab] = [:]
+    /// The attached tab: only this session is subscribed, only this console
+    /// has a viewer.
     private(set) var selectedSessionId: String?
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
@@ -82,6 +92,86 @@ final class NativePeerSessions {
     private func rebuildSnapshot() {
         guard downstream != nil else { return }
         snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries, consoles: consoles?.consoles ?? [:])
+        reconcileSelectedTab()
+    }
+
+    var selectedTab: NativePeerTab? {
+        if let selectedSessionId { return .session(selectedSessionId) }
+        return consoles?.viewer.map { .console($0.consoleId) }
+    }
+
+    private func worktrees(on serverId: String) -> [NativePeerWorktreeGroup] {
+        snapshot.groups.first { $0.serverId == serverId }?.repos(ordering: .manual).flatMap(\.worktrees) ?? []
+    }
+
+    private func worktree(_ selection: NativePeerWorktreeSelection) -> NativePeerWorktreeGroup? {
+        worktrees(on: selection.serverId).first { $0.id == selection.worktreeId }
+    }
+
+    /// Opens the tab last used in the worktree, else its first tab, else
+    /// nothing: the center pane shows the worktree's empty state.
+    func selectWorktree(_ selection: NativePeerWorktreeSelection) {
+        guard let worktree = worktree(selection) else { return }
+        let tabs = worktree.tabs
+        if let tab = lastTabs[selection].flatMap({ tabs.contains($0) ? $0 : nil }) ?? tabs.first {
+            selectTab(tab, in: selection)
+        } else {
+            clearSelection()
+            selectedWorktree = selection
+        }
+    }
+
+    func selectTab(_ tab: NativePeerTab, in selection: NativePeerWorktreeSelection) {
+        switch tab {
+        case .session(let id): select(id)
+        case .console(let id): selectConsole(serverId: selection.serverId, consoleId: id)
+        }
+    }
+
+    /// Points the worktree selection at whichever worktree holds `tab`.
+    private func noteSelected(_ tab: NativePeerTab, serverId: String) {
+        let worktree = worktrees(on: serverId).first { group in
+            switch tab {
+            case .session(let id): group.sessions.contains { $0.id == id }
+            case .console(let id): group.consoles.contains { $0.consoleId == id }
+            }
+        }
+        guard let worktree else { return }
+        let selection = NativePeerWorktreeSelection(serverId: serverId, worktreeId: worktree.id)
+        selectedWorktree = selection
+        selectedWorktreeTabs = worktree.tabs
+        if selectedWorktreeTabs.contains(tab) { lastTabs[selection] = tab }
+    }
+
+    /// Follows the host closing tabs in the selected worktree.
+    private func reconcileSelectedTab() {
+        guard let selection = selectedWorktree,
+              snapshot.groups.first(where: { $0.serverId == selection.serverId })?.state.carriesSessions == true
+        else { return }
+        let selected = selectedTab
+        // Until the peer's console list arrives, its consoles are unknown, not closed.
+        if case .console = selected, consoles?.consoles[selection.serverId] == nil { return }
+        let current: [NativePeerTab]
+        if let worktree = worktree(selection) {
+            current = worktree.tabs
+        } else if case .console = selected {
+            // The console list is known (checked above), so its last console closed.
+            current = []
+        } else {
+            // Missing session rows mean the peer's list dropped, not that its
+            // tabs closed; `refresh()` marks the selection unavailable.
+            return
+        }
+        let previous = selectedWorktreeTabs
+        selectedWorktreeTabs = current
+        let next = NativePeerWorktreeGroup.reconciledTab(selected, previous: previous, current: selectedWorktreeTabs)
+        guard next != selected else { return }
+        if let next {
+            selectTab(next, in: selection)
+        } else {
+            clearSelection()
+            selectedWorktree = selection
+        }
     }
 
     var selectedRow: RemoteSessionSummary? {
@@ -118,6 +208,8 @@ final class NativePeerSessions {
         }
         downstream = nil
         consoles?.stop()
+        selectedWorktree = nil
+        selectedWorktreeTabs = []
         selectedSessionId = nil
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
@@ -191,7 +283,7 @@ final class NativePeerSessions {
 
     func select(_ sessionId: String) {
         guard let downstream,
-              snapshot.groups.contains(where: { group in
+              let peer = snapshot.groups.first(where: { group in
                   group.state.carriesSessions && group.sessions.contains { $0.id == sessionId }
               }) else { return }
         if selectedSessionId == sessionId {
@@ -200,6 +292,7 @@ final class NativePeerSessions {
             return
         }
         clearSelection()
+        noteSelected(.session(sessionId), serverId: peer.serverId)
         selectedSessionId = sessionId
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
@@ -210,10 +303,13 @@ final class NativePeerSessions {
         if let viewer = consoles?.viewer, viewer.serverId == serverId, viewer.consoleId == consoleId,
            !viewer.isEnded { return }
         clearSelection()
+        noteSelected(.console(consoleId), serverId: serverId)
         consoles?.select(serverId: serverId, consoleId: consoleId)
     }
 
     func clearSelection() {
+        selectedWorktree = nil
+        selectedWorktreeTabs = []
         consoles?.clearSelection()
         if let selectedSessionId, let downstream {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
