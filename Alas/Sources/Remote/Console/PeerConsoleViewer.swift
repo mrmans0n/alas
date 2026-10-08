@@ -104,6 +104,39 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
+    /// The host program's mouse format as of the latest accepted output,
+    /// which decides whether mouse reports are forwarded.
+    private var hostMouse = PeerConsoleMouseModeTracker()
+    /// The same format as of the bytes the surface has been handed, which
+    /// decides where the SGR override goes.
+    private var surfaceMouse = PeerConsoleMouseModeTracker()
+
+    /// Feeds in-order output as soon as it is accepted, even while the write
+    /// gate holds it: mouse reports are forwarded only while the host program
+    /// wants mouse events and itself uses SGR.
+    mutating func observeHostOutput(_ data: Data, isSnapshot: Bool = false) {
+        if isSnapshot {
+            hostMouse.observeSnapshot(data)
+        } else {
+            _ = hostMouse.observe(data)
+        }
+        filter.forwardedMouseEvents = hostMouse.hostWantsSGRMouse ? hostMouse.hostEvents : .none
+    }
+
+    /// Output was lost before a resync: the host's mouse modes are unknown
+    /// until the replacement snapshot, so mouse input is not forwarded.
+    mutating func forgetHostModes() {
+        hostMouse = PeerConsoleMouseModeTracker()
+        filter.forwardedMouseEvents = .none
+    }
+
+    /// Returns output about to reach the surface with the surface kept in
+    /// SGR mouse format after every host format change.
+    mutating func prepareForSurface(_ data: Data) -> Data {
+        let output = surfaceMouse.forcingSGR(data)
+        filter.legacyMouseUTF8 = surfaceMouse.hostFormat == .utf8
+        return output
+    }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.
     private var pendingLease: PeerConsoleControl?
@@ -265,13 +298,17 @@ final class PeerConsoleViewer {
             gridChanged()
         case .snapshot(_, let sequence, _, let data):
             order.snapshot(sequence: sequence)
-            deliver(writeGate.snapshot(Self.resetBeforeSnapshot + data))
+            let snapshot = Self.resetBeforeSnapshot + data
+            relay.observeHostOutput(snapshot, isSnapshot: true)
+            deliver(writeGate.snapshot(snapshot))
             phase = .live
         case .output(_, let sequence, let data):
             switch order.output(sequence: sequence) {
-            case .write: deliver(writeGate.output(data))
+            case .write:
+                relay.observeHostOutput(data)
+                deliver(writeGate.output(data))
             case .drop: break
-            case .resync: send(.resync(attachmentId: attachmentId))
+            case .resync: requestSnapshot()
             }
         case .control(_, let control):
             apply(control)
@@ -327,8 +364,7 @@ final class PeerConsoleViewer {
                 writeToSurface(data)
             }
         case .resync:
-            order = PeerConsoleStreamOrder()
-            send(.resync(attachmentId: attachmentId))
+            requestSnapshot()
         }
     }
 
@@ -342,8 +378,19 @@ final class PeerConsoleViewer {
     /// A surface that stopped draining has lost bytes, so the stream cannot
     /// continue: drop output until a fresh snapshot replaces the screen.
     private func writeToSurface(_ data: Data) {
-        guard bridge?.write(data) == false else { return }
+        guard let bridge else { return }
+        // The surface always reports the mouse in SGR, whatever the host
+        // selected, so input never needs mode-dependent decoding.
+        guard !bridge.write(relay.prepareForSurface(data)) else { return }
+        requestSnapshot()
+    }
+
+    /// Output was lost, so the screen and the host's mouse modes are both
+    /// unknown: drop output and stop forwarding mouse input until a
+    /// replacement snapshot rebuilds them.
+    private func requestSnapshot() {
         order = PeerConsoleStreamOrder()
+        relay.forgetHostModes()
         send(.resync(attachmentId: attachmentId))
     }
 
