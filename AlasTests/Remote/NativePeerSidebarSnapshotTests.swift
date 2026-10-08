@@ -97,7 +97,7 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos.map(\.name) == ["alas", "cpcl", NativePeerRepoGroup.unassignedName])
         #expect(repos[0].worktrees.count == 2)
         #expect(repos[0].worktrees[0].sessions.map(\.id) == ["b:s1", "b:s3"])
-        #expect(repos[0].worktrees[0].primarySession.id == "b:s1")
+        #expect(repos[0].worktrees[0].primarySession?.id == "b:s1")
         #expect(repos[0].worktrees[0].title == "feat")
         #expect(repos[0].worktrees[0].updatedAt == 30)
         #expect(repos[0].attentionCount == 1)
@@ -148,6 +148,65 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos[0].worktrees.flatMap(\.sessions).map(\.id) == ["b:s3", "b:s1"])
         #expect(repos[1].name == "alas")
         #expect(repos[1].worktrees.flatMap(\.sessions).map(\.id) == ["b:s2"])
+    }
+
+    private func console(
+        _ id: String, project: String?, worktreeId: String?, branch: String? = nil, isMain: Bool? = nil
+    ) -> PeerConsoleSummary {
+        PeerConsoleSummary(
+            consoleId: id, title: "zsh", worktreeId: worktreeId, projectId: project,
+            projectName: project, worktreeName: worktreeId, rows: 24, columns: 80,
+            worktree: branch.map {
+                RemoteWorktreeSummary(
+                    projectName: project ?? "", worktreeName: $0, branch: $0,
+                    path: "/\(project ?? "")/\($0)", metricsAvailable: false, comparisonRef: nil,
+                    commitCount: 0, changedFileCount: 0, addedLines: 0, deletedLines: 0,
+                    conflictCount: 0, isMain: isMain
+                )
+            }
+        )
+    }
+
+    @Test func consolesJoinTheirSessionWorktreeRowOnOnlinePeersOnly() {
+        let peers = [
+            RemoteHelloPeer(serverId: "b", name: "Mac B", state: "online"),
+            RemoteHelloPeer(serverId: "c", name: "Mac C", state: "offline")
+        ]
+        let rows = [
+            worktreeRow("s1", project: "alas", worktreeId: "w1", branch: "feat", updatedAt: 20),
+            worktreeRow("s2", project: "alas", worktreeId: "w2", branch: "fix", updatedAt: 10)
+        ]
+        let snapshot = NativePeerSidebarSnapshot.build(peers: peers, rows: rows, consoles: [
+            "b": [console("c1", project: "alas", worktreeId: "w1", branch: "feat"),
+                  console("c2", project: "alas", worktreeId: "w1", branch: "feat")],
+            "c": [console("c3", project: "alas", worktreeId: "w1")]
+        ])
+
+        let worktrees = snapshot.groups[0].repos(ordering: .lastUpdateDesc).flatMap(\.worktrees)
+        #expect(worktrees.map(\.title) == ["feat", "fix"])
+        #expect(worktrees[0].sessions.map(\.id) == ["b:s1"])
+        #expect(worktrees[0].consoles.map(\.consoleId) == ["c1", "c2"])
+        #expect(worktrees[1].consoles.isEmpty)
+        #expect(snapshot.groups[1].consoles.isEmpty)
+    }
+
+    @Test func consoleOnlyWorktreesAppearInTheirRepoWithMainFirst() {
+        let sessions = [
+            worktreeRow("s1", project: "alas", worktreeId: "w1", branch: "feat", updatedAt: 20)
+        ]
+        let consoles = [
+            console("c1", project: "alas", worktreeId: "wm", branch: "main", isMain: true),
+            // An older host sends no worktree summary; the row falls back to
+            // its display names.
+            console("c2", project: "cpcl", worktreeId: "legacy")
+        ]
+
+        let repos = NativePeerRepoGroup.build(sessions: sessions, consoles: consoles)
+
+        #expect(repos.map(\.name) == ["alas", "cpcl"])
+        #expect(repos[0].worktrees.map(\.title) == ["main", "feat"])
+        #expect(repos[0].worktrees[0].primarySession == nil)
+        #expect(repos[1].worktrees.map(\.title) == ["legacy"])
     }
 
     @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {

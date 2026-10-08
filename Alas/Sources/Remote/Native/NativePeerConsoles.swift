@@ -15,6 +15,9 @@ final class NativePeerConsoles {
     /// Eligible consoles per peer `serverId`, as the peer last reported them.
     private(set) var consoles: [String: [PeerConsoleSummary]] = [:]
     private(set) var viewer: PeerConsoleViewer?
+    /// Fired when a peer reports a console list that differs from the last
+    /// one, so the sidebar snapshot can fold it in.
+    @ObservationIgnored var onListChanged: (() -> Void)?
 
     @ObservationIgnored private let send: @MainActor (_ serverId: String, RemoteClientMessage) -> Void
     @ObservationIgnored private let supportsConsoles: @MainActor (_ serverId: String) -> Bool
@@ -62,8 +65,9 @@ final class NativePeerConsoles {
 
     func receive(serverId: String, _ event: PeerConsoleEvent) {
         if case .list(let list) = event {
-            guard onlinePeers.contains(serverId) else { return }
+            guard onlinePeers.contains(serverId), consoles[serverId] != list else { return }
             consoles[serverId] = list
+            onListChanged?()
             return
         }
         guard let viewer, viewer.serverId == serverId, event.attachmentId == viewer.attachmentId else { return }

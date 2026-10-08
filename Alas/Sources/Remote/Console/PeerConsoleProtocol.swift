@@ -22,6 +22,9 @@ struct PeerConsoleSummary: Codable, Equatable, Sendable {
     let worktreeName: String?
     let rows: Int
     let columns: Int
+    /// Lets a peer's sidebar place a console-only worktree like a session's.
+    /// Nil from an older host; rows then fall back to the display names.
+    var worktree: RemoteWorktreeSummary? = nil
 }
 
 struct PeerConsoleControl: Codable, Equatable, Sendable {

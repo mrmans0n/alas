@@ -42,6 +42,19 @@ struct RemoteProtocolTests {
             #expect(try roundTrip(message) == message)
             #expect(message.sessionId == nil)
         }
+        let worktree = RemoteWorktreeSummary(
+            projectName: "alas", worktreeName: "feat", branch: "feat", path: "~/alas/feat",
+            metricsAvailable: false, comparisonRef: nil, commitCount: 0, changedFileCount: 0,
+            addedLines: 0, deletedLines: 0, conflictCount: 0, isMain: false)
+        let placed = RemoteServerMessage.console(.list(consoles: [PeerConsoleSummary(
+            consoleId: "c", title: "zsh", worktreeId: "w", projectId: "p",
+            projectName: "alas", worktreeName: "feat", rows: 40, columns: 120, worktree: worktree)]))
+        #expect(try roundTrip(placed) == placed)
+        let olderHost = Data(#"{"type":"console","console":{"list":{"consoles":[{"consoleId":"c","title":"zsh","rows":40,"columns":120}]}}}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: olderHost)
+            == .console(.list(consoles: [PeerConsoleSummary(
+                consoleId: "c", title: "zsh", worktreeId: nil, projectId: nil,
+                projectName: nil, worktreeName: nil, rows: 40, columns: 120)])))
         let futureReason = Data(#"{"type":"console","console":{"detached":{"attachmentId":"a","reason":"later"}}}"#.utf8)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: futureReason)
             == .console(.detached(attachmentId: "a", reason: .unknown)))
