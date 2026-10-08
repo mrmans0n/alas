@@ -191,10 +191,11 @@ struct PeerConsoleInputFilter {
     }
 }
 
-/// The mouse format a host program selected (`CSI ? 1005/1006/1015/1016
-/// h/l`), followed in the output written to the viewer's surface. Handles
-/// combined mode changes of any length and sequences split across writes;
-/// RIS (`ESC c`), sent before every snapshot, resets it.
+/// The mouse format a host program selected (`CSI ? 1005/1006/1015/1016`
+/// with `h` set, `l` reset, `s` save, `r` restore), followed in the output
+/// written to the viewer's surface. Handles combined mode changes of any
+/// length and sequences split across writes; RIS (`ESC c`), sent before
+/// every snapshot, resets it.
 struct PeerConsoleMouseModeTracker {
     enum Format: Equatable {
         case x10, utf8, sgr, urxvt, sgrPixels
@@ -205,12 +206,14 @@ struct PeerConsoleMouseModeTracker {
     }
 
     private(set) var hostFormat = Format.x10
+    /// Formats whose mode was set when last saved with `CSI ? n s`.
+    private var savedSet: Set<Format> = []
     private var state = State.ground
     /// Digits of the parameter being read, capped just past four digits so
     /// longer numbers never match a mode.
     private var parameter: [UInt8] = []
-    /// Format modes named so far in the current sequence, applied in order
-    /// once its final byte says set or reset.
+    /// Format modes named so far in the current sequence, last occurrence
+    /// last, applied once its final byte says what to do. At most four.
     private var named: [Format] = []
 
     /// Returns whether `data` set, reset, or cleared any mouse format mode,
@@ -233,6 +236,7 @@ struct PeerConsoleMouseModeTracker {
             state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
             guard byte == UInt8(ascii: "c") else { return false }
             hostFormat = .x10
+            savedSet = []
             return true
         case .controlSequence:
             state = byte == UInt8(ascii: "?") ? .privateParameters : .ground
@@ -247,16 +251,10 @@ struct PeerConsoleMouseModeTracker {
             case UInt8(ascii: ";"), UInt8(ascii: ":"):
                 nameCurrentParameter()
                 return false
-            case UInt8(ascii: "h"), UInt8(ascii: "l"):
+            case UInt8(ascii: "h"), UInt8(ascii: "l"), UInt8(ascii: "s"), UInt8(ascii: "r"):
                 nameCurrentParameter()
                 state = .ground
-                for format in named {
-                    if byte == UInt8(ascii: "h") {
-                        hostFormat = format
-                    } else if hostFormat == format {
-                        hostFormat = .x10
-                    }
-                }
+                for format in named { apply(byte, to: format) }
                 return !named.isEmpty
             default:
                 state = .ground
@@ -274,6 +272,22 @@ struct PeerConsoleMouseModeTracker {
         default: nil
         }
         parameter = []
-        if let format, named.count < 8 { named.append(format) }
+        guard let format else { return }
+        named.removeAll { $0 == format }
+        named.append(format)
+    }
+
+    private mutating func apply(_ action: UInt8, to format: Format) {
+        switch action {
+        case UInt8(ascii: "h"):
+            hostFormat = format
+        case UInt8(ascii: "s"):
+            if hostFormat == format { savedSet.insert(format) } else { savedSet.remove(format) }
+        case UInt8(ascii: "r") where savedSet.contains(format):
+            hostFormat = format
+        default:
+            // `l`, or restoring a mode that was saved unset.
+            if hostFormat == format { hostFormat = .x10 }
+        }
     }
 }

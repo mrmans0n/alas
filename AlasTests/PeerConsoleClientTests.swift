@@ -122,6 +122,18 @@ import Testing
         let long = String(repeating: "1000;", count: 30) + "1006h"
         #expect(observe("\u{1B}[?\(long)"))
         #expect(tracker.hostFormat == .sgr)
+        // Every recognized parameter counts, however many come first.
+        #expect(observe("\u{1B}[?" + String(repeating: "1005;", count: 9) + "1006l"))
+        #expect(tracker.hostFormat == .x10)
+        // Save and restore around a temporary change.
+        #expect(observe("\u{1B}[?1006h\u{1B}[?1006s\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(observe("\u{1B}[?1006r"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(observe("\u{1B}[?1005s\u{1B}[?1005h"))
+        #expect(tracker.hostFormat == .utf8)
+        #expect(observe("\u{1B}[?1005r"))
+        #expect(tracker.hostFormat == .x10)
     }
 }
 
