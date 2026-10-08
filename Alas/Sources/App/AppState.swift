@@ -15567,6 +15567,11 @@ extension AppState: RemoteSessionsProvider {
         onResult(false)
     }
 
+    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool {
+        guard let manager = acpManager(forSession: id) else { return false }
+        return await manager.answerVisualAid(id: visualId, answer: answer, in: id)
+    }
+
     func sendPrompt(
         for id: String,
         worktreeID: String,

@@ -13,6 +13,54 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     let iconSystemName: String
     let style: Style
 
+    /// A `visual_show` call: the rule `resolve` labels "Visual aid". The call's
+    /// content and raw input carry the visual's HTML.
+    static func isVisualShow(_ toolCall: ACPMessage.ToolCall) -> Bool {
+        isVisualShow(name: toolCall.nonEmptyName, title: toolCall.title)
+    }
+
+    /// The same match for fields that arrive outside a `ToolCall`, such as a
+    /// permission request's tool call. A stable tool name decides on its own
+    /// (any component of it may be the tool). The title is only consulted when
+    /// the adapter sent no name, and then only its leading word counts, so an
+    /// ordinary call whose title merely mentions `visual_show` (`rg visual_show
+    /// Alas/`) is not mistaken for the visual tool.
+    static func isVisualShow(name: String?, title: String?) -> Bool {
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedName.isEmpty { return namesVisualShowTool(trimmedName) }
+        return titleLeadsWithVisualShowTool(title ?? "")
+    }
+
+    private static func isToolNameCharacter(_ character: Character) -> Bool {
+        character.isASCII && (character.isLetter || character.isNumber || character == "_")
+    }
+
+    private static func isToolNameComponent(_ component: Substring) -> Bool {
+        component == "visual_show" || component.hasSuffix("__visual_show")
+    }
+
+    /// True when a token of `text` is exactly `visual_show` or an MCP-qualified
+    /// `…__visual_show`. Tokens split on every character outside `[a-z0-9_]`, so
+    /// `alas.visual_show` matches while `visual_showcase` and `visual_show_backup` do not.
+    private static func namesVisualShowTool(_ text: String) -> Bool {
+        text.lowercased()
+            .split(whereSeparator: { !isToolNameCharacter($0) })
+            .contains(where: isToolNameComponent)
+    }
+
+    /// True when the title's first word is a qualified visual tool name, with
+    /// or without trailing call syntax: `alas.visual_show`, `mcp__alas__visual_show`,
+    /// `alas.visual_show({…})`. The qualifier may be separated by `.`, `/`, `:` or `-`.
+    private static func titleLeadsWithVisualShowTool(_ title: String) -> Bool {
+        let word = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .first ?? ""
+        let qualified = word.prefix { isToolNameCharacter($0) || ".:/-".contains($0) }
+        guard let last = qualified.split(whereSeparator: { ".:/-".contains($0) }).last else { return false }
+        return isToolNameComponent(last)
+    }
+
     static func resolve(_ toolCall: ACPMessage.ToolCall) -> ACPToolCallPresentation {
         let title = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowerTitle = title.lowercased()
@@ -40,7 +88,7 @@ struct ACPToolCallPresentation: Equatable, Sendable {
             return .init(label: "Viewed Image", iconSystemName: "photo.on.rectangle", style: .image)
         }
 
-        if name?.contains("visual_show") == true || lowerTitle.contains("visual_show") {
+        if isVisualShow(toolCall) {
             return .init(label: "Visual aid", iconSystemName: "rectangle.on.rectangle", style: .mcp)
         }
 

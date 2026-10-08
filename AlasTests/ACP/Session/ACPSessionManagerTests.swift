@@ -1608,6 +1608,110 @@ struct ACPSessionManagerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
 
+    @Test("an answered visual has its prompt registered by the time answerVisualAid returns, so a following Stop finds the turn")
+    func answerVisualAidRegistersThePromptBeforeReturning() async throws {
+        let (manager, session, _, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+
+        #expect(runner.activePromptIDForTesting != nil || !session.queue.isEmpty)
+    }
+
+    @Test("raceWithTimeout returns true for work that finishes and false, without cancelling it, for work that does not")
+    func raceWithTimeoutBoundsTheWait() async {
+        #expect(await ACPSessionManager.raceWithTimeout({}, timeout: .seconds(30)))
+
+        let gate = AsyncGate()
+        var finished = false
+        let started = ContinuousClock.now
+        let result = await ACPSessionManager.raceWithTimeout({
+            await gate.enterAndWait()
+            finished = true
+        }, timeout: .milliseconds(50))
+        #expect(result == false)
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(!finished)
+        await gate.release()
+        while !finished { await Task.yield() }
+    }
+
+    @Test("a visual answer cancelled while the lease is being confirmed sends nothing and is reverted")
+    func cancelledVisualAnswerSendsNothingAfterTheLeaseCheck() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let leaseCheck = AsyncGate()
+        manager.beforeLeaseConfirmationForTesting = { await leaseCheck.enterAndWait() }
+
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        await leaseCheck.waitUntilEntered()
+        answering.cancel()
+        await leaseCheck.release()
+        _ = await answering.value
+
+        while session.transcript.visualAid(id: visual.id)?.answer != nil { await Task.yield() }
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("a visual answer whose registration times out is reverted, returns false and never sends after the stall ends")
+    func timedOutVisualAnswerIsInvalidated() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        manager.visualAidPromptRegistrationWait = .milliseconds(50)
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let leaseCheck = AsyncGate()
+        manager.beforeLeaseConfirmationForTesting = { await leaseCheck.enterAndWait() }
+
+        let sent = await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id)
+
+        #expect(sent == false)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        await leaseCheck.release()
+        await manager.flushPersistence()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("a cancelled visual answer cannot commit and a committed one cannot be cancelled")
+    func visualAnswerCancellationStateMachine() {
+        let cancelFirst = VisualAidAnswerCancellation()
+        #expect(cancelFirst.cancelIfNotCommitted())
+        #expect(cancelFirst.commit() == false)
+        #expect(cancelFirst.isCancelled)
+
+        let commitFirst = VisualAidAnswerCancellation()
+        #expect(commitFirst.commit())
+        #expect(commitFirst.cancelIfNotCommitted() == false)
+        #expect(commitFirst.commit())
+        #expect(commitFirst.isCancelled == false)
+    }
+
+    @Test("sendPrompt that is no longer wanted after the lease check reports failure and sends nothing")
+    func sendPromptHonoursIsStillWanted() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        var results: [Bool] = []
+
+        await manager.sendPrompt(for: session.id, text: "hi", attachments: [], isStillWanted: { false }) { results.append($0) }
+
+        #expect(results == [false])
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("answerVisualAid reverts the answer and sends nothing when its row is not written")
     func answerVisualAidRevertsWhenTheWriteFails() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()
@@ -1856,6 +1960,39 @@ struct ACPSessionManagerTests {
         #expect(await second.value == false)
         #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
+    }
+
+    @Test("an answer cancelled while the card's first write is held stores nothing, sends nothing and leaves the card answerable")
+    func cancelledAnswerDuringTheFirstWriteMutatesNothing() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        answering.cancel()
+        await initialWrite.release()
+
+        #expect(await show.value)
+        #expect(await answering.value == false)
+        await runner.flushPersistence()
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == nil)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
     }
 
     @Test("rollBackVisualAidAnswer clears only the answer it was given, confirms the row and records the failure on the session")

@@ -270,6 +270,13 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         takeOverContinuation = nil
     }
 
+    var answeredVisuals: [(id: String, visualId: UUID, answer: ACPVisualAid.Answer)] = []
+    var answerVisualAidResult = true
+    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool {
+        answeredVisuals.append((id, visualId, answer))
+        return answerVisualAidResult
+    }
+
     var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && sendPromptAccepts
@@ -408,7 +415,7 @@ extension ACPPermissionRequestParams {
         sessionId: String = "remote", toolTitle: String = "Bash",
         toolCallContent: [ACPToolCallContent]? = nil,
         metadata: AnyCodable? = nil, toolCallMetadata: AnyCodable? = nil,
-        allowOptionMetadata: AnyCodable? = nil
+        allowOptionMetadata: AnyCodable? = nil, toolName: String? = nil
     ) -> ACPPermissionRequestParams {
         ACPPermissionRequestParams(
             sessionId: sessionId,
@@ -421,6 +428,7 @@ extension ACPPermissionRequestParams {
                 locations: nil,
                 rawInput: nil,
                 rawOutput: nil,
+                name: toolName,
                 metadata: toolCallMetadata),
             options: [
                 ACPPermissionOption(optionId: "allow_once", name: "Allow once", kind: "allow_once", metadata: allowOptionMetadata),
@@ -1592,6 +1600,359 @@ struct RemoteSessionGatewayTests {
 
         #expect(wire.kind == "user")
         #expect(wire.text == "hello")
+    }
+
+    private func makeVisual(answer: ACPVisualAid.Answer? = nil, allowMultiple: Bool = false) -> ACPVisualAid {
+        ACPVisualAid(
+            id: UUID(uuidString: "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F")!,
+            title: "Layouts", html: "<h2>Pick</h2>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: allowMultiple),
+            answer: answer, createdAt: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test func visualAidRowIsVisibleWithTitleAndStructuredJSON() throws {
+        let visual = makeVisual()
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 3)
+        #expect(wire.kind == "visualAid")
+        #expect(wire.text == "Layouts")
+        #expect(wire.isHidden != true)
+        #expect(wire.stableId == "m3")
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(wire.json).utf8))
+        #expect(dto.id == visual.id.uuidString)
+        #expect(dto.html == "<h2>Pick</h2>")
+        #expect(dto.question?.options.map(\.id) == ["a", "b"])
+        #expect(dto.answer == nil)
+    }
+
+    @Test func visualAidAnswerDTOOmitsTheTimestamp() throws {
+        let answered = RemoteVisualAid(makeVisual(answer: .answered(selectedOptionIds: ["b"], note: "ok", at: Date(timeIntervalSince1970: 9))))
+        #expect(answered.answer == .init(kind: "answered", selectedOptionIds: ["b"], note: "ok"))
+        let dismissed = RemoteVisualAid(makeVisual(answer: .dismissed(at: Date())))
+        #expect(dismissed.answer == .init(kind: "dismissed", selectedOptionIds: nil, note: nil))
+    }
+
+    @Test(arguments: ["mcp__alas__visual_show", "visual_show"], ["Show visual", "<h2>secret</h2>"])
+    func visualShowToolCallIsScrubbedOnTheWire(name: String, title: String) throws {
+        let call = ACPMessage.ToolCall(
+            toolCallId: "t1", title: title, status: "completed",
+            content: "<h2>secret</h2>", preview: "<h2>secret</h2>", rawInput: #"{"html":"<h2>secret</h2>"}"#,
+            locations: ["<h2>secret</h2>"], name: name)
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        let json = try #require(wire.json)
+        #expect(!json.contains("secret"))
+        #expect(!json.contains("Show visual"))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(json.utf8))
+        #expect(decoded.title == "Visual aid")
+        #expect(decoded.status == "completed")
+        #expect(decoded.name == name)
+    }
+
+    @Test func visualShowPermissionRequestHidesTheVisualFromThePhone() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.streamingState = .awaitingPermission
+        let meta = AnyCodable([
+            "permission": AnyCodable([
+                "version": AnyCodable(1),
+                "title": AnyCodable("<h2>secret</h2>"),
+                "description": AnyCodable("<h2>secret</h2>"),
+                "defaultToNo": AnyCodable(true),
+            ] as [String: AnyCodable]),
+        ] as [String: AnyCodable])
+        s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+            toolTitle: "<h2>secret</h2>",
+            toolCallContent: [.content(.text("<h2>secret</h2>"))],
+            metadata: meta, allowOptionMetadata: meta, toolName: "mcp__alas__visual_show"))
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .permissionRequest(_, let payload) = try #require(sent.first(where: {
+            if case .permissionRequest = $0 { return true }
+            return false
+        })) else {
+            Issue.record("expected a permissionRequest message")
+            return
+        }
+        #expect(payload.toolName == "Visual aid")
+        #expect(payload.defaultToNo, "the adapter's default-to-deny survives the redaction")
+        let json = try String(decoding: JSONEncoder().encode(payload), as: UTF8.self)
+        #expect(!json.contains("secret"))
+    }
+
+    @Test func ordinaryToolCallKeepsItsContent() throws {
+        let call = ACPMessage.ToolCall(toolCallId: "t1", title: "Run", status: "completed", content: "output", name: "Bash")
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        #expect(try #require(wire.json).contains("output"))
+    }
+
+    @Test func truncatedVisualShowCallIsNotRehydratedFromStorage() async throws {
+        let provider = FakeSessionsProvider()
+        let html = String(repeating: "<p>secret</p>", count: 600)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "Show visual", status: "completed",
+            content: html, preview: "<p>secret</p>", name: "mcp__alas__visual_show")
+        toolCall.truncateForOffWindow()
+        let session = try makeSessionWithAgentText("tail")
+        session.transcript.messages = [.toolCall(toolCall)]
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = html
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _)? = sent.first,
+              let json = msgs.first(where: { $0.kind == "toolCall" })?.json
+        else {
+            Issue.record("expected tool-call snapshot, got \(sent)")
+            return
+        }
+        #expect(!json.contains("secret"))
+        #expect(provider.fullToolCallContentCallCount == 0)
+    }
+
+    @Test func answeringAVisualUpdatesTheSameRowThroughADelta() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        let visual = makeVisual()
+        s.transcript.appendMessage(.visualAid(visual))
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gw = RemoteSessionGateway(provider: provider) { frame in
+            sent.append(frame)
+            if case .transcriptDelta = frame, let waiter = nextDelta {
+                nextDelta = nil
+                waiter.resume(returning: frame)
+            }
+        }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        let snapshot = sent.compactMap { msg -> [RemoteWireMessage]? in
+            if case .transcriptSnapshot(_, _, _, let m, _, _, _, _, _) = msg { return m }
+            return nil
+        }.first
+        #expect(snapshot?.last?.kind == "visualAid")
+        let index = try #require(snapshot?.last?.index)
+
+        var answered = visual
+        answered.answer = .dismissed(at: Date())
+        let frame = await withCheckedContinuation { nextDelta = $0
+            s.transcript.replaceMessage(at: index, with: .visualAid(answered)) }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _, _) = frame else {
+            Issue.record("expected delta")
+            return
+        }
+        #expect(upserts.count == 1)
+        #expect(upserts[0].index == index)
+        #expect(upserts[0].kind == "visualAid")
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(upserts[0].json).utf8))
+        #expect(dto.answer?.kind == "dismissed")
+    }
+
+    @Test func oversizedVisualBecomesTheTooLargeNoticeAtItsPosition() throws {
+        var visual = makeVisual()
+        visual = ACPVisualAid(id: visual.id, title: visual.title, html: String(repeating: "x", count: 5 * 1024 * 1024),
+                              question: nil, answer: nil, createdAt: Date())
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 7)
+        let bounded = wire.boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes).message
+        #expect(bounded.kind == "systemNotice")
+        #expect(bounded.index == 7)
+        #expect(bounded.stableId == "m7")
+    }
+
+    private func makeVisualSession(allowMultiple: Bool) throws -> (ACPSession, ACPVisualAid) {
+        let session = try makeSessionWithAgentText("hi")
+        let visual = makeVisual(allowMultiple: allowMultiple)
+        session.transcript.appendMessage(.visualAid(visual))
+        return (session, visual)
+    }
+
+    private func visualRejection(_ sent: [RemoteServerMessage]) -> String? {
+        for case .visualAidRejected(_, _, let reason, _) in sent { return reason }
+        return nil
+    }
+
+    private func visualRejectionRequestId(_ sent: [RemoteServerMessage]) -> String? {
+        for case .visualAidRejected(_, _, _, let requestId) in sent { return requestId }
+        return nil
+    }
+
+    @Test func visualAnswerRoutesToTheProviderInQuestionOrder() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: true)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["b", "a"], note: "  keep it  "))
+        let call = try #require(provider.answeredVisuals.first)
+        #expect(call.visualId == visual.id)
+        guard case .answered(let ids, let note, _) = call.answer else {
+            Issue.record("expected answered")
+            return
+        }
+        #expect(ids == ["a", "b"])
+        #expect(note == "keep it")
+        #expect(visualRejection(sent) == nil)
+    }
+
+    @Test func visualDismissRoutesWithoutChoices() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss",
+                                           selectedOptionIds: [], note: nil))
+        guard case .dismissed = try #require(provider.answeredVisuals.first).answer else {
+            Issue.record("expected dismissed")
+            return
+        }
+    }
+
+    @Test(arguments: [
+        ("notWriter", false, false, "answer", ["a"], Optional<String>.none),
+        ("invalid", true, false, "answer", [String](), nil),
+        ("invalid", true, true, "answer", [String](), nil),
+        ("invalid", true, false, "answer", ["zzz"], nil),
+        ("invalid", true, false, "answer", ["a", "a"], nil),
+        ("invalid", true, false, "answer", ["a", "b"], nil),
+        ("invalid", true, false, "answer", ["a"], String(repeating: "x", count: 2001)),
+        ("invalid", true, false, "wave", ["a"], nil),
+        ("invalid", true, true, "answer", ["a", "b", "c", "d", "e", "f", "g", "h", "i"], nil),
+        ("invalid", true, false, "answer", [String(repeating: "a", count: 300)], nil),
+        ("invalid", true, false, "answer", ["a"], String(repeating: "x", count: 100_000)),
+    ])
+    func invalidVisualResponsesAreRejectedWithoutCallingTheManager(
+        reason: String, isWriter: Bool, allowMultiple: Bool, action: String, ids: [String], note: String?
+    ) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: allowMultiple)
+        provider.sessions["s1"] = s
+        if isWriter { provider.writers.insert("s1") }
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: action,
+                                           selectedOptionIds: ids, note: note, requestId: "req-1"))
+        #expect(visualRejection(sent) == reason)
+        #expect(visualRejectionRequestId(sent) == "req-1")
+        #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test(arguments: [(64, true), (65, false), (1_000_000, false)])
+    func visualRejectionEchoesOnlyBoundedRequestIds(length: Int, echoed: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let id = String(repeating: "r", count: length)
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "wave",
+                                           selectedOptionIds: ["a"], note: nil, requestId: id))
+        #expect(visualRejection(sent) == "invalid")
+        #expect(visualRejectionRequestId(sent) == (echoed ? id : nil))
+    }
+
+    @Test func visualRejectionWithoutRequestIdCarriesNone() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: nil))
+        #expect(visualRejection(sent) == "notWriter")
+        #expect(visualRejectionRequestId(sent) == nil)
+    }
+
+    @Test(arguments: [
+        (["a", "b", "c", "d", "e", "f", "g", "h"], Optional<String>.none, false),
+        (["a", "b", "c", "d", "e", "f", "g", "h", "i"], nil, true),
+        ([String(repeating: "a", count: 64)], nil, false),
+        ([String(repeating: "a", count: 256)], nil, false),
+        ([String(repeating: "a", count: 257)], nil, true),
+        (["a"], String(repeating: "x", count: 256 * 1024), false),
+        (["a"], String(repeating: "x", count: 256 * 1024 + 1), true),
+    ])
+    func visualResponseBoundsRejectOversizedInputBeforeAnyWork(ids: [String], note: String?, exceeds: Bool) {
+        #expect(RemoteVisualAidLimits.exceedsBounds(ids: ids, note: note) == exceeds)
+    }
+
+    @Test(arguments: [(2000, true), (2001, false)])
+    func aNoteIsLimitedByGraphemesNotBytes(count: Int, accepted: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: count)))
+        #expect(provider.answeredVisuals.count == (accepted ? 1 : 0))
+        #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
+    }
+
+    /// The same vectors run in scripts/tests/remote-web-visual-aid/test-visual-aid.js against `trimNote`: the phone
+    /// must count and send exactly what this side trims (CharacterSet.whitespacesAndNewlines).
+    @Test(arguments: [
+        (0x85, true), (0x200B, true), (0xA0, true), (0x2028, true), (0x3000, true), (0x1680, true),
+        (0x202F, true), (0xFEFF, false),
+    ] as [(UInt32, Bool)])
+    func noteEdgesTrimLikeThePhone(scalar: UInt32, trimmed: Bool) async throws {
+        let edge = String(Unicode.Scalar(scalar)!)
+        let body = String(repeating: "x", count: 2000)
+        for (note, expectedNote) in [(edge + body, trimmed ? body : nil), (edge + body + edge, trimmed ? body : nil), (edge, trimmed ? "" : edge)] {
+            let provider = FakeSessionsProvider()
+            let (s, visual) = try makeVisualSession(allowMultiple: false)
+            provider.sessions["s1"] = s
+            provider.writers.insert("s1")
+            var sent: [RemoteServerMessage] = []
+            let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+            await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                               selectedOptionIds: ["a"], note: note))
+            // Kept edge characters push the 2000-character body over the limit; the edge-only note stays valid.
+            let accepted = trimmed || note == edge
+            #expect(provider.answeredVisuals.count == (accepted ? 1 : 0), "U+\(String(scalar, radix: 16)) \(note.count)")
+            #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
+            if accepted, case .answered(_, let stored, _) = try #require(provider.answeredVisuals.first).answer {
+                #expect(stored == (expectedNote?.isEmpty == true ? nil : expectedNote))
+            }
+        }
+    }
+
+    @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: UUID().uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
+        #expect(visualRejection(sent) == "notFound")
+        sent.removeAll()
+        var answered = visual
+        answered.answer = .dismissed(at: Date())
+        s.transcript.replaceMessage(at: s.transcript.messages.count - 1, with: .visualAid(answered))
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
+        #expect(visualRejection(sent) == "alreadyAnswered")
+        #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test func aManagerFailureIsReportedAsFailed() async throws {
+        let provider = FakeSessionsProvider()
+        provider.answerVisualAidResult = false
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: nil))
+        #expect(visualRejection(sent) == "failed")
     }
 
     @Test func toolCallWireOmitsInlineAssetData() throws {

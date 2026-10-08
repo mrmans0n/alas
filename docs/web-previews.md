@@ -116,8 +116,8 @@ results remain untrusted application data.
 The built-in Alas server's `visual_show` tool shows an HTML visual inline in an
 ACP session's transcript: a UI prototype, layout, diagram, or side-by-side
 comparison. It is an MCP tool only, has no `alas` CLI command, and applies to
-ACP sessions, including Workspace Checkout sessions. The phone client does not
-show visuals yet.
+ACP sessions, including Workspace Checkout sessions. The phone web
+client shows visuals too; see the phone section below.
 
 | Argument | Meaning |
 |---|---|
@@ -135,6 +135,20 @@ out the user's choices before they submit. Links in a question visual do
 nothing until the question is answered, and stay off if it is dismissed.
 
 With a `question`, elements carrying `data-choice="<option id>"` select that
-option when clicked, and the answer card appears under the visual. The tool
+option when clicked on the Mac, and the answer card appears under the visual. The tool
 returns immediately and does not wait: the user's answer, if any, arrives as
 their next message, so the agent should end its turn after asking.
+
+On the phone web client the visual renders in a sandboxed frame that cannot
+reach the app or its token. It makes the same https loads as on the Mac, and
+`fetch`, XHR, and WebSockets are blocked. A visual with a question is
+display-only on the phone, so `data-choice` clicks do nothing there. The
+question is answered from phone controls under the visual, and the answer goes
+through the same path as a Mac answer. Links inside a visual do nothing on the
+phone. A visual's frame cannot be navigated away, even by its own script: the
+phone page's `frame-src 'none'` policy blocks every navigation of the frame, and
+the in-frame and load-count guards remain as backstops. The question is
+read-only until the phone drives the session; a "Take over to answer" hint
+appears and the phone never takes over silently. Frames
+load lazily and at most three stay live; older ones show "Show visual". The
+raw HTML no longer appears in the `visual_show` tool card on the phone.

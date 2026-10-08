@@ -20,7 +20,8 @@ extension RemoteClientMessage {
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
-             .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _):
+             .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _),
+             .visualAidResponse(let id, _, _, _, _, _):
             return id
         }
     }
@@ -36,6 +37,8 @@ extension RemoteClientMessage {
             return .permissionDecision(sessionId: new, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(_, let requestId, let answers):
             return .questionAnswer(sessionId: new, requestId: requestId, answers: answers)
+        case .visualAidResponse(_, let visualId, let action, let ids, let note, let requestId):
+            return .visualAidResponse(sessionId: new, visualId: visualId, action: action, selectedOptionIds: ids, note: note, requestId: requestId)
         case .planResponse(_, let requestId, let action, let reason):
             return .planResponse(sessionId: new, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(_, let requestId, let action, let content):
@@ -88,7 +91,7 @@ extension RemoteServerMessage {
              .transcriptPage(let id, _, _, _), .stopPending(let id), .permissionRequest(let id, _),
              .permissionResolved(let id, _), .questionRequest(let id, _), .questionResolved(let id, _),
              .planRequest(let id, _), .planResolved(let id, _), .elicitationRequest(let id, _),
-             .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id),
+             .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id), .visualAidRejected(let id, _, _, _),
              .sessionRenamed(let id, _), .queueState(let id, _), .queueEditRestored(let id, _, _),
              .changeList(let id, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
              .fileDiffResult(let id, _, _, _, _, _), .fileDiffFailed(let id, _, _, _, _),
@@ -134,6 +137,8 @@ extension RemoteServerMessage {
         case .elicitationResolved(_, let r): return .elicitationResolved(sessionId: new, requestId: r)
         case .sessionClosed: return .sessionClosed(sessionId: new)
         case .promptRejected: return .promptRejected(sessionId: new)
+        case .visualAidRejected(_, let visualId, let reason, let requestId):
+            return .visualAidRejected(sessionId: new, visualId: visualId, reason: reason, requestId: requestId)
         case .sessionConfig(let cfg):
             return .sessionConfig(RemoteSessionConfig(
                 sessionId: new, models: cfg.models, modes: cfg.modes, currentModel: cfg.currentModel,

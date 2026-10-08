@@ -745,3 +745,7 @@ jobs:
       - name: Test remote web hub
         if: ${{ !cancelled() }}
         run: bash scripts/tests/remote-web-hub/run.sh
+
+      - name: Test remote web visual aid
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/remote-web-visual-aid/run.sh

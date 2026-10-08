@@ -151,6 +151,24 @@ struct FederatedSessionsProviderTests {
         ])
     }
 
+    @Test func aVisualAidAnswerReachesThePeerAndItsRejectionComesBack() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
+        links.sent.removeAll()
+        let answer = RemoteClientMessage.visualAidResponse(
+            sessionId: "srv-b:s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil, requestId: "r-1")
+        #expect(provider.route(answer, from: client.downstream))
+        #expect(links.sent(to: "srv-b") == [
+            .visualAidResponse(sessionId: "s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil, requestId: "r-1")
+        ])
+        links.receive(.visualAidRejected(sessionId: "s1", visualId: "V", reason: "notWriter", requestId: "r-1"), from: "srv-b")
+        #expect(client.received == [.visualAidRejected(sessionId: "srv-b:s1", visualId: "V", reason: "notWriter", requestId: "r-1")])
+    }
+
     @Test func twoClientsShareOneUpstreamSubscriptionAndBothGetFrames() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)

@@ -151,6 +151,10 @@ final class RemoteSessionGateway {
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .visualAidResponse(let sessionId, let visualId, let action, let selectedOptionIds, let note, let requestId):
+            await handleVisualAidResponse(
+                sessionId: sessionId, visualId: visualId, action: action,
+                selectedOptionIds: selectedOptionIds, note: note, requestId: requestId)
         case .planResponse(let id, let requestId, let action, let reason):
             applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(let id, let requestId, let action, let content):
@@ -884,7 +888,8 @@ final class RemoteSessionGateway {
     }
 
     private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
-        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated else { return nil }
+        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated,
+              !ACPToolCallPresentation.isVisualShow(toolCall) else { return nil }
         let state = syncState(for: sessionId)
         if let cached = state.cachedToolContent(toolCall.toolCallId) { return cached }
         guard let full = await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
@@ -902,20 +907,22 @@ final class RemoteSessionGateway {
             let rid = Self.requestIdInt(pending.id)
             lastPermissionReq[id] = rid
             let tc = pending.params.toolCall
+            let isVisualShow = ACPToolCallPresentation.isVisualShow(name: tc.name, title: tc.title)
             let presentation = ACPPermissionPresentation(metadata: pending.params.metadata)
             let payload = RemotePermissionPayload(
                 requestId: rid,
-                toolName: tc.title ?? tc.kind ?? "tool",
+                toolName: isVisualShow ? Self.visualAidToolName : tc.title ?? tc.kind ?? "tool",
                 options: pending.params.options.map {
                     RemotePermissionOption(
                         optionId: $0.optionId, name: $0.name, kind: $0.kind,
-                        description: $0.presentationDescription)
+                        description: isVisualShow ? nil : $0.presentationDescription)
                 },
-                title: presentation?.title,
-                reason: presentation?.description,
+                // `defaultToNo` carries no agent text, so it survives the redaction of a visual's permission.
+                title: isVisualShow ? nil : presentation?.title,
+                reason: isVisualShow ? nil : presentation?.description,
                 defaultToNo: presentation?.defaultToNo ?? false,
                 mcpServerName: tc.mcpServerName,
-                commandSummary: tc.content?.compactMap { block -> String? in
+                commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
                     guard case .content(.text(let text)) = block else { return nil }
                     return text
                 }.first)
@@ -1070,6 +1077,48 @@ final class RemoteSessionGateway {
         await policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
         lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private func handleVisualAidResponse(
+        sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?,
+        requestId: String?
+    ) async {
+        // An over-long token is hostile or broken; drop it instead of echoing it back to every phone.
+        let echoedRequestId = requestId.flatMap { $0.utf8.count <= RemoteVisualAidLimits.maxRequestIdBytes ? $0 : nil }
+        func reject(_ reason: String) {
+            send(.visualAidRejected(sessionId: sessionId, visualId: visualId, reason: reason, requestId: echoedRequestId))
+        }
+        guard provider.isWriter(for: sessionId) else { return reject("notWriter") }
+        guard let id = UUID(uuidString: visualId),
+              let session = provider.session(for: sessionId),
+              let visual = session.transcript.visualAid(id: id)
+        else { return reject("notFound") }
+        guard let question = visual.question, visual.answer == nil else { return reject("alreadyAnswered") }
+
+        guard !RemoteVisualAidLimits.exceedsBounds(ids: selectedOptionIds, note: note) else { return reject("invalid") }
+
+        let answer: ACPVisualAid.Answer
+        switch action {
+        case "dismiss":
+            answer = .dismissed(at: Date())
+        case "answer":
+            let known = Set(question.options.map(\.id))
+            let picked = Set(selectedOptionIds)
+            guard picked.count == selectedOptionIds.count, !picked.isEmpty, picked.isSubset(of: known),
+                  question.allowMultiple || picked.count == 1
+            else { return reject("invalid") }
+            let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, trimmed.count > ACPVisualAidQuestionForm.noteMaxLength { return reject("invalid") }
+            // Question order, like a native answer.
+            let ordered = question.options.map(\.id).filter(picked.contains)
+            answer = .answered(
+                selectedOptionIds: ordered,
+                note: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+                at: Date())
+        default:
+            return reject("invalid")
+        }
+        guard await provider.answerVisualAid(for: sessionId, visualId: id, answer: answer) else { return reject("failed") }
     }
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
@@ -1349,10 +1398,15 @@ final class RemoteSessionGateway {
             )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
-        case .visualAid:
-            return .init(stableId: sid, kind: "systemNotice", text: nil, json: nil, index: index, isHidden: true)
+        case .visualAid(let visual):
+            // Without json the phone falls back to a plain-text row with the title.
+            return .init(
+                stableId: sid, kind: "visualAid", text: visual.title,
+                json: Self.encodeJSON(RemoteVisualAid(visual)), index: index)
         }
     }
+
+    private static let visualAidToolName = "Visual aid"
 
     private static func remoteToolCall(
         _ call: ACPMessage.ToolCall,
@@ -1363,6 +1417,16 @@ final class RemoteSessionGateway {
             remote.content = fullContent
         }
         remote.rawOutput = nil
+        if ACPToolCallPresentation.isVisualShow(remote) {
+            // The call's title, content, raw input and locations are agent
+            // text that can carry the visual's HTML, which reaches the phone
+            // as a `visualAid` row instead.
+            remote.title = Self.visualAidToolName
+            remote.content = ""
+            remote.rawInput = nil
+            remote.preview = nil
+            remote.locations = []
+        }
         remote.metadata = nil
         remote.assets = call.assets.map { asset in
             ACPMessage.ToolCallAsset(
@@ -1395,4 +1459,22 @@ final class RemoteSessionGateway {
 @MainActor
 private final class RemoteRefusalWindowBox {
     var value = true
+}
+
+/// Cheap size bounds for a `visualAidResponse`, checked before the handler builds a `Set` or trims the
+/// note, so a hostile client cannot make the main actor hash or scan megabytes. `utf8.count` is O(1) for
+/// native strings. Option ids are ASCII, so four bytes per allowed character is generous. The note cap is a
+/// transport limit, not a grapheme limit: a valid note of multi-scalar graphemes (family emoji) is far
+/// larger than `noteMaxLength` bytes, and the exact `String.count` check follows in the handler.
+enum RemoteVisualAidLimits {
+    static let maxNoteBytes = 256 * 1024
+    static let maxIdUTF8Bytes = ACPVisualAid.Limits.optionIdMaxCharacters * 4
+    /// Longest correlation token a rejection echoes; a phone's UUID is 36 bytes.
+    static let maxRequestIdBytes = 64
+
+    static func exceedsBounds(ids: [String], note: String?) -> Bool {
+        ids.count > ACPVisualAid.Limits.optionCount.upperBound
+            || ids.contains { $0.utf8.count > maxIdUTF8Bytes }
+            || (note?.utf8.count ?? 0) > maxNoteBytes
+    }
 }

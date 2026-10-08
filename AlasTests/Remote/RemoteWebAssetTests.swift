@@ -1,6 +1,8 @@
 import Foundation
 import JavaScriptCore
 import Testing
+import WebKit
+@testable import Alas
 
 struct RemoteWebAssetTests {
     private func asset(_ relativePath: String) throws -> String {
@@ -646,7 +648,7 @@ struct RemoteWebAssetTests {
         let removed = false;
         """)
         if previouslyVisible {
-            context.evaluateScript("messageNodes.set('row', { remove() { removed = true; } });")
+            context.evaluateScript("messageNodes.set('row', { dataset: {}, remove() { removed = true; } });")
         }
         let marker: [String: Any] = ["stableId": "row", "index": 11, "isHidden": true]
         apply.call(withArguments: [marker, NSNull()])
@@ -1066,7 +1068,7 @@ struct RemoteWebAssetTests {
     @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2200) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
     }
 
@@ -1577,5 +1579,354 @@ struct RemoteWebAssetTests {
         let clearedAt = try #require(body.range(of: "gatewayCounts = new Map();")?.lowerBound)
         let refreshedAt = try #require(body.range(of: "refreshHubViews();")?.lowerBound)
         #expect(clearedAt < refreshedAt, "must clear before refreshing views, not after")
+    }
+
+    @Test func visualAidScriptLoadsBeforeAppAndIsPrecached() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        try expectLoadsBeforeApp("/visual-aid.js", in: html)
+        try expectReferencedAndPrecached("/visual-aid.js", html: html, sw: sw)
+    }
+
+    @Test func visualAidIframeNeverAllowsSameOrigin() throws {
+        let module = try asset("visual-aid.js")
+        let app = try asset("app.js")
+        #expect(module.contains(#"const SANDBOX = "allow-scripts";"#))
+        #expect(app.contains(#"setAttribute("sandbox", RemoteVisualAid.SANDBOX)"#))
+        // The token lives in localStorage and /ws is same-origin: a frame with allow-same-origin could read both.
+        for name in ["app.js", "index.html", "hub-links.js"] {
+            let text = try asset(name)
+            #expect(!text.contains("allow-same-origin"), "\(name) must not mention allow-same-origin")
+        }
+        #expect(module.components(separatedBy: "allow-same-origin").count == 2, "only the explanatory comment mentions it")
+    }
+
+    @Test func visualAidQuestionFramesAreInert() throws {
+        let app = try asset("app.js")
+        #expect(app.contains(#"frame.setAttribute("inert", "")"#))
+        #expect(app.contains("card.visual.question"))
+    }
+
+    @Test func visualAidCSPMatchesTheDesktopPolicy() throws {
+        let module = try asset("visual-aid.js")
+        // The phone module builds the string from fragments, so compare by evaluating it.
+        let context = try #require(JSContext())
+        context.evaluateScript(module)
+        #expect(context.exception == nil)
+        let csp = context.evaluateScript("globalThis.RemoteVisualAid.CSP")?.toString()
+        #expect(csp == VisualAidWebPolicy.contentSecurityPolicy)
+    }
+
+    @Test func visualAidFrameCopyHasEveryDesktopClass() throws {
+        let desktop = try String(
+            contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("Alas/Resources/VisualAid/frame.html"),
+            encoding: .utf8)
+        let phone = try asset("visual-aid.js")
+        let classes = Set(desktop.matches(of: #/\.([a-zA-Z][a-zA-Z0-9-]*)\s*[{,]/#).map { String($0.1) })
+        #expect(!classes.isEmpty)
+        for name in classes {
+            #expect(phone.contains(".\(name)"), "the phone frame is missing .\(name)")
+        }
+    }
+
+    @Test func visualAidAnswerOnlyChangesTheCardWithoutReplacingItsFrame() throws {
+        let source = try asset("app.js")
+        let start = try #require(source.range(of: "function upsertMessage("))
+        let end = try #require(source.range(of: "\n}", range: start.upperBound..<source.endIndex))
+        let context = try #require(JSContext())
+        context.evaluateScript("""
+        var replaced = 0, updated = 0;
+        var messages = new Map(), transcriptMeta = null;
+        var node = { dataset: { kind: "visualAid", sid: "m1", index: "1" }, classList: { contains() { return false; } },
+                     replaceWith() { replaced += 1; }, remove() {} };
+        var messageNodes = new Map([["m1", node]]);
+        function updateVisualAid(n, m) { updated += 1; return true; }
+        function renderMessage() { return node; }
+        function insertMessage() {}
+        \(source[start.lowerBound..<end.upperBound])
+        upsertMessage({ stableId: "m1", index: 1, kind: "visualAid", json: "{}" });
+        """)
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("replaced")?.toInt32() == 0)
+        #expect(context.evaluateScript("updated")?.toInt32() == 1)
+    }
+
+    @MainActor
+    @Test func visualAidDocumentBuilderRunsOnARealDOMParser() async throws {
+        let module = try asset("visual-aid.js")
+        let webView = WKWebView(frame: .zero)
+        webView.loadHTMLString("<html></html>", baseURL: nil)
+        let loaded = await awaitCondition { !webView.isLoading }
+        #expect(loaded)
+        _ = try await webView.evaluateJavaScript(module)
+        let id = "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F"
+        let script = """
+        const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+        const build = (html) => {
+          const doc = parse(RemoteVisualAid.buildDocument(html, "\(id)", parse));
+          return { first: doc.head.firstElementChild && doc.head.firstElementChild.outerHTML,
+                   scripts: doc.head.querySelectorAll("script").length,
+                   body: doc.body.innerHTML, doctype: !!doc.doctype, htmlAttr: doc.documentElement.getAttribute("data-note") };
+        };
+        return JSON.stringify({
+          fragment: build("<p>hi</p>"),
+          full: build("<!DOCTYPE html><html><head><title>t</title></head><body><b>x</b></body></html>"),
+          noHead: build("<html><body>y</body></html>"),
+          tricky: build('<!DOCTYPE html><html data-note="<head>"><body><script>var s = "<head>";</script>z</body></html>')
+        });
+        """
+        let raw = try await webView.callAsyncJavaScript(script, contentWorld: .page) as? String
+        let result = try #require(raw.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: [String: Any]] })
+        for key in ["fragment", "full", "noHead", "tricky"] {
+            let entry = try #require(result[key])
+            let first = try #require(entry["first"] as? String)
+            #expect(first.contains("Content-Security-Policy"), "\(key): the CSP meta must be first in <head>")
+            #expect((entry["scripts"] as? Int) ?? 0 >= 2, "\(key): lockdown and bridge scripts")
+        }
+        #expect((result["full"]?["doctype"] as? Bool) == true)
+        #expect((result["tricky"]?["htmlAttr"] as? String) == "<head>", "an attribute containing <head> is untouched")
+        #expect((result["tricky"]?["body"] as? String)?.contains(#"var s = "<head>";"#) == true)
+    }
+
+    @MainActor
+    @Test func visualAidFrameSwallowsSameDocumentAnchorClicks() async throws {
+        let module = try asset("visual-aid.js")
+        let host = WKWebView(frame: .zero)
+        host.loadHTMLString("<html></html>", baseURL: nil)
+        #expect(await awaitCondition { !host.isLoading })
+        _ = try await host.evaluateJavaScript(module)
+        let built = try await host.callAsyncJavaScript(
+            #"""
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            return RemoteVisualAid.buildDocument('<a id="a" href="#x">go</a><area id="r" href="#x"><p id="x">t</p>', "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            """#, contentWorld: .page) as? String
+        let document = try #require(built)
+        let page = WKWebView(frame: .zero)
+        page.loadHTMLString(document, baseURL: URL(string: "https://visual.invalid/"))
+        #expect(await awaitCondition { !page.isLoading })
+        let hash = try await page.evaluateJavaScript(
+            #"document.getElementById("a").click(); document.getElementById("r").click(); location.hash"#) as? String
+        #expect(hash == "", "a visual link click must not navigate to an anchor")
+    }
+
+    /// Mounts a sandboxed srcdoc frame built by the real module, reporting page events through a script message
+    /// handler so the Swift side can poll without sleeping. With `guarded`, the real `guardFrameNavigation` (the
+    /// load counter) is attached too; without it only the bridge's own `navigating` message can report a move.
+    @MainActor
+    private func mountVisual(html: String, guarded: Bool, until stop: (FrameProbe) -> Bool) async throws -> FrameProbe {
+        let module = try asset("visual-aid.js")
+        let probe = FrameProbe()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(probe, name: "probe")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        _ = try await webView.evaluateJavaScript(module)
+        _ = try await webView.callAsyncJavaScript(
+            #"""
+            const post = (m) => webkit.messageHandlers.probe.postMessage(m);
+            addEventListener("message", (e) => {
+              if (!e.data || !e.data.alasVisual) return;
+              post(e.data.navigating === true ? "navigating" : "heard");
+            });
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            const frame = document.createElement("iframe");
+            frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
+            frame.addEventListener("load", () => post("load"));
+            if (guarded) RemoteVisualAid.guardFrameNavigation(frame, () => post("navigated"));
+            frame.srcdoc = RemoteVisualAid.buildDocument(html, "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            document.body.appendChild(frame);
+            """#, arguments: ["html": html, "guarded": guarded], contentWorld: .page)
+        #expect(await awaitCondition { stop(probe) }, "events: \(probe.events)")
+        configuration.userContentController.removeScriptMessageHandler(forName: "probe")
+        return probe
+    }
+
+    @MainActor
+    @Test func visualAidGuardCatchesAFrameThatNavigatesItself() async throws {
+        let probe = try await mountVisual(
+            html: "<p>x</p><script>setTimeout(function () { location.href = 'about:blank#moved'; }, 0);</script>",
+            guarded: true,
+            until: { $0.events.contains("navigated") })
+        #expect(probe.events.filter { $0 == "navigated" }.count == 1)
+    }
+
+    @MainActor
+    @Test func visualAidGuardLeavesAFrameThatStaysPutAlone() async throws {
+        let probe = try await mountVisual(html: "<p>stays</p>", guarded: true, until: { $0.events.contains("heard") })
+        #expect(probe.events.filter { $0 == "load" }.count == 1)
+        #expect(!probe.events.contains("navigated"))
+        #expect(!probe.events.contains("navigating"), "a document that stays put never reports unloading")
+    }
+
+    /// The load-count guard is not attached, so only the bridge's pagehide message can report the move: the
+    /// detection does not depend on a second `load` ever firing.
+    @MainActor
+    @Test func visualAidBridgeReportsASelfNavigationWithoutAnyLoadGuard() async throws {
+        let probe = try await mountVisual(
+            html: "<p>x</p><script>setTimeout(function () { location.href = 'about:blank#moved'; }, 0);</script>",
+            guarded: false,
+            until: { $0.events.contains("navigating") })
+        #expect(probe.events.filter { $0 == "navigating" }.count == 1)
+        #expect(!probe.events.contains("navigated"))
+    }
+
+    /// The shipped phone page's own `frame-src` policy, read out of index.html so the test pins the real file.
+    private func shippedFramePolicyMeta() throws -> String {
+        let html = try asset("index.html")
+        let meta = try #require(html.firstMatch(of: #/<meta http-equiv="Content-Security-Policy"[^>]*>/#), "index.html carries a CSP meta")
+        let head = try #require(html.range(of: "<head>"))
+        let firstResource = try #require(html.range(of: #"<link"#))
+        #expect(head.upperBound <= meta.range.lowerBound && meta.range.upperBound <= firstResource.lowerBound,
+                "the policy precedes every link and script")
+        #expect(!html[html.startIndex..<meta.range.lowerBound].contains("<script"))
+        return String(meta.output)
+    }
+
+    /// A parent page (with or without the shipped policy) holding a sandboxed srcdoc frame built by the real module.
+    /// The frame's own script reports `parent.postMessage("ran")`; messages from any document in the frame reach
+    /// the probe as plain strings, and a `securitypolicyviolation` on the parent reports as "violation".
+    @MainActor
+    private func mountParentFrame(
+        meta: String?, html: String, until stop: (FrameProbe) -> Bool
+    ) async throws -> (probe: FrameProbe, webView: WKWebView) {
+        let module = try asset("visual-aid.js")
+        let probe = FrameProbe()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(probe, name: "probe")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.loadHTMLString("<!doctype html><html><head>\(meta ?? "")</head><body></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        _ = try await webView.evaluateJavaScript(module)
+        _ = try await webView.callAsyncJavaScript(
+            #"""
+            const post = (m) => webkit.messageHandlers.probe.postMessage(m);
+            addEventListener("message", (e) => { if (typeof e.data === "string") post(e.data); });
+            document.addEventListener("securitypolicyviolation", () => post("violation"));
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            const frame = document.createElement("iframe");
+            frame.id = "visual";
+            frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
+            frame.srcdoc = RemoteVisualAid.buildDocument(html, "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            document.body.appendChild(frame);
+            """#, arguments: ["html": html], contentWorld: .page)
+        #expect(await awaitCondition { stop(probe) }, "events: \(probe.events)")
+        return (probe, webView)
+    }
+
+    /// Erases the frame's own listeners with `document.open()`, installs a replacement document that answers a
+    /// ping, then navigates the frame to a destination that reports when it runs.
+    private static let rewriteThenNavigate = """
+    <p>x</p><script>
+    document.open();
+    document.write('<script>addEventListener("message", function (e) { if (e.data === "ping") parent.postMessage("pong", "*"); }); parent.postMessage("rewritten", "*");<\\/script>');
+    document.close();
+    setTimeout(function () { location.href = "data:text/html,%3Cscript%3Eparent.postMessage('destination ran','*')%3C/script%3E"; }, 0);
+    </script>
+    """
+
+    /// Without the page policy a frame that erased its own listeners walks away to a destination that runs code.
+    /// This is the control for the test below: it fails to prove anything if the destination cannot run here.
+    @MainActor
+    @Test func visualAidFrameThatRewritesItselfReachesADestinationWithoutTheParentPolicy() async throws {
+        let (probe, webView) = try await mountParentFrame(
+            meta: nil, html: Self.rewriteThenNavigate, until: { $0.events.contains("destination ran") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        #expect(probe.events.contains("rewritten"))
+    }
+
+    @MainActor
+    @Test func visualAidParentPolicyBlocksAFrameThatRewritesItselfThenNavigates() async throws {
+        let meta = try shippedFramePolicyMeta()
+        let (probe, webView) = try await mountParentFrame(
+            meta: meta, html: Self.rewriteThenNavigate, until: { $0.events.contains("violation") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        // Still the rewritten document, not the destination: it answers a ping from the parent.
+        _ = try await webView.evaluateJavaScript(#"document.getElementById("visual").contentWindow.postMessage("ping", "*")"#)
+        #expect(await awaitCondition { probe.events.contains("pong") }, "events: \(probe.events)")
+        #expect(probe.events.contains("rewritten"))
+        #expect(!probe.events.contains("destination ran"), "events: \(probe.events)")
+    }
+
+    @MainActor
+    @Test func visualAidParentPolicyStillRendersAndRunsASrcdocVisual() async throws {
+        let meta = try shippedFramePolicyMeta()
+        let (probe, webView) = try await mountParentFrame(
+            meta: meta, html: #"<p>hi</p><script>parent.postMessage("ran", "*");</script>"#,
+            until: { $0.events.contains("ran") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        #expect(!probe.events.contains("violation"), "the srcdoc load itself is not a frame-src violation")
+    }
+
+    @Test func visualAidLeavingASessionTearsDownItsFrames() throws {
+        let app = try asset("app.js")
+        let start = try #require(app.range(of: "function showSessions(")).lowerBound
+        let end = try #require(app.range(of: "\n}", range: start..<app.endIndex)).upperBound
+        let body = app[start..<end]
+        let reset = try #require(body.range(of: "resetVisualCards(false)"), "Back drops the cards without stashing drafts")
+        #expect(body.contains("visualDrafts.clear()"), "leaving counts as a different session")
+        #expect(body.contains("visualSubmitted.clear()"), "leaving also forgets which cards this phone answered")
+        #expect(body.contains(#"$("messages").innerHTML = """#), "the mounted iframes leave the DOM")
+        let hide = try #require(body.range(of: #"$("transcript").classList.add("hidden")"#))
+        #expect(reset.lowerBound < hide.lowerBound)
+        // Every way out of a session goes through showSessions: it is the only place the open session is cleared,
+        // and the close and server-switch paths call it.
+        #expect(app.components(separatedBy: "currentSession = null;").count == 2, "only showSessions leaves a session")
+        #expect(app.contains("case \"sessionClosed\": if (msg.sessionId === currentSession) showSessions();"))
+        let switching = try #require(app.range(of: "function resetServerScopedState(")).lowerBound
+        #expect(app[switching...].prefix(200).contains("if (currentSession) showSessions();"))
+        // A socket reconnect re-opens the same session and keeps today's stash-and-restore.
+        #expect(app.contains("resetVisualCards(sameSession)"))
+    }
+
+    @Test func visualAidSnapshotStashesDraftsBeforeDroppingCards() throws {
+        let app = try asset("app.js")
+        let snapshot = try #require(app.range(of: "function applySnapshot(")).lowerBound
+        let body = app[snapshot...].prefix(1500)
+        #expect(body.contains("resetVisualCards(true)"), "a snapshot keeps drafts")
+        let reset = try #require(app.range(of: "function resetVisualCards(")).lowerBound
+        let resetBody = app[reset...].prefix(900)
+        let stash = try #require(resetBody.range(of: "RemoteVisualAid.stashDraft(card)")).lowerBound
+        let clear = try #require(resetBody.range(of: "visualCards.clear()")).lowerBound
+        #expect(stash < clear, "stash before the cards are cleared")
+        #expect(app.contains("if (!sameSession) { visualDrafts.clear(); visualSubmitted.clear(); }"), "a different session starts with no drafts or answered flags")
+    }
+
+    @Test func visualAidSnapshotKeepsSubmitProvenanceForRebuiltCards() throws {
+        let app = try asset("app.js")
+        let reset = try #require(app.range(of: "function resetVisualCards(")).lowerBound
+        let resetBody = app[reset...].prefix(900)
+        let stash = try #require(resetBody.range(of: "if (card.submitted === true) visualSubmitted.add(key)")).lowerBound
+        let clear = try #require(resetBody.range(of: "visualCards.clear()")).lowerBound
+        #expect(stash < clear, "an answered card is recorded before the cards are cleared, with or without a draft")
+        let render = try #require(app.range(of: "function renderVisualAid(")).lowerBound
+        let renderBody = app[render...].prefix(1800)
+        #expect(renderBody.contains("card.submitted = RemoteVisualAid.restoreSubmitted(visual, visualSubmitted.has(draftKey))"))
+        let snapshot = try #require(app.range(of: "function applySnapshot(")).lowerBound
+        let snapshotBody = app[snapshot...].prefix(1500)
+        let rebuilt = try #require(snapshotBody.range(of: "msg.messages.forEach(m => insertMessage(m, open))")).lowerBound
+        let prune = try #require(snapshotBody.range(of: "visualSubmitted.clear()")).lowerBound
+        #expect(rebuilt < prune, "entries whose card the snapshot did not recreate are dropped after the rebuild")
+    }
+
+    @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
+        let app = try asset("app.js")
+        // The observer must go through shouldMount, the update through nextCardState, and a rejection
+        // must go through applyRejection; the module tests pin the decisions themselves.
+        #expect(app.contains("RemoteVisualAid.shouldMount(card, entry.isIntersecting)"))
+        #expect(app.contains("RemoteVisualAid.nextCardState(card, visual)"))
+        let reject = try #require(app.range(of: "function rejectVisual(")).upperBound
+        #expect(app[reject...].prefix(300).contains("RemoteVisualAid.applyRejection(card, reason, requestId)"))
+        #expect(app.contains("other.paused = true"))
+    }
+}
+
+@MainActor
+private final class FrameProbe: NSObject, WKScriptMessageHandler {
+    var events: [String] = []
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let name = message.body as? String { events.append(name) }
     }
 }

@@ -5,7 +5,7 @@ import Foundation
 /// for tool calls / file edits / plans the web client renders specially.
 struct RemoteWireMessage: Codable, Equatable, Sendable {
     let stableId: String
-    let kind: String          // "user" | "agent" | "thought" | "toolCall" | "fileEdit" | "plan" | "systemNotice"
+    let kind: String          // "user" | "agent" | "thought" | "toolCall" | "fileEdit" | "plan" | "visualAid" | "systemNotice"
     let text: String?
     let json: String?         // JSON string for structured kinds; nil otherwise
     let index: Int            // transcript position; the client orders and windows by this
@@ -62,6 +62,53 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
             }
         }
         return count
+    }
+}
+
+/// A visual aid as the phone receives it in `RemoteWireMessage.json`. The
+/// answer timestamp stays on the Mac; the phone needs only what it shows.
+struct RemoteVisualAid: Codable, Equatable, Sendable {
+    struct Option: Codable, Equatable, Sendable {
+        let id: String
+        let label: String
+    }
+
+    struct Question: Codable, Equatable, Sendable {
+        let prompt: String
+        let options: [Option]
+        let allowMultiple: Bool
+    }
+
+    struct Answer: Codable, Equatable, Sendable {
+        let kind: String
+        let selectedOptionIds: [String]?
+        let note: String?
+    }
+
+    let id: String
+    let title: String
+    let html: String
+    let question: Question?
+    let answer: Answer?
+
+    init(_ visual: ACPVisualAid) {
+        id = visual.id.uuidString
+        title = visual.title
+        html = visual.html
+        question = visual.question.map { question in
+            Question(
+                prompt: question.prompt,
+                options: question.options.map { Option(id: $0.id, label: $0.label) },
+                allowMultiple: question.allowMultiple)
+        }
+        switch visual.answer {
+        case .answered(let ids, let note, _):
+            answer = Answer(kind: "answered", selectedOptionIds: ids, note: note)
+        case .dismissed:
+            answer = Answer(kind: "dismissed", selectedOptionIds: nil, note: nil)
+        case nil:
+            answer = nil
+        }
     }
 }
 

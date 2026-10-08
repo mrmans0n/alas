@@ -114,12 +114,17 @@ enum RemoteClientMessage: Equatable, Sendable {
     case listCommitFiles(sessionId: String, sha: String)
     case commitFileDiff(sessionId: String, sha: String, path: String)
     case readFile(sessionId: String, path: String)
+    /// The phone's answer to a visual aid question. `action` is "answer" or
+    /// "dismiss"; the gateway validates the choices against the question.
+    /// `requestId` is an opaque correlation token echoed on any `visualAidRejected`, so one of several
+    /// phones on a federated session can tell its own rejection from another's.
+    case visualAidResponse(sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?, requestId: String? = nil)
     /// Peer console traffic; see `PeerConsoleRequest`.
     case console(PeerConsoleRequest)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, console }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -161,6 +166,14 @@ extension RemoteClientMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 requestId: try c.decode(Int.self, forKey: .requestId),
                 answers: try c.decode([RemoteQuestionAnswer].self, forKey: .answers))
+        case "visualAidResponse":
+            self = .visualAidResponse(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                visualId: try c.decode(String.self, forKey: .visualId),
+                action: try c.decode(String.self, forKey: .action),
+                selectedOptionIds: try c.decodeIfPresent([String].self, forKey: .selectedOptionIds) ?? [],
+                note: try c.decodeIfPresent(String.self, forKey: .note),
+                requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
         case "planResponse":
             self = .planResponse(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -312,6 +325,14 @@ extension RemoteClientMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(r, forKey: .requestId)
             try c.encode(a, forKey: .answers)
+        case .visualAidResponse(let s, let v, let a, let ids, let n, let requestId):
+            try c.encode("visualAidResponse", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(v, forKey: .visualId)
+            try c.encode(a, forKey: .action)
+            try c.encode(ids, forKey: .selectedOptionIds)
+            try c.encodeIfPresent(n, forKey: .note)
+            try c.encodeIfPresent(requestId, forKey: .requestId)
         case .planResponse(let s, let r, let action, let reason):
             try c.encode("planResponse", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -465,7 +486,9 @@ extension RemoteClientMessage {
         }
     }
 
-    /// Messages that establish or change which turn is active, and so a
+    /// Messages that establish or change which turn is active (answering a
+    /// visual aid starts one with its prompt; dismissing one sends nothing),
+    /// and so a
     /// following `stop` must wait for them specifically (not the whole
     /// ordered queue) before running — otherwise stop could land before a
     /// still-in-flight `sendPrompt`/`takeOver` finishes, find no active turn
@@ -474,6 +497,8 @@ extension RemoteClientMessage {
     /// stop stays fast when a client is simply scrolled up mid-backfill.
     var isDriveOrdering: Bool {
         switch self {
+        case .visualAidResponse(_, _, let action, _, _, _):
+            return action == "answer"
         case .sendPrompt, .takeOver,
              .queueForceSend, .queueRemove, .queueRetry, .queueEdit,
              .queueClear:
@@ -527,6 +552,10 @@ enum RemoteServerMessage: Equatable, Sendable {
     /// the prompt was empty), so the client should restore the user's text
     /// instead of silently losing it.
     case promptRejected(sessionId: String)
+    /// The server refused a `visualAidResponse` (reason: notWriter, notFound,
+    /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
+    /// `requestId` echoes the response's token when it carried one.
+    case visualAidRejected(sessionId: String, visualId: String, reason: String, requestId: String? = nil)
     case sessionConfig(RemoteSessionConfig)
     case sessionRenamed(sessionId: String, title: String)
     case queueState(sessionId: String, items: [RemoteQueuedPrompt])
@@ -573,6 +602,7 @@ extension RemoteServerMessage: Codable {
         case metadataNote, commitsTruncated, sha
         case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console
         case challenge, publicKey, signature
+        case visualId
     }
 
     init(from decoder: Decoder) throws {
@@ -683,6 +713,12 @@ extension RemoteServerMessage: Codable {
                 requestId: try c.decode(String.self, forKey: .requestId)
             )
         case "sessionClosed": self = .sessionClosed(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "visualAidRejected":
+            self = .visualAidRejected(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                visualId: try c.decode(String.self, forKey: .visualId),
+                reason: try c.decode(String.self, forKey: .reason),
+                requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
         case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sessionConfig":
             self = .sessionConfig(RemoteSessionConfig(
@@ -912,6 +948,12 @@ extension RemoteServerMessage: Codable {
         try c.encode(id, forKey: .sessionId)
         case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
+        case .visualAidRejected(let s, let v, let r, let requestId):
+            try c.encode("visualAidRejected", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(v, forKey: .visualId)
+            try c.encode(r, forKey: .reason)
+            try c.encodeIfPresent(requestId, forKey: .requestId)
         case .sessionConfig(let cfg):
             try c.encode("sessionConfig", forKey: .type)
             try c.encode(cfg.sessionId, forKey: .sessionId)

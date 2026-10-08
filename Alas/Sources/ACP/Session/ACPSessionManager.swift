@@ -61,6 +61,46 @@ enum ACPSessionForkCreationError: Error, Equatable {
     case sourceReadOnly
 }
 
+/// Decides, exactly once, whether a visual answer's prompt is sent. The send commits right after its
+/// lease check; a Stop or the registration timeout cancels first. Whichever transition happens first
+/// wins, under the lock, because cancellation runs off the main actor while the task is suspended.
+final class VisualAidAnswerCancellation: @unchecked Sendable {
+    private enum State { case pending, committed, cancelled }
+
+    private let lock = NSLock()
+    private var state = State.pending
+
+    var isCancelled: Bool {
+        lock.withLock { state == .cancelled }
+    }
+
+    /// True when the send may proceed: pending becomes committed, and committed stays committed.
+    func commit() -> Bool {
+        lock.withLock {
+            switch state {
+            case .pending:
+                state = .committed
+                return true
+            case .committed: return true
+            case .cancelled: return false
+            }
+        }
+    }
+
+    /// True when the send is now (or already) cancelled; false when it had already committed.
+    func cancelIfNotCommitted() -> Bool {
+        lock.withLock {
+            switch state {
+            case .pending:
+                state = .cancelled
+                return true
+            case .committed: return false
+            case .cancelled: return true
+            }
+        }
+    }
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -411,11 +451,20 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true, onResult: @escaping @MainActor (Bool) -> Void) async {
+    ///
+    /// `isStillWanted` is asked once the lease is confirmed and before anything is
+    /// submitted; when it says no, `onResult(false)` fires and nothing is sent.
+    func sendPrompt(
+        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true,
+        isStillWanted: (@MainActor () -> Bool)? = nil, onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
         defer { suggestionSession?.nextPromptWorkCount -= 1 }
-        guard await confirmedWriterLease(for: id) else {
+#if DEBUG
+        await beforeLeaseConfirmationForTesting?()
+#endif
+        guard await confirmedWriterLease(for: id), isStillWanted?() ?? true else {
             onResult(false)
             return
         }
@@ -1346,6 +1395,8 @@ final class ACPSessionManager: ObservableObject {
     /// How long delegated reasoning validation waits for the config options
     /// an agent publishes after `session/set_model` before rejecting.
     private let delegatedReasoningRefreshTimeout: Duration
+    /// How long `answerVisualAid` waits for its prompt to register; tests shorten it.
+    var visualAidPromptRegistrationWait: Duration = ACPSessionManager.visualAidPromptRegistrationTimeout
 #if DEBUG
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
@@ -1353,6 +1404,8 @@ final class ACPSessionManager: ObservableObject {
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforePersistenceForTesting: (@MainActor () async -> Void)?
+    /// Runs inside `sendPrompt`, just before the writer lease is confirmed.
+    var beforeLeaseConfirmationForTesting: (@MainActor () async -> Void)?
     var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces
@@ -8718,8 +8771,8 @@ extension ACPSessionManager {
 
     /// Store the user's answer on the visual and start sending it to the agent
     /// as a normal prompt, without awaiting the turn. Returns true once the
-    /// answer's row is confirmed written (and for a dismissal, which sends
-    /// nothing), false when it could not be stored. An answer first waits for
+    /// answer's row is confirmed written and the prompt is registered (sent or
+    /// queued; a dismissal sends nothing), false when it could not be stored. An answer first waits for
     /// the card's own first write to be confirmed, and is refused if that
     /// write failed. The in-memory answer is set first so a second submit
     /// finds it answered; when the write fails the
@@ -8732,6 +8785,10 @@ extension ACPSessionManager {
         guard let firstWriteRunner = runners[sessionId],
               await firstWriteRunner.awaitVisualAidFirstWrite(id: visualId)
         else { return false }
+        // The first-write wait is not cancellation-aware. A Stop that cancelled this task meanwhile must
+        // not see an answer installed or persisted after it was acknowledged; nothing has been touched yet,
+        // and this wait is the function's only suspension before the mutation.
+        guard !Task.isCancelled else { return false }
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId),
               var visual = session.transcript.visualAid(id: visualId), visual.answer == nil
@@ -8744,12 +8801,66 @@ extension ACPSessionManager {
         }
         session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
-        Task { @MainActor in
-            await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
-                if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
-            }
+        // `sendPrompt` returns once the prompt is registered (sent now or queued), not when the turn
+        // ends, so a Stop ordered after this answer finds the turn it started. The wait is bounded: a
+        // stalled lease confirmation must not hold the card on "Sending" or the phone's ordered chain.
+        //
+        // The lease check cannot be cancelled, so the send is gated instead: it commits right after the
+        // check, and a Stop or the timeout cancels it first when it has not. A cancelled send submits
+        // nothing and `onResult(false)` rolls the answer back. On timeout the answer is reverted at once
+        // and `false` is returned, so no turn can start after this call returned unless it had committed.
+        let cancellation = VisualAidAnswerCancellation()
+        guard !Task.isCancelled else {
+            await rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+            return false
+        }
+        let registered = await withTaskCancellationHandler {
+            await Self.raceWithTimeout({ [weak self] in
+                await self?.sendPrompt(
+                    for: sessionId, text: prompt, attachments: [],
+                    isStillWanted: { cancellation.commit() }
+                ) { ok in
+                    if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+                }
+            }, timeout: visualAidPromptRegistrationWait)
+        } onCancel: {
+            _ = cancellation.cancelIfNotCommitted()
+        }
+        if !registered, cancellation.cancelIfNotCommitted() {
+            // The late `onResult(false)` rollback finds the answer already reverted and does nothing.
+            await rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+            return false
         }
         return true
+    }
+
+    /// How long `answerVisualAid` waits for its prompt to be registered before returning anyway.
+    static let visualAidPromptRegistrationTimeout: Duration = .seconds(10)
+
+    /// Runs `work` in its own task and returns true when it finishes, or false once `timeout` passes
+    /// first. The caller resumes exactly once; `work` is never cancelled, so it keeps running after a timeout.
+    static func raceWithTimeout(_ work: @escaping @MainActor () async -> Void, timeout: Duration) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            final class Race {
+                var resolved = false
+                var timer: Task<Void, Never>?
+            }
+            let race = Race()
+            let finish: @MainActor (Bool) -> Void = { finished in
+                guard !race.resolved else { return }
+                race.resolved = true
+                race.timer?.cancel()
+                continuation.resume(returning: finished)
+            }
+            Task { @MainActor in
+                await work()
+                finish(true)
+            }
+            race.timer = Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                if !Task.isCancelled { finish(false) }
+            }
+        }
     }
 
     /// Clear an answer whose send failed, if it is still the one we set. The
