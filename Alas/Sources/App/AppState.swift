@@ -14322,8 +14322,10 @@ final class AppState {
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else { return }
-        // Another open may have added the tab while this one was suspended.
-        guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
+        // Another open may have added the tab, or the worktree may have been
+        // removed, while this one was suspended.
+        guard self.worktree(withId: worktree.id) != nil,
+              openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id, activate: activate)
     }
