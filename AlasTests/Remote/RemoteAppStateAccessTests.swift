@@ -494,11 +494,16 @@ struct RemoteAppStateAccessTests {
         let id = "history-\(UUID().uuidString)"
         try await seedStoredSession(id: id, title: "History", in: manager)
 
-        // Two connections opening at once must not both append a tab.
-        let firstOpen = Task { await state.openSessionTab(for: id) }
-        let secondOpen = Task { await state.openSessionTab(for: id) }
-        #expect(await firstOpen.value == .success)
-        #expect(await secondOpen.value == .success)
+        // A close arriving while an open is suspended in hydration waits for
+        // it instead of finding no tab and letting the open add one after.
+        let overlappingOpen = Task { await state.openSessionTab(for: id) }
+        let overlappingClose = Task { await state.closeSessionTab(for: id) }
+        #expect(await overlappingOpen.value == .success)
+        #expect(await overlappingClose.value == .success)
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
+
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(await state.openSessionTab(for: id) == .success)
         #expect(acpTabs(in: state).filter { $0.sessionId == id }.count == 1)
         #expect(await state.sessionSummaries().first { $0.id == id }?.isActive == true)
 
