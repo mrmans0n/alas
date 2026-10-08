@@ -351,6 +351,33 @@ struct ACPMentionPickerTests {
         #expect(origin == expected)
     }
 
+    @Test("the symbol preview opens right of the picker, left without room, and not at all without either", arguments: [
+        (NSRect(x: 100, y: 200, width: 560, height: 440), MentionSymbolPreviewPlacement.Side?.some(.right)),
+        (NSRect(x: 600, y: 200, width: 560, height: 440), .some(.left)),
+        (NSRect(x: 300, y: 200, width: 560, height: 440), nil),
+    ])
+    func sidesSymbolPreview(picker: NSRect, expected: MentionSymbolPreviewPlacement.Side?) {
+        let visible = NSRect(x: 0, y: 0, width: 1200, height: 900)
+        #expect(MentionSymbolPreviewPlacement.side(picker: picker, width: 460, gap: 2, visibleFrame: visible) == expected)
+    }
+
+    @Test("the symbol preview stays level with the picker, slides only to keep the arrow inside, and stays in bounds",
+          arguments: [
+              // Row inside the card's span: card at the top, arrow on the row.
+              (CGFloat(100), CGFloat(0), CGFloat(100)),
+              // Row below the card: the card slides down to the arrow inset.
+              (CGFloat(350), CGFloat(70), CGFloat(280)),
+              // Row near the top: the arrow stays the inset away from the corner.
+              (CGFloat(5), CGFloat(0), CGFloat(20)),
+              // Row near the bottom: the card stays inside the picker's height.
+              (CGFloat(430), CGFloat(140), CGFloat(280)),
+          ])
+    func placesSymbolPreviewVertically(rowMidY: CGFloat, cardTop: CGFloat, arrowY: CGFloat) {
+        let place = MentionSymbolPreviewPlacement.vertical(rowMidY: rowMidY, cardHeight: 300, containerHeight: 440, inset: 20)
+        #expect(place.cardTop == cardTop)
+        #expect(place.arrowY == arrowY)
+    }
+
     // @MainActor: opens a real NSPanel; key window and first responder are
     // AppKit main-thread-only state.
     @Test("the search field takes focus when the panel opens with scope tabs")
