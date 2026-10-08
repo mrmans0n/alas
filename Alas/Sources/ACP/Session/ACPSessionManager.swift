@@ -8745,11 +8745,44 @@ extension ACPSessionManager {
         session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
         // `sendPrompt` returns once the prompt is registered (sent now or queued), not when the turn
-        // ends, so a Stop ordered after this answer finds the turn it started.
-        await sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
-            if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
-        }
+        // ends, so a Stop ordered after this answer finds the turn it started. The wait is bounded: a
+        // stalled lease confirmation must not hold the card on "Sending" or the phone's ordered chain.
+        // On timeout the answer stays stored and the send keeps running; `onResult(false)` still rolls back.
+        _ = await Self.raceWithTimeout({ [weak self] in
+            await self?.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
+                if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+            }
+        }, timeout: Self.visualAidPromptRegistrationTimeout)
         return true
+    }
+
+    /// How long `answerVisualAid` waits for its prompt to be registered before returning anyway.
+    static let visualAidPromptRegistrationTimeout: Duration = .seconds(10)
+
+    /// Runs `work` in its own task and returns true when it finishes, or false once `timeout` passes
+    /// first. The caller resumes exactly once; `work` is never cancelled, so it keeps running after a timeout.
+    static func raceWithTimeout(_ work: @escaping @MainActor () async -> Void, timeout: Duration) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            final class Race {
+                var resolved = false
+                var timer: Task<Void, Never>?
+            }
+            let race = Race()
+            let finish: @MainActor (Bool) -> Void = { finished in
+                guard !race.resolved else { return }
+                race.resolved = true
+                race.timer?.cancel()
+                continuation.resume(returning: finished)
+            }
+            Task { @MainActor in
+                await work()
+                finish(true)
+            }
+            race.timer = Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                if !Task.isCancelled { finish(false) }
+            }
+        }
     }
 
     /// Clear an answer whose send failed, if it is still the one we set. The

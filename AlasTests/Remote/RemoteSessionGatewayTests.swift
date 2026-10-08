@@ -1648,6 +1648,7 @@ struct RemoteSessionGatewayTests {
                 "version": AnyCodable(1),
                 "title": AnyCodable("<h2>secret</h2>"),
                 "description": AnyCodable("<h2>secret</h2>"),
+                "defaultToNo": AnyCodable(true),
             ] as [String: AnyCodable]),
         ] as [String: AnyCodable])
         s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
@@ -1666,6 +1667,7 @@ struct RemoteSessionGatewayTests {
             return
         }
         #expect(payload.toolName == "Visual aid")
+        #expect(payload.defaultToNo, "the adapter's default-to-deny survives the redaction")
         let json = try String(decoding: JSONEncoder().encode(payload), as: UTF8.self)
         #expect(!json.contains("secret"))
     }

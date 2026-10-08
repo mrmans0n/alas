@@ -889,7 +889,7 @@ final class RemoteSessionGateway {
             lastPermissionReq[id] = rid
             let tc = pending.params.toolCall
             let isVisualShow = ACPToolCallPresentation.isVisualShow(name: tc.name, title: tc.title)
-            let presentation = isVisualShow ? nil : ACPPermissionPresentation(metadata: pending.params.metadata)
+            let presentation = ACPPermissionPresentation(metadata: pending.params.metadata)
             let payload = RemotePermissionPayload(
                 requestId: rid,
                 toolName: isVisualShow ? Self.visualAidToolName : tc.title ?? tc.kind ?? "tool",
@@ -898,8 +898,9 @@ final class RemoteSessionGateway {
                         optionId: $0.optionId, name: $0.name, kind: $0.kind,
                         description: isVisualShow ? nil : $0.presentationDescription)
                 },
-                title: presentation?.title,
-                reason: presentation?.description,
+                // `defaultToNo` carries no agent text, so it survives the redaction of a visual's permission.
+                title: isVisualShow ? nil : presentation?.title,
+                reason: isVisualShow ? nil : presentation?.description,
                 defaultToNo: presentation?.defaultToNo ?? false,
                 mcpServerName: tc.mcpServerName,
                 commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in

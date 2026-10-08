@@ -1622,6 +1622,24 @@ struct ACPSessionManagerTests {
         #expect(runner.activePromptIDForTesting != nil || !session.queue.isEmpty)
     }
 
+    @Test("raceWithTimeout returns true for work that finishes and false, without cancelling it, for work that does not")
+    func raceWithTimeoutBoundsTheWait() async {
+        #expect(await ACPSessionManager.raceWithTimeout({}, timeout: .seconds(30)))
+
+        let gate = AsyncGate()
+        var finished = false
+        let started = ContinuousClock.now
+        let result = await ACPSessionManager.raceWithTimeout({
+            await gate.enterAndWait()
+            finished = true
+        }, timeout: .milliseconds(50))
+        #expect(result == false)
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(!finished)
+        await gate.release()
+        while !finished { await Task.yield() }
+    }
+
     @Test("answerVisualAid reverts the answer and sends nothing when its row is not written")
     func answerVisualAidRevertsWhenTheWriteFails() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()
