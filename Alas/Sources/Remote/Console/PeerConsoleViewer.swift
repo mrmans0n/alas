@@ -98,12 +98,23 @@ struct PeerConsoleWriteGate {
 /// sends no keys, paste, mouse, or terminal replies. While controlling,
 /// terminal replies are filtered out, and every message carries the lease
 /// generation so the host rejects input that outlives the grant.
+///
+/// The surface writes a paste to its PTY in small pieces, so keys are
+/// batched: input that finds the batch window closed goes out at once and
+/// opens it, and input inside the window joins the batch, which leaves when
+/// it fills a chunk or the caller's timer calls `flushBatch`.
 struct PeerConsoleInputRelay {
     /// Largest `input` message; bigger pastes are split in order.
     static let maxChunk = 64 * 1024
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
+    private var batch = Data()
+    /// The lease the batched keys were typed under.
+    private var batchLease: PeerConsoleControl?
+    /// While open, keys wait for `flushBatch` or a full chunk; the caller
+    /// keeps a timer armed until it closes.
+    private(set) var isBatchWindowOpen = false
     /// The host program's mouse format as of the latest accepted output,
     /// which decides whether mouse reports are forwarded.
     private var hostMouse = PeerConsoleMouseModeTracker()
@@ -162,7 +173,7 @@ struct PeerConsoleInputRelay {
             pendingLease = control
         }
         guard control.owner == .you, !crossesLease else { return [] }
-        return requests(for: keys, attachmentId: attachmentId, control: control)
+        return enqueue(keys, attachmentId: attachmentId, control: control)
     }
 
     /// Releases a held prefix as a key, but only under the lease it was held
@@ -175,7 +186,46 @@ struct PeerConsoleInputRelay {
         // held under the same lease.
         pendingLease = filter.hasPending ? lease : nil
         guard control.owner == .you, let lease, Self.sameLease(lease, control) else { return [] }
+        return enqueue(keys, attachmentId: attachmentId, control: control)
+    }
+
+    /// The batch window elapsed: sends the batch if it is still under the
+    /// lease it was typed under, and closes the window once nothing was
+    /// waiting, so the next key goes out at once.
+    mutating func flushBatch(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
+        let keys = batch
+        let lease = batchLease
+        batch = Data()
+        batchLease = nil
+        guard control.owner == .you, let lease, Self.sameLease(lease, control) else {
+            isBatchWindowOpen = false
+            return []
+        }
+        isBatchWindowOpen = !keys.isEmpty
         return requests(for: keys, attachmentId: attachmentId, control: control)
+    }
+
+    private mutating func enqueue(
+        _ keys: Data,
+        attachmentId: String,
+        control: PeerConsoleControl
+    ) -> [PeerConsoleRequest] {
+        guard !keys.isEmpty else { return [] }
+        guard isBatchWindowOpen else {
+            isBatchWindowOpen = true
+            return requests(for: keys, attachmentId: attachmentId, control: control)
+        }
+        // Keys typed under an earlier lease never go out under this one.
+        if let batchLease, !Self.sameLease(batchLease, control) {
+            batch = Data()
+        }
+        batch += keys
+        batchLease = control
+        guard batch.count >= Self.maxChunk else { return [] }
+        let full = batch.count - batch.count % Self.maxChunk
+        let out = batch.prefix(full)
+        batch = Data(batch.dropFirst(full))
+        return requests(for: Data(out), attachmentId: attachmentId, control: control)
     }
 
     private static func sameLease(_ a: PeerConsoleControl, _ b: PeerConsoleControl) -> Bool {
@@ -248,6 +298,7 @@ final class PeerConsoleViewer {
     @ObservationIgnored private var relay = PeerConsoleInputRelay()
     /// Only the newest Escape timer may release a held ESC.
     @ObservationIgnored private var escapeTimerToken = 0
+    @ObservationIgnored private var batchTimerArmed = false
     @ObservationIgnored private var writeGate = PeerConsoleWriteGate()
     @ObservationIgnored private var fallbackToken = 0
     /// How long held bytes wait for the surface to reach the host grid.
@@ -403,10 +454,29 @@ final class PeerConsoleViewer {
     /// sent as the Escape key.
     static let escapeTimeout: Duration = .milliseconds(30)
 
+    /// How long input after a send gathers before it goes out together.
+    static let batchWindow: Duration = .milliseconds(8)
+
+    private var inputOwner: PeerConsoleControl {
+        phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
+    }
+
     private func surfaceWrote(_ data: Data) {
-        let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
-        relay.relay(data, attachmentId: attachmentId, control: owner).forEach(send)
+        relay.relay(data, attachmentId: attachmentId, control: inputOwner).forEach(send)
+        scheduleBatchFlush()
         scheduleAmbiguousPrefixFlush()
+    }
+
+    private func scheduleBatchFlush() {
+        guard relay.isBatchWindowOpen, !batchTimerArmed else { return }
+        batchTimerArmed = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.batchWindow)
+            guard let self else { return }
+            batchTimerArmed = false
+            relay.flushBatch(attachmentId: attachmentId, control: inputOwner).forEach(send)
+            scheduleBatchFlush()
+        }
     }
 
     private func scheduleAmbiguousPrefixFlush() {
@@ -416,8 +486,8 @@ final class PeerConsoleViewer {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.escapeTimeout)
             guard let self, token == escapeTimerToken else { return }
-            let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
-            relay.flushAmbiguousPrefix(attachmentId: attachmentId, control: owner).forEach(send)
+            relay.flushAmbiguousPrefix(attachmentId: attachmentId, control: inputOwner).forEach(send)
+            scheduleBatchFlush()
             // Keys typed after an Alt prefix may hold another prefix.
             scheduleAmbiguousPrefixFlush()
         }
