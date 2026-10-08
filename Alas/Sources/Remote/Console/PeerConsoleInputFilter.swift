@@ -30,11 +30,10 @@ struct PeerConsoleInputFilter {
             }
             switch Self.sequence(in: bytes, at: i) {
             case .incomplete:
-                // A lone ESC at the end of a read is the Escape key; replies
-                // arrive in single writes. Anything longer waits for more.
-                if i == bytes.count - 1 {
-                    kept.append(Self.esc)
-                } else if bytes.count - i <= Self.maxPending {
+                // Includes a lone ESC: the bridge is a byte stream, so a reply
+                // can split right after its ESC. `flushEscape()` releases a
+                // lone ESC as the Escape key once nothing followed it.
+                if bytes.count - i <= Self.maxPending {
                     pending = Array(bytes[i...])
                 }
                 return kept
@@ -46,6 +45,16 @@ struct PeerConsoleInputFilter {
             }
         }
         return kept
+    }
+
+    /// Whether a lone ESC is waiting to be classified.
+    var hasPendingEscape: Bool { pending == [Self.esc] }
+
+    /// Called when no byte followed a lone ESC in time: it was the Escape key.
+    mutating func flushEscape() -> Data {
+        guard hasPendingEscape else { return Data() }
+        pending = []
+        return Data([Self.esc])
     }
 
     private enum Sequence {

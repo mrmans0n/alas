@@ -46,7 +46,13 @@ import Testing
         let first = filter.filter(Data("a\(Self.esc)]11;rgb:00".utf8))
         let second = filter.filter(Data("00/0000/0000\u{07}b\(Self.esc)[?6".utf8))
         let third = filter.filter(Data("2c\(Self.esc)".utf8))
-        #expect(first + second + third == Data("ab\(Self.esc)".utf8))
+        #expect(first + second + third == Data("ab".utf8))
+        // A reply split right after its ESC is still dropped whole.
+        #expect(filter.filter(Data("[?62c".utf8)).isEmpty)
+        // A lone ESC nothing followed is the Escape key.
+        #expect(filter.filter(Data("\(Self.esc)".utf8)).isEmpty)
+        #expect(filter.flushEscape() == Data("\(Self.esc)".utf8))
+        #expect(filter.flushEscape().isEmpty)
     }
 }
 
@@ -94,6 +100,9 @@ import Testing
             .input(attachmentId: "a", generation: 3, sequence: 1, data: Data("ls".utf8)),
         ])
         #expect(relay.relay(reply, attachmentId: "a", control: control(.you, 3)).isEmpty)
+        // A held ESC is not released once control is gone.
+        #expect(relay.relay(Data("\u{1B}".utf8), attachmentId: "a", control: control(.you, 3)).isEmpty)
+        #expect(relay.flushEscape(attachmentId: "a", control: control(.host, 4)).isEmpty)
 
         let paste = Data(repeating: 0x61, count: PeerConsoleInputRelay.maxChunk + 1)
         let chunks = relay.relay(paste, attachmentId: "a", control: control(.you, 3))

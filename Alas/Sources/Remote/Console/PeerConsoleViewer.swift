@@ -93,12 +93,30 @@ struct PeerConsoleInputRelay {
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
 
+    /// A lone ESC is held until `flushEscape` decides it was the Escape key.
+    var hasPendingEscape: Bool { filter.hasPendingEscape }
+
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
         guard control.owner == .you else {
             filter = PeerConsoleInputFilter()
             return []
         }
-        let keys = filter.filter(data)
+        return requests(for: filter.filter(data), attachmentId: attachmentId, control: control)
+    }
+
+    mutating func flushEscape(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
+        guard control.owner == .you else {
+            filter = PeerConsoleInputFilter()
+            return []
+        }
+        return requests(for: filter.flushEscape(), attachmentId: attachmentId, control: control)
+    }
+
+    private mutating func requests(
+        for keys: Data,
+        attachmentId: String,
+        control: PeerConsoleControl
+    ) -> [PeerConsoleRequest] {
         var requests: [PeerConsoleRequest] = []
         var offset = 0
         while offset < keys.count {
@@ -277,9 +295,20 @@ final class PeerConsoleViewer {
         surface?.setReadOnly(control.owner != .you)
     }
 
+    /// How long a lone ESC may wait for the rest of a sequence before it is
+    /// sent as the Escape key.
+    static let escapeTimeout: Duration = .milliseconds(30)
+
     private func surfaceWrote(_ data: Data) {
         let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
         relay.relay(data, attachmentId: attachmentId, control: owner).forEach(send)
+        guard relay.hasPendingEscape else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.escapeTimeout)
+            guard let self else { return }
+            let owner = phase == .live ? control : PeerConsoleControl(owner: .host, generation: 0, change: .current)
+            relay.flushEscape(attachmentId: attachmentId, control: owner).forEach(send)
+        }
     }
 
     private func end(_ message: String, notifyHost: Bool) {
