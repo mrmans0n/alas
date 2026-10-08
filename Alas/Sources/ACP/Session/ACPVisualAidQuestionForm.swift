@@ -64,16 +64,28 @@ enum ACPVisualAidQuestionForm {
         return .answered(selectedOptionIds: ordered, note: note, at: date)
     }
 
+    private static let answerPromptPrefix = "[Visual aid: "
+
     /// The user prompt an answer sends; nil for a dismissal, which sends nothing.
     static func answerPrompt(for visual: ACPVisualAid, answer: ACPVisualAid.Answer) -> String? {
         guard case .answered(let ids, let note, _) = answer else { return nil }
         let labels = Dictionary(uniqueKeysWithValues: (visual.question?.options ?? []).map { ($0.id, $0.label) })
         var lines = [
-            "[Visual aid: \(visual.title)] \(visual.question?.prompt ?? "")",
+            "\(answerPromptPrefix)\(visual.title)] \(visual.question?.prompt ?? "")",
             "Selected: " + ids.map { "\($0) (\(labels[$0] ?? $0))" }.joined(separator: ", "),
         ]
         if let note, !note.isEmpty { lines.append("Note: \(note)") }
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether `message` is the prompt that answering a visual aid sends. The answered card already
+    /// shows the choice, so transcripts hide that prompt instead of rendering it as something the
+    /// user typed. Decided from the message alone, not from the visual it answers: the visual can
+    /// be outside a tail-first hydration slice, and a rolled-back answer must not flip the prompt's
+    /// visibility on a row nothing re-emits.
+    static func isAnswerPrompt(_ message: ACPMessage) -> Bool {
+        guard case .user(_, _, let text, _, nil, _) = message else { return false }
+        return text.hasPrefix(answerPromptPrefix) && text.contains("\nSelected: ")
     }
 }
 
