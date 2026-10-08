@@ -101,7 +101,7 @@ import Testing
 }
 
 @Suite struct PeerConsoleMouseModeTrackerTests {
-    @Test func aSnapshotWithSeveralFormatsSetLeavesTheFormatUnknownUntilLiveOutputSettlesIt() {
+    @Test func aSnapshotWithSeveralModesOfAGroupSetLeavesThemUnknownUntilLiveOutputSettlesThem() {
         var tracker = PeerConsoleMouseModeTracker()
         // Ghostty serializes set modes in fixed order, so this could have
         // been 1006 then 1005 (UTF-8 active) as easily as the reverse.
@@ -113,6 +113,11 @@ import Testing
         tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1005h\u{1B}[?1006h".utf8))
         _ = tracker.observe(Data("\u{1B}c".utf8))
         #expect(tracker.formatKnown && tracker.hostFormat == .x10)
+        // The same holds for event modes: 1003 then 1000 replays as 1000, 1003.
+        tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1003h\u{1B}[?1006h".utf8))
+        #expect(!tracker.hostWantsSGRMouse)
+        let liveEvents = tracker.observe(Data("\u{1B}[?1000h".utf8))
+        #expect(liveEvents && tracker.hostWantsSGRMouse)
         // A snapshot with a single format set is unambiguous.
         tracker.observeSnapshot(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8))
         #expect(tracker.hostWantsSGRMouse)
