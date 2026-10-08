@@ -211,6 +211,27 @@ for (const [scalar, trimmed] of [[0x85, true], [0x200B, true], [0xA0, true], [0x
 assert.equal(V.trimNote(" \t\n\r x y \n\t"), "x y", "a tab and newline mix");
 assert.equal(V.trimNote("a\u200Bb"), "a\u200Bb", "only the edges are trimmed");
 
+// Drafts across a resync.
+{
+  const q = { prompt: "Pick", allowMultiple: true, options: [{ id: "a", label: "A" }, { id: "b", label: "B" }] };
+  const visual = { question: q };
+  const card = (extra) => ({ visual, selected: [], note: "", ...extra });
+  const draft = V.stashDraft(card({ selected: ["a", "b"], note: "why" }));
+  assert.deepEqual(V.restoreDraft(visual, draft), { selected: ["a", "b"], note: "why" }, "survives a reset");
+  assert.deepEqual(V.restoreDraft(visual, V.stashDraft(card({ note: "only a note" }))), { selected: [], note: "only a note" });
+  assert.equal(V.stashDraft(card({})), null, "nothing to keep");
+  assert.equal(V.stashDraft(card({ selected: ["a"], visual: { question: q, answer: { kind: "dismissed" } } })), null, "answered cards keep nothing");
+  assert.deepEqual(V.restoreDraft(visual, { ...draft, selected: ["a", "gone"] }), { selected: ["a"], note: "why" }, "invalid id dropped");
+  assert.equal(V.restoreDraft(visual, { ...draft, selected: ["gone"], note: "" }), null, "nothing valid left");
+  const changed = { question: { ...q, prompt: "Different" } };
+  assert.equal(V.restoreDraft(changed, draft), null, "a changed question drops the draft");
+  assert.equal(V.restoreDraft({ question: { ...q, options: [q.options[0]] } }, draft), null, "changed options drop it");
+  assert.equal(V.restoreDraft({ question: q, answer: { kind: "answered", selectedOptionIds: ["a"] } }, draft), null, "an answered row drops it");
+  const single = { question: { ...q, allowMultiple: false } };
+  const singleDraft = V.stashDraft({ visual: single, selected: ["b"], note: "" });
+  assert.deepEqual(V.restoreDraft(single, { ...singleDraft, selected: ["a", "b"] }), { selected: ["a"], note: "" }, "single choice keeps one");
+}
+
 // buildDocument: a stub parser records what the module inserts. The real DOMParser behavior is
 // covered in RemoteWebAssetTests with WebKit.
 const inserted = [];

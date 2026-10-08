@@ -1754,6 +1754,19 @@ struct RemoteWebAssetTests {
         #expect(!probe.events.contains("navigated"))
     }
 
+    @Test func visualAidSnapshotStashesDraftsBeforeDroppingCards() throws {
+        let app = try asset("app.js")
+        let snapshot = try #require(app.range(of: "function applySnapshot(")).lowerBound
+        let body = app[snapshot...].prefix(1500)
+        #expect(body.contains("resetVisualCards(true)"), "a snapshot keeps drafts")
+        let reset = try #require(app.range(of: "function resetVisualCards(")).lowerBound
+        let resetBody = app[reset...].prefix(700)
+        let stash = try #require(resetBody.range(of: "RemoteVisualAid.stashDraft(card)")).lowerBound
+        let clear = try #require(resetBody.range(of: "visualCards.clear()")).lowerBound
+        #expect(stash < clear, "stash before the cards are cleared")
+        #expect(app.contains("if (!sameSession) visualDrafts.clear();"), "a different session starts with no drafts")
+    }
+
     @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
         let app = try asset("app.js")
         // The observer must go through shouldMount, the update through nextCardState, and a rejection

@@ -266,6 +266,31 @@
     return { pending: false, submitted: false, error: rejectionText(reason) };
   }
 
+  // Drafts survive a transcript resync: a snapshot rebuilds every card from the server row, which would drop
+  // what the user picked or typed. The stash holds only unanswered cards with something to keep, tagged with the
+  // question's shape so a draft never applies to a different question.
+  function questionShape(q) {
+    return JSON.stringify([q.prompt, q.allowMultiple === true, q.options.map((o) => o.id)]);
+  }
+  function stashDraft(card) {
+    const q = card.visual && card.visual.question;
+    if (!q || card.visual.answer) return null;
+    const selected = card.selected || [];
+    const note = card.note || "";
+    if (selected.length === 0 && note === "") return null;
+    return { selected: selected.slice(), note, shape: questionShape(q) };
+  }
+  // Returns {selected, note} filtered against the question, or null when the draft no longer applies.
+  function restoreDraft(visual, draft) {
+    const q = visual && visual.question;
+    if (!q || visual.answer || !draft || draft.shape !== questionShape(q)) return null;
+    const known = new Set(q.options.map((o) => o.id));
+    let selected = [...new Set((draft.selected || []).filter((id) => known.has(id)))];
+    if (!q.allowMultiple) selected = selected.slice(0, 1);
+    const note = typeof draft.note === "string" ? draft.note : "";
+    return selected.length === 0 && note === "" ? null : { selected, note };
+  }
+
   // A srcdoc iframe fires `load` once for its own document, so any further load means the page navigated the
   // frame itself (scripted navigation cannot be stopped by cancelling click defaults). Calls onNavigated once.
   function guardFrameNavigation(frame, onNavigated) {
@@ -288,7 +313,7 @@
   globalThis.RemoteVisualAid = {
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
-    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation,
+    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft,
     shouldSwallowLinkClick, applyRejection,
   };
 })();
