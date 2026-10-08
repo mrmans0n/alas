@@ -96,20 +96,19 @@ struct PeerConsoleInputRelay {
     /// A lone ESC is held until `flushEscape` decides it was the Escape key.
     var hasPendingEscape: Bool { filter.hasPendingEscape }
 
+    /// Bytes always pass through the filter, even in view mode, so a reply
+    /// that starts before control is granted is still recognized when it
+    /// finishes after; only the holder's output is sent.
     mutating func relay(_ data: Data, attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
-        guard control.owner == .you else {
-            filter = PeerConsoleInputFilter()
-            return []
-        }
-        return requests(for: filter.filter(data), attachmentId: attachmentId, control: control)
+        let keys = filter.filter(data)
+        guard control.owner == .you else { return [] }
+        return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
     mutating func flushEscape(attachmentId: String, control: PeerConsoleControl) -> [PeerConsoleRequest] {
-        guard control.owner == .you else {
-            filter = PeerConsoleInputFilter()
-            return []
-        }
-        return requests(for: filter.flushEscape(), attachmentId: attachmentId, control: control)
+        let keys = filter.flushEscape()
+        guard control.owner == .you else { return [] }
+        return requests(for: keys, attachmentId: attachmentId, control: control)
     }
 
     private mutating func requests(

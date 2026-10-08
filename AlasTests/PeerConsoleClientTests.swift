@@ -100,6 +100,10 @@ import Testing
             .input(attachmentId: "a", generation: 3, sequence: 1, data: Data("ls".utf8)),
         ])
         #expect(relay.relay(reply, attachmentId: "a", control: control(.you, 3)).isEmpty)
+        // A reply that starts in view mode and ends after control is
+        // granted is still dropped whole.
+        #expect(relay.relay(Data("\u{1B}[".utf8), attachmentId: "a", control: control(.host, 4)).isEmpty)
+        #expect(relay.relay(Data("?62c".utf8), attachmentId: "a", control: control(.you, 5)).isEmpty)
         // A held ESC is not released once control is gone.
         #expect(relay.relay(Data("\u{1B}".utf8), attachmentId: "a", control: control(.you, 3)).isEmpty)
         #expect(relay.flushEscape(attachmentId: "a", control: control(.host, 4)).isEmpty)
