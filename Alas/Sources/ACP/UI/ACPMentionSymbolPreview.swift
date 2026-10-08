@@ -63,7 +63,9 @@ final class MentionSymbolPreviewModel: ObservableObject {
     static let motion = Animation.easeOut(duration: 0.18)
 
     private let root: URL
-    private let theme: Theme?
+    /// The user's theme; the preview window is its own hosting root, which
+    /// would otherwise read the default theme.
+    let theme: Theme?
     private let typography: ACPChatTypography
     private var shownSymbol: SymbolEntry?
     private var pending: MentionSymbolPreviewRequest?
@@ -264,7 +266,8 @@ final class ACPMentionSymbolPreviewPanel: NSPanel {
         isOpaque = false
         ignoresMouseEvents = true
         hidesOnDeactivate = true
-        let host = NSHostingView(rootView: MentionSymbolPreviewView(model: model))
+        let host = NSHostingView(rootView: MentionSymbolPreviewView(model: model)
+            .transformEnvironment(\.theme) { if let theme = model.theme { $0 = theme } })
         host.safeAreaRegions = []
         host.frame = contentView?.bounds ?? NSRect(origin: .zero, size: MentionSymbolPreviewView.windowSize)
         host.autoresizingMask = [.width, .height]
