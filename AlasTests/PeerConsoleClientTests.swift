@@ -34,6 +34,8 @@ import Testing
         "\(esc)[I\(esc)[O",                                   // focus in/out
         "\(esc)[<0;10;5M\(esc)[<0;10;5m",                     // SGR mouse
         "\(esc)[M !!",                                        // X10 mouse
+        "\(esc)[M \u{A0}!",                                   // UTF-8/1005 mouse (two-byte column)
+        "\(esc)[32;10;5M",                                     // rxvt/1015 mouse
         "\(esc)[8;40;120t",                                   // window size report
     ])
     func terminalRepliesAreDropped(reply: String) {

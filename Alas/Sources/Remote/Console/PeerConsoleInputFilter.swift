@@ -157,9 +157,18 @@ struct PeerConsoleInputFilter {
         // SGR mouse reports: DA, DECRPM, kitty keyboard status.
         if let first = params.first, (0x3C...0x3F).contains(first) { return .drop(length) }
         switch final {
-        case UInt8(ascii: "M") where params.isEmpty:
-            // X10 mouse report: three raw bytes follow.
-            return start + length + 3 <= bytes.count ? .drop(length + 3) : .incomplete
+        case UInt8(ascii: "M"):
+            // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
+            // its coordinates as parameters.
+            guard params.isEmpty else { return .drop(length) }
+            // X10, or UTF-8/1005: three coordinates follow, each one
+            // character, which 1005 encodes as two bytes above 95.
+            var end = start + length
+            for _ in 0..<3 {
+                guard end < bytes.count else { return .incomplete }
+                end += bytes[end] >= 0xC0 ? 2 : 1
+            }
+            return end <= bytes.count ? .drop(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
             // Focus in/out.
             return params.isEmpty ? .drop(length) : .keep(length)
