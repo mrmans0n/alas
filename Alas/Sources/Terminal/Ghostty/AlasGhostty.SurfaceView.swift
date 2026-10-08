@@ -326,19 +326,22 @@ extension AlasGhostty {
                 UInt32(max(1, backing.width)),
                 UInt32(max(1, backing.height))
             )
-            if let size = gridSize, size != lastReportedGridSize {
-                lastReportedGridSize = size
-                onGridSizeChange?(size.rows, size.columns)
-            }
+            reportGridSizeIfChanged()
         }
 
         // MARK: - Public API
 
-        /// Fires when a resize changes the terminal's rows or columns.
-        /// ponytail: pixel resizes only; a font-size change that reflows the
-        /// grid is picked up by the next resize.
+        /// Fires when a pixel resize or a font-size change alters the
+        /// terminal's rows or columns.
         var onGridSizeChange: ((_ rows: Int, _ columns: Int) -> Void)?
         private var lastReportedGridSize: GridSize?
+
+        /// Called after a resize and when Ghostty reports a new cell size.
+        func reportGridSizeIfChanged() {
+            guard let size = gridSize, size != lastReportedGridSize else { return }
+            lastReportedGridSize = size
+            onGridSizeChange?(size.rows, size.columns)
+        }
 
         struct GridSize: Equatable {
             let rows: Int
