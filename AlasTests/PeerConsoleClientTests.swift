@@ -101,6 +101,17 @@ import Testing
 }
 
 @Suite struct PeerConsoleMouseModeTrackerTests {
+    @Test func sgrIsForcedRightAfterEachFormatChangeInsideAChunk() {
+        var tracker = PeerConsoleMouseModeTracker()
+        let sgr = "\u{1B}[?1006h"
+        let output = tracker.forcingSGR(Data("a\u{1B}[?1005hbig tail\u{1B}cb\u{1B}[?25lc".utf8))
+        #expect(output == Data("a\u{1B}[?1005h\(sgr)big tail\u{1B}c\(sgr)b\u{1B}[?25lc".utf8))
+        #expect(tracker.hostFormat == .x10)
+        let unchanged = Data("plain\u{1B}[?2004h".utf8)
+        let passedThrough = tracker.forcingSGR(unchanged)
+        #expect(passedThrough == unchanged)
+    }
+
     @Test func followsTheHostsMouseFormatAcrossSplitsAndResets() {
         var tracker = PeerConsoleMouseModeTracker()
         func observe(_ output: String) -> Bool { tracker.observe(Data(output.utf8)) }

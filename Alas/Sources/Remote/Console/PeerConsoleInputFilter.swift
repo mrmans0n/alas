@@ -219,12 +219,31 @@ struct PeerConsoleMouseModeTracker {
     /// last, applied once its final byte says what to do. At most four.
     private var named: [Format] = []
 
-    /// Returns whether `data` set, reset, or cleared any mouse format mode,
-    /// which the viewer answers by forcing its own surface back to SGR.
+    /// Selects SGR mouse reports on the viewer's own surface; never sent to
+    /// the host.
+    static let sgrOverride = Data("\u{1B}[?1006h".utf8)
+
+    /// Returns whether `data` set, reset, saved, restored, or cleared any
+    /// mouse format mode.
     mutating func observe(_ data: Data) -> Bool {
         var changed = false
         for byte in data where step(byte) { changed = true }
         return changed
+    }
+
+    /// Follows `data` and returns it with `sgrOverride` inserted right after
+    /// every format change, so the surface never reports the mouse in
+    /// another format while it is still consuming the rest of `data`.
+    mutating func forcingSGR(_ data: Data) -> Data {
+        var output = Data()
+        var start = data.startIndex
+        for index in data.indices where step(data[index]) {
+            let end = data.index(after: index)
+            output += data[start..<end] + Self.sgrOverride
+            start = end
+        }
+        guard start != data.startIndex else { return data }
+        return output + data[start...]
     }
 
     private mutating func step(_ byte: UInt8) -> Bool {

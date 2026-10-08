@@ -106,13 +106,13 @@ struct PeerConsoleInputRelay {
     private var sequence = 0
     private var mouseMode = PeerConsoleMouseModeTracker()
 
-    /// Feeds output written to the surface. Mouse reports are forwarded only
-    /// while the host program uses SGR, the format the surface is kept in.
-    /// Returns whether the output changed the host's mouse format.
-    mutating func observeOutput(_ data: Data) -> Bool {
-        let changed = mouseMode.observe(data)
+    /// Feeds output written to the surface and returns it with the surface
+    /// kept in SGR mouse format after every host format change. Mouse
+    /// reports are forwarded only while the host program itself uses SGR.
+    mutating func observeOutput(_ data: Data) -> Data {
+        let output = mouseMode.forcingSGR(data)
         filter.forwardsMouse = mouseMode.hostFormat == .sgr
-        return changed
+        return output
     }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.
@@ -204,8 +204,6 @@ final class PeerConsoleViewer {
 
     /// Clears the surface and its scrollback before a snapshot replaces it.
     nonisolated static let resetBeforeSnapshot = Data("\u{1B}c\u{1B}[3J".utf8)
-    /// Selects SGR mouse reports on the local surface only; never sent to the host.
-    static let sgrMouseFormat = Data("\u{1B}[?1006h".utf8)
 
     let serverId: String
     let consoleId: String
@@ -355,11 +353,9 @@ final class PeerConsoleViewer {
     /// continue: drop output until a fresh snapshot replaces the screen.
     private func writeToSurface(_ data: Data) {
         guard let bridge else { return }
-        var data = data
         // The surface always reports the mouse in SGR, whatever the host
         // selected, so input never needs mode-dependent decoding.
-        if relay.observeOutput(data) { data += Self.sgrMouseFormat }
-        guard !bridge.write(data) else { return }
+        guard !bridge.write(relay.observeOutput(data)) else { return }
         order = PeerConsoleStreamOrder()
         send(.resync(attachmentId: attachmentId))
     }
