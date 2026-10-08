@@ -123,6 +123,13 @@ struct PeerConsoleInputRelay {
         filter.forwardsMouse = hostMouse.hostWantsSGRMouse
     }
 
+    /// Output was lost before a resync: the host's mouse modes are unknown
+    /// until the replacement snapshot, so mouse input is not forwarded.
+    mutating func forgetHostModes() {
+        hostMouse = PeerConsoleMouseModeTracker()
+        filter.forwardsMouse = false
+    }
+
     /// Returns output about to reach the surface with the surface kept in
     /// SGR mouse format after every host format change.
     mutating func prepareForSurface(_ data: Data) -> Data {
@@ -299,7 +306,7 @@ final class PeerConsoleViewer {
                 relay.observeHostOutput(data)
                 deliver(writeGate.output(data))
             case .drop: break
-            case .resync: send(.resync(attachmentId: attachmentId))
+            case .resync: requestSnapshot()
             }
         case .control(_, let control):
             apply(control)
@@ -355,8 +362,7 @@ final class PeerConsoleViewer {
                 writeToSurface(data)
             }
         case .resync:
-            order = PeerConsoleStreamOrder()
-            send(.resync(attachmentId: attachmentId))
+            requestSnapshot()
         }
     }
 
@@ -374,7 +380,15 @@ final class PeerConsoleViewer {
         // The surface always reports the mouse in SGR, whatever the host
         // selected, so input never needs mode-dependent decoding.
         guard !bridge.write(relay.prepareForSurface(data)) else { return }
+        requestSnapshot()
+    }
+
+    /// Output was lost, so the screen and the host's mouse modes are both
+    /// unknown: drop output and stop forwarding mouse input until a
+    /// replacement snapshot rebuilds them.
+    private func requestSnapshot() {
         order = PeerConsoleStreamOrder()
+        relay.forgetHostModes()
         send(.resync(attachmentId: attachmentId))
     }
 

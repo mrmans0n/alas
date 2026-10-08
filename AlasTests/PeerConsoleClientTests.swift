@@ -301,6 +301,13 @@ import Testing
         #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
         relay.observeHostOutput(Data("\u{1B}[?1000l".utf8))
         #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        // A gap in the output stops forwarding until the snapshot rebuilds
+        // the modes the missing bytes may have changed.
+        relay.observeHostOutput(Data("\u{1B}[?1000h".utf8))
+        relay.forgetHostModes()
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        relay.observeHostOutput(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8), isSnapshot: true)
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
         // The surface still gets its SGR override when the bytes arrive.
         #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))
     }
