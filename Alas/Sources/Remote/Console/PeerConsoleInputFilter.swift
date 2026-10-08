@@ -21,9 +21,10 @@ struct PeerConsoleInputFilter {
     static let maxDiscard = 16 * 1024 * 1024
 
     private var pending: [UInt8] = []
-    /// Whether SGR mouse reports go through: true while the host program
-    /// asked for SGR mouse input (mode 1006); see `PeerConsoleMouseModeTracker`.
-    var forwardsMouse = false
+    /// Which SGR mouse reports go through: the events the host program asked
+    /// for while it uses SGR (mode 1006), `.none` otherwise; see
+    /// `PeerConsoleMouseModeTracker`.
+    var forwardedMouseEvents = PeerConsoleMouseModeTracker.Events.none
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
@@ -47,7 +48,7 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i, forwardsMouse: forwardsMouse) {
+            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -127,11 +128,15 @@ struct PeerConsoleInputFilter {
         case incomplete
     }
 
-    private static func sequence(in bytes: [UInt8], at start: Int, forwardsMouse: Bool) -> Sequence {
+    private static func sequence(
+        in bytes: [UInt8],
+        at start: Int,
+        mouseEvents: PeerConsoleMouseModeTracker.Events
+    ) -> Sequence {
         guard start + 1 < bytes.count else { return .incomplete }
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
-            return controlSequence(in: bytes, at: start, forwardsMouse: forwardsMouse)
+            return controlSequence(in: bytes, at: start, mouseEvents: mouseEvents)
         case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
             return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
@@ -144,7 +149,32 @@ struct PeerConsoleInputFilter {
         }
     }
 
-    private static func controlSequence(in bytes: [UInt8], at start: Int, forwardsMouse: Bool) -> Sequence {
+    /// Whether an SGR report (`b;x;y` after the `<`) is an event the host's
+    /// tracking mode asked for, so a surface still in an older, broader mode
+    /// cannot send events the host has stopped expecting.
+    static func sgrMouseReport(
+        _ parameters: some Collection<UInt8>,
+        release: Bool,
+        isWanted events: PeerConsoleMouseModeTracker.Events
+    ) -> Bool {
+        let digits = parameters.prefix { $0 != UInt8(ascii: ";") }
+        guard let button = Int(String(decoding: digits, as: UTF8.self)) else { return false }
+        let motion = button & 32 != 0
+        let noButtonHeld = button & 3 == 3 && button & 64 == 0
+        switch events {
+        case .none: return false
+        case .x10: return !motion && !release
+        case .normal: return !motion
+        case .button: return !motion || !noButtonHeld
+        case .any: return true
+        }
+    }
+
+    private static func controlSequence(
+        in bytes: [UInt8],
+        at start: Int,
+        mouseEvents: PeerConsoleMouseModeTracker.Events
+    ) -> Sequence {
         var j = start + 2
         let paramsStart = j
         while j < bytes.count, (0x30...0x3F).contains(bytes[j]) { j += 1 }
@@ -161,7 +191,8 @@ struct PeerConsoleInputFilter {
         // surface emits, and the only user input with a private marker. They
         // are self-delimiting, so no mode is needed to find where they end.
         if params.first == UInt8(ascii: "<"), final == UInt8(ascii: "M") || final == UInt8(ascii: "m") {
-            return forwardsMouse ? .keep(length) : .drop(length)
+            let release = final == UInt8(ascii: "m")
+            return sgrMouseReport(params.dropFirst(), release: release, isWanted: mouseEvents) ? .keep(length) : .drop(length)
         }
         // Every other private marker (`<`, `=`, `>`, `?`) is a reply: DA,
         // DECRPM, kitty keyboard status.

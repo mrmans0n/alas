@@ -120,14 +120,14 @@ struct PeerConsoleInputRelay {
         } else {
             _ = hostMouse.observe(data)
         }
-        filter.forwardsMouse = hostMouse.hostWantsSGRMouse
+        filter.forwardedMouseEvents = hostMouse.hostWantsSGRMouse ? hostMouse.hostEvents : .none
     }
 
     /// Output was lost before a resync: the host's mouse modes are unknown
     /// until the replacement snapshot, so mouse input is not forwarded.
     mutating func forgetHostModes() {
         hostMouse = PeerConsoleMouseModeTracker()
-        filter.forwardsMouse = false
+        filter.forwardedMouseEvents = .none
     }
 
     /// Returns output about to reach the surface with the surface kept in

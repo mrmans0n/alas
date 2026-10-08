@@ -46,13 +46,27 @@ import Testing
         var filter = PeerConsoleInputFilter()
         let press = Data("\(Self.esc)[<0;10;5M\(Self.esc)[<0;10;5m\(Self.esc)[<64;10;5M".utf8)
         #expect(filter.filter(press).isEmpty)
-        filter.forwardsMouse = true
+        filter.forwardedMouseEvents = .any
         #expect(filter.filter(press) == press)
         // A report split across reads goes out whole and only once.
         #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
         #expect(filter.filter(Data("0;5M".utf8)) == Data("\(Self.esc)[<0;10;5M".utf8))
         // Legacy formats are never forwarded.
         #expect(filter.filter(Data("\(Self.esc)[M !!k".utf8)) == Data("k".utf8))
+    }
+
+    @Test(arguments: [
+        // (button code, release, events, forwarded)
+        (0, false, .x10, true), (0, true, .x10, false), (64, false, .x10, true),
+        (0, true, .normal, true), (64, false, .normal, true), (32, false, .normal, false),
+        (32, false, .button, true), (35, false, .button, false), (96, false, .button, true),
+        (35, false, .any, true), (0, false, .none, false),
+    ] as [(Int, Bool, PeerConsoleMouseModeTracker.Events, Bool)])
+    func sgrMouseReportsMatchTheHostsTrackingMode(
+        button: Int, release: Bool, events: PeerConsoleMouseModeTracker.Events, forwarded: Bool
+    ) {
+        let parameters = Array("\(button);10;5".utf8)
+        #expect(PeerConsoleInputFilter.sgrMouseReport(parameters, release: release, isWanted: events) == forwarded)
     }
 
     @Test func repliesSplitAcrossReadsAreDroppedAndKeysAroundThemKept() {
