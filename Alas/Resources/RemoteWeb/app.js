@@ -3310,9 +3310,11 @@ function submitVisual(card, action) {
 function rejectVisual(visualId, reason) {
   const card = visualCards.get(visualId);
   if (!card) return;
-  card.pending = false;
-  card.submitted = false;
-  card.error = RemoteVisualAid.rejectionText(reason);
+  const next = RemoteVisualAid.applyRejection(card, reason);
+  if (!next) return;   // another phone's request: this card is not waiting on a reply
+  card.pending = next.pending;
+  card.submitted = next.submitted;
+  card.error = next.error;
   renderVisualAnswer(card);
 }
 

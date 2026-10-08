@@ -61,10 +61,10 @@
       observer.observe(document.documentElement);
       addEventListener("DOMContentLoaded", () => { if (document.body) observer.observe(document.body); post(); });
       addEventListener("load", post);
-      // Links do nothing in a phone visual; same-document anchors keep scrolling.
+      // Links do nothing in a phone visual, same-document anchors included (see shouldSwallowLinkClick).
       document.addEventListener("click", (event) => {
-        const link = event.target instanceof Element && event.target.closest("a[href]");
-        if (link && !(link.getAttribute("href") || "").startsWith("#")) event.preventDefault();
+        const link = event.target instanceof Element && event.target.closest("a[href], area[href]");
+        if (link && link.getAttribute("href") !== null) event.preventDefault();
       }, true);
     })();`;
   }
@@ -245,6 +245,19 @@
     return { pending: card.pending === true, submitted: false, error: card.error || "" };
   }
 
+  // Every link click is swallowed: any element with an href, whatever the scheme or fragment. The in-frame
+  // script in bridgeScript applies the same rule inline.
+  function shouldSwallowLinkClick(link) {
+    return !!link && typeof link.getAttribute === "function" && link.getAttribute("href") !== null;
+  }
+
+  // A rejection is session-scoped, so every phone on a federated session receives it. Only the card that is
+  // waiting on a reply (pending) belongs to this phone's request; anything else ignores it (null).
+  function applyRejection(card, reason) {
+    if (card.pending !== true) return null;
+    return { pending: false, submitted: false, error: rejectionText(reason) };
+  }
+
   // A frame the budget evicted ("paused") comes back only through an explicit tap; otherwise it would
   // evict a sibling that the observer remounts in turn.
   function shouldMount(card, isIntersecting) {
@@ -255,5 +268,6 @@
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
     buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount,
+    shouldSwallowLinkClick, applyRejection,
   };
 })();

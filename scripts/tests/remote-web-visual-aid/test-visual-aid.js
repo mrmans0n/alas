@@ -159,6 +159,20 @@ assert.equal(V.shouldMount({ frame: null, paused: true }, true), false);
 assert.equal(V.shouldMount({ frame: {}, paused: false }, true), false);
 assert.equal(V.shouldMount({ frame: null, paused: false }, false), false);
 
+// Links: every element with an href is swallowed, fragments included.
+const link = (href) => ({ getAttribute: (n) => (n === "href" ? href : null) });
+for (const href of ["#frag", "https://example.com/", "javascript:alert(1)", "mailto:a@b.c", ""]) {
+  assert.equal(V.shouldSwallowLinkClick(link(href)), true, href);
+}
+assert.equal(V.shouldSwallowLinkClick(link(null)), false, "an anchor without href");
+assert.equal(V.shouldSwallowLinkClick(null), false);
+
+// Rejections apply only to the card waiting on a reply.
+assert.deepEqual(V.applyRejection({ pending: true, submitted: true }, "notWriter"),
+  { pending: false, submitted: false, error: V.rejectionText("notWriter") });
+assert.equal(V.applyRejection({ pending: false, submitted: false }, "notWriter"), null, "an idle card ignores it");
+assert.equal(V.applyRejection({ pending: false, submitted: true }, "notWriter"), null, "submitted but no longer pending");
+
 // buildDocument: a stub parser records what the module inserts. The real DOMParser behavior is
 // covered in RemoteWebAssetTests with WebKit.
 const inserted = [];

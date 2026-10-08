@@ -1689,14 +1689,35 @@ struct RemoteWebAssetTests {
         #expect((result["tricky"]?["body"] as? String)?.contains(#"var s = "<head>";"#) == true)
     }
 
+    @MainActor
+    @Test func visualAidFrameSwallowsSameDocumentAnchorClicks() async throws {
+        let module = try asset("visual-aid.js")
+        let host = WKWebView(frame: .zero)
+        host.loadHTMLString("<html></html>", baseURL: nil)
+        #expect(await awaitCondition { !host.isLoading })
+        _ = try await host.evaluateJavaScript(module)
+        let built = try await host.callAsyncJavaScript(
+            #"""
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            return RemoteVisualAid.buildDocument('<a id="a" href="#x">go</a><area id="r" href="#x"><p id="x">t</p>', "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            """#, contentWorld: .page) as? String
+        let document = try #require(built)
+        let page = WKWebView(frame: .zero)
+        page.loadHTMLString(document, baseURL: URL(string: "https://visual.invalid/"))
+        #expect(await awaitCondition { !page.isLoading })
+        let hash = try await page.evaluateJavaScript(
+            #"document.getElementById("a").click(); document.getElementById("r").click(); location.hash"#) as? String
+        #expect(hash == "", "a visual link click must not navigate to an anchor")
+    }
+
     @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
         let app = try asset("app.js")
         // The observer must go through shouldMount, the update through nextCardState, and a rejection
-        // must clear `submitted`; the module tests pin the decisions themselves.
+        // must go through applyRejection; the module tests pin the decisions themselves.
         #expect(app.contains("RemoteVisualAid.shouldMount(card, entry.isIntersecting)"))
         #expect(app.contains("RemoteVisualAid.nextCardState(card, visual)"))
         let reject = try #require(app.range(of: "function rejectVisual(")).upperBound
-        #expect(app[reject...].prefix(300).contains("card.submitted = false"))
+        #expect(app[reject...].prefix(300).contains("RemoteVisualAid.applyRejection(card, reason)"))
         #expect(app.contains("other.paused = true"))
     }
 }
