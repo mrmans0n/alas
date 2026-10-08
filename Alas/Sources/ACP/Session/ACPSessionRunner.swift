@@ -561,7 +561,7 @@ final class ACPSessionRunner {
             // the unexpected stream-end.
             if Task.isCancelled || !self.isConnectionCurrent() { return }
             self.turnPublicationGeneration += 1
-            self.pendingCompletedOutputBoundary?.successfulTurn = nil
+            self.discardPendingSuccessfulTurn("start: connection ended unexpectedly")
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
@@ -4470,7 +4470,7 @@ extension ACPSessionRunner {
                         }
                         self.onPromptWorkChanged?()
                     } else {
-                        nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: a newer prompt is active")
+                        nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: no longer the active prompt (newerActive=\(hasNewerActivePrompt), cancelled=\(wasCancelled))")
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
