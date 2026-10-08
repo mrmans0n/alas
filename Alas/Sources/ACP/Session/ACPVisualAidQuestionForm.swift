@@ -64,16 +64,32 @@ enum ACPVisualAidQuestionForm {
         return .answered(selectedOptionIds: ordered, note: note, at: date)
     }
 
+    private static let answerPromptPrefix = "[Visual aid: "
+
     /// The user prompt an answer sends; nil for a dismissal, which sends nothing.
     static func answerPrompt(for visual: ACPVisualAid, answer: ACPVisualAid.Answer) -> String? {
         guard case .answered(let ids, let note, _) = answer else { return nil }
         let labels = Dictionary(uniqueKeysWithValues: (visual.question?.options ?? []).map { ($0.id, $0.label) })
         var lines = [
-            "[Visual aid: \(visual.title)] \(visual.question?.prompt ?? "")",
+            "\(answerPromptPrefix)\(visual.title)] \(visual.question?.prompt ?? "")",
             "Selected: " + ids.map { "\($0) (\(labels[$0] ?? $0))" }.joined(separator: ", "),
         ]
         if let note, !note.isEmpty { lines.append("Note: \(note)") }
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether the user message at `index` is the prompt that answering an earlier visual aid
+    /// sent. The answered card already shows the choice, so transcripts hide that prompt
+    /// instead of rendering it as something the user typed.
+    static func isAnswerPrompt(at index: Int, in messages: [ACPMessage]) -> Bool {
+        guard messages.indices.contains(index),
+              case .user(_, _, let text, _, nil, _) = messages[index],
+              text.hasPrefix(answerPromptPrefix)
+        else { return false }
+        return messages[..<index].reversed().contains { message in
+            guard case .visualAid(let visual) = message, let answer = visual.answer else { return false }
+            return answerPrompt(for: visual, answer: answer) == text
+        }
     }
 }
 

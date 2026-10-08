@@ -859,7 +859,8 @@ final class RemoteSessionGateway {
         // the caller's generation check will discard the stale serialization.
         guard session.transcript.messages.indices.contains(index) else { return nil }
         let message = session.transcript.messages[index]
-        if superseded {
+        // A visual aid's answer prompt stays a positional marker: the phone's card shows the answer.
+        if superseded || ACPVisualAidQuestionForm.isAnswerPrompt(at: index, in: session.transcript.messages) {
             return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
                                      index: index, isHidden: true)
                 .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)

@@ -10,7 +10,8 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
 
     /// Window-sliced, plan-filtered row list. The slice bounds first-paint cost
     /// on long transcripts; the filter drops `.plan` entries because the toolbar
-    /// pill renders the current turn's plan instead of an inline card.
+    /// pill renders the current turn's plan instead of an inline card, and a
+    /// visual aid's answer prompt because its card already shows the answer.
     static func rows(
         messages: [ACPMessage],
         visibleHead: Int,
@@ -30,6 +31,7 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
             guard seen.insert(id).inserted else { return nil }
             if case .toolCall(let toolCall) = message,
                ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false { return nil }
+            if ACPVisualAidQuestionForm.isAnswerPrompt(at: index, in: messages) { return nil }
             return ACPTranscriptVisibleRow(index: index, stableId: id)
         }
         return rows.reversed()
