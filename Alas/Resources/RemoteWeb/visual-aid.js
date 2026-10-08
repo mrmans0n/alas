@@ -9,6 +9,7 @@
   const SANDBOX = "allow-scripts";
   const HEIGHT_MIN = 120, HEIGHT_MAX = 720, NOTE_MAX = 2000, MAX_LIVE_FRAMES = 3;
   const FAILED_TEXT = "Couldn't send your answer. Try again.";
+  const BLOCKED_TEXT = "Visual blocked: it tried to leave the page.";
   const UUID = /^[0-9a-fA-F-]{36}$/;
 
   // Mirrors Alas/Resources/VisualAid/frame.html; RemoteWebAssetTests checks every class selector is present.
@@ -166,8 +167,15 @@
 
   // The Mac counts extended grapheme clusters (Swift String.count); UTF-16 length would disagree.
   const segmenter = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+  // The gateway and the desktop card trim notes with Foundation's CharacterSet.whitespacesAndNewlines, by
+  // scalar at both edges. JS trim() is a different set (it strips U+FEFF; it keeps U+0085 and U+200B), so
+  // this class lists the Foundation set exactly. Enumerated over U+0000...U+10FFFF with swiftc on
+  // macOS 26.7 (build 25G229): 0009-000D 0020 0085 00A0 1680 2000-200B 2028-2029 202F 205F 3000.
+  const NOTE_EDGE = /^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200B\u2028\u2029\u202F\u205F\u3000]+|[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200B\u2028\u2029\u202F\u205F\u3000]+$/g;
+  function trimNote(text) { return String(text || "").replace(NOTE_EDGE, ""); }
+
   function noteLength(text) {
-    const t = String(text || "").trim();
+    const t = trimNote(text);
     if (segmenter) { let n = 0; for (const _ of segmenter.segment(t)) n++; return n; }
     return Array.from(t).length;
   }
@@ -184,7 +192,7 @@
     if (action === "dismiss") return { ...base, selectedOptionIds: [] };
     if (!canSubmit(q, selected, note)) return null;
     const ordered = q.options.map((o) => o.id).filter((id) => selected.includes(id));
-    const trimmed = String(note || "").trim();
+    const trimmed = trimNote(note);
     return trimmed ? { ...base, selectedOptionIds: ordered, note: trimmed } : { ...base, selectedOptionIds: ordered };
   }
 
@@ -258,16 +266,29 @@
     return { pending: false, submitted: false, error: rejectionText(reason) };
   }
 
+  // A srcdoc iframe fires `load` once for its own document, so any further load means the page navigated the
+  // frame itself (scripted navigation cannot be stopped by cancelling click defaults). Calls onNavigated once.
+  function guardFrameNavigation(frame, onNavigated) {
+    let loads = 0;
+    const listener = () => {
+      loads += 1;
+      if (loads < 2) return;
+      frame.removeEventListener("load", listener);
+      onNavigated();
+    };
+    frame.addEventListener("load", listener);
+  }
+
   // A frame the budget evicted ("paused") comes back only through an explicit tap; otherwise it would
   // evict a sibling that the observer remounts in turn.
   function shouldMount(card, isIntersecting) {
-    return isIntersecting === true && !card.frame && card.paused !== true;
+    return isIntersecting === true && !card.frame && card.paused !== true && card.blocked !== true;
   }
 
   globalThis.RemoteVisualAid = {
-    CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, FRAME_CSS,
+    CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
-    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount,
+    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation,
     shouldSwallowLinkClick, applyRejection,
   };
 })();

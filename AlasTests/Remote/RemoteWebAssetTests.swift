@@ -1710,6 +1710,50 @@ struct RemoteWebAssetTests {
         #expect(hash == "", "a visual link click must not navigate to an anchor")
     }
 
+    /// Mounts a sandboxed srcdoc frame built by the real module and guarded by the real `guardFrameNavigation`,
+    /// reporting page events through a script message handler so the Swift side can poll without sleeping.
+    @MainActor
+    private func mountGuardedVisual(html: String, until stop: (FrameProbe) -> Bool) async throws -> FrameProbe {
+        let module = try asset("visual-aid.js")
+        let probe = FrameProbe()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(probe, name: "probe")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        _ = try await webView.evaluateJavaScript(module)
+        _ = try await webView.callAsyncJavaScript(
+            #"""
+            const post = (m) => webkit.messageHandlers.probe.postMessage(m);
+            addEventListener("message", (e) => { if (e.data && e.data.alasVisual) post("heard"); });
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            const frame = document.createElement("iframe");
+            frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
+            frame.addEventListener("load", () => post("load"));
+            RemoteVisualAid.guardFrameNavigation(frame, () => post("navigated"));
+            frame.srcdoc = RemoteVisualAid.buildDocument(html, "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            document.body.appendChild(frame);
+            """#, arguments: ["html": html], contentWorld: .page)
+        #expect(await awaitCondition { stop(probe) }, "events: \(probe.events)")
+        configuration.userContentController.removeScriptMessageHandler(forName: "probe")
+        return probe
+    }
+
+    @MainActor
+    @Test func visualAidGuardCatchesAFrameThatNavigatesItself() async throws {
+        let probe = try await mountGuardedVisual(
+            html: "<p>x</p><script>setTimeout(function () { location.href = 'about:blank#moved'; }, 0);</script>",
+            until: { $0.events.contains("navigated") })
+        #expect(probe.events.filter { $0 == "navigated" }.count == 1)
+    }
+
+    @MainActor
+    @Test func visualAidGuardLeavesAFrameThatStaysPutAlone() async throws {
+        let probe = try await mountGuardedVisual(html: "<p>stays</p>", until: { $0.events.contains("heard") })
+        #expect(probe.events.filter { $0 == "load" }.count == 1)
+        #expect(!probe.events.contains("navigated"))
+    }
+
     @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
         let app = try asset("app.js")
         // The observer must go through shouldMount, the update through nextCardState, and a rejection
@@ -1719,5 +1763,14 @@ struct RemoteWebAssetTests {
         let reject = try #require(app.range(of: "function rejectVisual(")).upperBound
         #expect(app[reject...].prefix(300).contains("RemoteVisualAid.applyRejection(card, reason)"))
         #expect(app.contains("other.paused = true"))
+    }
+}
+
+@MainActor
+private final class FrameProbe: NSObject, WKScriptMessageHandler {
+    var events: [String] = []
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let name = message.body as? String { events.append(name) }
     }
 }

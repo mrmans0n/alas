@@ -1854,6 +1854,34 @@ struct RemoteSessionGatewayTests {
         #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
     }
 
+    /// The same vectors run in scripts/tests/remote-web-visual-aid/test-visual-aid.js against `trimNote`: the phone
+    /// must count and send exactly what this side trims (CharacterSet.whitespacesAndNewlines).
+    @Test(arguments: [
+        (0x85, true), (0x200B, true), (0xA0, true), (0x2028, true), (0x3000, true), (0x1680, true),
+        (0x202F, true), (0xFEFF, false),
+    ] as [(UInt32, Bool)])
+    func noteEdgesTrimLikeThePhone(scalar: UInt32, trimmed: Bool) async throws {
+        let edge = String(Unicode.Scalar(scalar)!)
+        let body = String(repeating: "x", count: 2000)
+        for (note, expectedNote) in [(edge + body, trimmed ? body : nil), (edge + body + edge, trimmed ? body : nil), (edge, trimmed ? "" : edge)] {
+            let provider = FakeSessionsProvider()
+            let (s, visual) = try makeVisualSession(allowMultiple: false)
+            provider.sessions["s1"] = s
+            provider.writers.insert("s1")
+            var sent: [RemoteServerMessage] = []
+            let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+            await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                               selectedOptionIds: ["a"], note: note))
+            // Kept edge characters push the 2000-character body over the limit; the edge-only note stays valid.
+            let accepted = trimmed || note == edge
+            #expect(provider.answeredVisuals.count == (accepted ? 1 : 0), "U+\(String(scalar, radix: 16)) \(note.count)")
+            #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
+            if accepted, case .answered(_, let stored, _) = try #require(provider.answeredVisuals.first).answer {
+                #expect(stored == (expectedNote?.isEmpty == true ? nil : expectedNote))
+            }
+        }
+    }
+
     @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {
         let provider = FakeSessionsProvider()
         let (s, visual) = try makeVisualSession(allowMultiple: false)

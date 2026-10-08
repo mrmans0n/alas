@@ -3126,7 +3126,7 @@ function renderVisualAid(m) {
   const answer = el("div", "visual-answer");
   node.append(el("div", "visual-title", visual.title), host, answer);
   const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
-                 selected: [], note: "", pending: false, submitted: false, paused: false, error: "", signature: "" };
+                 selected: [], note: "", pending: false, submitted: false, paused: false, blocked: false, error: "", signature: "" };
   visualCards.set(visual.id, card);
   showVisualPlaceholder(card, "Visual not loaded", true);
   observeVisualCard(card);
@@ -3159,7 +3159,7 @@ function showVisualPlaceholder(card, text, canShow) {
 }
 
 function mountVisualFrame(card) {
-  if (card.frame) return;
+  if (card.frame || card.blocked) return;
   let srcdoc;
   try {
     srcdoc = RemoteVisualAid.buildDocument(card.visual.html, card.id,
@@ -3187,6 +3187,13 @@ function mountVisualFrame(card) {
     frame.classList.add("is-inert");
   }
   frame.style.height = card.height + "px";
+  RemoteVisualAid.guardFrameNavigation(frame, () => {   // registered before attaching, so the first load is counted
+    if (card.frame !== frame) return;
+    frame.remove();
+    visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, card.id);
+    card.blocked = true;   // never remounted automatically: a looping script would hammer
+    showVisualPlaceholder(card, RemoteVisualAid.BLOCKED_TEXT, false);
+  });
   frame.srcdoc = srcdoc;
   card.frame = frame;
   card.host.replaceChildren(frame);

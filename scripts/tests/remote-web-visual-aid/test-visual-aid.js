@@ -176,6 +176,41 @@ assert.deepEqual(V.applyRejection({ pending: true, submitted: true }, "notWriter
 assert.equal(V.applyRejection({ pending: false, submitted: false }, "notWriter"), null, "an idle card ignores it");
 assert.equal(V.applyRejection({ pending: false, submitted: true }, "notWriter"), null, "submitted but no longer pending");
 
+// Frame navigation guard: the first load is the srcdoc itself, any later load is a navigation.
+{
+  const listeners = [];
+  const frame = {
+    addEventListener(type, fn) { assert.equal(type, "load"); listeners.push(fn); },
+    removeEventListener(type, fn) { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); },
+    fire() { [...listeners].forEach((fn) => fn()); },
+  };
+  let calls = 0;
+  V.guardFrameNavigation(frame, () => { calls += 1; });
+  assert.equal(listeners.length, 1);
+  frame.fire();
+  assert.equal(calls, 0, "one load is the document itself");
+  frame.fire();
+  assert.equal(calls, 1);
+  assert.equal(listeners.length, 0, "the listener is removed");
+  frame.fire(); frame.fire();
+  assert.equal(calls, 1, "later loads are ignored");
+}
+assert.equal(V.shouldMount({ frame: null, paused: false, blocked: true }, true), false, "a blocked card never remounts");
+
+// Note trimming equals Foundation's whitespacesAndNewlines (the same vectors run through the gateway in Swift).
+for (const [scalar, trimmed] of [[0x85, true], [0x200B, true], [0xA0, true], [0x2028, true], [0x3000, true], [0x1680, true],
+                                 [0x202F, true], [0xFEFF, false]]) {
+  const v = String.fromCodePoint(scalar);
+  const note = v + "x".repeat(2000);
+  assert.equal(V.trimNote(note), trimmed ? "x".repeat(2000) : note, scalar.toString(16));
+  assert.equal(V.trimNote(note + v), trimmed ? "x".repeat(2000) : note + v, scalar.toString(16) + " both edges");
+  assert.equal(V.noteLength(note), trimmed ? 2000 : 2001, scalar.toString(16));
+  assert.equal(V.canSubmit({ allowMultiple: false }, ["a"], note), trimmed, scalar.toString(16));
+  assert.equal(V.trimNote(v), trimmed ? "" : v);
+}
+assert.equal(V.trimNote(" \t\n\r x y \n\t"), "x y", "a tab and newline mix");
+assert.equal(V.trimNote("a\u200Bb"), "a\u200Bb", "only the edges are trimmed");
+
 // buildDocument: a stub parser records what the module inserts. The real DOMParser behavior is
 // covered in RemoteWebAssetTests with WebKit.
 const inserted = [];
