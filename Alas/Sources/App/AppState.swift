@@ -15646,12 +15646,17 @@ extension AppState: RemoteSessionsProvider {
     }
 
     /// The worktree whose manager owns `id` as a live or unarchived recent session.
+    /// Peer tab actions only reach worktree tabs; checkout-owned sessions have
+    /// no worktree target, so they fail explicitly.
     private func remoteSessionTabWorktree(for id: String) -> RemoteSessionTabWorktree {
-        for mgr in acpManagers.values {
+        for (owner, mgr) in acpManagers {
             let row = mgr.sessionRows.first { $0.id == id }
             guard row != nil || mgr.liveSession(for: id) != nil else { continue }
             if row?.archived == true { return .failed("This session is archived.") }
-            guard let worktree = worktree(withId: mgr.worktreeId) else {
+            guard let worktreeId = owner.worktreeID else {
+                return .failed("Tabs for workspace checkout sessions can only be changed on their own Mac.")
+            }
+            guard let worktree = worktree(withId: worktreeId) else {
                 return .failed("This session's worktree is no longer available.")
             }
             return .found(worktree)
