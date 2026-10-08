@@ -31,6 +31,9 @@ protocol RemoteSessionsProvider: AnyObject {
     /// failed delivery later); the gateway emits `promptRejected` on false so
     /// the client can restore the text instead of losing it.
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
+    /// Stores `answer` on the visual and starts sending it to the agent. False
+    /// when no live session owns `id` or the manager could not store it.
+    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool
     /// Decode a base64 image to a file under the session's acp-attachments dir.
     /// Returns the file URL on success, nil on any write error.
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL?

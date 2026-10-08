@@ -270,6 +270,13 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         takeOverContinuation = nil
     }
 
+    var answeredVisuals: [(id: String, visualId: UUID, answer: ACPVisualAid.Answer)] = []
+    var answerVisualAidResult = true
+    func answerVisualAid(for id: String, visualId: UUID, answer: ACPVisualAid.Answer) async -> Bool {
+        answeredVisuals.append((id, visualId, answer))
+        return answerVisualAidResult
+    }
+
     var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && sendPromptAccepts
@@ -1585,11 +1592,11 @@ struct RemoteSessionGatewayTests {
         #expect(wire.text == "hello")
     }
 
-    private func makeVisual(answer: ACPVisualAid.Answer? = nil) -> ACPVisualAid {
+    private func makeVisual(answer: ACPVisualAid.Answer? = nil, allowMultiple: Bool = false) -> ACPVisualAid {
         ACPVisualAid(
             id: UUID(uuidString: "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F")!,
             title: "Layouts", html: "<h2>Pick</h2>",
-            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false),
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: allowMultiple),
             answer: answer, createdAt: Date(timeIntervalSince1970: 0))
     }
 
@@ -1706,6 +1713,108 @@ struct RemoteSessionGatewayTests {
         #expect(bounded.kind == "systemNotice")
         #expect(bounded.index == 7)
         #expect(bounded.stableId == "m7")
+    }
+
+    private func makeVisualSession(allowMultiple: Bool) throws -> (ACPSession, ACPVisualAid) {
+        let session = try makeSessionWithAgentText("hi")
+        let visual = makeVisual(allowMultiple: allowMultiple)
+        session.transcript.appendMessage(.visualAid(visual))
+        return (session, visual)
+    }
+
+    private func visualRejection(_ sent: [RemoteServerMessage]) -> String? {
+        for case .visualAidRejected(_, _, let reason) in sent { return reason }
+        return nil
+    }
+
+    @Test func visualAnswerRoutesToTheProviderInQuestionOrder() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: true)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["b", "a"], note: "  keep it  "))
+        let call = try #require(provider.answeredVisuals.first)
+        #expect(call.visualId == visual.id)
+        guard case .answered(let ids, let note, _) = call.answer else {
+            Issue.record("expected answered")
+            return
+        }
+        #expect(ids == ["a", "b"])
+        #expect(note == "keep it")
+        #expect(visualRejection(sent) == nil)
+    }
+
+    @Test func visualDismissRoutesWithoutChoices() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss",
+                                           selectedOptionIds: [], note: nil))
+        guard case .dismissed = try #require(provider.answeredVisuals.first).answer else {
+            Issue.record("expected dismissed")
+            return
+        }
+    }
+
+    @Test(arguments: [
+        ("notWriter", false, false, "answer", ["a"], Optional<String>.none),
+        ("invalid", true, false, "answer", [String](), nil),
+        ("invalid", true, true, "answer", [String](), nil),
+        ("invalid", true, false, "answer", ["zzz"], nil),
+        ("invalid", true, false, "answer", ["a", "a"], nil),
+        ("invalid", true, false, "answer", ["a", "b"], nil),
+        ("invalid", true, false, "answer", ["a"], String(repeating: "x", count: 2001)),
+        ("invalid", true, false, "wave", ["a"], nil),
+    ])
+    func invalidVisualResponsesAreRejectedWithoutCallingTheManager(
+        reason: String, isWriter: Bool, allowMultiple: Bool, action: String, ids: [String], note: String?
+    ) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: allowMultiple)
+        provider.sessions["s1"] = s
+        if isWriter { provider.writers.insert("s1") }
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: action,
+                                           selectedOptionIds: ids, note: note))
+        #expect(visualRejection(sent) == reason)
+        #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: UUID().uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
+        #expect(visualRejection(sent) == "notFound")
+        sent.removeAll()
+        var answered = visual
+        answered.answer = .dismissed(at: Date())
+        s.transcript.replaceMessage(at: s.transcript.messages.count - 1, with: .visualAid(answered))
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "dismiss", selectedOptionIds: [], note: nil))
+        #expect(visualRejection(sent) == "alreadyAnswered")
+        #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test func aManagerFailureIsReportedAsFailed() async throws {
+        let provider = FakeSessionsProvider()
+        provider.answerVisualAidResult = false
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: nil))
+        #expect(visualRejection(sent) == "failed")
     }
 
     @Test func toolCallWireOmitsInlineAssetData() throws {

@@ -145,6 +145,10 @@ final class RemoteSessionGateway {
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .visualAidResponse(let sessionId, let visualId, let action, let selectedOptionIds, let note):
+            await handleVisualAidResponse(
+                sessionId: sessionId, visualId: visualId, action: action,
+                selectedOptionIds: selectedOptionIds, note: note)
         case .planResponse(let id, let requestId, let action, let reason):
             applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(let id, let requestId, let action, let content):
@@ -1052,6 +1056,43 @@ final class RemoteSessionGateway {
         await policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
         lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private func handleVisualAidResponse(
+        sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?
+    ) async {
+        func reject(_ reason: String) {
+            send(.visualAidRejected(sessionId: sessionId, visualId: visualId, reason: reason))
+        }
+        guard provider.isWriter(for: sessionId) else { return reject("notWriter") }
+        guard let id = UUID(uuidString: visualId),
+              let session = provider.session(for: sessionId),
+              let visual = session.transcript.visualAid(id: id)
+        else { return reject("notFound") }
+        guard let question = visual.question, visual.answer == nil else { return reject("alreadyAnswered") }
+
+        let answer: ACPVisualAid.Answer
+        switch action {
+        case "dismiss":
+            answer = .dismissed(at: Date())
+        case "answer":
+            let known = Set(question.options.map(\.id))
+            let picked = Set(selectedOptionIds)
+            guard picked.count == selectedOptionIds.count, !picked.isEmpty, picked.isSubset(of: known),
+                  question.allowMultiple || picked.count == 1
+            else { return reject("invalid") }
+            let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmed, trimmed.count > ACPVisualAidQuestionForm.noteMaxLength { return reject("invalid") }
+            // Question order, like a native answer.
+            let ordered = question.options.map(\.id).filter(picked.contains)
+            answer = .answered(
+                selectedOptionIds: ordered,
+                note: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+                at: Date())
+        default:
+            return reject("invalid")
+        }
+        guard await provider.answerVisualAid(for: sessionId, visualId: id, answer: answer) else { return reject("failed") }
     }
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {

@@ -567,6 +567,26 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(resolved) == resolved)
     }
 
+    @Test func visualAidResponseRoundTrips() throws {
+        let answer = RemoteClientMessage.visualAidResponse(
+            sessionId: "s1", visualId: "V", action: "answer", selectedOptionIds: ["a", "b"], note: "hi")
+        #expect(try roundTrip(answer) == answer)
+        let dismiss = RemoteClientMessage.visualAidResponse(
+            sessionId: "s1", visualId: "V", action: "dismiss", selectedOptionIds: [], note: nil)
+        #expect(try roundTrip(dismiss) == dismiss)
+    }
+
+    @Test func visualAidResponseDecodesWithOptionalFieldsAbsent() throws {
+        let json = #"{"type":"visualAidResponse","sessionId":"s1","visualId":"V","action":"dismiss"}"#.data(using: .utf8)!
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
+        #expect(msg == .visualAidResponse(sessionId: "s1", visualId: "V", action: "dismiss", selectedOptionIds: [], note: nil))
+    }
+
+    @Test func visualAidRejectedRoundTrips() throws {
+        let rejected = RemoteServerMessage.visualAidRejected(sessionId: "s1", visualId: "V", reason: "notWriter")
+        #expect(try roundTrip(rejected) == rejected)
+    }
+
     @Test func promptRejectedRoundTrips() throws {
         let rejected = RemoteServerMessage.promptRejected(sessionId: "s1")
         #expect(try roundTrip(rejected) == rejected)
