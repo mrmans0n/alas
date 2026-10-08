@@ -187,6 +187,18 @@ assert.deepEqual(V.applyRejection({ pending: true, submitted: true }, "notWriter
 assert.equal(V.applyRejection({ pending: false, submitted: false }, "notWriter"), null, "an idle card ignores it");
 assert.equal(V.applyRejection({ pending: false, submitted: true }, "notWriter"), null, "submitted but no longer pending");
 
+// A rejection echoes the request's id: only the card that sent that request takes it.
+assert.deepEqual(V.applyRejection({ pending: true, submitted: true, requestId: "r1" }, "notWriter", "r1"),
+  { pending: false, submitted: false, error: V.rejectionText("notWriter") }, "a matching id applies");
+assert.equal(V.applyRejection({ pending: true, submitted: true, requestId: "r1" }, "notWriter", "r2"), null,
+  "another phone's simultaneous response is ignored");
+assert.deepEqual(V.applyRejection({ pending: true, submitted: true, requestId: "r1" }, "notWriter", undefined),
+  { pending: false, submitted: false, error: V.rejectionText("notWriter") }, "no id (older Mac) applies when pending");
+assert.equal(V.applyRejection({ pending: false, submitted: false, requestId: null }, "notWriter", "r1"), null, "an idle card ignores an id");
+assert.equal(V.applyRejection({ pending: false, submitted: false }, "notWriter", undefined), null, "an idle card ignores an id-less rejection");
+assert.notEqual(V.newRequestId(), V.newRequestId(), "ids differ per request");
+assert.ok(V.newRequestId().length > 0 && V.newRequestId().length <= 64);
+
 // Frame navigation guard: the first load is the srcdoc itself, any later load is a navigation.
 {
   const listeners = [];

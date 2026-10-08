@@ -270,10 +270,19 @@
   }
 
   // A rejection is session-scoped, so every phone on a federated session receives it. Only the card that is
-  // waiting on a reply (pending) belongs to this phone's request; anything else ignores it (null).
-  function applyRejection(card, reason) {
+  // waiting on a reply (pending) belongs to this phone's request; anything else ignores it (null). The server
+  // echoes the request's `requestId`: when the message carries one it must match the card's, so a rejection
+  // meant for another phone's simultaneous answer never clears this phone's accepted send. A message without
+  // an id (an older Mac) applies to the pending card, as before.
+  function applyRejection(card, reason, requestId) {
     if (card.pending !== true) return null;
+    if (typeof requestId === "string" && requestId !== card.requestId) return null;
     return { pending: false, submitted: false, error: rejectionText(reason) };
+  }
+
+  function newRequestId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
   // Drafts survive a transcript resync: a snapshot rebuilds every card from the server row, which would drop
@@ -324,6 +333,6 @@
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, BLOCKED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
     buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount, trimNote, guardFrameNavigation, stashDraft, restoreDraft,
-    shouldSwallowLinkClick, applyRejection, navigationFromMessage,
+    shouldSwallowLinkClick, applyRejection, newRequestId, navigationFromMessage,
   };
 })();

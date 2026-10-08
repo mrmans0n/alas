@@ -421,7 +421,7 @@ function handle(msg) {
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
-    case "visualAidRejected": if (msg.sessionId === currentSession) rejectVisual(msg.visualId, msg.reason); break;
+    case "visualAidRejected": if (msg.sessionId === currentSession) rejectVisual(msg.visualId, msg.reason, msg.requestId); break;
     case "changeList":
       if (msg.sessionId !== currentSession) break;
       $("changes-error").classList.add("hidden");
@@ -3139,7 +3139,7 @@ function renderVisualAid(m) {
   const answer = el("div", "visual-answer");
   node.append(el("div", "visual-title", visual.title), host, answer);
   const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
-                 selected: [], note: "", pending: false, submitted: false, paused: false, blocked: false, error: "", signature: "" };
+                 selected: [], note: "", pending: false, submitted: false, requestId: null, paused: false, blocked: false, error: "", signature: "" };
   const draftKey = currentSession + ":" + visual.id;
   const restored = RemoteVisualAid.restoreDraft(visual, visualDrafts.get(draftKey));
   visualDrafts.delete(draftKey);   // an answered row or a changed question drops it; a restored one lives on the card
@@ -3161,6 +3161,7 @@ function updateVisualAid(node, m) {
   card.pending = next.pending;
   card.submitted = next.submitted;
   card.error = next.error;
+  card.requestId = null;
   renderVisualAnswer(card);
   return true;
 }
@@ -3331,21 +3332,23 @@ function submitVisual(card, action) {
   if (!currentSession || card.pending) return;
   const msg = RemoteVisualAid.buildResponse(currentSession, card.visual, action, card.selected, card.note);
   if (!msg) return;
+  card.requestId = RemoteVisualAid.newRequestId();
   card.pending = true;
   card.submitted = true;
   card.error = "";
   renderVisualAnswer(card);
-  send(msg);
+  send({ ...msg, requestId: card.requestId });
 }
 
-function rejectVisual(visualId, reason) {
+function rejectVisual(visualId, reason, requestId) {
   const card = visualCards.get(visualId);
   if (!card) return;
-  const next = RemoteVisualAid.applyRejection(card, reason);
+  const next = RemoteVisualAid.applyRejection(card, reason, requestId);
   if (!next) return;   // another phone's request: this card is not waiting on a reply
   card.pending = next.pending;
   card.submitted = next.submitted;
   card.error = next.error;
+  card.requestId = null;
   renderVisualAnswer(card);
 }
 

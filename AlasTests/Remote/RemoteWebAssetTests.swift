@@ -1812,7 +1812,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains("RemoteVisualAid.shouldMount(card, entry.isIntersecting)"))
         #expect(app.contains("RemoteVisualAid.nextCardState(card, visual)"))
         let reject = try #require(app.range(of: "function rejectVisual(")).upperBound
-        #expect(app[reject...].prefix(300).contains("RemoteVisualAid.applyRejection(card, reason)"))
+        #expect(app[reject...].prefix(300).contains("RemoteVisualAid.applyRejection(card, reason, requestId)"))
         #expect(app.contains("other.paused = true"))
     }
 }

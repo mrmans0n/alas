@@ -1770,7 +1770,12 @@ struct RemoteSessionGatewayTests {
     }
 
     private func visualRejection(_ sent: [RemoteServerMessage]) -> String? {
-        for case .visualAidRejected(_, _, let reason) in sent { return reason }
+        for case .visualAidRejected(_, _, let reason, _) in sent { return reason }
+        return nil
+    }
+
+    private func visualRejectionRequestId(_ sent: [RemoteServerMessage]) -> String? {
+        for case .visualAidRejected(_, _, _, let requestId) in sent { return requestId }
         return nil
     }
 
@@ -1831,9 +1836,37 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: action,
-                                           selectedOptionIds: ids, note: note))
+                                           selectedOptionIds: ids, note: note, requestId: "req-1"))
         #expect(visualRejection(sent) == reason)
+        #expect(visualRejectionRequestId(sent) == "req-1")
         #expect(provider.answeredVisuals.isEmpty)
+    }
+
+    @Test(arguments: [(64, true), (65, false), (1_000_000, false)])
+    func visualRejectionEchoesOnlyBoundedRequestIds(length: Int, echoed: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let id = String(repeating: "r", count: length)
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "wave",
+                                           selectedOptionIds: ["a"], note: nil, requestId: id))
+        #expect(visualRejection(sent) == "invalid")
+        #expect(visualRejectionRequestId(sent) == (echoed ? id : nil))
+    }
+
+    @Test func visualRejectionWithoutRequestIdCarriesNone() async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: nil))
+        #expect(visualRejection(sent) == "notWriter")
+        #expect(visualRejectionRequestId(sent) == nil)
     }
 
     @Test(arguments: [

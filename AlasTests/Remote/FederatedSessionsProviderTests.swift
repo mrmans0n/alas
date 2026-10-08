@@ -160,13 +160,13 @@ struct FederatedSessionsProviderTests {
         _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: client.downstream)
         links.sent.removeAll()
         let answer = RemoteClientMessage.visualAidResponse(
-            sessionId: "srv-b:s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil)
+            sessionId: "srv-b:s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil, requestId: "r-1")
         #expect(provider.route(answer, from: client.downstream))
         #expect(links.sent(to: "srv-b") == [
-            .visualAidResponse(sessionId: "s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil)
+            .visualAidResponse(sessionId: "s1", visualId: "V", action: "answer", selectedOptionIds: ["a"], note: nil, requestId: "r-1")
         ])
-        links.receive(.visualAidRejected(sessionId: "s1", visualId: "V", reason: "notWriter"), from: "srv-b")
-        #expect(client.received == [.visualAidRejected(sessionId: "srv-b:s1", visualId: "V", reason: "notWriter")])
+        links.receive(.visualAidRejected(sessionId: "s1", visualId: "V", reason: "notWriter", requestId: "r-1"), from: "srv-b")
+        #expect(client.received == [.visualAidRejected(sessionId: "srv-b:s1", visualId: "V", reason: "notWriter", requestId: "r-1")])
     }
 
     @Test func twoClientsShareOneUpstreamSubscriptionAndBothGetFrames() {

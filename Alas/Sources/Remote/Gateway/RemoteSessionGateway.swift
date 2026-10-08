@@ -151,10 +151,10 @@ final class RemoteSessionGateway {
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
-        case .visualAidResponse(let sessionId, let visualId, let action, let selectedOptionIds, let note):
+        case .visualAidResponse(let sessionId, let visualId, let action, let selectedOptionIds, let note, let requestId):
             await handleVisualAidResponse(
                 sessionId: sessionId, visualId: visualId, action: action,
-                selectedOptionIds: selectedOptionIds, note: note)
+                selectedOptionIds: selectedOptionIds, note: note, requestId: requestId)
         case .planResponse(let id, let requestId, let action, let reason):
             applyPlanResponse(sessionId: id, requestId: requestId, action: action, reason: reason)
         case .elicitationResponse(let id, let requestId, let action, let content):
@@ -1080,10 +1080,13 @@ final class RemoteSessionGateway {
     }
 
     private func handleVisualAidResponse(
-        sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?
+        sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?,
+        requestId: String?
     ) async {
+        // An over-long token is hostile or broken; drop it instead of echoing it back to every phone.
+        let echoedRequestId = requestId.flatMap { $0.utf8.count <= RemoteVisualAidLimits.maxRequestIdBytes ? $0 : nil }
         func reject(_ reason: String) {
-            send(.visualAidRejected(sessionId: sessionId, visualId: visualId, reason: reason))
+            send(.visualAidRejected(sessionId: sessionId, visualId: visualId, reason: reason, requestId: echoedRequestId))
         }
         guard provider.isWriter(for: sessionId) else { return reject("notWriter") }
         guard let id = UUID(uuidString: visualId),
@@ -1466,6 +1469,8 @@ private final class RemoteRefusalWindowBox {
 enum RemoteVisualAidLimits {
     static let maxNoteBytes = 256 * 1024
     static let maxIdUTF8Bytes = ACPVisualAid.Limits.optionIdMaxCharacters * 4
+    /// Longest correlation token a rejection echoes; a phone's UUID is 36 bytes.
+    static let maxRequestIdBytes = 64
 
     static func exceedsBounds(ids: [String], note: String?) -> Bool {
         ids.count > ACPVisualAid.Limits.optionCount.upperBound

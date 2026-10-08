@@ -19,7 +19,7 @@ struct RemoteMessageSessionScopeTests {
             .queueForceSend(sessionId: "a", itemId: "i"), .queueRemove(sessionId: "a", itemId: "i"),
             .queueRetry(sessionId: "a", itemId: "i"), .queueEdit(sessionId: "a", itemId: "i"),
             .queueClear(sessionId: "a"),
-            .visualAidResponse(sessionId: "a", visualId: "V", action: "answer", selectedOptionIds: ["x"], note: "n"),
+            .visualAidResponse(sessionId: "a", visualId: "V", action: "answer", selectedOptionIds: ["x"], note: "n", requestId: "r"),
             .listChanges(sessionId: "a"), .fileDiff(sessionId: "a", path: "p", stage: nil),
             .listFiles(sessionId: "a", path: nil), .readFile(sessionId: "a", path: "p"),
         ]
@@ -66,7 +66,7 @@ struct RemoteMessageSessionScopeTests {
                 requestId: "r", title: nil, message: "m", mode: "form", fields: [], elicitationId: nil, url: nil)),
             .elicitationResolved(sessionId: "a", requestId: "r"),
             .sessionClosed(sessionId: "a"), .promptRejected(sessionId: "a"),
-            .visualAidRejected(sessionId: "a", visualId: "V", reason: "failed"),
+            .visualAidRejected(sessionId: "a", visualId: "V", reason: "failed", requestId: "r"),
             .sessionConfig(cfg), .sessionRenamed(sessionId: "a", title: "t"),
             .queueState(sessionId: "a", items: []), .queueEditRestored(sessionId: "a", itemId: "i", text: "t"),
             .changeList(sessionId: "a", comparisonRef: nil, metricsAvailable: false, files: [], staged: [],

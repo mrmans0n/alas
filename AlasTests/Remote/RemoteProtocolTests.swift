@@ -624,6 +624,20 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(dismiss) == dismiss)
     }
 
+    @Test func visualAidRequestIdRoundTripsAndOldJSONDecodes() throws {
+        let response = RemoteClientMessage.visualAidResponse(
+            sessionId: "s1", visualId: "V", action: "dismiss", selectedOptionIds: [], note: nil, requestId: "r-1")
+        #expect(try roundTrip(response) == response)
+        let rejected = RemoteServerMessage.visualAidRejected(sessionId: "s1", visualId: "V", reason: "failed", requestId: "r-1")
+        #expect(try roundTrip(rejected) == rejected)
+
+        let plain = try JSONEncoder().encode(RemoteServerMessage.visualAidRejected(sessionId: "s1", visualId: "V", reason: "failed"))
+        #expect(!String(decoding: plain, as: UTF8.self).contains("requestId"))
+        let old = #"{"type":"visualAidRejected","sessionId":"s1","visualId":"V","reason":"failed"}"#.data(using: .utf8)!
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: old)
+            == .visualAidRejected(sessionId: "s1", visualId: "V", reason: "failed", requestId: nil))
+    }
+
     @Test func visualAidResponseDecodesWithOptionalFieldsAbsent() throws {
         let json = #"{"type":"visualAidResponse","sessionId":"s1","visualId":"V","action":"dismiss"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
