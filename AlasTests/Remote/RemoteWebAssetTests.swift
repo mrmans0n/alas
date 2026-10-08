@@ -1772,6 +1772,93 @@ struct RemoteWebAssetTests {
         #expect(!probe.events.contains("navigated"))
     }
 
+    /// The shipped phone page's own `frame-src` policy, read out of index.html so the test pins the real file.
+    private func shippedFramePolicyMeta() throws -> String {
+        let html = try asset("index.html")
+        let meta = try #require(html.firstMatch(of: #/<meta http-equiv="Content-Security-Policy"[^>]*>/#), "index.html carries a CSP meta")
+        let head = try #require(html.range(of: "<head>"))
+        let firstResource = try #require(html.range(of: #"<link"#))
+        #expect(head.upperBound <= meta.range.lowerBound && meta.range.upperBound <= firstResource.lowerBound,
+                "the policy precedes every link and script")
+        #expect(!html[html.startIndex..<meta.range.lowerBound].contains("<script"))
+        return String(meta.output)
+    }
+
+    /// A parent page (with or without the shipped policy) holding a sandboxed srcdoc frame built by the real module.
+    /// The frame's own script reports `parent.postMessage("ran")`; messages from any document in the frame reach
+    /// the probe as plain strings, and a `securitypolicyviolation` on the parent reports as "violation".
+    @MainActor
+    private func mountParentFrame(
+        meta: String?, html: String, until stop: (FrameProbe) -> Bool
+    ) async throws -> (probe: FrameProbe, webView: WKWebView) {
+        let module = try asset("visual-aid.js")
+        let probe = FrameProbe()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(probe, name: "probe")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.loadHTMLString("<!doctype html><html><head>\(meta ?? "")</head><body></body></html>", baseURL: nil)
+        #expect(await awaitCondition { !webView.isLoading })
+        _ = try await webView.evaluateJavaScript(module)
+        _ = try await webView.callAsyncJavaScript(
+            #"""
+            const post = (m) => webkit.messageHandlers.probe.postMessage(m);
+            addEventListener("message", (e) => { if (typeof e.data === "string") post(e.data); });
+            document.addEventListener("securitypolicyviolation", () => post("violation"));
+            const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+            const frame = document.createElement("iframe");
+            frame.id = "visual";
+            frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
+            frame.srcdoc = RemoteVisualAid.buildDocument(html, "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F", parse);
+            document.body.appendChild(frame);
+            """#, arguments: ["html": html], contentWorld: .page)
+        #expect(await awaitCondition { stop(probe) }, "events: \(probe.events)")
+        return (probe, webView)
+    }
+
+    /// Erases the frame's own listeners with `document.open()`, installs a replacement document that answers a
+    /// ping, then navigates the frame to a destination that reports when it runs.
+    private static let rewriteThenNavigate = """
+    <p>x</p><script>
+    document.open();
+    document.write('<script>addEventListener("message", function (e) { if (e.data === "ping") parent.postMessage("pong", "*"); }); parent.postMessage("rewritten", "*");<\\/script>');
+    document.close();
+    setTimeout(function () { location.href = "data:text/html,%3Cscript%3Eparent.postMessage('destination ran','*')%3C/script%3E"; }, 0);
+    </script>
+    """
+
+    /// Without the page policy a frame that erased its own listeners walks away to a destination that runs code.
+    /// This is the control for the test below: it fails to prove anything if the destination cannot run here.
+    @MainActor
+    @Test func visualAidFrameThatRewritesItselfReachesADestinationWithoutTheParentPolicy() async throws {
+        let (probe, webView) = try await mountParentFrame(
+            meta: nil, html: Self.rewriteThenNavigate, until: { $0.events.contains("destination ran") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        #expect(probe.events.contains("rewritten"))
+    }
+
+    @MainActor
+    @Test func visualAidParentPolicyBlocksAFrameThatRewritesItselfThenNavigates() async throws {
+        let meta = try shippedFramePolicyMeta()
+        let (probe, webView) = try await mountParentFrame(
+            meta: meta, html: Self.rewriteThenNavigate, until: { $0.events.contains("violation") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        // Still the rewritten document, not the destination: it answers a ping from the parent.
+        _ = try await webView.evaluateJavaScript(#"document.getElementById("visual").contentWindow.postMessage("ping", "*")"#)
+        #expect(await awaitCondition { probe.events.contains("pong") }, "events: \(probe.events)")
+        #expect(probe.events.contains("rewritten"))
+        #expect(!probe.events.contains("destination ran"), "events: \(probe.events)")
+    }
+
+    @MainActor
+    @Test func visualAidParentPolicyStillRendersAndRunsASrcdocVisual() async throws {
+        let meta = try shippedFramePolicyMeta()
+        let (probe, webView) = try await mountParentFrame(
+            meta: meta, html: #"<p>hi</p><script>parent.postMessage("ran", "*");</script>"#,
+            until: { $0.events.contains("ran") })
+        defer { webView.configuration.userContentController.removeScriptMessageHandler(forName: "probe") }
+        #expect(!probe.events.contains("violation"), "the srcdoc load itself is not a frame-src violation")
+    }
+
     @Test func visualAidLeavingASessionTearsDownItsFrames() throws {
         let app = try asset("app.js")
         let start = try #require(app.range(of: "function showSessions(")).lowerBound

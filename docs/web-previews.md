@@ -145,7 +145,10 @@ reach the app or its token. It makes the same https loads as on the Mac, and
 display-only on the phone, so `data-choice` clicks do nothing there. The
 question is answered from phone controls under the visual, and the answer goes
 through the same path as a Mac answer. Links inside a visual do nothing on the
-phone. The question is read-only until the phone drives the session; a "Take
-over to answer" hint appears and the phone never takes over silently. Frames
+phone. A visual's frame cannot be navigated away, even by its own script: the
+phone page's `frame-src 'none'` policy blocks every navigation of the frame, and
+the in-frame and load-count guards remain as backstops. The question is
+read-only until the phone drives the session; a "Take over to answer" hint
+appears and the phone never takes over silently. Frames
 load lazily and at most three stay live; older ones show "Show visual". The
 raw HTML no longer appears in the `visual_show` tool card on the phone.
