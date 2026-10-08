@@ -14290,7 +14290,11 @@ final class AppState {
     /// Pins the owner before suspension, including when sidebar focus reopens history.
     /// `activate: false` (peer requests) neither focuses an existing tab nor
     /// activates a new one, so the host's visible tab never changes.
-    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree, activate: Bool = true) async {
+    /// `storedTitle` is a title the caller just read from SQLite, preferred
+    /// over the manager's possibly stale cached row.
+    func openExistingACPSession(
+        sessionId: ACPSession.ID, worktree: Worktree, activate: Bool = true, storedTitle: String? = nil
+    ) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -14311,6 +14315,8 @@ final class AppState {
         let title: String
         if let liveTitle = mgr.liveSession(for: sessionId)?.title {
             title = liveTitle
+        } else if let storedTitle {
+            title = storedTitle
         } else if let row = await mgr.persistedSessionRow(id: sessionId) {
             title = row.title
         } else {
@@ -15619,7 +15625,7 @@ extension AppState: RemoteSessionsProvider {
         guard let stored else { return .failure("This session is no longer available.") }
         if stored.archived { return .failure("This session is archived.") }
         // A peer's request must not switch the tab the host user is looking at.
-        await openExistingACPSession(sessionId: id, worktree: worktree, activate: false)
+        await openExistingACPSession(sessionId: id, worktree: worktree, activate: false, storedTitle: stored.title)
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
             return .failure("Could not open this session.")
         }

@@ -547,6 +547,30 @@ struct RemoteAppStateAccessTests {
         #expect(!acpTabs(in: state).contains { $0.sessionId == id })
     }
 
+    @Test func remoteOpenSessionTabUsesTheTitleRenamedByAnotherProcess() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "renamed-elsewhere-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "Old Title", in: manager)
+        #expect(await manager.persistedSessionRow(id: id)?.title == "Old Title")
+        var renamed = try #require(try await manager.persistence.loadSession(id: id))
+        renamed.title = "New Title"
+        try await manager.persistence.upsertSession(renamed)
+
+        #expect(await state.openSessionTab(for: id) == .success)
+        #expect(acpTabs(in: state).first { $0.sessionId == id }?.title == "New Title")
+    }
+
     @Test(arguments: [true, false])
     func remoteSessionTabActionsFailForArchivedOrUnknownSessions(archived: Bool) async throws {
         var cleanupWorktreeId: String?
