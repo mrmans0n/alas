@@ -435,7 +435,9 @@ final class ACPSessionManager: ObservableObject {
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
         defer { suggestionSession?.nextPromptWorkCount -= 1 }
+#if DEBUG
         await beforeLeaseConfirmationForTesting?()
+#endif
         guard await confirmedWriterLease(for: id), isStillWanted?() ?? true else {
             onResult(false)
             return
