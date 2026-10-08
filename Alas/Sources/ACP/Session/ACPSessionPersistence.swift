@@ -629,6 +629,22 @@ actor ACPSessionPersistence {
         return true
     }
 
+    /// See `ACPSessionStore.closeMessageSequenceGaps`. Fenced like a row
+    /// write, since it moves rows other writers address by position.
+    @discardableResult
+    func closeMessageSequenceGaps(
+        sessionId: String,
+        loadedMessageCount: Int,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = {
+            try store.closeMessageSequenceGaps(sessionId: sessionId, loadedMessageCount: loadedMessageCount)
+        }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try store.db.transaction(operation)
+    }
+
     /// Child-session transcript rows. Fenced exactly like parent rows so a
     /// process that lost the lease can't keep writing a child's output.
     func persistSubagentMessages(

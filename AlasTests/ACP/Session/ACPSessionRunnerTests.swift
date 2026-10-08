@@ -4798,6 +4798,68 @@ struct ACPSessionRunnerTests {
         #expect(observedStoredMessage)
     }
 
+    /// Row 1's write fails while row 2's lands, leaving a gap at seq 1. A
+    /// runner over a transcript reloaded from that store must not let its
+    /// next append overwrite row 2; one over the original transcript, which
+    /// still holds row 1, must not move stored rows under it.
+    @Test("a sequence gap left by a failed row write never makes a later append overwrite a stored row",
+          arguments: [true, false])
+    func sequenceGapDoesNotOverwriteStoredRows(reloadedFromStore: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-seq-gap-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        func makeRunner(_ session: ACPSession) -> ACPSessionRunner {
+            ACPSessionRunner(
+                session: session,
+                connection: ACPConnection(client: ACPMockClient()),
+                store: store,
+                sessionId: "s",
+                worktreePath: FileManager.default.temporaryDirectory.path,
+                persistedMessageCount: session.transcript.messages.count
+            )
+        }
+
+        let original = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let first = makeRunner(original)
+        try store.db.exec("""
+        CREATE TRIGGER reject_seq_1 BEFORE INSERT ON messages WHEN NEW.seq = 1
+        BEGIN SELECT RAISE(ABORT, 'rejected'); END
+        """)
+        for text in ["zero", "one", "two"] { first.appendAndPersistSystemNotice(text) }
+        await first.flushPersistence()
+        try store.db.exec("DROP TRIGGER reject_seq_1")
+        #expect(try store.loadMessages(sessionId: "s").map(\.seq) == [0, 2])
+        // A submitted draft recorded after "two" must still name that row.
+        try store.upsertComposerDraft(sessionId: "s", draft: .empty, updatedAt: 0,
+                                      submittedRecovery: true, submittedAfterSeq: 2)
+
+        let session: ACPSession
+        if reloadedFromStore {
+            session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+            session.replaceTranscriptMessages(try store.loadMessages(sessionId: "s").map {
+                try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+            })
+        } else {
+            session = original
+        }
+        let next = makeRunner(session)
+        next.appendAndPersistSystemNotice("three")
+        await next.flushPersistence()
+
+        let stored = try store.loadMessages(sessionId: "s").map { row -> String in
+            guard case .systemNotice(_, let text) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+            else { return "" }
+            return "\(row.seq):\(text)"
+        }
+        #expect(stored == (reloadedFromStore
+            ? ["0:zero", "1:two", "2:three"]
+            : ["0:zero", "2:two", "3:three"]))
+        #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedAfterSeq == (reloadedFromStore ? 1 : 2))
+    }
+
     @Test("onChipsObserved fires when a live availableModelsUpdate names new models")
     func onChipsObservedFiresOnLiveAvailableModelsUpdate() async throws {
         let url = FileManager.default.temporaryDirectory

@@ -1236,6 +1236,56 @@ extension ACPSessionStore {
         return rows.first?["seq"] as? Int64
     }
 
+    /// Renumber a session's message rows to dense positions in `seq` order,
+    /// so each row is again `msg-<session>-<position>` with `seq` equal to
+    /// its position. A failed write followed by a later one that landed
+    /// leaves a gap, and hydration loads the rows densely: without this, the
+    /// next write at a position past the gap overwrites a stored row.
+    ///
+    /// Skipped when `loadedMessageCount` exceeds the stored row count: the
+    /// transcript then holds rows the store never got, at their original
+    /// positions, and renumbering would move stored rows under them.
+    ///
+    /// Stored boundaries that name a message `seq` — a submitted draft's
+    /// `submitted_after_seq` and a fork's `source_boundary_seq` — move with
+    /// the rows, or a later restart would compare them against new seqs.
+    /// Does not open a transaction; callers wrap it in one.
+    @discardableResult
+    func closeMessageSequenceGaps(sessionId: String, loadedMessageCount: Int) throws -> Bool {
+        let rows = try db.query("""
+        SELECT id, seq FROM messages WHERE session_id = ? ORDER BY seq ASC
+        """, bindings: [sessionId])
+        guard rows.count >= loadedMessageCount,
+              rows.enumerated().contains(where: { ($1["seq"] as? Int64) != Int64($0) })
+        else { return false }
+        // A boundary's new value is the position of the last row at or before
+        // it, which is the number of such rows minus one. Run before the rows move.
+        func newBoundary(_ column: String) -> String {
+            "(SELECT COUNT(*) FROM messages WHERE session_id = ? AND seq <= \(column)) - 1"
+        }
+        try db.exec("""
+        UPDATE composer_drafts
+        SET submitted_after_seq = \(newBoundary("composer_drafts.submitted_after_seq"))
+        WHERE session_id = ? AND submitted_after_seq IS NOT NULL
+        """, bindings: [sessionId, sessionId])
+        try db.exec("""
+        UPDATE session_forks
+        SET source_boundary_seq = \(newBoundary("session_forks.source_boundary_seq"))
+        WHERE source_session_id = ?
+        """, bindings: [sessionId, sessionId])
+        for (position, row) in rows.enumerated() {
+            guard let id = row["id"] as? String,
+                  let seq = row["seq"] as? Int64,
+                  seq != Int64(position)
+            else { continue }
+            try db.exec(
+                "UPDATE messages SET id = ?, seq = ? WHERE id = ?",
+                bindings: ["msg-\(sessionId)-\(position)", Int64(position), id]
+            )
+        }
+        return true
+    }
+
     func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {
         let rows = try db.query("""
         SELECT id, session_id, kind, seq, payload, created_at
