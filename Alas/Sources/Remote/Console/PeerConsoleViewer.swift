@@ -133,7 +133,9 @@ struct PeerConsoleInputRelay {
     /// Returns output about to reach the surface with the surface kept in
     /// SGR mouse format after every host format change.
     mutating func prepareForSurface(_ data: Data) -> Data {
-        surfaceMouse.forcingSGR(data)
+        let output = surfaceMouse.forcingSGR(data)
+        filter.legacyMouseUTF8 = surfaceMouse.hostFormat == .utf8
+        return output
     }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.

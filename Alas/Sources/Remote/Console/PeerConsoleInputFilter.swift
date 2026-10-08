@@ -25,6 +25,10 @@ struct PeerConsoleInputFilter {
     /// for while it uses SGR (mode 1006), `.none` otherwise; see
     /// `PeerConsoleMouseModeTracker`.
     var forwardedMouseEvents = PeerConsoleMouseModeTracker.Events.none
+    /// Whether the surface was last told to use UTF-8/1005 mouse
+    /// coordinates. Only sizes the legacy reports it can emit in the instant
+    /// before the SGR override lands, so they are dropped whole.
+    var legacyMouseUTF8 = false
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
@@ -48,7 +52,7 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents) {
+            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents, legacyUTF8: legacyMouseUTF8) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -131,12 +135,13 @@ struct PeerConsoleInputFilter {
     private static func sequence(
         in bytes: [UInt8],
         at start: Int,
-        mouseEvents: PeerConsoleMouseModeTracker.Events
+        mouseEvents: PeerConsoleMouseModeTracker.Events,
+        legacyUTF8: Bool
     ) -> Sequence {
         guard start + 1 < bytes.count else { return .incomplete }
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
-            return controlSequence(in: bytes, at: start, mouseEvents: mouseEvents)
+            return controlSequence(in: bytes, at: start, mouseEvents: mouseEvents, legacyUTF8: legacyUTF8)
         case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
             return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
@@ -175,7 +180,8 @@ struct PeerConsoleInputFilter {
     private static func controlSequence(
         in bytes: [UInt8],
         at start: Int,
-        mouseEvents: PeerConsoleMouseModeTracker.Events
+        mouseEvents: PeerConsoleMouseModeTracker.Events,
+        legacyUTF8: Bool
     ) -> Sequence {
         var j = start + 2
         let paramsStart = j
@@ -206,8 +212,14 @@ struct PeerConsoleInputFilter {
             // host format change is being overridden. No key encoding ends
             // in `M`. rxvt/1015 carries coordinates as parameters.
             guard params.isEmpty else { return .drop(length) }
-            // X10: three coordinate bytes follow.
-            return start + length + 3 <= bytes.count ? .drop(length + 3) : .incomplete
+            // X10 or UTF-8/1005: three coordinates follow, one byte each in
+            // X10 and UTF-8 characters in the format the surface was told.
+            var end = start + length
+            for _ in 0..<3 {
+                guard end < bytes.count else { return .incomplete }
+                end += legacyUTF8 && bytes[end] >= 0xC0 ? 2 : 1
+            }
+            return end <= bytes.count ? .drop(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
             // Focus in/out.
             return params.isEmpty ? .drop(length) : .keep(length)

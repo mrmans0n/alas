@@ -323,6 +323,14 @@ import Testing
         #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
         relay.observeHostOutput(Data("\u{1B}c\u{1B}[?1000h\u{1B}[?1006h".utf8), isSnapshot: true)
         #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        // A legacy report the surface emits before the override lands is
+        // dropped whole, sized by the format the surface was just told.
+        _ = relay.prepareForSurface(Data("\u{1B}[?1005h".utf8))
+        let utf8Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]) + Data("k".utf8)
+        #expect(relay.relay(utf8Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
+        _ = relay.prepareForSurface(Data("\u{1B}[?1005l".utf8))
+        let x10Report = Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0]) + Data("k".utf8)
+        #expect(relay.relay(x10Report, attachmentId: "a", control: lease).compactMap(\.inputData) == [Data("k".utf8)])
         // The surface still gets its SGR override when the bytes arrive.
         #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))
     }
@@ -391,5 +399,11 @@ import Testing
         // Only newly online peers are asked again.
         consoles.peersChanged(online: ["srv-old", "srv-new"])
         #expect(sent.count == 2)
+    }
+}
+
+private extension PeerConsoleRequest {
+    var inputData: Data? {
+        if case .input(_, _, _, let data) = self { data } else { nil }
     }
 }
