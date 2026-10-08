@@ -215,12 +215,17 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
     @ObservedObject var model: ACPSymbolHoverModel
     /// Tallest the code area may get before it scrolls.
     let maxCodeHeight: CGFloat
+    /// Fixed card width; nil sizes the card to its code. A fixed width keeps
+    /// the card steady while it switches between symbols.
+    let width: CGFloat?
     /// Shown between the header and the code.
     let accessory: Accessory
 
-    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat, @ViewBuilder accessory: () -> Accessory) {
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat, width: CGFloat? = nil,
+         @ViewBuilder accessory: () -> Accessory) {
         self.model = model
         self.maxCodeHeight = maxCodeHeight
+        self.width = width
         self.accessory = accessory()
     }
 
@@ -252,6 +257,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
     }
 
     private var cardWidth: CGFloat {
+        if let width { return width }
         guard case .found(let rendered) = model.state else { return Self.minWidth }
         let content = rendered.frame.gutterWidth + Self.gutterSpacing + rendered.codeWidth + Self.padding * 2
         return min(max(content, Self.minWidth), Self.maxWidth)
@@ -345,7 +351,7 @@ struct ACPSymbolHoverCard<Accessory: View>: View {
 }
 
 extension ACPSymbolHoverCard where Accessory == EmptyView {
-    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat) {
-        self.init(model: model, maxCodeHeight: maxCodeHeight) { EmptyView() }
+    init(model: ACPSymbolHoverModel, maxCodeHeight: CGFloat, width: CGFloat? = nil) {
+        self.init(model: model, maxCodeHeight: maxCodeHeight, width: width) { EmptyView() }
     }
 }

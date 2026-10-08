@@ -38,9 +38,13 @@ struct ACPMentionPickerView: View {
     let onCancel: () -> Void
     let filesProvider: (@Sendable () async -> [URL])?
     let panelLink: MentionPickerPanelLink
+    /// Shows the highlighted symbol's code beside the picker; nil shows none.
+    var symbolPreview: MentionSymbolPreviewModel? = nil
 
     /// The picker's size; `ACPMentionPanel` opens at it.
     static let panelSize = CGSize(width: 560, height: 440)
+    /// The picker's own coordinates, top-left at the panel's top-left.
+    static let coordinateSpace = "mentionPicker"
 
     @Environment(\.theme) private var theme
     @State private var query: String = ""
@@ -58,6 +62,9 @@ struct ACPMentionPickerView: View {
     @State private var symbolIndexing: MentionSymbolIndexing? = nil
     @State private var symbolTask: Task<Void, Never>?
     @State private var isClosed = false
+    /// The highlighted row, when it is a symbol row on screen.
+    @State private var highlightedSymbolRow: CGRect?
+    @State private var listViewport: CGRect = .zero
 
     private let maxDisplay = 80
 
@@ -83,6 +90,10 @@ struct ACPMentionPickerView: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 16, y: 8)
+        .coordinateSpace(.named(Self.coordinateSpace))
+        .onChange(of: symbolPreviewRequest, initial: true) { _, request in
+            symbolPreview?.update(request)
+        }
         .defaultFocus($searchFocused, true)
         .onAppear {
             panelLink.attach(keys: { handleKey($0) }, focus: { searchFocused = true })
@@ -93,11 +104,22 @@ struct ACPMentionPickerView: View {
         .onDisappear {
             isClosed = true
             panelLink.detach()
+            symbolPreview?.update(nil)
             symbolTask?.cancel()
             symbolTask = nil
             rankTask?.cancel()
             rankTask = nil
         }
+    }
+
+    /// The highlighted symbol and where its row sits, while the row's middle
+    /// is inside the list's visible area.
+    private var symbolPreviewRequest: MentionSymbolPreviewRequest? {
+        guard symbolPreview != nil, ranked.indices.contains(highlight),
+              case .symbol(let symbol) = ranked[highlight],
+              let row = highlightedSymbolRow,
+              row.midY >= listViewport.minY, row.midY <= listViewport.maxY else { return nil }
+        return MentionSymbolPreviewRequest(symbol: symbol, rowMidY: row.midY)
     }
 
     private var offeredScopes: [MentionScope] {
@@ -227,6 +249,10 @@ struct ACPMentionPickerView: View {
                 }
                 .padding(.vertical, 4)
             }
+            .onPreferenceChange(HighlightedSymbolRowKey.self) { highlightedSymbolRow = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
+                listViewport = $0
+            }
             .onChange(of: highlight) { _, new in
                 guard scrollOnHighlightChange else { return }
                 scrollOnHighlightChange = false
@@ -272,15 +298,29 @@ struct ACPMentionPickerView: View {
                         .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
                 Spacer(minLength: 8)
-                Text(symbol.relativePath)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(theme.color("fg-faint"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 0) {
+                    Text(symbol.relativePath)
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    // The start line tells overloads apart, so it never truncates.
+                    Text(":\(symbol.lineRange.lowerBound + 1)")
+                        .foregroundStyle(isOn ? theme.color("accent") : theme.color("fg-dim"))
+                        .fixedSize()
+                }
+                .font(.system(size: 11, design: .monospaced))
             }
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(isOn ? theme.color("accent").opacity(0.18) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 5))
+            .background {
+                if isOn, symbolPreview != nil {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: HighlightedSymbolRowKey.self,
+                                               value: proxy.frame(in: .named(Self.coordinateSpace)))
+                    }
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

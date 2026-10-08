@@ -1636,6 +1636,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
             filesProvider: coord.filesProvider,
             sessionsProvider: coord.sessionMentions?.candidates,
             symbolMentions: coord.symbolMentions,
+            previewTheme: coord.theme,
+            previewTypography: coord.typography,
             onPick: { [weak self] file in
                 self?.insertMention(file)
             },
@@ -2965,15 +2967,27 @@ enum PickerPanelPlacement {
 final class ACPMentionPanel: NSPanel {
     private var host: NSView?
     private let link = MentionPickerPanelLink()
+    private let symbolPreview: MentionSymbolPreviewModel?
+    private var symbolPreviewPanel: ACPMentionSymbolPreviewPanel?
 
+    /// Between the picker's edge and the preview's arrow tip.
+    private static let symbolPreviewGap: CGFloat = 2
+
+    /// `previewTheme` and `previewTypography` style the code in the symbol preview.
     init(worktreeRoot: URL,
          filesProvider: (@Sendable () async -> [URL])?,
          sessionsProvider: (@MainActor () async -> [ACPSessionMentionCandidate])? = nil,
          symbolMentions: ACPSymbolMentionSource? = nil,
+         previewTheme: Theme? = nil,
+         previewTypography: ACPChatTypography = .default,
          onPick: @escaping (URL) -> Void,
          onPickSession: @escaping (ACPSessionMentionCandidate) -> Void = { _ in },
          onPickSymbol: @escaping (SymbolEntry, Bool) -> Void = { _, _ in },
          onCancel: @escaping () -> Void = {}) {
+        let symbolPreview = symbolMentions.map { _ in
+            MentionSymbolPreviewModel(root: worktreeRoot, theme: previewTheme, typography: previewTypography)
+        }
+        self.symbolPreview = symbolPreview
         super.init(
             contentRect: NSRect(origin: .zero, size: ACPMentionPickerView.panelSize),
             // Borderless, not titled: a titlebar would inset the hosted
@@ -3009,13 +3023,33 @@ final class ACPMentionPanel: NSPanel {
                 onCancel()
             },
             filesProvider: filesProvider,
-            panelLink: link
+            panelLink: link,
+            symbolPreview: symbolPreview
         ))
         host.safeAreaRegions = []
         host.frame = contentView?.bounds ?? NSRect(origin: .zero, size: ACPMentionPickerView.panelSize)
         host.autoresizingMask = [.width, .height]
         contentView?.addSubview(host)
         self.host = host
+        symbolPreview?.place = { [weak self] in self?.placeSymbolPreview() }
+    }
+
+    /// Puts the preview window beside the picker, right when it fits on
+    /// screen and left otherwise, level with the picker.
+    private func placeSymbolPreview() -> MentionSymbolPreviewPlacement.Side? {
+        guard isVisible, let symbolPreview else { return nil }
+        let size = MentionSymbolPreviewView.windowSize
+        let gap = Self.symbolPreviewGap
+        guard let side = MentionSymbolPreviewPlacement.side(
+            picker: frame, width: size.width, gap: gap, visibleFrame: screen?.visibleFrame) else { return nil }
+        let x = side == .right ? frame.maxX + gap : frame.minX - gap - size.width
+        let previewFrame = NSRect(x: x, y: frame.minY - MentionSymbolPreviewView.margin,
+                                  width: size.width, height: size.height)
+        let panel = symbolPreviewPanel ?? ACPMentionSymbolPreviewPanel(model: symbolPreview)
+        symbolPreviewPanel = panel
+        panel.setFrame(previewFrame, display: false)
+        if panel.parent == nil { addChildWindow(panel, ordered: .above) }
+        return side
     }
 
     /// Focus lands in the search field each time the panel becomes key.
@@ -3043,6 +3077,11 @@ final class ACPMentionPanel: NSPanel {
     /// runs. Removing the host does run it. Deferred: a pick closes the
     /// panel from inside the host's own button or key handler.
     override func close() {
+        if let symbolPreviewPanel {
+            removeChildWindow(symbolPreviewPanel)
+            symbolPreviewPanel.close()
+        }
+        symbolPreviewPanel = nil
         super.close()
         guard let host else { return }
         self.host = nil
