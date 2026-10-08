@@ -281,6 +281,13 @@ struct PeerConsoleMouseModeTracker {
             state = .escape
             return false
         }
+        // As in Ghostty's VT parser: CAN and SUB abort a sequence, other C0
+        // controls and DEL are executed or ignored without leaving it.
+        if byte == 0x18 || byte == 0x1A {
+            state = .ground
+            return false
+        }
+        if byte < 0x20 || byte == 0x7F { return false }
         switch state {
         case .ground:
             return false

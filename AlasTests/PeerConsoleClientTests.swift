@@ -175,6 +175,13 @@ import Testing
         #expect(tracker.hostFormat == .x10)
         #expect(!observe("\u{1B}[?99991006h\u{1B}[?1006000000h"))
         #expect(tracker.hostFormat == .x10)
+        // Embedded C0 controls and DEL do not end a sequence; CAN does.
+        #expect(observe("\u{1B}[?1005\u{07}h"))
+        #expect(tracker.hostFormat == .utf8)
+        #expect(observe("\u{1B}[?10\u{7F}06h"))
+        #expect(tracker.hostFormat == .sgr)
+        #expect(!observe("\u{1B}[?1005\u{18}h"))
+        #expect(tracker.hostFormat == .sgr)
         // Event modes follow the same rules in their own group.
         #expect(observe("\u{1B}[?1002h"))
         #expect(tracker.hostEvents == .button)
