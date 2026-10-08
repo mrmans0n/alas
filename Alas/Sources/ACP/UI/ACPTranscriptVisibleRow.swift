@@ -8,10 +8,21 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
 
     var id: String { stableId }
 
-    /// Window-sliced, plan-filtered row list. The slice bounds first-paint cost
-    /// on long transcripts; the filter drops `.plan` entries because the toolbar
-    /// pill renders the current turn's plan instead of an inline card, and a
-    /// visual aid's answer prompt because its card already shows the answer.
+    /// Messages that never become a row: the toolbar pill renders plans, hidden background
+    /// tasks are not shown, and a visual aid's answer prompt is shown by its answered card.
+    static func isHidden(_ message: ACPMessage) -> Bool {
+        switch message {
+        case .plan:
+            true
+        case .toolCall(let toolCall):
+            ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false
+        default:
+            ACPVisualAidQuestionForm.isAnswerPrompt(message)
+        }
+    }
+
+    /// Window-sliced, hidden-filtered row list. The slice bounds first-paint cost
+    /// on long transcripts; `isHidden` drops the messages that have no row.
     static func rows(
         messages: [ACPMessage],
         visibleHead: Int,
@@ -29,9 +40,8 @@ struct ACPTranscriptVisibleRow: Identifiable, Equatable {
             if case .plan = message { return nil }
             let id = stableId(message)
             guard seen.insert(id).inserted else { return nil }
-            if case .toolCall(let toolCall) = message,
-               ACPBackgroundTask(toolCall: toolCall)?.showInTranscript == false { return nil }
-            if ACPVisualAidQuestionForm.isAnswerPrompt(at: index, in: messages) { return nil }
+            // A hidden latest snapshot still claims the id, so it supersedes earlier visible ones.
+            if isHidden(message) { return nil }
             return ACPTranscriptVisibleRow(index: index, stableId: id)
         }
         return rows.reversed()

@@ -1430,12 +1430,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard var localIndex = host.transcript.localIndex(forGlobalIndex: clampedTarget) else {
                 return false
             }
-            // Plans and visual-aid answer prompts never become rows; land on the nearest message that does.
+            // Hidden messages never become rows; land on the nearest message that does.
             let messages = host.transcript.messages
-            func isHidden(_ index: Int) -> Bool {
-                if case .plan = messages[index] { return true }
-                return ACPVisualAidQuestionForm.isAnswerPrompt(at: index, in: messages)
-            }
+            func isHidden(_ index: Int) -> Bool { ACPTranscriptVisibleRow.isHidden(messages[index]) }
             if isHidden(localIndex) {
                 let original = localIndex
                 while localIndex < messages.count, isHidden(localIndex) { localIndex += 1 }

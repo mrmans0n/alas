@@ -78,18 +78,14 @@ enum ACPVisualAidQuestionForm {
         return lines.joined(separator: "\n")
     }
 
-    /// Whether the user message at `index` is the prompt that answering an earlier visual aid
-    /// sent. The answered card already shows the choice, so transcripts hide that prompt
-    /// instead of rendering it as something the user typed.
-    static func isAnswerPrompt(at index: Int, in messages: [ACPMessage]) -> Bool {
-        guard messages.indices.contains(index),
-              case .user(_, _, let text, _, nil, _) = messages[index],
-              text.hasPrefix(answerPromptPrefix)
-        else { return false }
-        return messages[..<index].reversed().contains { message in
-            guard case .visualAid(let visual) = message, let answer = visual.answer else { return false }
-            return answerPrompt(for: visual, answer: answer) == text
-        }
+    /// Whether `message` is the prompt that answering a visual aid sends. The answered card already
+    /// shows the choice, so transcripts hide that prompt instead of rendering it as something the
+    /// user typed. Decided from the message alone, not from the visual it answers: the visual can
+    /// be outside a tail-first hydration slice, and a rolled-back answer must not flip the prompt's
+    /// visibility on a row nothing re-emits.
+    static func isAnswerPrompt(_ message: ACPMessage) -> Bool {
+        guard case .user(_, _, let text, _, nil, _) = message else { return false }
+        return text.hasPrefix(answerPromptPrefix) && text.contains("\nSelected: ")
     }
 }
 

@@ -860,7 +860,7 @@ final class RemoteSessionGateway {
         guard session.transcript.messages.indices.contains(index) else { return nil }
         let message = session.transcript.messages[index]
         // A visual aid's answer prompt stays a positional marker: the phone's card shows the answer.
-        if superseded || ACPVisualAidQuestionForm.isAnswerPrompt(at: index, in: session.transcript.messages) {
+        if superseded || ACPVisualAidQuestionForm.isAnswerPrompt(message) {
             return RemoteWireMessage(stableId: "m\(index)", kind: message.kind, text: nil, json: nil,
                                      index: index, isHidden: true)
                 .boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes)

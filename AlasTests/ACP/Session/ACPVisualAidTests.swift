@@ -75,20 +75,18 @@ struct ACPVisualAidTests {
         #expect(ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: .dismissed(at: Date())) == nil)
     }
 
-    @Test("only a prompt matching an earlier answered visual counts as its answer prompt")
+    @Test("an answer prompt is hidden from the rows by its text alone, and typed text is not")
     func answerPromptDetection() throws {
-        var visual = Self.visual()
-        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["b"], note: nil, at: Date())
+        let visual = Self.visual()
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["b"], note: "Keep it.", at: Date())
         let text = try #require(ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer))
         let prompt = ACPMessage.user(id: UUID(), text: text, attachments: [])
         let typed = ACPMessage.user(id: UUID(), text: "[Visual aid: Homepage layout] actually, neither", attachments: [])
-        let unanswered = ACPMessage.visualAid(visual)
-        visual.answer = answer
-        let answered = ACPMessage.visualAid(visual)
 
-        #expect(ACPVisualAidQuestionForm.isAnswerPrompt(at: 1, in: [answered, prompt]))
-        #expect(!ACPVisualAidQuestionForm.isAnswerPrompt(at: 1, in: [answered, typed]))
-        #expect(!ACPVisualAidQuestionForm.isAnswerPrompt(at: 1, in: [unanswered, prompt]))
-        #expect(!ACPVisualAidQuestionForm.isAnswerPrompt(at: 0, in: [prompt, answered]))
+        #expect(ACPVisualAidQuestionForm.isAnswerPrompt(prompt))
+        #expect(!ACPVisualAidQuestionForm.isAnswerPrompt(typed))
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: [typed, prompt], visibleHead: 0, visibleTail: 2, stableId: { $0.stableId })
+        #expect(rows.map(\.index) == [0])
     }
 }
