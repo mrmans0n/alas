@@ -193,9 +193,11 @@ struct PeerConsoleInputFilter {
 
 /// The mouse format a host program selected (`CSI ? 1005/1006/1015/1016`
 /// with `h` set, `l` reset, `s` save, `r` restore), followed in the output
-/// written to the viewer's surface. Handles combined mode changes of any
-/// length and sequences split across writes; RIS (`ESC c`), sent before
-/// every snapshot, resets it.
+/// written to the viewer's surface. Mirrors Ghostty: each format is its own
+/// mode with a saved value, setting one selects it, and resetting or
+/// restoring-unset any of them falls back to X10. Handles combined mode
+/// changes of any length and sequences split across writes; RIS (`ESC c`),
+/// sent before every snapshot, clears it.
 struct PeerConsoleMouseModeTracker {
     enum Format: Equatable {
         case x10, utf8, sgr, urxvt, sgrPixels
@@ -206,7 +208,8 @@ struct PeerConsoleMouseModeTracker {
     }
 
     private(set) var hostFormat = Format.x10
-    /// Formats whose mode was set when last saved with `CSI ? n s`.
+    /// Format modes currently set, and as last saved with `CSI ? n s`.
+    private var modesSet: Set<Format> = []
     private var savedSet: Set<Format> = []
     private var state = State.ground
     /// Digits of the parameter being read, capped just past four digits so
@@ -236,6 +239,7 @@ struct PeerConsoleMouseModeTracker {
             state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
             guard byte == UInt8(ascii: "c") else { return false }
             hostFormat = .x10
+            modesSet = []
             savedSet = []
             return true
         case .controlSequence:
@@ -279,15 +283,22 @@ struct PeerConsoleMouseModeTracker {
 
     private mutating func apply(_ action: UInt8, to format: Format) {
         switch action {
-        case UInt8(ascii: "h"):
-            hostFormat = format
         case UInt8(ascii: "s"):
-            if hostFormat == format { savedSet.insert(format) } else { savedSet.remove(format) }
-        case UInt8(ascii: "r") where savedSet.contains(format):
-            hostFormat = format
+            if modesSet.contains(format) { savedSet.insert(format) } else { savedSet.remove(format) }
+        case UInt8(ascii: "r"):
+            set(format, savedSet.contains(format))
         default:
-            // `l`, or restoring a mode that was saved unset.
-            if hostFormat == format { hostFormat = .x10 }
+            set(format, action == UInt8(ascii: "h"))
+        }
+    }
+
+    private mutating func set(_ format: Format, _ enabled: Bool) {
+        if enabled {
+            modesSet.insert(format)
+            hostFormat = format
+        } else {
+            modesSet.remove(format)
+            hostFormat = .x10
         }
     }
 }

@@ -113,9 +113,9 @@ import Testing
         #expect(tracker.hostFormat == .sgr)
         #expect(observe("\u{1B}[?1015h"))
         #expect(tracker.hostFormat == .urxvt)
-        // Resetting a format that is not active leaves the current one.
+        // As in Ghostty, resetting any format mode falls back to X10.
         #expect(observe("\u{1B}[?1006l"))
-        #expect(tracker.hostFormat == .urxvt)
+        #expect(tracker.hostFormat == .x10)
         #expect(observe("\u{1B}c"))
         #expect(tracker.hostFormat == .x10)
         // A combined mode change far longer than any fixed buffer.
@@ -134,6 +134,11 @@ import Testing
         #expect(tracker.hostFormat == .utf8)
         #expect(observe("\u{1B}[?1005r"))
         #expect(tracker.hostFormat == .x10)
+        // A mode saved while another format was selected is still saved set.
+        #expect(observe("\u{1B}[?1006h\u{1B}[?1015h\u{1B}[?1006s\u{1B}[?1006l"))
+        #expect(tracker.hostFormat == .x10)
+        #expect(observe("\u{1B}[?1006r"))
+        #expect(tracker.hostFormat == .sgr)
     }
 }
 
