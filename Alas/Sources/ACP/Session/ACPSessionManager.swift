@@ -8785,6 +8785,10 @@ extension ACPSessionManager {
         guard let firstWriteRunner = runners[sessionId],
               await firstWriteRunner.awaitVisualAidFirstWrite(id: visualId)
         else { return false }
+        // The first-write wait is not cancellation-aware. A Stop that cancelled this task meanwhile must
+        // not see an answer installed or persisted after it was acknowledged; nothing has been touched yet,
+        // and this wait is the function's only suspension before the mutation.
+        guard !Task.isCancelled else { return false }
         guard !mergingForks.contains(sessionId), let session = sessions[sessionId],
               let runner = runners[sessionId], isWriter(for: sessionId),
               var visual = session.transcript.visualAid(id: visualId), visual.answer == nil

@@ -1962,6 +1962,39 @@ struct ACPSessionManagerTests {
         #expect(try storedVisualAids(store, sessionId: session.id).first?.answer == answer)
     }
 
+    @Test("an answer cancelled while the card's first write is held stores nothing, sends nothing and leaves the card answerable")
+    func cancelledAnswerDuringTheFirstWriteMutatesNothing() async throws {
+        let (manager, session, store, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        let initialWrite = AsyncGate()
+        var held = false
+        runner.beforePersistenceForTesting = {
+            if !held {
+                held = true
+                await initialWrite.enterAndWait()
+            }
+        }
+        let show = Task { @MainActor in await manager.showVisualAid(visual, in: session.id) }
+        await initialWrite.waitUntilEntered()
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        answering.cancel()
+        await initialWrite.release()
+
+        #expect(await show.value)
+        #expect(await answering.value == false)
+        await runner.flushPersistence()
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == nil)
+        #expect(try storedVisualAids(store, sessionId: session.id) == [visual])
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == answer)
+    }
+
     @Test("rollBackVisualAidAnswer clears only the answer it was given, confirms the row and records the failure on the session")
     func rollBackVisualAidAnswerClearsMatchingAnswer() async throws {
         let (manager, session, store, _) = try await attachedVisualAidManager()
