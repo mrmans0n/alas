@@ -888,20 +888,21 @@ final class RemoteSessionGateway {
             let rid = Self.requestIdInt(pending.id)
             lastPermissionReq[id] = rid
             let tc = pending.params.toolCall
-            let presentation = ACPPermissionPresentation(metadata: pending.params.metadata)
+            let isVisualShow = ACPToolCallPresentation.isVisualShow(name: tc.name, title: tc.title)
+            let presentation = isVisualShow ? nil : ACPPermissionPresentation(metadata: pending.params.metadata)
             let payload = RemotePermissionPayload(
                 requestId: rid,
-                toolName: tc.title ?? tc.kind ?? "tool",
+                toolName: isVisualShow ? Self.visualAidToolName : tc.title ?? tc.kind ?? "tool",
                 options: pending.params.options.map {
                     RemotePermissionOption(
                         optionId: $0.optionId, name: $0.name, kind: $0.kind,
-                        description: $0.presentationDescription)
+                        description: isVisualShow ? nil : $0.presentationDescription)
                 },
                 title: presentation?.title,
                 reason: presentation?.description,
                 defaultToNo: presentation?.defaultToNo ?? false,
                 mcpServerName: tc.mcpServerName,
-                commandSummary: tc.content?.compactMap { block -> String? in
+                commandSummary: isVisualShow ? nil : tc.content?.compactMap { block -> String? in
                     guard case .content(.text(let text)) = block else { return nil }
                     return text
                 }.first)
@@ -1380,6 +1381,8 @@ final class RemoteSessionGateway {
         }
     }
 
+    private static let visualAidToolName = "Visual aid"
+
     private static func remoteToolCall(
         _ call: ACPMessage.ToolCall,
         fullContent: String? = nil
@@ -1390,11 +1393,14 @@ final class RemoteSessionGateway {
         }
         remote.rawOutput = nil
         if ACPToolCallPresentation.isVisualShow(remote) {
-            // The call's content and raw input carry the visual's HTML, which
-            // reaches the phone as a `visualAid` row instead.
+            // The call's title, content, raw input and locations are agent
+            // text that can carry the visual's HTML, which reaches the phone
+            // as a `visualAid` row instead.
+            remote.title = Self.visualAidToolName
             remote.content = ""
             remote.rawInput = nil
             remote.preview = nil
+            remote.locations = []
         }
         remote.metadata = nil
         remote.assets = call.assets.map { asset in

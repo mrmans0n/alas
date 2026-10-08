@@ -415,7 +415,7 @@ extension ACPPermissionRequestParams {
         sessionId: String = "remote", toolTitle: String = "Bash",
         toolCallContent: [ACPToolCallContent]? = nil,
         metadata: AnyCodable? = nil, toolCallMetadata: AnyCodable? = nil,
-        allowOptionMetadata: AnyCodable? = nil
+        allowOptionMetadata: AnyCodable? = nil, toolName: String? = nil
     ) -> ACPPermissionRequestParams {
         ACPPermissionRequestParams(
             sessionId: sessionId,
@@ -428,6 +428,7 @@ extension ACPPermissionRequestParams {
                 locations: nil,
                 rawInput: nil,
                 rawOutput: nil,
+                name: toolName,
                 metadata: toolCallMetadata),
             options: [
                 ACPPermissionOption(optionId: "allow_once", name: "Allow once", kind: "allow_once", metadata: allowOptionMetadata),
@@ -1621,17 +1622,52 @@ struct RemoteSessionGatewayTests {
         #expect(dismissed.answer == .init(kind: "dismissed", selectedOptionIds: nil, note: nil))
     }
 
-    @Test(arguments: ["mcp__alas__visual_show", "visual_show"])
-    func visualShowToolCallIsScrubbedOnTheWire(name: String) throws {
+    @Test(arguments: ["mcp__alas__visual_show", "visual_show"], ["Show visual", "<h2>secret</h2>"])
+    func visualShowToolCallIsScrubbedOnTheWire(name: String, title: String) throws {
         let call = ACPMessage.ToolCall(
-            toolCallId: "t1", title: "Show visual", status: "completed",
-            content: "<h2>secret</h2>", preview: "<h2>secret</h2>", rawInput: #"{"html":"<h2>secret</h2>"}"#, name: name)
+            toolCallId: "t1", title: title, status: "completed",
+            content: "<h2>secret</h2>", preview: "<h2>secret</h2>", rawInput: #"{"html":"<h2>secret</h2>"}"#,
+            locations: ["<h2>secret</h2>"], name: name)
         let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
         let json = try #require(wire.json)
         #expect(!json.contains("secret"))
+        #expect(!json.contains("Show visual"))
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(json.utf8))
-        #expect(decoded.title == "Show visual")
+        #expect(decoded.title == "Visual aid")
         #expect(decoded.status == "completed")
+        #expect(decoded.name == name)
+    }
+
+    @Test func visualShowPermissionRequestHidesTheVisualFromThePhone() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = s
+        s.transcript.streamingState = .awaitingPermission
+        let meta = AnyCodable([
+            "permission": AnyCodable([
+                "version": AnyCodable(1),
+                "title": AnyCodable("<h2>secret</h2>"),
+                "description": AnyCodable("<h2>secret</h2>"),
+            ] as [String: AnyCodable]),
+        ] as [String: AnyCodable])
+        s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+            toolTitle: "<h2>secret</h2>",
+            toolCallContent: [.content(.text("<h2>secret</h2>"))],
+            metadata: meta, allowOptionMetadata: meta, toolName: "mcp__alas__visual_show"))
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .permissionRequest(_, let payload) = try #require(sent.first(where: {
+            if case .permissionRequest = $0 { return true }
+            return false
+        })) else {
+            Issue.record("expected a permissionRequest message")
+            return
+        }
+        #expect(payload.toolName == "Visual aid")
+        let json = try String(decoding: JSONEncoder().encode(payload), as: UTF8.self)
+        #expect(!json.contains("secret"))
     }
 
     @Test func ordinaryToolCallKeepsItsContent() throws {

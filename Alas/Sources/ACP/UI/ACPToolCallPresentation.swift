@@ -16,8 +16,15 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     /// A `visual_show` call: the rule `resolve` labels "Visual aid". The call's
     /// content and raw input carry the visual's HTML.
     static func isVisualShow(_ toolCall: ACPMessage.ToolCall) -> Bool {
-        let lowerTitle = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return toolCall.nonEmptyName?.contains("visual_show") == true || lowerTitle.contains("visual_show")
+        isVisualShow(name: toolCall.nonEmptyName, title: toolCall.title)
+    }
+
+    /// The same match for fields that arrive outside a `ToolCall`, such as a
+    /// permission request's tool call.
+    static func isVisualShow(name: String?, title: String?) -> Bool {
+        let lowerTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (!trimmedName.isEmpty && trimmedName.contains("visual_show")) || lowerTitle.contains("visual_show")
     }
 
     static func resolve(_ toolCall: ACPMessage.ToolCall) -> ACPToolCallPresentation {
