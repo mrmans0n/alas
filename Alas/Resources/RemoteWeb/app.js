@@ -421,6 +421,7 @@ function handle(msg) {
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
+    case "visualAidRejected": if (msg.sessionId === currentSession) rejectVisual(msg.visualId, msg.reason); break;
     case "changeList":
       if (msg.sessionId !== currentSession) break;
       $("changes-error").classList.add("hidden");
@@ -867,7 +868,7 @@ function openSession(id) {
   $("detail-title-block").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id); setDetailSubtitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("bottom-tabbar").classList.add("hidden");
-  $("messages").innerHTML = ""; renderConfigAffordances();
+  resetVisualCards(); $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
@@ -1952,6 +1953,7 @@ function applySnapshot(msg) {
   const box = $("messages");
   const open = new Set();
   box.querySelectorAll(".m-collapsible.is-open").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
+  resetVisualCards();
   box.innerHTML = "";
   messages = new Map(); messageNodes = new Map();
   msg.messages.forEach(m => insertMessage(m, open));
@@ -2131,7 +2133,9 @@ function resubscribe() {
 // dataset.index; the common case (append at the tail) is O(1).
 function insertMessage(m, open) {
   if (m.isHidden === true) {
-    messageNodes.get(m.stableId)?.remove();
+    const gone = messageNodes.get(m.stableId);
+    if (gone?.dataset.visualId) forgetVisualCard(gone.dataset.visualId);
+    gone?.remove();
     messageNodes.delete(m.stableId);
     messages.set(m.stableId, m);
     return;
@@ -2149,13 +2153,20 @@ function insertMessage(m, open) {
 
 function upsertMessage(m) {
   if (m.isHidden === true) {
-    messageNodes.get(m.stableId)?.remove();
+    const gone = messageNodes.get(m.stableId);
+    if (gone?.dataset.visualId) forgetVisualCard(gone.dataset.visualId);
+    gone?.remove();
     messageNodes.delete(m.stableId);
     messages.set(m.stableId, m);
     return;
   }
   const existing = messageNodes.get(m.stableId);
   if (existing) {
+    if (existing.dataset.kind === "visualAid" && m.kind === "visualAid" && updateVisualAid(existing, m)) {
+      existing.dataset.index = m.index;
+      messages.set(m.stableId, m);
+      return;
+    }
     const wasOpen = existing.classList.contains("is-open") ? new Set([m.stableId]) : null;
     const node = renderMessage(m, m.stableId, wasOpen);
     node.dataset.sid = m.stableId;
@@ -3062,6 +3073,8 @@ function renderMessage(m, sid, open) {
     node = thoughtCard(m.text || "");
   } else if (m.kind === "toolCall") {
     node = toolCard(jparse(m.json) || {});
+  } else if (m.kind === "visualAid") {
+    node = renderVisualAid(m);
   } else if (m.kind === "fileEdit") {
     node = structCard("Edit", m.text || legacyFileEditPath(m.json) || "file", "");
   } else if (m.kind === "plan") {
@@ -3075,6 +3088,211 @@ function renderMessage(m, sid, open) {
   }
   return node;
 }
+
+// ---- Visual aids ---------------------------------------------------------
+const visualCards = new Map();   // visualId -> card state
+let visualFrameOrder = [];       // live frame ids, least recently shown first
+let visualObserver = null;
+
+function takeOver() {
+  if (currentSession) send({ type: "takeOver", sessionId: currentSession });
+}
+
+function resetVisualCards() {
+  if (visualObserver) visualObserver.disconnect();
+  visualObserver = null;
+  visualCards.clear();
+  visualFrameOrder = [];
+}
+
+function forgetVisualCard(visualId) {
+  visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, visualId);
+  const card = visualCards.get(visualId);
+  if (card && visualObserver) visualObserver.unobserve(card.node);
+  visualCards.delete(visualId);
+}
+
+function renderVisualAid(m) {
+  const visual = RemoteVisualAid.parseVisual(m.json);
+  if (!visual) return el("div", "msg m-agent", m.text || "");   // an old or malformed row shows its title
+  const node = el("div", "msg m-visual");
+  node.dataset.kind = "visualAid";
+  node.dataset.visualId = visual.id;
+  const host = el("div", "visual-host");
+  const answer = el("div", "visual-answer");
+  node.append(el("div", "visual-title", visual.title), host, answer);
+  const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
+                 selected: [], note: "", pending: false, error: "", signature: "" };
+  visualCards.set(visual.id, card);
+  showVisualPlaceholder(card, "Visual not loaded", true);
+  observeVisualCard(card);
+  renderVisualAnswer(card);
+  return node;
+}
+
+// An upsert that only changes the answer must not rebuild the frame: that would reload the page.
+function updateVisualAid(node, m) {
+  const visual = RemoteVisualAid.parseVisual(m.json);
+  const card = visual && visualCards.get(visual.id);
+  if (!card || card.node !== node) return false;
+  const previous = card.visual;
+  card.visual = visual;
+  if (visual.answer) { card.pending = false; card.error = ""; }
+  else if (previous.answer) card.error = RemoteVisualAid.FAILED_TEXT;   // a failed send reopened the question
+  renderVisualAnswer(card);
+  return true;
+}
+
+function showVisualPlaceholder(card, text, canShow) {
+  card.frame = null;
+  const label = el("div", "visual-placeholder-text", text);
+  if (!canShow) { card.host.replaceChildren(label); return; }
+  const button = el("button", "visual-show", "Show visual");
+  button.type = "button";
+  button.onclick = () => mountVisualFrame(card);
+  card.host.replaceChildren(label, button);
+}
+
+function mountVisualFrame(card) {
+  if (card.frame) return;
+  let srcdoc;
+  try {
+    srcdoc = RemoteVisualAid.buildDocument(card.visual.html, card.id,
+      (source) => new DOMParser().parseFromString(source, "text/html"));
+  } catch {
+    showVisualPlaceholder(card, "Visual unavailable", false);
+    return;
+  }
+  const admitted = RemoteVisualAid.admitFrame(visualFrameOrder, card.id, RemoteVisualAid.MAX_LIVE_FRAMES);
+  visualFrameOrder = admitted.order;
+  admitted.evicted.forEach((id) => {
+    const other = visualCards.get(id);
+    if (other) showVisualPlaceholder(other, "Visual paused to save memory", true);
+  });
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.setAttribute("title", card.visual.title);
+  frame.className = "visual-frame";
+  if (card.visual.question) {   // display-only: no click, key or assistive input reaches the page
+    frame.setAttribute("inert", "");
+    frame.tabIndex = -1;
+    frame.classList.add("is-inert");
+  }
+  frame.style.height = card.height + "px";
+  frame.srcdoc = srcdoc;
+  card.frame = frame;
+  card.host.replaceChildren(frame);
+}
+
+function observeVisualCard(card) {
+  if (!("IntersectionObserver" in window)) { mountVisualFrame(card); return; }
+  if (!visualObserver) {
+    visualObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const card = visualCards.get(entry.target.dataset.visualId);
+        if (!card) return;
+        if (card.frame) visualFrameOrder = RemoteVisualAid.touchFrame(visualFrameOrder, card.id);
+        else mountVisualFrame(card);
+      });
+    }, { root: $("messages"), rootMargin: "100% 0px" });
+  }
+  visualObserver.observe(card.node);
+}
+
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || typeof data.id !== "string") return;
+  const card = visualCards.get(data.id);
+  if (!card || !card.frame) return;
+  const height = RemoteVisualAid.heightFromMessage(data, card.id, event.source, card.frame.contentWindow);
+  if (height === null) return;
+  card.height = height;
+  card.frame.style.height = height + "px";
+});
+
+function renderVisualAnswer(card) {
+  const view = RemoteVisualAid.answerView(card.visual, {
+    canDrive: canDriveKnown && canDrive, pending: card.pending, error: card.error, selected: card.selected, note: card.note });
+  // Skip a redraw that would change nothing, so a typing user keeps focus when unrelated state ticks.
+  // The view carries ownership (editable, hint), so a canDrive change alone still redraws the controls.
+  const signature = JSON.stringify({ ...view, note: undefined });
+  if (signature === card.signature) return;
+  card.signature = signature;
+  const box = card.answer;
+  box.replaceChildren();
+  if (view.kind === "none") return;
+  if (view.kind === "dismissed") { box.append(el("div", "visual-summary", "Dismissed")); return; }
+  if (view.kind === "answered") {
+    box.append(el("div", "visual-summary", "Answered: " + view.labels.join(", ")));
+    if (view.note) box.append(el("div", "visual-note-summary", view.note));
+    return;
+  }
+  box.append(el("div", "visual-prompt", view.prompt));
+  view.options.forEach((option) => {
+    const row = el("label", "visual-option");
+    const input = document.createElement("input");
+    input.type = view.multiple ? "checkbox" : "radio";
+    input.name = "visual-" + card.id;
+    input.checked = option.checked;
+    input.disabled = !view.editable;
+    input.onchange = () => {
+      card.selected = RemoteVisualAid.toggleSelection(card.visual.question, card.selected, option.id);
+      renderVisualAnswer(card);
+    };
+    row.append(input, el("span", "visual-option-label", option.label));
+    box.append(row);
+  });
+  const note = document.createElement("textarea");
+  note.className = "visual-note";
+  note.placeholder = "Add a note (optional)";
+  note.value = card.note;   // no maxLength: it counts UTF-16 units, the limit counts graphemes (canSubmit enforces it)
+  note.disabled = !view.editable;
+  const submit = el("button", "visual-submit", view.pending ? "Sending…" : "Submit");
+  submit.type = "button";
+  submit.disabled = !view.canSubmit;
+  note.oninput = () => {
+    card.note = note.value;
+    submit.disabled = !RemoteVisualAid.answerView(card.visual, {
+      canDrive: canDriveKnown && canDrive, pending: card.pending, selected: card.selected, note: card.note }).canSubmit;
+  };
+  submit.onclick = () => submitVisual(card, "answer");
+  const dismiss = el("button", "visual-dismiss", "Dismiss");
+  dismiss.type = "button";
+  dismiss.disabled = !view.editable;
+  dismiss.onclick = () => submitVisual(card, "dismiss");
+  const actions = el("div", "visual-actions");
+  actions.append(submit, dismiss);
+  box.append(note, actions);
+  if (view.hint) {
+    const hint = el("button", "visual-takeover", view.hint);
+    hint.type = "button";
+    hint.onclick = takeOver;
+    box.append(hint);
+  }
+  if (view.error) box.append(el("div", "visual-error", view.error));
+}
+
+function submitVisual(card, action) {
+  if (!currentSession || card.pending) return;
+  const msg = RemoteVisualAid.buildResponse(currentSession, card.visual, action, card.selected, card.note);
+  if (!msg) return;
+  card.pending = true;
+  card.error = "";
+  renderVisualAnswer(card);
+  send(msg);
+}
+
+function rejectVisual(visualId, reason) {
+  const card = visualCards.get(visualId);
+  if (!card) return;
+  card.pending = false;
+  card.error = RemoteVisualAid.rejectionText(reason);
+  renderVisualAnswer(card);
+}
+
+function refreshVisualCards() { visualCards.forEach(renderVisualAnswer); }
 
 function thoughtCard(text) {
   const d = el("div", "msg m-thought m-collapsible");
@@ -3663,6 +3881,7 @@ function queueBadgeCount() {
 }
 
 function renderDriveBar(streamingState) {
+  refreshVisualCards();   // runs on every snapshot and delta, so ownership changes reach the answer controls
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
   // we actually own, and an empty bar strip shows before any state arrives.
@@ -3929,7 +4148,7 @@ function removeLoadingRow() {
   if (row) row.remove();
 }
 
-$("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
+$("takeover").onclick = takeOver;
 $("send").onclick = sendPrompt;
 $("stop").onclick = () => {
   if (!currentSession) return;

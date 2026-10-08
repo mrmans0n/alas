@@ -477,3 +477,24 @@ button.create-row.is-selected { background: color-mix(in oklab, var(--accent) 15
 #add-server-manual summary { cursor: pointer; list-style: none; }
 #add-server-manual summary::-webkit-details-marker { display: none; }
 #add-server-manual[open] summary { margin-bottom: 8px; }
+
+/* Visual aids */
+.m-visual { align-self: stretch; padding: 0; background: var(--bg-2); border-radius: 12px; box-shadow: inset 0 0 0 0.5px var(--ring); overflow: hidden; white-space: normal; }
+.visual-title { padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--fg); border-bottom: 0.5px solid var(--line); }
+.visual-host { min-height: 120px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; }
+.visual-frame { display: block; width: 100%; border: 0; background: transparent; }
+.visual-frame.is-inert { pointer-events: none; }
+.visual-placeholder-text { padding: 14px 12px 6px; text-align: center; color: var(--fg-dim); font-size: 13px; }
+.visual-show, .visual-takeover { align-self: center; margin: 4px 0 14px; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--fill-strong); color: var(--fg); font: inherit; }
+.visual-answer { padding: 0 12px 12px; }
+.visual-answer:not(:empty) { border-top: 0.5px solid var(--line); padding-top: 12px; }
+.visual-prompt { margin-bottom: 8px; font-weight: 600; }
+.visual-option { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.visual-note { width: 100%; box-sizing: border-box; min-height: 64px; margin: 8px 0; padding: 8px 10px; border-radius: 10px; border: 0.5px solid var(--line-strong); background: var(--well); color: var(--fg); font: inherit; resize: vertical; }
+.visual-actions { display: flex; gap: 8px; }
+.visual-submit { padding: 10px 16px; border: 0; border-radius: 10px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; }
+.visual-dismiss { padding: 10px 16px; border: 0; border-radius: 10px; background: var(--fill-strong); color: var(--fg); font: inherit; }
+.visual-submit:disabled, .visual-dismiss:disabled { opacity: 0.5; }
+.visual-summary { color: var(--fg-muted); }
+.visual-note-summary { margin-top: 4px; color: var(--fg-dim); font-size: 13px; }
+.visual-error { margin-top: 8px; color: var(--del); font-size: 13px; }

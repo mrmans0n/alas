@@ -1,6 +1,8 @@
 import Foundation
 import JavaScriptCore
 import Testing
+import WebKit
+@testable import Alas
 
 struct RemoteWebAssetTests {
     private func asset(_ relativePath: String) throws -> String {
@@ -646,7 +648,7 @@ struct RemoteWebAssetTests {
         let removed = false;
         """)
         if previouslyVisible {
-            context.evaluateScript("messageNodes.set('row', { remove() { removed = true; } });")
+            context.evaluateScript("messageNodes.set('row', { dataset: {}, remove() { removed = true; } });")
         }
         let marker: [String: Any] = ["stableId": "row", "index": 11, "isHidden": true]
         apply.call(withArguments: [marker, NSNull()])
@@ -1066,7 +1068,7 @@ struct RemoteWebAssetTests {
     @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2000) })
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2200) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
     }
 
@@ -1577,5 +1579,113 @@ struct RemoteWebAssetTests {
         let clearedAt = try #require(body.range(of: "gatewayCounts = new Map();")?.lowerBound)
         let refreshedAt = try #require(body.range(of: "refreshHubViews();")?.lowerBound)
         #expect(clearedAt < refreshedAt, "must clear before refreshing views, not after")
+    }
+
+    @Test func visualAidScriptLoadsBeforeAppAndIsPrecached() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        try expectLoadsBeforeApp("/visual-aid.js", in: html)
+        try expectReferencedAndPrecached("/visual-aid.js", html: html, sw: sw)
+    }
+
+    @Test func visualAidIframeNeverAllowsSameOrigin() throws {
+        let module = try asset("visual-aid.js")
+        let app = try asset("app.js")
+        #expect(module.contains(#"const SANDBOX = "allow-scripts";"#))
+        #expect(app.contains(#"setAttribute("sandbox", RemoteVisualAid.SANDBOX)"#))
+        // The token lives in localStorage and /ws is same-origin: a frame with allow-same-origin could read both.
+        for name in ["app.js", "index.html", "hub-links.js"] {
+            let text = try asset(name)
+            #expect(!text.contains("allow-same-origin"), "\(name) must not mention allow-same-origin")
+        }
+        #expect(module.components(separatedBy: "allow-same-origin").count == 2, "only the explanatory comment mentions it")
+    }
+
+    @Test func visualAidQuestionFramesAreInert() throws {
+        let app = try asset("app.js")
+        #expect(app.contains(#"frame.setAttribute("inert", "")"#))
+        #expect(app.contains("card.visual.question"))
+    }
+
+    @Test func visualAidCSPMatchesTheDesktopPolicy() throws {
+        let module = try asset("visual-aid.js")
+        // The phone module builds the string from fragments, so compare by evaluating it.
+        let context = try #require(JSContext())
+        context.evaluateScript(module)
+        #expect(context.exception == nil)
+        let csp = context.evaluateScript("globalThis.RemoteVisualAid.CSP")?.toString()
+        #expect(csp == VisualAidWebPolicy.contentSecurityPolicy)
+    }
+
+    @Test func visualAidFrameCopyHasEveryDesktopClass() throws {
+        let desktop = try String(
+            contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("Alas/Resources/VisualAid/frame.html"),
+            encoding: .utf8)
+        let phone = try asset("visual-aid.js")
+        let classes = Set(desktop.matches(of: #/\.([a-zA-Z][a-zA-Z0-9-]*)\s*[{,]/#).map { String($0.1) })
+        #expect(!classes.isEmpty)
+        for name in classes {
+            #expect(phone.contains(".\(name)"), "the phone frame is missing .\(name)")
+        }
+    }
+
+    @Test func visualAidAnswerOnlyChangesTheCardWithoutReplacingItsFrame() throws {
+        let source = try asset("app.js")
+        let start = try #require(source.range(of: "function upsertMessage("))
+        let end = try #require(source.range(of: "\n}", range: start.upperBound..<source.endIndex))
+        let context = try #require(JSContext())
+        context.evaluateScript("""
+        var replaced = 0, updated = 0;
+        var messages = new Map(), transcriptMeta = null;
+        var node = { dataset: { kind: "visualAid", sid: "m1", index: "1" }, classList: { contains() { return false; } },
+                     replaceWith() { replaced += 1; }, remove() {} };
+        var messageNodes = new Map([["m1", node]]);
+        function updateVisualAid(n, m) { updated += 1; return true; }
+        function renderMessage() { return node; }
+        function insertMessage() {}
+        \(source[start.lowerBound..<end.upperBound])
+        upsertMessage({ stableId: "m1", index: 1, kind: "visualAid", json: "{}" });
+        """)
+        #expect(context.exception == nil)
+        #expect(context.evaluateScript("replaced")?.toInt32() == 0)
+        #expect(context.evaluateScript("updated")?.toInt32() == 1)
+    }
+
+    @MainActor
+    @Test func visualAidDocumentBuilderRunsOnARealDOMParser() async throws {
+        let module = try asset("visual-aid.js")
+        let webView = WKWebView(frame: .zero)
+        webView.loadHTMLString("<html></html>", baseURL: nil)
+        let loaded = await awaitCondition { !webView.isLoading }
+        #expect(loaded)
+        _ = try await webView.evaluateJavaScript(module)
+        let id = "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F"
+        let script = """
+        const parse = (s) => new DOMParser().parseFromString(s, "text/html");
+        const build = (html) => {
+          const doc = parse(RemoteVisualAid.buildDocument(html, "\(id)", parse));
+          return { first: doc.head.firstElementChild && doc.head.firstElementChild.outerHTML,
+                   scripts: doc.head.querySelectorAll("script").length,
+                   body: doc.body.innerHTML, doctype: !!doc.doctype, htmlAttr: doc.documentElement.getAttribute("data-note") };
+        };
+        return JSON.stringify({
+          fragment: build("<p>hi</p>"),
+          full: build("<!DOCTYPE html><html><head><title>t</title></head><body><b>x</b></body></html>"),
+          noHead: build("<html><body>y</body></html>"),
+          tricky: build('<!DOCTYPE html><html data-note="<head>"><body><script>var s = "<head>";</script>z</body></html>')
+        });
+        """
+        let raw = try await webView.callAsyncJavaScript(script, contentWorld: .page) as? String
+        let result = try #require(raw.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: [String: Any]] })
+        for key in ["fragment", "full", "noHead", "tricky"] {
+            let entry = try #require(result[key])
+            let first = try #require(entry["first"] as? String)
+            #expect(first.contains("Content-Security-Policy"), "\(key): the CSP meta must be first in <head>")
+            #expect((entry["scripts"] as? Int) ?? 0 >= 2, "\(key): lockdown and bridge scripts")
+        }
+        #expect((result["full"]?["doctype"] as? Bool) == true)
+        #expect((result["tricky"]?["htmlAttr"] as? String) == "<head>", "an attribute containing <head> is untouched")
+        #expect((result["tricky"]?["body"] as? String)?.contains(#"var s = "<head>";"#) == true)
     }
 }
