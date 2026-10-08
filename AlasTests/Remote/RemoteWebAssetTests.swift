@@ -1688,4 +1688,15 @@ struct RemoteWebAssetTests {
         #expect((result["tricky"]?["htmlAttr"] as? String) == "<head>", "an attribute containing <head> is untouched")
         #expect((result["tricky"]?["body"] as? String)?.contains(#"var s = "<head>";"#) == true)
     }
+
+    @Test func visualAidAppDelegatesStateDecisionsToTheTestedModule() throws {
+        let app = try asset("app.js")
+        // The observer must go through shouldMount, the update through nextCardState, and a rejection
+        // must clear `submitted`; the module tests pin the decisions themselves.
+        #expect(app.contains("RemoteVisualAid.shouldMount(card, entry.isIntersecting)"))
+        #expect(app.contains("RemoteVisualAid.nextCardState(card, visual)"))
+        let reject = try #require(app.range(of: "function rejectVisual(")).upperBound
+        #expect(app[reject...].prefix(300).contains("card.submitted = false"))
+        #expect(app.contains("other.paused = true"))
+    }
 }

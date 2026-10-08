@@ -138,6 +138,27 @@ r = V.admitFrame(V.touchFrame(r.order, "a"), "d", 3);
 assert.deepEqual(r, { order: ["c", "a", "d"], evicted: ["b"] });
 assert.deepEqual(V.releaseFrame(r.order, "a"), ["c", "d"]);
 
+// Card send state: only a card that submitted treats an unanswered row as a failed send.
+const answeredRow = { answer: { kind: "answered" } }, unansweredRow = {};
+assert.deepEqual(V.nextCardState({ pending: true, submitted: true }, unansweredRow),
+  { pending: false, submitted: false, error: V.FAILED_TEXT }, "coalesced rollback while submitted");
+let sendState = V.nextCardState({ pending: true, submitted: true }, answeredRow);
+assert.deepEqual(sendState, { pending: false, submitted: true, error: "" }, "an answer keeps submitted");
+assert.deepEqual(V.nextCardState({ pending: false, submitted: sendState.submitted }, unansweredRow),
+  { pending: false, submitted: false, error: V.FAILED_TEXT }, "answered then rolled back while submitted");
+assert.deepEqual(V.nextCardState({ pending: false, submitted: false, error: "" }, unansweredRow),
+  { pending: false, submitted: false, error: "" }, "an observer shows no error");
+assert.deepEqual(V.nextCardState({ pending: false, submitted: false }, answeredRow),
+  { pending: false, submitted: false, error: "" }, "answeredRow by another client");
+// A rejection clears submitted in app.js; the next unanswered row then shows no failure.
+assert.equal(V.nextCardState({ pending: false, submitted: false, error: "x" }, unansweredRow).error, "x");
+
+// Mount decision: evicted (paused) cards never remount by themselves.
+assert.equal(V.shouldMount({ frame: null, paused: false }, true), true);
+assert.equal(V.shouldMount({ frame: null, paused: true }, true), false);
+assert.equal(V.shouldMount({ frame: {}, paused: false }, true), false);
+assert.equal(V.shouldMount({ frame: null, paused: false }, false), false);
+
 // buildDocument: a stub parser records what the module inserts. The real DOMParser behavior is
 // covered in RemoteWebAssetTests with WebKit.
 const inserted = [];

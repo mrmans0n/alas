@@ -3093,6 +3093,7 @@ function renderMessage(m, sid, open) {
 const visualCards = new Map();   // visualId -> card state
 let visualFrameOrder = [];       // live frame ids, least recently shown first
 let visualObserver = null;
+let visualFarObserver = null;
 
 function takeOver() {
   if (currentSession) send({ type: "takeOver", sessionId: currentSession });
@@ -3100,7 +3101,9 @@ function takeOver() {
 
 function resetVisualCards() {
   if (visualObserver) visualObserver.disconnect();
+  if (visualFarObserver) visualFarObserver.disconnect();
   visualObserver = null;
+  visualFarObserver = null;
   visualCards.clear();
   visualFrameOrder = [];
 }
@@ -3109,6 +3112,7 @@ function forgetVisualCard(visualId) {
   visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, visualId);
   const card = visualCards.get(visualId);
   if (card && visualObserver) visualObserver.unobserve(card.node);
+  if (card && visualFarObserver) visualFarObserver.unobserve(card.node);
   visualCards.delete(visualId);
 }
 
@@ -3122,7 +3126,7 @@ function renderVisualAid(m) {
   const answer = el("div", "visual-answer");
   node.append(el("div", "visual-title", visual.title), host, answer);
   const card = { id: visual.id, node, host, answer, visual, frame: null, height: RemoteVisualAid.HEIGHT_MIN,
-                 selected: [], note: "", pending: false, error: "", signature: "" };
+                 selected: [], note: "", pending: false, submitted: false, paused: false, error: "", signature: "" };
   visualCards.set(visual.id, card);
   showVisualPlaceholder(card, "Visual not loaded", true);
   observeVisualCard(card);
@@ -3135,10 +3139,11 @@ function updateVisualAid(node, m) {
   const visual = RemoteVisualAid.parseVisual(m.json);
   const card = visual && visualCards.get(visual.id);
   if (!card || card.node !== node) return false;
-  const previous = card.visual;
+  const next = RemoteVisualAid.nextCardState(card, visual);
   card.visual = visual;
-  if (visual.answer) { card.pending = false; card.error = ""; }
-  else if (previous.answer) card.error = RemoteVisualAid.FAILED_TEXT;   // a failed send reopened the question
+  card.pending = next.pending;
+  card.submitted = next.submitted;
+  card.error = next.error;
   renderVisualAnswer(card);
   return true;
 }
@@ -3149,7 +3154,7 @@ function showVisualPlaceholder(card, text, canShow) {
   if (!canShow) { card.host.replaceChildren(label); return; }
   const button = el("button", "visual-show", "Show visual");
   button.type = "button";
-  button.onclick = () => mountVisualFrame(card);
+  button.onclick = () => { card.paused = false; mountVisualFrame(card); };
   card.host.replaceChildren(label, button);
 }
 
@@ -3167,7 +3172,9 @@ function mountVisualFrame(card) {
   visualFrameOrder = admitted.order;
   admitted.evicted.forEach((id) => {
     const other = visualCards.get(id);
-    if (other) showVisualPlaceholder(other, "Visual paused to save memory", true);
+    if (!other) return;
+    other.paused = true;   // only an explicit tap remounts a card the budget evicted
+    showVisualPlaceholder(other, "Visual paused to save memory", true);
   });
   const frame = document.createElement("iframe");
   frame.setAttribute("sandbox", RemoteVisualAid.SANDBOX);
@@ -3190,15 +3197,30 @@ function observeVisualCard(card) {
   if (!visualObserver) {
     visualObserver = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
         const card = visualCards.get(entry.target.dataset.visualId);
         if (!card) return;
-        if (card.frame) visualFrameOrder = RemoteVisualAid.touchFrame(visualFrameOrder, card.id);
-        else mountVisualFrame(card);
+        if (card.frame) {
+          if (entry.isIntersecting) visualFrameOrder = RemoteVisualAid.touchFrame(visualFrameOrder, card.id);
+        } else if (RemoteVisualAid.shouldMount(card, entry.isIntersecting)) {
+          mountVisualFrame(card);
+        }
       });
     }, { root: $("messages"), rootMargin: "100% 0px" });
   }
+  if (!visualFarObserver) {
+    // A card scrolled far away drops its frame; it is not "paused", so the near observer remounts it on return.
+    visualFarObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) return;
+        const card = visualCards.get(entry.target.dataset.visualId);
+        if (!card || !card.frame) return;
+        visualFrameOrder = RemoteVisualAid.releaseFrame(visualFrameOrder, card.id);
+        showVisualPlaceholder(card, "Visual not loaded", true);
+      });
+    }, { root: $("messages"), rootMargin: "300% 0px" });
+  }
   visualObserver.observe(card.node);
+  visualFarObserver.observe(card.node);
 }
 
 window.addEventListener("message", (event) => {
@@ -3279,6 +3301,7 @@ function submitVisual(card, action) {
   const msg = RemoteVisualAid.buildResponse(currentSession, card.visual, action, card.selected, card.note);
   if (!msg) return;
   card.pending = true;
+  card.submitted = true;
   card.error = "";
   renderVisualAnswer(card);
   send(msg);
@@ -3288,6 +3311,7 @@ function rejectVisual(visualId, reason) {
   const card = visualCards.get(visualId);
   if (!card) return;
   card.pending = false;
+  card.submitted = false;
   card.error = RemoteVisualAid.rejectionText(reason);
   renderVisualAnswer(card);
 }

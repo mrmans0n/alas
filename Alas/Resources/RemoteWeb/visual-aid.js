@@ -234,9 +234,26 @@
   function touchFrame(order, id) { return order.includes(id) ? order.filter((x) => x !== id).concat(id) : order.slice(); }
   function releaseFrame(order, id) { return order.filter((x) => x !== id); }
 
+  // How a card's send state moves when a row for it arrives. `submitted` means THIS phone sent an answer or
+  // dismissal that has not been reported as failed. An answer clears the pending state but keeps `submitted`,
+  // because the gateway can still roll the answer back; an unanswered row after that (or one that coalesced
+  // the whole answer-and-rollback into a single delta) is a failed send. A phone that never submitted and
+  // merely observed another client's answer and rollback shows no error.
+  function nextCardState(card, incoming) {
+    if (incoming.answer) return { pending: false, submitted: card.submitted === true, error: "" };
+    if (card.submitted === true) return { pending: false, submitted: false, error: FAILED_TEXT };
+    return { pending: card.pending === true, submitted: false, error: card.error || "" };
+  }
+
+  // A frame the budget evicted ("paused") comes back only through an explicit tap; otherwise it would
+  // evict a sibling that the observer remounts in turn.
+  function shouldMount(card, isIntersecting) {
+    return isIntersecting === true && !card.frame && card.paused !== true;
+  }
+
   globalThis.RemoteVisualAid = {
     CSP, SANDBOX, HEIGHT_MIN, HEIGHT_MAX, NOTE_MAX, MAX_LIVE_FRAMES, FAILED_TEXT, FRAME_CSS,
     isFullDocument, buildDocument, parseVisual, clampHeight, heightFromMessage, toggleSelection, noteLength, canSubmit,
-    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame,
+    buildResponse, answerView, rejectionText, admitFrame, touchFrame, releaseFrame, nextCardState, shouldMount,
   };
 })();
