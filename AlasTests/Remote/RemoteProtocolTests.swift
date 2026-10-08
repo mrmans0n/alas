@@ -48,7 +48,7 @@ struct RemoteProtocolTests {
             addedLines: 0, deletedLines: 0, conflictCount: 0, isMain: false)
         let placed = RemoteServerMessage.console(.list(consoles: [PeerConsoleSummary(
             consoleId: "c", title: "zsh", worktreeId: "w", projectId: "p",
-            projectName: "alas", worktreeName: "feat", rows: 40, columns: 120, worktree: worktree)]))
+            projectName: "alas", worktreeName: "feat", rows: 40, columns: 120, worktree: worktree, tabIndex: 2)]))
         #expect(try roundTrip(placed) == placed)
         let olderHost = Data(#"{"type":"console","console":{"list":{"consoles":[{"consoleId":"c","title":"zsh","rows":40,"columns":120}]}}}"#.utf8)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: olderHost)
@@ -434,6 +434,7 @@ struct RemoteProtocolTests {
             agentId: "claude",
             status: "streaming",
             canDrive: false,
+            tabIndex: 3,
             projectId: "project-1",
             worktreeId: "worktree-1",
             updatedAt: 123,
@@ -552,6 +553,7 @@ struct RemoteProtocolTests {
         let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: Data(json.utf8))
         #expect(decoded == RemoteSessionSummary(id: "s1", title: "T", agentId: "codex", status: "idle", canDrive: false))
         #expect(decoded.isActive)
+        #expect(decoded.tabIndex == nil)
     }
 
     @Test func sessionSummaryDecodesInactivePayload() throws {

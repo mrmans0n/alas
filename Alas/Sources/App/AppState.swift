@@ -2724,6 +2724,7 @@ final class AppState {
     /// pane posts under its pseudo worktree id.
     var inAppBannerWorktreeID: String? {
         if isPreviewingForestScenes
+            || nativePeerSessions?.selectedWorktree != nil
             || nativePeerSessions?.selectedSessionId != nil
             || nativePeerSessions?.consoles?.viewer != nil { return nil }
         let resolver = CenterSelectionStateResolver(
@@ -15043,7 +15044,7 @@ extension AppState: RemoteSessionsProvider {
                     row: effectiveRow,
                     status: state.map(RemoteSessionGateway.stateString) ?? "idle",
                     hasRunner: state != nil,
-                    isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
+                    tabIndex: openACPSessionTabIndex(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
                     projectId: projectId,
                     worktreeId: worktreeId,
@@ -15061,8 +15062,8 @@ extension AppState: RemoteSessionsProvider {
         return identities.compactMap { summariesByIdentity[$0]?.summary }
     }
 
-    private func hasOpenACPSessionTab(worktreeId: String, sessionId: ACPSession.ID) -> Bool {
-        tabs.tabs(forWorktree: worktreeId).contains { tab in
+    private func openACPSessionTabIndex(worktreeId: String, sessionId: ACPSession.ID) -> Int? {
+        tabs.tabs(forWorktree: worktreeId).firstIndex { tab in
             if case .acpSession(let state) = tab {
                 return state.sessionId == sessionId
             }
@@ -15083,7 +15084,7 @@ extension AppState: RemoteSessionsProvider {
         var displayRow: ACPSessionRow
         var status: String
         var hasRunner: Bool
-        var isActive: Bool
+        var tabIndex: Int?
         var canDrive: Bool
         let projectId: String?
         let worktreeId: String?
@@ -15093,7 +15094,7 @@ extension AppState: RemoteSessionsProvider {
             row: ACPSessionRow,
             status: String,
             hasRunner: Bool,
-            isActive: Bool,
+            tabIndex: Int?,
             canDrive: Bool,
             projectId: String?,
             worktreeId: String?,
@@ -15103,12 +15104,14 @@ extension AppState: RemoteSessionsProvider {
             self.displayRow = row
             self.status = status
             self.hasRunner = hasRunner
-            self.isActive = isActive
+            self.tabIndex = tabIndex
             self.canDrive = canDrive
             self.projectId = projectId
             self.worktreeId = worktreeId
             self.worktree = worktree
         }
+
+        var isActive: Bool { tabIndex != nil }
 
         var summary: RemoteSessionSummary {
             RemoteSessionSummary(
@@ -15118,6 +15121,7 @@ extension AppState: RemoteSessionsProvider {
                 status: status,
                 canDrive: canDrive,
                 isActive: isActive,
+                tabIndex: tabIndex,
                 projectId: projectId,
                 worktreeId: worktreeId,
                 updatedAt: displayRow.updatedAt,
@@ -15131,7 +15135,7 @@ extension AppState: RemoteSessionsProvider {
                 merged.operationalRow = other.operationalRow
                 merged.status = other.status
                 merged.hasRunner = other.hasRunner
-                merged.isActive = other.isActive
+                merged.tabIndex = other.tabIndex
                 merged.canDrive = other.canDrive
             }
             if Self.isBetterDisplayRow(other.displayRow, than: merged.displayRow) {

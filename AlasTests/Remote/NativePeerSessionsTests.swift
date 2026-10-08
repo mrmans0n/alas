@@ -278,6 +278,41 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == nil)
     }
 
+    @Test func peerWorktreeSelectsOpenTabsRestoresTheLastOneAndFollowsHostCloses() throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] }
+        )
+        client.start()
+        func tab(_ id: String, _ index: Int?, updatedAt: Int64 = 1) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+                  isActive: index != nil, tabIndex: index, worktreeId: "w", updatedAt: updatedAt)
+        }
+        // The history session is the most recently updated.
+        links.receive(.sessionList(sessions: [tab("history", nil, updatedAt: 9), tab("s1", 0), tab("s2", 1)]), from: "B")
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        let selection = NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id)
+
+        client.selectWorktree(selection)
+        #expect(client.selectedSessionId == "B:s1")
+        client.selectTab(.session("B:s2"), in: selection)
+        client.clearSelection()
+        client.selectWorktree(selection)
+        #expect(client.selectedSessionId == "B:s2")
+
+        links.receive(.sessionList(sessions: [tab("history", nil, updatedAt: 9), tab("s1", 0), tab("s2", nil)]), from: "B")
+        #expect(client.selectedSessionId == "B:s1")
+        #expect(client.selectedWorktree == selection)
+
+        links.receive(.sessionList(sessions: [tab("history", nil, updatedAt: 9), tab("s1", nil)]), from: "B")
+        #expect(client.selectedSessionId == nil)
+        #expect(client.selectedWorktree == selection)
+        // Detached once when s2 was picked, and again when the host closed it.
+        #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
+    }
+
     @Test func aChangedConsoleListRebuildsTheSidebarWithoutASessionListChange() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

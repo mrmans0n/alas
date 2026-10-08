@@ -153,11 +153,23 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
     }
 }
 
+/// One of a peer worktree's open tabs: a session or a console, by id.
+enum NativePeerTab: Hashable {
+    case session(String)
+    case console(String)
+}
+
+/// A peer worktree, by the peer's `serverId` and `NativePeerWorktreeGroup.id`.
+struct NativePeerWorktreeSelection: Hashable {
+    let serverId: String
+    let worktreeId: String
+}
+
 struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let id: String
-    /// Most recently updated first.
+    /// Most recently updated first, history included.
     let sessions: [RemoteSessionSummary]
-    /// In the order the peer listed them, which is creation order.
+    /// In the order the peer listed them: tab order, then pane order.
     var consoles: [PeerConsoleSummary] = []
 
     static let waitingStatuses: Set<String> = ["awaitingPermission", "awaitingInput"]
@@ -209,16 +221,38 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         }
         return main + sortedOthers
     }
-    /// The session a click on the row opens. Nil for a worktree that only
-    /// has consoles; the click opens `consoles.first` instead.
-    var primarySession: RemoteSessionSummary? { sessions.first }
+    var tabs: [NativePeerTab] { Self.tabs(sessions: sessions, consoles: consoles) }
+
+    /// The host's open tabs: active sessions and consoles, in the host's tab
+    /// order. Panes of one split tab share an index and keep their listed
+    /// order. Rows without an index (an older host) follow, sessions first.
+    static func tabs(sessions: [RemoteSessionSummary], consoles: [PeerConsoleSummary]) -> [NativePeerTab] {
+        let entries = sessions.filter(\.isActive).map { (tab: NativePeerTab.session($0.id), index: $0.tabIndex) }
+            + consoles.map { (tab: NativePeerTab.console($0.consoleId), index: $0.tabIndex) }
+        return entries.enumerated()
+            .sorted { ($0.element.index ?? .max, $0.offset) < ($1.element.index ?? .max, $1.offset) }
+            .map(\.element.tab)
+    }
+
+    /// What stays selected once the host's tabs change from `previous` to
+    /// `current`: the same tab, or, when the host closed it, the neighbour a
+    /// local close picks (the tab before it, else the new first one). A
+    /// selection that was never one of `previous` is left alone.
+    static func reconciledTab(
+        _ selected: NativePeerTab?, previous: [NativePeerTab], current: [NativePeerTab]
+    ) -> NativePeerTab? {
+        guard let selected, !current.contains(selected),
+              let index = previous.firstIndex(of: selected) else { return selected }
+        return previous[..<index].reversed().first(where: current.contains) ?? current.first
+    }
+
     var updatedAt: Int64 { sessions.map(\.updatedAt).max() ?? 0 }
     var attentionCount: Int { sessions.count { Self.waitingStatuses.contains($0.status) } }
 
     var title: String {
         if let branch = worktree?.branch, !branch.isEmpty { return branch }
         if let name = worktree?.worktreeName, !name.isEmpty { return name }
-        if let primarySession { return primarySession.title }
+        if let session = sessions.first { return session.title }
         if let name = consoles.first?.worktreeName, !name.isEmpty { return name }
         return consoles.first?.title ?? ""
     }

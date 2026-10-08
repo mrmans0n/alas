@@ -25,6 +25,10 @@ struct PeerConsoleSummary: Codable, Equatable, Sendable {
     /// Lets a peer's sidebar place a console-only worktree like a session's.
     /// Nil from an older host; rows then fall back to the display names.
     var worktree: RemoteWorktreeSummary? = nil
+    /// The position of the console's tab in its worktree's tab strip. Panes
+    /// of one split tab share it and are listed in pane order. Nil from an
+    /// older host.
+    var tabIndex: Int? = nil
 }
 
 struct PeerConsoleControl: Codable, Equatable, Sendable {

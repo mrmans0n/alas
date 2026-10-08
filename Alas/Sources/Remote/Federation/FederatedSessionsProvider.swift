@@ -575,7 +575,7 @@ private extension RemoteSessionSummary {
         RemoteSessionSummary(
             id: RemoteFederatedSessionID.compose(serverId: peer.serverId, sessionId: id),
             title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
-            projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
+            tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
             serverId: peer.serverId, serverName: peer.name)
     }
 
@@ -583,7 +583,7 @@ private extension RemoteSessionSummary {
     func retagged(under peer: FederatedPeerInfo) -> RemoteSessionSummary {
         RemoteSessionSummary(
             id: id, title: title, agentId: agentId, status: status, canDrive: canDrive, isActive: isActive,
-            projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
+            tabIndex: tabIndex, projectId: projectId, worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
             serverId: peer.serverId, serverName: peer.name)
     }
 }

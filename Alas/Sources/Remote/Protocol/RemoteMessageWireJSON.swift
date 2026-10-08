@@ -239,6 +239,9 @@ struct RemoteSessionSummary: Equatable, Sendable {
     let status: String       // "idle" | "streaming" | "awaitingPermission" | "awaitingInput"
     let canDrive: Bool       // this remote-host instance currently holds the writer lease
     let isActive: Bool       // still backed by an open Alas tab
+    /// The tab's position in its worktree's tab strip on the host. Nil for
+    /// history sessions and from hosts that predate tab ordering.
+    let tabIndex: Int?
     let projectId: String?
     let worktreeId: String?
     let updatedAt: Int64
@@ -256,6 +259,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
         status: String,
         canDrive: Bool,
         isActive: Bool = true,
+        tabIndex: Int? = nil,
         projectId: String? = nil,
         worktreeId: String? = nil,
         updatedAt: Int64 = 0,
@@ -269,6 +273,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
         self.status = status
         self.canDrive = canDrive
         self.isActive = isActive
+        self.tabIndex = tabIndex
         self.projectId = projectId
         self.worktreeId = worktreeId
         self.updatedAt = updatedAt
@@ -280,7 +285,7 @@ struct RemoteSessionSummary: Equatable, Sendable {
 
 extension RemoteSessionSummary: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, agentId, status, canDrive, isActive, projectId, worktreeId, updatedAt, worktree
+        case id, title, agentId, status, canDrive, isActive, tabIndex, projectId, worktreeId, updatedAt, worktree
         case serverId, serverName
     }
 
@@ -293,6 +298,7 @@ extension RemoteSessionSummary: Codable {
             status: try c.decode(String.self, forKey: .status),
             canDrive: try c.decode(Bool.self, forKey: .canDrive),
             isActive: try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? true,
+            tabIndex: try c.decodeIfPresent(Int.self, forKey: .tabIndex),
             projectId: try c.decodeIfPresent(String.self, forKey: .projectId),
             worktreeId: try c.decodeIfPresent(String.self, forKey: .worktreeId),
             updatedAt: try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0,
@@ -310,6 +316,7 @@ extension RemoteSessionSummary: Codable {
         try c.encode(status, forKey: .status)
         try c.encode(canDrive, forKey: .canDrive)
         try c.encode(isActive, forKey: .isActive)
+        try c.encodeIfPresent(tabIndex, forKey: .tabIndex)
         try c.encodeIfPresent(projectId, forKey: .projectId)
         try c.encodeIfPresent(worktreeId, forKey: .worktreeId)
         try c.encode(updatedAt, forKey: .updatedAt)

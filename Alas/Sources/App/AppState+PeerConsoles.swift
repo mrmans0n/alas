@@ -26,10 +26,16 @@ extension AppState {
         return (path, size)
     }
 
+    /// Tab order, then pane order within a split tab; consoles outside any
+    /// tab follow in creation order.
     func peerConsoleSummaries() -> [PeerConsoleSummary] {
         terminal.registry.all
-            .sorted { $0.createdAt < $1.createdAt }
-            .compactMap { session in
+            .map { (session: $0, position: terminalTabPosition(of: $0)) }
+            .sorted {
+                ($0.position?.tab ?? .max, $0.position?.pane ?? 0, $0.session.createdAt)
+                    < ($1.position?.tab ?? .max, $1.position?.pane ?? 0, $1.session.createdAt)
+            }
+            .compactMap { session, position in
                 guard let console = peerConsoleSocket(session) else { return nil }
                 let names = projectAndWorktree(withWorktreeId: session.worktreeId)
                 return PeerConsoleSummary(
@@ -49,9 +55,20 @@ extension AppState {
                             isMain: projectsManager.isMain($0.worktree, in: $0.project),
                             metrics: .unavailable
                         )
-                    }
+                    },
+                    tabIndex: position?.tab
                 )
             }
+    }
+
+    private func terminalTabPosition(of session: TerminalSession) -> (tab: Int, pane: Int)? {
+        for (index, tab) in tabs.tabs(forWorktree: session.worktreeId).enumerated() {
+            if case .terminal(let state) = tab,
+               let pane = state.root.leaves().firstIndex(where: { $0.id == session.id }) {
+                return (index, pane)
+            }
+        }
+        return nil
     }
 
     private func peerConsoleTarget(consoleId: String) -> PeerConsoleTarget? {
