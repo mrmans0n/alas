@@ -104,6 +104,14 @@ struct PeerConsoleInputRelay {
 
     private var filter = PeerConsoleInputFilter()
     private var sequence = 0
+    private var mouseMode = PeerConsoleMouseModeTracker()
+
+    /// Feeds output written to the surface, so mouse reports the surface
+    /// writes back are decoded in the encoding the host program selected.
+    mutating func observeOutput(_ data: Data) {
+        mouseMode.observe(data)
+        filter.utf8MouseCoordinates = mouseMode.utf8Coordinates
+    }
     /// The lease in effect when the filter's currently held bytes began.
     /// Bytes held under one lease never go out under another.
     private var pendingLease: PeerConsoleControl?
@@ -342,7 +350,11 @@ final class PeerConsoleViewer {
     /// A surface that stopped draining has lost bytes, so the stream cannot
     /// continue: drop output until a fresh snapshot replaces the screen.
     private func writeToSurface(_ data: Data) {
-        guard bridge?.write(data) == false else { return }
+        guard let bridge else { return }
+        guard !bridge.write(data) else {
+            relay.observeOutput(data)
+            return
+        }
         order = PeerConsoleStreamOrder()
         send(.resync(attachmentId: attachmentId))
     }

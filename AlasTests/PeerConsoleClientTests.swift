@@ -45,12 +45,13 @@ import Testing
     }
 
     @Test(arguments: [
-        [0x1B, 0x5B, 0x4D, 0x20, 0xC0, 0x21],      // raw X10, column 160
-        [0x1B, 0x5B, 0x4D, 0x20, 0xD5, 0x21],      // raw X10, high column then low row
-        [0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21], // UTF-8/1005, two-byte column
-    ] as [[UInt8]])
-    func mouseCoordinatesAreSizedByEncoding(report: [UInt8]) {
+        ([0x1B, 0x5B, 0x4D, 0x20, 0xC0, 0x21], false),       // raw X10, column 160
+        ([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0], false),       // raw X10 whose bytes look like UTF-8
+        ([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21], true),  // UTF-8/1005, two-byte column
+    ] as [([UInt8], Bool)])
+    func mouseCoordinatesFollowTheHostsEncoding(report: [UInt8], utf8: Bool) {
         var filter = PeerConsoleInputFilter()
+        filter.utf8MouseCoordinates = utf8
         #expect(filter.filter(Data(report) + Data("k".utf8)) == Data(report) + Data("k".utf8))
         #expect(!filter.hasPending)
     }
@@ -60,6 +61,7 @@ import Testing
         #expect(filter.filter(Data("\(Self.esc)[<0;1".utf8)).isEmpty)
         #expect(filter.filter(Data("0;5M".utf8)) == Data("\(Self.esc)[<0;10;5M".utf8))
         // A 1005 report split inside a two-byte coordinate.
+        filter.utf8MouseCoordinates = true
         #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
         #expect(filter.filter(Data([0xA0, 0x21])) == Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2, 0xA0, 0x21]))
     }
@@ -106,6 +108,22 @@ import Testing
         #expect(filter.flushAmbiguousPrefix().isEmpty)
         kept += filter.filter(Data("\\x".utf8))
         #expect(kept == Data("kx".utf8))
+    }
+}
+
+@Suite struct PeerConsoleMouseModeTrackerTests {
+    @Test func followsMode1005AcrossSplitsAndResets() {
+        var tracker = PeerConsoleMouseModeTracker()
+        tracker.observe(Data("\u{1B}[?1000;10".utf8))
+        #expect(!tracker.utf8Coordinates)
+        tracker.observe(Data("05h text".utf8))
+        #expect(tracker.utf8Coordinates)
+        tracker.observe(Data("\u{1B}[?10050l\u{1B}[1005l".utf8))
+        #expect(tracker.utf8Coordinates)
+        tracker.observe(Data("\u{1B}c".utf8))
+        #expect(!tracker.utf8Coordinates)
+        tracker.observe(Data("\u{1B}[?1005h\u{1B}[?1005l".utf8))
+        #expect(!tracker.utf8Coordinates)
     }
 }
 

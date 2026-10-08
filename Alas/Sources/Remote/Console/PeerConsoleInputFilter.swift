@@ -21,6 +21,9 @@ struct PeerConsoleInputFilter {
     static let maxDiscard = 16 * 1024 * 1024
 
     private var pending: [UInt8] = []
+    /// Whether the host program enabled UTF-8 mouse coordinates (mode 1005);
+    /// see `PeerConsoleMouseModeTracker`. Decides how `CSI M` reports end.
+    var utf8MouseCoordinates = false
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
@@ -44,7 +47,7 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i) {
+            switch Self.sequence(in: bytes, at: i, utf8Mouse: utf8MouseCoordinates) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -124,11 +127,11 @@ struct PeerConsoleInputFilter {
         case incomplete
     }
 
-    private static func sequence(in bytes: [UInt8], at start: Int) -> Sequence {
+    private static func sequence(in bytes: [UInt8], at start: Int, utf8Mouse: Bool) -> Sequence {
         guard start + 1 < bytes.count else { return .incomplete }
         switch bytes[start + 1] {
         case UInt8(ascii: "["):
-            return controlSequence(in: bytes, at: start)
+            return controlSequence(in: bytes, at: start, utf8Mouse: utf8Mouse)
         case let introducer where isStringIntroducer(introducer):
             // OSC, DCS, APC, PM, SOS: never produced by a key press.
             return stringEnd(in: bytes, from: start + 2).map { .drop($0 - start) } ?? .incomplete
@@ -141,18 +144,7 @@ struct PeerConsoleInputFilter {
         }
     }
 
-    /// Bytes in one mouse coordinate: two for a valid two-byte UTF-8 lead
-    /// (0xC0 and 0xC1 never are) followed by a continuation byte, otherwise
-    /// one. Nil when a lead is the last byte read, so the caller waits.
-    /// ponytail: a raw X10 report past column 161 whose row byte happens to
-    /// be 0x80...0xBF (rows 96...159) reads as one 1005 character.
-    private static func mouseCoordinateWidth(_ bytes: [UInt8], at index: Int) -> Int? {
-        guard (0xC2...0xDF).contains(bytes[index]) else { return 1 }
-        guard index + 1 < bytes.count else { return nil }
-        return (0x80...0xBF).contains(bytes[index + 1]) ? 2 : 1
-    }
-
-    private static func controlSequence(in bytes: [UInt8], at start: Int) -> Sequence {
+    private static func controlSequence(in bytes: [UInt8], at start: Int, utf8Mouse: Bool) -> Sequence {
         var j = start + 2
         let paramsStart = j
         while j < bytes.count, (0x30...0x3F).contains(bytes[j]) { j += 1 }
@@ -179,15 +171,13 @@ struct PeerConsoleInputFilter {
             // Mouse reports; no key encoding ends in `M`. rxvt/1015 carries
             // its coordinates as parameters.
             guard params.isEmpty else { return .keep(length) }
-            // X10, or UTF-8/1005: three coordinates follow. Raw X10 uses one
-            // byte each, reaching 0xC0 and above past column 159; 1005
-            // encodes values above 95 as a two-byte UTF-8 character.
+            // X10 or UTF-8/1005: three coordinates follow. Raw X10 uses one
+            // byte each; 1005 encodes values above 95 as two-byte UTF-8, so
+            // only the active mode, not byte shapes, can tell them apart.
             var end = start + length
             for _ in 0..<3 {
-                guard end < bytes.count, let width = mouseCoordinateWidth(bytes, at: end) else {
-                    return .incomplete
-                }
-                end += width
+                guard end < bytes.count else { return .incomplete }
+                end += utf8Mouse && bytes[end] >= 0xC0 ? 2 : 1
             }
             return end <= bytes.count ? .keep(end - start) : .incomplete
         case UInt8(ascii: "I"), UInt8(ascii: "O"):
@@ -202,6 +192,50 @@ struct PeerConsoleInputFilter {
             return .drop(length)
         default:
             return .keep(length)
+        }
+    }
+}
+
+/// Follows the mouse coordinate encoding a host program selects with
+/// `CSI ? 1005 h` / `CSI ? 1005 l`, by watching the output written to the
+/// viewer's surface. Handles multi-parameter forms and sequences split
+/// across writes; RIS (`ESC c`), sent before every snapshot, resets it.
+struct PeerConsoleMouseModeTracker {
+    private(set) var utf8Coordinates = false
+    /// Bytes of a possible `ESC [ ? ... h/l` or `ESC c` seen so far.
+    private var partial: [UInt8] = []
+    private static let maxPartial = 64
+
+    mutating func observe(_ data: Data) {
+        for byte in data { step(byte) }
+    }
+
+    private mutating func step(_ byte: UInt8) {
+        if byte == 0x1B {
+            partial = [byte]
+            return
+        }
+        guard !partial.isEmpty else { return }
+        partial.append(byte)
+        switch partial.count {
+        case 2:
+            if byte == UInt8(ascii: "c") {
+                utf8Coordinates = false
+                partial = []
+            } else if byte != UInt8(ascii: "[") {
+                partial = []
+            }
+        case 3:
+            if byte != UInt8(ascii: "?") { partial = [] }
+        default:
+            if (0x30...0x3B).contains(byte), partial.count < Self.maxPartial { return }
+            if byte == UInt8(ascii: "h") || byte == UInt8(ascii: "l") {
+                let params = partial.dropFirst(3).dropLast().split(separator: UInt8(ascii: ";"))
+                if params.contains(where: { Array($0) == Array("1005".utf8) }) {
+                    utf8Coordinates = byte == UInt8(ascii: "h")
+                }
+            }
+            partial = []
         }
     }
 }
