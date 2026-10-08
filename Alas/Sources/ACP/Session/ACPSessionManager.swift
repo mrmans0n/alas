@@ -5167,6 +5167,7 @@ extension ACPSessionManager {
                 cancelAutoReconnect(sessionId: sessionId)
                 let previousAttempt = supersedeAttachmentAttempt(for: sessionId)
                 let previousRunner = runners.removeValue(forKey: sessionId)
+                recordUnreportedUsage(of: previousRunner)
                 connectionOwnerIDs[sessionId] = nil
                 brokerCallbackOwnerIDs[sessionId] = nil
                 previousRunner?.stop()
@@ -5261,6 +5262,7 @@ extension ACPSessionManager {
         discardDeferredConfigOptionUpdates(for: sessionId)
         discardDeferredModelModeUpdates(for: sessionId)
         let runner = runners.removeValue(forKey: sessionId)
+        recordUnreportedUsage(of: runner)
         runner?.invalidateActivePrompt()
         runner?.stop()
         cancelAutoReconnect(sessionId: sessionId)
@@ -6044,6 +6046,7 @@ extension ACPSessionManager {
         // registered AFTER state flips to .ready — so anything still here
         // is a zombie whose update task already exited.
         if let stale = runners[sessionId] {
+            recordUnreportedUsage(of: stale)
             stale.stop()
             await stale.flushPersistence()
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
@@ -7680,6 +7683,7 @@ extension ACPSessionManager {
                     attachSucceeded = false
                     if runners[sessionId] === runner {
                         runners[sessionId] = nil
+                        recordUnreportedUsage(of: runner)
                         runner.stop()
                         await runner.flushPersistence()
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
@@ -7872,6 +7876,14 @@ extension ACPSessionManager {
         }
     }
 
+    /// A retired runner's own usage reports are dropped once it no longer owns the connection, so whatever it has not
+    /// reported yet, a turn in flight or one held behind it, is recorded here.
+    private func recordUnreportedUsage(of runner: ACPSessionRunner?) {
+        for usage in runner?.takeUnreportedUsage() ?? [] {
+            onTurnUsage?(usage)
+        }
+    }
+
     /// Replaces an attach that has stopped making progress, keeping the
     /// persisted session and pending queue available to the next connection.
     func restartConnection(to sessionId: ACPSession.ID) async {
@@ -7917,10 +7929,7 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
-        // The old runner lost ownership above, so its reports are dropped: a turn in flight gets its row here.
-        for usage in oldRunner?.takeUnreportedUsage() ?? [] {
-            onTurnUsage?(usage)
-        }
+        recordUnreportedUsage(of: oldRunner)
         replacementAttempt.retiringRunner = oldRunner
         let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         let oldAttemptConnection = oldAttempt?.connection
@@ -9258,6 +9267,7 @@ extension ACPSessionManager {
         sessionId: ACPSession.ID
     ) async {
         guard runners[sessionId] === runner else { return }
+        recordUnreportedUsage(of: runner)
         runner.invalidateActivePrompt()
         if let session = sessions[sessionId] {
             session.transcript.streamingState = .idle
@@ -9561,6 +9571,7 @@ extension ACPSessionManager {
         let remoteSessionId = attaching?.remoteSessionId ?? session?.remoteSessionId
         let runner = runners.removeValue(forKey: sessionId) ?? attempt?.retiringRunner
         attempt?.retiringRunner = nil
+        recordUnreportedUsage(of: runner)
         let remoteCloseConnection: ACPConnection? = if attempt?.connectionIsInitializedForRemoteClose == true {
             attemptConnection ?? attaching?.connection ?? runner?.connection
         } else {

@@ -1645,8 +1645,9 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.interruptedQueueSessionIds().isEmpty)
     }
 
-    @Test("a turn in flight when the connection restarts is still recorded as usage, without its result")
-    func restartRecordsTheInterruptedTurnsUsage() async throws {
+    @Test("a turn in flight when its runner is retired is still recorded as usage, without its result",
+          arguments: [true, false])
+    func aRetiredRunnersTurnIsStillRecordedAsUsage(restarts: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         scriptInitialize(client)
@@ -1665,7 +1666,11 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
         try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
 
-        await manager.restartConnection(to: session.id)
+        if restarts {
+            await manager.restartConnection(to: session.id)
+        } else {
+            await manager.detach(sessionId: session.id)
+        }
 
         #expect(usage.map(\.result) == [.cancelled])
         #expect(usage.first?.sentAt != nil && usage.first?.quota == nil)
