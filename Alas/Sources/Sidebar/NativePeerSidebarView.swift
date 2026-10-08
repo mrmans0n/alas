@@ -536,7 +536,7 @@ private struct NativePeerWorktreeRow: View {
                                 Text(session.title)
                             } icon: {
                                 if let agent = AgentKind(rawValue: session.agentId) {
-                                    Image(agent.logoAssetName)
+                                    Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
                                 } else {
                                     Image(systemName: "sparkles")
                                 }
