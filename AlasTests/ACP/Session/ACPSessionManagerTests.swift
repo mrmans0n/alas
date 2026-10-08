@@ -1662,6 +1662,43 @@ struct ACPSessionManagerTests {
         #expect(session.queue.isEmpty)
     }
 
+    @Test("a visual answer whose registration times out is reverted, returns false and never sends after the stall ends")
+    func timedOutVisualAnswerIsInvalidated() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        manager.visualAidPromptRegistrationWait = .milliseconds(50)
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let leaseCheck = AsyncGate()
+        manager.beforeLeaseConfirmationForTesting = { await leaseCheck.enterAndWait() }
+
+        let sent = await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id)
+
+        #expect(sent == false)
+        #expect(session.transcript.visualAid(id: visual.id)?.answer == nil)
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        await leaseCheck.release()
+        await manager.flushPersistence()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("a cancelled visual answer cannot commit and a committed one cannot be cancelled")
+    func visualAnswerCancellationStateMachine() {
+        let cancelFirst = VisualAidAnswerCancellation()
+        #expect(cancelFirst.cancelIfNotCommitted())
+        #expect(cancelFirst.commit() == false)
+        #expect(cancelFirst.isCancelled)
+
+        let commitFirst = VisualAidAnswerCancellation()
+        #expect(commitFirst.commit())
+        #expect(commitFirst.cancelIfNotCommitted() == false)
+        #expect(commitFirst.commit())
+        #expect(commitFirst.isCancelled == false)
+    }
+
     @Test("sendPrompt that is no longer wanted after the lease check reports failure and sends nothing")
     func sendPromptHonoursIsStillWanted() async throws {
         let (manager, session, _, client) = try await attachedVisualAidManager()
