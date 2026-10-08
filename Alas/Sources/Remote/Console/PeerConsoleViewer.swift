@@ -243,9 +243,12 @@ final class PeerConsoleViewer {
         self.title = title
         self.send = send
         do {
-            let bridge = try PeerConsoleBridge { [weak self] data in
-                Task { @MainActor in self?.surfaceWrote(data) }
-            }
+            // Both callbacks hop to the main actor in arrival order, so the
+            // mouse mode changes before input the surface encoded after it.
+            let bridge = try PeerConsoleBridge(
+                onWritten: { [weak self] data in Task { @MainActor in self?.relay.observeOutput(data) } },
+                onInput: { [weak self] data in Task { @MainActor in self?.surfaceWrote(data) } }
+            )
             self.bridge = bridge
             surface = try makeSurface(bridge.command.executable, bridge.command.args) { [weak self] in
                 Task { @MainActor in self?.end("The local terminal closed.", notifyHost: true) }
@@ -351,10 +354,7 @@ final class PeerConsoleViewer {
     /// continue: drop output until a fresh snapshot replaces the screen.
     private func writeToSurface(_ data: Data) {
         guard let bridge else { return }
-        guard !bridge.write(data) else {
-            relay.observeOutput(data)
-            return
-        }
+        guard !bridge.write(data) else { return }
         order = PeerConsoleStreamOrder()
         send(.resync(attachmentId: attachmentId))
     }

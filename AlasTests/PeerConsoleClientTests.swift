@@ -124,6 +124,12 @@ import Testing
         #expect(!tracker.utf8Coordinates)
         tracker.observe(Data("\u{1B}[?1005h\u{1B}[?1005l".utf8))
         #expect(!tracker.utf8Coordinates)
+        // A combined mode change far longer than any fixed buffer.
+        let long = String(repeating: "1000;", count: 30) + "1005h"
+        tracker.observe(Data("\u{1B}[?\(long)".utf8))
+        #expect(tracker.utf8Coordinates)
+        tracker.observe(Data("\u{1B}[?100500h".utf8))
+        #expect(tracker.utf8Coordinates)
     }
 }
 

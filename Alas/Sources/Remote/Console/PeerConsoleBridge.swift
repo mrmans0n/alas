@@ -31,8 +31,17 @@ final class PeerConsoleBridge: @unchecked Sendable {
     }
 
     /// `onInput` runs on a background thread with bytes the surface wrote.
-    init(maxPendingBytes: Int = 16 * 1024 * 1024, onInput: @escaping @Sendable (Data) -> Void) throws {
+    /// Runs on the write queue with bytes just handed to `nc`, the closest
+    /// observable point to the surface consuming them.
+    private let onWritten: @Sendable (Data) -> Void
+
+    init(
+        maxPendingBytes: Int = 16 * 1024 * 1024,
+        onWritten: @escaping @Sendable (Data) -> Void = { _ in },
+        onInput: @escaping @Sendable (Data) -> Void
+    ) throws {
         self.maxPendingBytes = maxPendingBytes
+        self.onWritten = onWritten
         var template = Array("/tmp/alas-pc.XXXXXX".utf8CString)
         guard let dir = template.withUnsafeMutableBufferPointer({ mkdtemp($0.baseAddress) }) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -82,6 +91,7 @@ final class PeerConsoleBridge: @unchecked Sendable {
             lock.unlock()
             guard fd >= 0 else { return }
             Self.writeAll(fd, data)
+            onWritten(data)
             lock.withLock { pendingBytes -= data.count }
         }
         return true
@@ -115,7 +125,12 @@ final class PeerConsoleBridge: @unchecked Sendable {
             let backlog = queued
             queued = []
             lock.unlock()
-            if !closed { backlog.forEach { Self.writeAll(fd, $0) } }
+            if !closed {
+                for data in backlog {
+                    Self.writeAll(fd, data)
+                    onWritten(data)
+                }
+            }
             lock.withLock { pendingBytes -= backlog.reduce(0) { $0 + $1.count } }
         }
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)

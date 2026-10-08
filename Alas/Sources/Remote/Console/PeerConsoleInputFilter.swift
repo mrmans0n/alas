@@ -201,41 +201,56 @@ struct PeerConsoleInputFilter {
 /// viewer's surface. Handles multi-parameter forms and sequences split
 /// across writes; RIS (`ESC c`), sent before every snapshot, resets it.
 struct PeerConsoleMouseModeTracker {
+    private enum State {
+        case ground, escape, controlSequence, privateParameters
+    }
+
     private(set) var utf8Coordinates = false
-    /// Bytes of a possible `ESC [ ? ... h/l` or `ESC c` seen so far.
-    private var partial: [UInt8] = []
-    private static let maxPartial = 64
+    private var state = State.ground
+    /// Digits of the parameter being read; longer than any mode number
+    /// means it cannot be 1005.
+    private var parameter: [UInt8] = []
+    private var names1005 = false
+    private static let mode1005 = Array("1005".utf8)
 
     mutating func observe(_ data: Data) {
         for byte in data { step(byte) }
     }
 
+    /// Streams `ESC [ ? p1 ; p2 ... h/l` one parameter at a time, so a long
+    /// combined mode change is still recognized.
     private mutating func step(_ byte: UInt8) {
         if byte == 0x1B {
-            partial = [byte]
+            state = .escape
             return
         }
-        guard !partial.isEmpty else { return }
-        partial.append(byte)
-        switch partial.count {
-        case 2:
-            if byte == UInt8(ascii: "c") {
-                utf8Coordinates = false
-                partial = []
-            } else if byte != UInt8(ascii: "[") {
-                partial = []
+        switch state {
+        case .ground:
+            return
+        case .escape:
+            if byte == UInt8(ascii: "c") { utf8Coordinates = false }
+            state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
+        case .controlSequence:
+            guard byte == UInt8(ascii: "?") else {
+                state = .ground
+                return
             }
-        case 3:
-            if byte != UInt8(ascii: "?") { partial = [] }
-        default:
-            if (0x30...0x3B).contains(byte), partial.count < Self.maxPartial { return }
-            if byte == UInt8(ascii: "h") || byte == UInt8(ascii: "l") {
-                let params = partial.dropFirst(3).dropLast().split(separator: UInt8(ascii: ";"))
-                if params.contains(where: { Array($0) == Array("1005".utf8) }) {
-                    utf8Coordinates = byte == UInt8(ascii: "h")
-                }
+            parameter = []
+            names1005 = false
+            state = .privateParameters
+        case .privateParameters:
+            switch byte {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"):
+                if parameter.count <= Self.mode1005.count { parameter.append(byte) }
+            case UInt8(ascii: ";"), UInt8(ascii: ":"):
+                names1005 = names1005 || parameter == Self.mode1005
+                parameter = []
+            case UInt8(ascii: "h"), UInt8(ascii: "l"):
+                if names1005 || parameter == Self.mode1005 { utf8Coordinates = byte == UInt8(ascii: "h") }
+                state = .ground
+            default:
+                state = .ground
             }
-            partial = []
         }
     }
 }
