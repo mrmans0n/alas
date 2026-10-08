@@ -516,7 +516,8 @@ struct RemoteAppStateAccessTests {
         #expect(state.canReopenClosedTab)
     }
 
-    @Test func remoteOpenSessionTabRejectsASessionArchivedByAnotherProcess() async throws {
+    @Test(arguments: [true, false])
+    func remoteOpenSessionTabRejectsASessionArchivedOrDeletedByAnotherProcess(archived: Bool) async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -531,10 +532,15 @@ struct RemoteAppStateAccessTests {
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         let id = "archived-elsewhere-\(UUID().uuidString)"
         try await seedStoredSession(id: id, title: "Stale", in: manager)
-        try await manager.persistence.setArchived(id: id, archived: true)
+        if archived {
+            try await manager.persistence.setArchived(id: id, archived: true)
+        } else {
+            try await manager.persistence.deleteSession(id: id)
+        }
         #expect(manager.sessionRows.contains { $0.id == id && !$0.archived })
 
-        #expect(await state.openSessionTab(for: id) == .failure("This session is archived."))
+        #expect(await state.openSessionTab(for: id) == .failure(
+            archived ? "This session is archived." : "This session is no longer available."))
         #expect(!acpTabs(in: state).contains { $0.sessionId == id })
     }
 

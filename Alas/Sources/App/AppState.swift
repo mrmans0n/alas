@@ -15602,10 +15602,16 @@ extension AppState: RemoteSessionsProvider {
         guard let manager = acpManager(for: worktree) else {
             return .failure("Could not open this session.")
         }
-        // `sessionRows` can predate an archive made by another Alas process.
-        if (try? await manager.persistence.loadSession(id: id))?.archived == true {
-            return .failure("This session is archived.")
+        // `sessionRows` can predate an archive or delete made by another Alas
+        // process, so only a fresh, unarchived stored row may be opened.
+        let stored: ACPSessionRow?
+        do {
+            stored = try await manager.persistence.loadSession(id: id)
+        } catch {
+            return .failure("Could not read this session.")
         }
+        guard let stored else { return .failure("This session is no longer available.") }
+        if stored.archived { return .failure("This session is archived.") }
         await openExistingACPSession(sessionId: id, worktree: worktree)
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
             return .failure("Could not open this session.")
