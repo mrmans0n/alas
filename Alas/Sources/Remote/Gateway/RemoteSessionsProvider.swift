@@ -80,9 +80,13 @@ protocol RemoteSessionsProvider: AnyObject {
     func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+    /// Serves peer console traffic; nil when this app does not.
+    var peerConsoleHost: PeerConsoleHost? { get }
 }
 
 extension RemoteSessionsProvider {
+    var peerConsoleHost: PeerConsoleHost? { nil }
+
     func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
         .failure(reason: .unknown, message: "Commit inspection is unavailable.")
     }

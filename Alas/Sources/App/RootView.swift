@@ -298,7 +298,8 @@ struct RootView: View {
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
             peerSessionId: state.nativePeerSessions?.selectedSessionId,
-            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil
+            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil,
+            peerConsoleSelected: state.nativePeerSessions?.consoles?.viewer != nil
         ).resolve()
     }
 
@@ -334,6 +335,14 @@ struct RootView: View {
                 )
                 .id(client.selectedSessionId)
             }
+        } else if let consoles = state.nativePeerSessions?.consoles, let viewer = consoles.viewer {
+            NativePeerConsoleView(
+                viewer: viewer,
+                peerName: state.nativePeerSessions?.snapshot.groups.first { $0.serverId == viewer.serverId }?.name
+                    ?? "a paired Mac",
+                onReconnect: { consoles.reconnect() }
+            )
+            .id(viewer.attachmentId)
         } else {
             worktreeCenterContent(
                 effectiveRightPaneVisible: effectiveRightPaneVisible,

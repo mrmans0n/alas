@@ -578,6 +578,15 @@ struct RemoteSessionGatewayTests {
         return ACPPermissionDecisionLog(store: try ACPSessionStore(path: url.path))
     }
 
+    @Test func consoleAttachIsRefusedWithoutAnAuthenticatedPeerLink() async {
+        // Browsers get no console link, so the host is never consulted.
+        let provider = FakeSessionsProvider()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.console(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0)))
+        #expect(sent == [.console(.detached(attachmentId: "a", reason: .unauthorized))])
+    }
+
     @Test func listProjectsDropsSupersededPausedResponse() async {
         let provider = FakeSessionsProvider()
         let oldProjects = [RemoteProjectOption(id: "project-old", name: "Old")]

@@ -7,6 +7,9 @@ final class NativePeerSessions {
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
     private let comparisonMode: @MainActor () -> AppConfig.Changes.ChangesComparisonMode?
+    /// Peer consoles. Selecting one clears the selected session and vice
+    /// versa, so the center pane shows exactly one peer surface.
+    let consoles: NativePeerConsoles?
     @ObservationIgnored private var downstream: FederatedDownstream?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var isFetchingOlderMessages = false
@@ -64,11 +67,13 @@ final class NativePeerSessions {
     init(
         federation: FederatedSessionsProvider,
         peers: @escaping @MainActor () -> [RemoteHelloPeer],
-        comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil }
+        comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil },
+        consoles: NativePeerConsoles? = nil
     ) {
         self.federation = federation
         self.peers = peers
         self.comparisonMode = comparisonMode
+        self.consoles = consoles
     }
 
     var selectedRow: RemoteSessionSummary? {
@@ -91,6 +96,7 @@ final class NativePeerSessions {
         )
         downstream = client
         federation.attach(client)
+        consoles?.start()
         refresh()
         _ = federation.route(.listSessions, from: client)
     }
@@ -103,6 +109,7 @@ final class NativePeerSessions {
             federation.detach(downstream)
         }
         downstream = nil
+        consoles?.stop()
         selectedSessionId = nil
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
@@ -126,6 +133,7 @@ final class NativePeerSessions {
     func refresh() {
         guard downstream != nil else { return }
         snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries)
+        consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
         reconcileNewSession()
         if let pending = pendingCreatedSessionId,
            snapshot.groups.contains(where: { $0.sessions.contains { $0.id == pending } }) {
@@ -190,7 +198,15 @@ final class NativePeerSessions {
         reloadWorkspace()
     }
 
+    func selectConsole(serverId: String, consoleId: String) {
+        if let viewer = consoles?.viewer, viewer.serverId == serverId, viewer.consoleId == consoleId,
+           !viewer.isEnded { return }
+        clearSelection()
+        consoles?.select(serverId: serverId, consoleId: consoleId)
+    }
+
     func clearSelection() {
+        consoles?.clearSelection()
         if let selectedSessionId, let downstream {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
         }

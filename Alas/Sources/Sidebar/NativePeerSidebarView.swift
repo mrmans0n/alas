@@ -137,11 +137,40 @@ struct NativePeerSidebarView: View {
                     ForEach(repos) { repo in
                         repoGroup(repo, peer: group)
                     }
+                    consoleRows(peer: group)
                 }
                 // Puts each repo's chevron under the peer's tile, one level
                 // in, the way worktrees sit under their repo.
                 .padding(.leading, 19)
             }
+        }
+    }
+
+    /// The peer's shareable consoles, including ones in worktrees that have
+    /// no agent session and so no row above.
+    @ViewBuilder
+    private func consoleRows(peer: NativePeerGroup) -> some View {
+        let consoles = client.consoles?.consoles[peer.serverId] ?? []
+        if !consoles.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Consoles")
+                    .textCase(.uppercase)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundColor(theme.color("fg-faint"))
+                    .padding(.leading, 7)
+                    .padding(.top, 6)
+                ForEach(consoles, id: \.consoleId) { console in
+                    NativePeerConsoleRow(
+                        console: console,
+                        isSelected: client.consoles?.viewer.map {
+                            $0.serverId == peer.serverId && $0.consoleId == console.consoleId
+                        } ?? false,
+                        onSelect: { client.selectConsole(serverId: peer.serverId, consoleId: console.consoleId) }
+                    )
+                }
+            }
+            .padding(.trailing, 6)
         }
     }
 
@@ -661,5 +690,59 @@ private struct NativePeerAttentionCount: View {
         .help("\(count) waiting on you")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(count) need attention")
+    }
+}
+
+/// One console on a paired Mac, opened in the center pane on tap.
+struct NativePeerConsoleRow: View {
+    let console: PeerConsoleSummary
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "terminal")
+                .font(.system(size: 10))
+                .foregroundColor(theme.color("fg-faint"))
+                .frame(width: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(console.title)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let location {
+                    Text(location)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 9).fill(theme.color("accent-soft"))
+            } else if hovering {
+                RoundedRectangle(cornerRadius: 9).fill(theme.color("bg-3").opacity(0.55))
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(perform: onSelect)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([console.title, location].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var location: String? {
+        let parts = [console.projectName, console.worktreeName].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

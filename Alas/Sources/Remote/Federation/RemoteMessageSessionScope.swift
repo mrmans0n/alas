@@ -12,7 +12,7 @@ extension RemoteClientMessage {
     var sessionId: String? {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession:
+             .createWorktreeSession, .createSession, .console:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id):
             return id
@@ -29,7 +29,7 @@ extension RemoteClientMessage {
     func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession:
+             .createWorktreeSession, .createSession, .console:
             return self
         case .subscribe: return .subscribe(sessionId: new)
         case .unsubscribe: return .unsubscribe(sessionId: new)
@@ -79,7 +79,7 @@ extension RemoteClientMessage {
 extension RemoteServerMessage {
     var sessionId: String? {
         switch self {
-        case .hello, .identityProof, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
              .createSessionFailed:
             return nil
@@ -107,7 +107,7 @@ extension RemoteServerMessage {
 
     func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
-        case .hello, .identityProof, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
              .createSessionFailed:
             return self

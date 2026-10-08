@@ -19,6 +19,8 @@ final class RemoteSessionGateway {
     /// This gateway's registration with `federation`; nil without one.
     private var downstream: FederatedDownstream?
     private let send: (RemoteServerMessage) -> Void
+    /// Console channel of an authenticated Alas peer; nil for browsers.
+    private let consoleLink: PeerConsoleLink?
     private var subscriptions: [String: AnyCancellable] = [:]
     private var configSubscriptions: [String: AnyCancellable] = [:]
     private var configCoalesce: [String: Task<Void, Never>] = [:]
@@ -48,9 +50,11 @@ final class RemoteSessionGateway {
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
     init(provider: RemoteSessionsProvider, federation: FederatedSessionsProvider? = nil,
+         consoleLink: PeerConsoleLink? = nil,
          send: @escaping (RemoteServerMessage) -> Void) {
         self.provider = provider
         self.federation = federation
+        self.consoleLink = consoleLink
         self.send = send
         guard let federation else { return }
         // A peer's cached list moving refreshes this client even if it has
@@ -69,6 +73,8 @@ final class RemoteSessionGateway {
         case .helloAck:
             // Version acknowledgement from an Alas peer; nothing to do server-side.
             break
+        case .console(let request):
+            handleConsole(request)
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
@@ -530,8 +536,21 @@ final class RemoteSessionGateway {
         }
     }
 
+    private func handleConsole(_ request: PeerConsoleRequest) {
+        if let consoleLink, let host = provider.peerConsoleHost {
+            host.handle(request, from: consoleLink)
+            return
+        }
+        // Browsers and hosts without console support: refuse attaches
+        // explicitly so the client does not wait for a snapshot.
+        if case .attach(_, let attachmentId, _) = request {
+            send(.console(.detached(attachmentId: attachmentId, reason: .unauthorized)))
+        }
+    }
+
     /// Tear down all observation (called when the connection closes).
     func close() {
+        if let consoleLink { provider.peerConsoleHost?.close(consoleLink) }
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil
         sessionListRefresh?.cancel()

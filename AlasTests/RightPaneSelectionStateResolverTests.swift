@@ -34,7 +34,14 @@ struct RightPaneSelectionStateResolverTests {
         #expect(resolver.resolve() == .peer(sessionId: "B:s"))
     }
 
-    @Test func peerSessionWithoutAWorktreeHidesTheRailRatherThanShowingTheStaleWorktree() {
+    @Test(arguments: [
+        ("B:s" as String?, false),   // peer session without a worktree
+        (nil as String?, true),      // peer console
+    ])
+    func peerSelectionWithoutWorktreeContentHidesTheRailRatherThanShowingTheStaleWorktree(
+        peerSessionId: String?,
+        peerConsoleSelected: Bool
+    ) {
         let project = ProjectConfig(id: "p", name: "P", path: "/tmp/p", color: "#fff", addedAt: .distantPast)
         let wt = Worktree(id: "wt", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/p"), status: .clean, lastActivity: .distantPast)
         let manager = ProjectsManager(persistedProjects: [project])
@@ -43,8 +50,9 @@ struct RightPaneSelectionStateResolverTests {
             selectedWorktreeId: wt.id,
             projects: [project],
             projectsManager: manager,
-            peerSessionId: "B:s",
-            peerSessionHasWorktree: false
+            peerSessionId: peerSessionId,
+            peerSessionHasWorktree: false,
+            peerConsoleSelected: peerConsoleSelected
         )
         #expect(resolver.resolve() == .empty)
     }

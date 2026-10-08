@@ -326,9 +326,53 @@ extension AlasGhostty {
                 UInt32(max(1, backing.width)),
                 UInt32(max(1, backing.height))
             )
+            reportGridSizeIfChanged()
         }
 
         // MARK: - Public API
+
+        /// Fires when a pixel resize or a font-size change alters the
+        /// terminal's rows or columns.
+        var onGridSizeChange: ((_ rows: Int, _ columns: Int) -> Void)?
+        private var lastReportedGridSize: GridSize?
+
+        /// Called after a resize and when Ghostty reports a new cell size.
+        func reportGridSizeIfChanged() {
+            guard let size = gridSize, size != lastReportedGridSize else { return }
+            lastReportedGridSize = size
+            onGridSizeChange?(size.rows, size.columns)
+        }
+
+        struct GridSize: Equatable {
+            let rows: Int
+            let columns: Int
+        }
+
+        /// One cell in points, or nil before the surface has font metrics.
+        var cellSize: CGSize? {
+            guard let surface = cSurface else { return nil }
+            let size = ghostty_surface_size(surface)
+            guard size.cell_width_px > 0, size.cell_height_px > 0 else { return nil }
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            return CGSize(width: CGFloat(size.cell_width_px) / scale, height: CGFloat(size.cell_height_px) / scale)
+        }
+
+        var gridSize: GridSize? {
+            guard let surface = cSurface else { return nil }
+            let size = ghostty_surface_size(surface)
+            return GridSize(rows: Int(size.rows), columns: Int(size.columns))
+        }
+
+        /// Read-only drops every user write to the PTY (keys, text, paste,
+        /// mouse reports) inside Ghostty while still rendering output and
+        /// answering terminal queries.
+        private(set) var isReadOnly = false
+
+        func setReadOnly(_ readOnly: Bool) {
+            guard readOnly != isReadOnly, cSurface != nil else { return }
+            isReadOnly = readOnly
+            runBindingAction("toggle_readonly")
+        }
 
         /// Foreground process pid in the surface's PTY (or nil if surface or pid unavailable).
         /// `cSurface` is nonisolated(unsafe) — Ghostty's foreground-pid read is a safe

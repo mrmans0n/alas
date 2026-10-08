@@ -117,10 +117,12 @@ enum RemoteClientMessage: Equatable, Sendable {
     /// The phone's answer to a visual aid question. `action` is "answer" or
     /// "dismiss"; the gateway validates the choices against the question.
     case visualAidResponse(sessionId: String, visualId: String, action: String, selectedOptionIds: [String], note: String?)
+    /// Peer console traffic; see `PeerConsoleRequest`.
+    case console(PeerConsoleRequest)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -267,6 +269,8 @@ extension RemoteClientMessage: Codable {
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
+        case "console":
+            self = .console(try c.decode(PeerConsoleRequest.self, forKey: .console))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -417,6 +421,9 @@ extension RemoteClientMessage: Codable {
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+        case .console(let request):
+            try c.encode("console", forKey: .type)
+            try c.encode(request, forKey: .console)
         }
     }
 }
@@ -500,8 +507,10 @@ extension RemoteClientMessage {
 /// Server → client. `type` discriminates.
 enum RemoteServerMessage: Equatable, Sendable {
     /// First frame after a successful upgrade, before any reply.
+    /// `capabilities` lists optional features this Mac serves, such as
+    /// `PeerConsoleCapability.v1`; absent on older Macs.
     case hello(protocolVersion: Int, serverId: String, name: String,
-               federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [])
+               federationEnabled: Bool = false, peers: [RemoteHelloPeer] = [], capabilities: [String] = [])
     /// Answer to a `helloAck` that carried a challenge: this Mac's public
     /// key and a signature over the asking peer's own nonce. Sent on the
     /// socket that will carry traffic, so what is proved is the identity of
@@ -572,6 +581,8 @@ enum RemoteServerMessage: Equatable, Sendable {
     case fileUnavailable(
         sessionId: String, path: String, reason: RemoteFileAccessReason,
         byteSize: Int?, message: String?)
+    /// Peer console traffic; see `PeerConsoleEvent`.
+    case console(PeerConsoleEvent)
 }
 
 extension RemoteServerMessage: Codable {
@@ -584,7 +595,7 @@ extension RemoteServerMessage: Codable {
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote, commitsTruncated, sha
-        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers
+        case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console
         case challenge, publicKey, signature
         case visualId
     }
@@ -598,7 +609,10 @@ extension RemoteServerMessage: Codable {
                 serverId: try c.decode(String.self, forKey: .serverId),
                 name: try c.decode(String.self, forKey: .name),
                 federationEnabled: try c.decodeIfPresent(Bool.self, forKey: .federationEnabled) ?? false,
-                peers: try c.decodeIfPresent([RemoteHelloPeer].self, forKey: .peers) ?? [])
+                peers: try c.decodeIfPresent([RemoteHelloPeer].self, forKey: .peers) ?? [],
+                capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities) ?? [])
+        case "console":
+            self = .console(try c.decode(PeerConsoleEvent.self, forKey: .console))
         case "identityProof":
             self = .identityProof(
                 challenge: try c.decode(String.self, forKey: .challenge),
@@ -811,7 +825,7 @@ extension RemoteServerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .hello(let protocolVersion, let serverId, let name, let federationEnabled, let peers):
+        case .hello(let protocolVersion, let serverId, let name, let federationEnabled, let peers, let capabilities):
             try c.encode("hello", forKey: .type)
             try c.encode(protocolVersion, forKey: .protocolVersion)
             try c.encode(serverId, forKey: .serverId)
@@ -820,6 +834,10 @@ extension RemoteServerMessage: Codable {
             try c.encode(true, forKey: .hubEnabled)
             try c.encode(federationEnabled, forKey: .federationEnabled)
             if !peers.isEmpty { try c.encode(peers, forKey: .peers) }
+            if !capabilities.isEmpty { try c.encode(capabilities, forKey: .capabilities) }
+        case .console(let event):
+            try c.encode("console", forKey: .type)
+            try c.encode(event, forKey: .console)
         case .identityProof(let challenge, let publicKey, let signature):
             try c.encode("identityProof", forKey: .type)
             try c.encode(challenge, forKey: .challenge)
@@ -1049,6 +1067,7 @@ extension RemoteServerMessage {
             name: identity.name,
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
-            peers: identity.peers)
+            peers: identity.peers,
+            capabilities: [PeerConsoleCapability.v1])
     }
 }
