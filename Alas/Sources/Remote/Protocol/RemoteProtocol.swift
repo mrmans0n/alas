@@ -475,7 +475,8 @@ extension RemoteClientMessage {
         }
     }
 
-    /// Messages that establish or change which turn is active, and so a
+    /// Messages that establish or change which turn is active (an answered
+    /// visual aid starts one with its prompt), and so a
     /// following `stop` must wait for them specifically (not the whole
     /// ordered queue) before running — otherwise stop could land before a
     /// still-in-flight `sendPrompt`/`takeOver` finishes, find no active turn
@@ -484,7 +485,7 @@ extension RemoteClientMessage {
     /// stop stays fast when a client is simply scrolled up mid-backfill.
     var isDriveOrdering: Bool {
         switch self {
-        case .sendPrompt, .takeOver,
+        case .sendPrompt, .takeOver, .visualAidResponse,
              .queueForceSend, .queueRemove, .queueRetry, .queueEdit,
              .queueClear:
             return true

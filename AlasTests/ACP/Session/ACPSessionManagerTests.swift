@@ -1608,6 +1608,20 @@ struct ACPSessionManagerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
     }
 
+    @Test("an answered visual has its prompt registered by the time answerVisualAid returns, so a following Stop finds the turn")
+    func answerVisualAidRegistersThePromptBeforeReturning() async throws {
+        let (manager, session, _, _) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let runner = try #require(manager.runners[session.id])
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+
+        #expect(await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id))
+
+        #expect(runner.activePromptIDForTesting != nil || !session.queue.isEmpty)
+    }
+
     @Test("answerVisualAid reverts the answer and sends nothing when its row is not written")
     func answerVisualAidRevertsWhenTheWriteFails() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()

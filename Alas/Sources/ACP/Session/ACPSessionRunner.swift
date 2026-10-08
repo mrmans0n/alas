@@ -186,6 +186,7 @@ final class ACPSessionRunner {
     var queueDispatchProvenancePersistedForTesting: (@MainActor @Sendable (UUID) async -> Void)?
     var beforePersistenceForTesting: (@MainActor () async -> Void)?
     var onPersistenceFlushForTesting: (@MainActor () -> Void)?
+    var activePromptIDForTesting: Int? { activePromptID }
 #endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?

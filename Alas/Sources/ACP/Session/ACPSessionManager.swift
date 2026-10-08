@@ -8718,8 +8718,8 @@ extension ACPSessionManager {
 
     /// Store the user's answer on the visual and start sending it to the agent
     /// as a normal prompt, without awaiting the turn. Returns true once the
-    /// answer's row is confirmed written (and for a dismissal, which sends
-    /// nothing), false when it could not be stored. An answer first waits for
+    /// answer's row is confirmed written and the prompt is registered (sent or
+    /// queued; a dismissal sends nothing), false when it could not be stored. An answer first waits for
     /// the card's own first write to be confirmed, and is refused if that
     /// write failed. The in-memory answer is set first so a second submit
     /// finds it answered; when the write fails the
@@ -8744,10 +8744,10 @@ extension ACPSessionManager {
         }
         session.visualAidSendStatus(for: visualId).error = nil
         guard let prompt = ACPVisualAidQuestionForm.answerPrompt(for: visual, answer: answer) else { return true }
-        Task { @MainActor in
-            await self.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
-                if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
-            }
+        // `sendPrompt` returns once the prompt is registered (sent now or queued), not when the turn
+        // ends, so a Stop ordered after this answer finds the turn it started.
+        await sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
+            if !ok { Task { @MainActor in await self.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
         }
         return true
     }
