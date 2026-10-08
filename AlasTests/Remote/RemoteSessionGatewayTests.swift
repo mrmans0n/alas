@@ -1585,6 +1585,129 @@ struct RemoteSessionGatewayTests {
         #expect(wire.text == "hello")
     }
 
+    private func makeVisual(answer: ACPVisualAid.Answer? = nil) -> ACPVisualAid {
+        ACPVisualAid(
+            id: UUID(uuidString: "6F0C2D4E-8B1A-4C3D-9E5F-1A2B3C4D5E6F")!,
+            title: "Layouts", html: "<h2>Pick</h2>",
+            question: .init(prompt: "Which?", options: [.init(id: "a", label: "One"), .init(id: "b", label: "Two")], allowMultiple: false),
+            answer: answer, createdAt: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test func visualAidRowIsVisibleWithTitleAndStructuredJSON() throws {
+        let visual = makeVisual()
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 3)
+        #expect(wire.kind == "visualAid")
+        #expect(wire.text == "Layouts")
+        #expect(wire.isHidden != true)
+        #expect(wire.stableId == "m3")
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(wire.json).utf8))
+        #expect(dto.id == visual.id.uuidString)
+        #expect(dto.html == "<h2>Pick</h2>")
+        #expect(dto.question?.options.map(\.id) == ["a", "b"])
+        #expect(dto.answer == nil)
+    }
+
+    @Test func visualAidAnswerDTOOmitsTheTimestamp() throws {
+        let answered = RemoteVisualAid(makeVisual(answer: .answered(selectedOptionIds: ["b"], note: "ok", at: Date(timeIntervalSince1970: 9))))
+        #expect(answered.answer == .init(kind: "answered", selectedOptionIds: ["b"], note: "ok"))
+        let dismissed = RemoteVisualAid(makeVisual(answer: .dismissed(at: Date())))
+        #expect(dismissed.answer == .init(kind: "dismissed", selectedOptionIds: nil, note: nil))
+    }
+
+    @Test(arguments: ["mcp__alas__visual_show", "visual_show"])
+    func visualShowToolCallIsScrubbedOnTheWire(name: String) throws {
+        let call = ACPMessage.ToolCall(
+            toolCallId: "t1", title: "Show visual", status: "completed",
+            content: "<h2>secret</h2>", preview: "<h2>secret</h2>", rawInput: #"{"html":"<h2>secret</h2>"}"#, name: name)
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        let json = try #require(wire.json)
+        #expect(!json.contains("secret"))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(json.utf8))
+        #expect(decoded.title == "Show visual")
+        #expect(decoded.status == "completed")
+    }
+
+    @Test func ordinaryToolCallKeepsItsContent() throws {
+        let call = ACPMessage.ToolCall(toolCallId: "t1", title: "Run", status: "completed", content: "output", name: "Bash")
+        let wire = RemoteSessionGateway.toWire(.toolCall(call), index: 0)
+        #expect(try #require(wire.json).contains("output"))
+    }
+
+    @Test func truncatedVisualShowCallIsNotRehydratedFromStorage() async throws {
+        let provider = FakeSessionsProvider()
+        let html = String(repeating: "<p>secret</p>", count: 600)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "Show visual", status: "completed",
+            content: html, preview: "<p>secret</p>", name: "mcp__alas__visual_show")
+        toolCall.truncateForOffWindow()
+        let session = try makeSessionWithAgentText("tail")
+        session.transcript.messages = [.toolCall(toolCall)]
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = html
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _, _)? = sent.first,
+              let json = msgs.first(where: { $0.kind == "toolCall" })?.json
+        else {
+            Issue.record("expected tool-call snapshot, got \(sent)")
+            return
+        }
+        #expect(!json.contains("secret"))
+        #expect(provider.fullToolCallContentCallCount == 0)
+    }
+
+    @Test func answeringAVisualUpdatesTheSameRowThroughADelta() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        let visual = makeVisual()
+        s.transcript.appendMessage(.visualAid(visual))
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        var nextDelta: CheckedContinuation<RemoteServerMessage, Never>?
+        let gw = RemoteSessionGateway(provider: provider) { frame in
+            sent.append(frame)
+            if case .transcriptDelta = frame, let waiter = nextDelta {
+                nextDelta = nil
+                waiter.resume(returning: frame)
+            }
+        }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        let snapshot = sent.compactMap { msg -> [RemoteWireMessage]? in
+            if case .transcriptSnapshot(_, _, _, let m, _, _, _, _, _) = msg { return m }
+            return nil
+        }.first
+        #expect(snapshot?.last?.kind == "visualAid")
+        let index = try #require(snapshot?.last?.index)
+
+        var answered = visual
+        answered.answer = .dismissed(at: Date())
+        let frame = await withCheckedContinuation { nextDelta = $0
+            s.transcript.replaceMessage(at: index, with: .visualAid(answered)) }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _, _) = frame else {
+            Issue.record("expected delta")
+            return
+        }
+        #expect(upserts.count == 1)
+        #expect(upserts[0].index == index)
+        #expect(upserts[0].kind == "visualAid")
+        let dto = try JSONDecoder().decode(RemoteVisualAid.self, from: Data(try #require(upserts[0].json).utf8))
+        #expect(dto.answer?.kind == "dismissed")
+    }
+
+    @Test func oversizedVisualBecomesTheTooLargeNoticeAtItsPosition() throws {
+        var visual = makeVisual()
+        visual = ACPVisualAid(id: visual.id, title: visual.title, html: String(repeating: "x", count: 5 * 1024 * 1024),
+                              question: nil, answer: nil, createdAt: Date())
+        let wire = RemoteSessionGateway.toWire(.visualAid(visual), index: 7)
+        let bounded = wire.boundedForTransport(maximumBytes: RemoteTranscriptSync.maxMessageBytes).message
+        #expect(bounded.kind == "systemNotice")
+        #expect(bounded.index == 7)
+        #expect(bounded.stableId == "m7")
+    }
+
     @Test func toolCallWireOmitsInlineAssetData() throws {
         let msg = ACPMessage.toolCall(.init(
             toolCallId: "tc-image",

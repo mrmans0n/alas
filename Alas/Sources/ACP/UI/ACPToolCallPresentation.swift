@@ -13,6 +13,13 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     let iconSystemName: String
     let style: Style
 
+    /// A `visual_show` call: the rule `resolve` labels "Visual aid". The call's
+    /// content and raw input carry the visual's HTML.
+    static func isVisualShow(_ toolCall: ACPMessage.ToolCall) -> Bool {
+        let lowerTitle = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return toolCall.nonEmptyName?.contains("visual_show") == true || lowerTitle.contains("visual_show")
+    }
+
     static func resolve(_ toolCall: ACPMessage.ToolCall) -> ACPToolCallPresentation {
         let title = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowerTitle = title.lowercased()
@@ -40,7 +47,7 @@ struct ACPToolCallPresentation: Equatable, Sendable {
             return .init(label: "Viewed Image", iconSystemName: "photo.on.rectangle", style: .image)
         }
 
-        if name?.contains("visual_show") == true || lowerTitle.contains("visual_show") {
+        if isVisualShow(toolCall) {
             return .init(label: "Visual aid", iconSystemName: "rectangle.on.rectangle", style: .mcp)
         }
 

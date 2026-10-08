@@ -865,7 +865,8 @@ final class RemoteSessionGateway {
     }
 
     private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
-        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated else { return nil }
+        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated,
+              !ACPToolCallPresentation.isVisualShow(toolCall) else { return nil }
         let state = syncState(for: sessionId)
         if let cached = state.cachedToolContent(toolCall.toolCallId) { return cached }
         guard let full = await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
@@ -1330,8 +1331,11 @@ final class RemoteSessionGateway {
             )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
-        case .visualAid:
-            return .init(stableId: sid, kind: "systemNotice", text: nil, json: nil, index: index, isHidden: true)
+        case .visualAid(let visual):
+            // Without json the phone falls back to a plain-text row with the title.
+            return .init(
+                stableId: sid, kind: "visualAid", text: visual.title,
+                json: Self.encodeJSON(RemoteVisualAid(visual)), index: index)
         }
     }
 
@@ -1344,6 +1348,13 @@ final class RemoteSessionGateway {
             remote.content = fullContent
         }
         remote.rawOutput = nil
+        if ACPToolCallPresentation.isVisualShow(remote) {
+            // The call's content and raw input carry the visual's HTML, which
+            // reaches the phone as a `visualAid` row instead.
+            remote.content = ""
+            remote.rawInput = nil
+            remote.preview = nil
+        }
         remote.metadata = nil
         remote.assets = call.assets.map { asset in
             ACPMessage.ToolCallAsset(
