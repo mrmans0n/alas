@@ -1236,6 +1236,37 @@ extension ACPSessionStore {
         return rows.first?["seq"] as? Int64
     }
 
+    /// Renumber a session's message rows to dense positions in `seq` order,
+    /// so each row is again `msg-<session>-<position>` with `seq` equal to
+    /// its position. A failed write followed by a later one that landed
+    /// leaves a gap, and hydration loads the rows densely: without this, the
+    /// next write at a position past the gap overwrites a stored row.
+    ///
+    /// Skipped when `loadedMessageCount` exceeds the stored row count: the
+    /// transcript then holds rows the store never got, at their original
+    /// positions, and renumbering would move stored rows under them.
+    /// Does not open a transaction; callers wrap it in one.
+    @discardableResult
+    func closeMessageSequenceGaps(sessionId: String, loadedMessageCount: Int) throws -> Bool {
+        let rows = try db.query("""
+        SELECT id, seq FROM messages WHERE session_id = ? ORDER BY seq ASC
+        """, bindings: [sessionId])
+        guard rows.count >= loadedMessageCount else { return false }
+        var changed = false
+        for (position, row) in rows.enumerated() {
+            guard let id = row["id"] as? String,
+                  let seq = row["seq"] as? Int64,
+                  seq != Int64(position)
+            else { continue }
+            try db.exec(
+                "UPDATE messages SET id = ?, seq = ? WHERE id = ?",
+                bindings: ["msg-\(sessionId)-\(position)", Int64(position), id]
+            )
+            changed = true
+        }
+        return changed
+    }
+
     func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {
         let rows = try db.query("""
         SELECT id, session_id, kind, seq, payload, created_at

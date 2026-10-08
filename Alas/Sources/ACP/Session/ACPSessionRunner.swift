@@ -480,6 +480,25 @@ final class ACPSessionRunner {
                 ))
             }
         )
+        closeStoredSequenceGaps()
+    }
+
+    /// Rows are written as `msg-<session>-<index>`, so the store must hold
+    /// them at the same dense positions the transcript was loaded into. A
+    /// gap left by an earlier failed write breaks that, and the first write
+    /// past it would overwrite a stored row. Queued ahead of any write.
+    private func closeStoredSequenceGaps() {
+        guard holdsLeaseForWrite() else { return }
+        let sessionId = sessionId
+        let loadedMessageCount = session.transcript.messages.count
+        let fence = leaseFenceProvider()
+        enqueuePersistence { persistence in
+            try await persistence.closeMessageSequenceGaps(
+                sessionId: sessionId,
+                loadedMessageCount: loadedMessageCount,
+                fence: fence
+            )
+        }
     }
 
     private func enqueuePersistence(
