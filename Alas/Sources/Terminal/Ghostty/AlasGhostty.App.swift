@@ -220,7 +220,10 @@ private func alasGhosttyAction(
         return true
 
     case GHOSTTY_ACTION_CELL_SIZE:
-        return true // No cell-snapping in v1.
+        // No cell-snapping in v1, but a font-size change alters the grid
+        // without resizing the view, and peer console viewers follow it.
+        if let sv = surfaceView { DispatchQueue.main.async { sv.reportGridSizeIfChanged() } }
+        return true
 
     case GHOSTTY_ACTION_INITIAL_SIZE:
         return true // Alas controls window geometry.

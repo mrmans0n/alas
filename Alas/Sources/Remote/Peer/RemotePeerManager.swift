@@ -78,6 +78,12 @@ final class RemotePeerManager {
     @ObservationIgnored var onRevokeDevice: (@MainActor (String) -> Void)?
     /// `FederatedPeerLinks` sink. Set by `FederatedSessionsProvider`.
     @ObservationIgnored var onFederationEvent: (@MainActor (FederatedPeerLinkEvent) -> Void)?
+    /// Peer console events, kept off the federation fan-out: they belong to
+    /// one attachment on this Mac, never to ACP subscribers.
+    @ObservationIgnored var onConsoleEvent: (@MainActor (_ serverId: String, PeerConsoleEvent) -> Void)?
+    /// Optional features each peer advertised in its latest `hello`, by
+    /// `serverId`. In memory only: every connection re-announces them.
+    private(set) var capabilities: [String: Set<String>] = [:]
 
     private let store: RemotePeerStore
     private let pairing: RemotePairingService
@@ -1027,9 +1033,10 @@ final class RemotePeerManager {
             if let peer = peers.first(where: { $0.id == peerId }) {
                 onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
             }
-        case .hello(_, let name, let protocolVersion, _):
+        case .hello(_, let name, let protocolVersion, _, let advertised):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
             guard !isProvisional(peers[index].serverId) else { return }
+            capabilities[peers[index].serverId] = Set(advertised)
             // The identity is deliberately NOT adopted from the frame. It is
             // the key everything else hangs off — the link's expected id, the
             // `/health` check, and the device records `forget` revokes — so
@@ -1068,6 +1075,10 @@ final class RemotePeerManager {
             // very socket.
             guard carriesSessions(peerId: peerId),
                   let peer = peers.first(where: { $0.id == peerId }) else { return }
+            if case .console(let event) = message {
+                onConsoleEvent?(peer.serverId, event)
+                return
+            }
             onFederationEvent?(.message(serverId: peer.serverId, message))
         }
     }

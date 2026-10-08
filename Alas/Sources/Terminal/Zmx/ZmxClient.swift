@@ -67,6 +67,14 @@ final class ZmxClient: Sendable {
         )
     }
 
+    /// Socket path of a session, named the way zmx names it: the
+    /// `ZMX_SESSION_PREFIX` from the environment, then the bare name.
+    func socketPath(forSession name: String) -> String? {
+        guard env.isAvailable, let dir = env.zmxDir else { return nil }
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        return dir.appendingPathComponent(prefix + name).path
+    }
+
     /// Best-effort `zmx kill <name>`. Never throws; logs and swallows
     /// failures so a hung daemon never blocks the close path. Blocks the
     /// caller for up to ~5s (the SubprocessRunner timeout); async callers

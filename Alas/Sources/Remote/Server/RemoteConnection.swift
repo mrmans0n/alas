@@ -2,6 +2,15 @@ import Foundation
 import Network
 import CryptoKit
 
+/// What a gateway gets from its socket: who authenticated, and two ways to
+/// send. `sendTracked` reports when the frame has been written, which peer
+/// console output uses as flow-control credit.
+struct RemoteGatewayChannel {
+    let deviceId: String
+    let send: (RemoteServerMessage) -> Void
+    let sendTracked: @Sendable (RemoteServerMessage, _ onWritten: @escaping @Sendable () -> Void) -> Void
+}
+
 /// Drives one `NWConnection`: reads HTTP, then either serves a response and
 /// closes, or (for an authorized WebSocket upgrade) switches to frame mode and
 /// bridges decoded client messages to a `RemoteSessionGateway`.
@@ -18,7 +27,7 @@ import CryptoKit
 final class RemoteConnection: @unchecked Sendable {
     private let conn: NWConnection
     private let queue: DispatchQueue
-    private let makeGateway: @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway
+    private let makeGateway: @MainActor (RemoteGatewayChannel) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
     private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
     private let accessPolicy: RemoteAccessPolicy
@@ -90,7 +99,7 @@ final class RemoteConnection: @unchecked Sendable {
          authorize: @escaping @MainActor (String) -> String?,
          accessPolicy: RemoteAccessPolicy,
          originPolicy: RemoteOriginPolicy = .loopback,
-         makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
+         makeGateway: @escaping @MainActor (RemoteGatewayChannel) -> RemoteSessionGateway,
          makeHello: @escaping @MainActor () -> RemoteServerMessage? = { nil },
          identityProof: @escaping @MainActor (String) -> RemoteIdentityProof? = { _ in nil },
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
@@ -344,10 +353,15 @@ final class RemoteConnection: @unchecked Sendable {
             + extensions
             + "\r\n"
         isWebSocket = true
+        let deviceId = self.deviceId ?? ""
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let gateway = self.makeGateway { [weak self] msg in self?.sendServerMessage(msg) }
+            let gateway = self.makeGateway(RemoteGatewayChannel(
+                deviceId: deviceId,
+                send: { [weak self] msg in self?.sendServerMessage(msg) },
+                sendTracked: { [weak self] msg, onWritten in self?.sendServerMessage(msg, onWritten: onWritten) }
+            ))
             let helloData = self.makeHello().flatMap { try? JSONEncoder().encode($0) }
             self.onQueue { [weak self] in
                 guard let self else { return }
@@ -552,14 +566,20 @@ final class RemoteConnection: @unchecked Sendable {
         }
     }
 
-    private func sendServerMessage(_ msg: RemoteServerMessage) {
+    /// `onWritten` fires on `queue` once NWConnection has processed the
+    /// frame; never if the connection dies first.
+    private func sendServerMessage(_ msg: RemoteServerMessage, onWritten: @escaping @Sendable () -> Void = {}) {
         // Encode on the connection's serial queue, not the caller's
         // MainActor context — outbound serialization must never compete
         // with ACP state mutation for main-thread time.
         onQueue { [weak self] in
-            guard let self, let data = try? JSONEncoder().encode(msg) else { return }
+            guard let self else { return }
+            guard let data = try? JSONEncoder().encode(msg) else {
+                onWritten()
+                return
+            }
             self.send(WebSocketFrame.encode(opcode: .text, payload: data,
-                                            compressionEnabled: self.compressionEnabled)) {}
+                                            compressionEnabled: self.compressionEnabled), completion: onWritten)
         }
     }
 

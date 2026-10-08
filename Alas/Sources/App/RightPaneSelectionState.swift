@@ -33,9 +33,13 @@ struct RightPaneSelectionStateResolver {
     /// filling with error messages, or worse, falling through to show
     /// whatever local worktree happened to be selected before.
     var peerSessionHasWorktree: Bool = true
+    /// A peer console fills the center pane. It has no worktree on this Mac,
+    /// so the rail hides instead of showing the stale local selection.
+    var peerConsoleSelected: Bool = false
 
     @MainActor
     func resolve() -> RightPaneSelectionState {
+        if peerConsoleSelected { return .empty }
         if let peerSessionId {
             return peerSessionHasWorktree ? .peer(sessionId: peerSessionId) : .empty
         }

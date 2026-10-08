@@ -1955,6 +1955,32 @@ struct RemotePeerManagerTests {
         #expect(availability.contains("srv-old"))
     }
 
+    @Test func consoleEventsBypassFederationAndNeedACarryingLink() throws {
+        let store = InMemoryPeerStore()
+        store.save([verifiedPeer(), unverifiedPeer()])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links)
+        var federated: [FederatedPeerLinkEvent] = []
+        var consoles: [(String, PeerConsoleEvent)] = []
+        manager.onFederationEvent = { federated.append($0) }
+        manager.onConsoleEvent = { consoles.append(($0, $1)) }
+        manager.connectAll()
+        let verified = try #require(links.byPeerId["p1"])
+        let unverified = try #require(links.byPeerId["p2"])
+        let event = PeerConsoleEvent.output(attachmentId: "a", sequence: 1, data: Data("x".utf8))
+        verified.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true,
+                             capabilities: [PeerConsoleCapability.v1]))
+        verified.emit(.message(.console(event)))                        // offline: dropped
+        verified.emit(.stateChanged(.online))
+        verified.emit(.message(.console(event)))                        // delivered to the console sink
+        unverified.emit(.stateChanged(.online))
+        unverified.emit(.message(.console(event)))                      // unverified: dropped
+        #expect(consoles.map(\.0) == ["srv-a"])
+        #expect(consoles.map(\.1) == [event])
+        #expect(!federated.contains { if case .message = $0 { true } else { false } })
+        #expect(manager.capabilities["srv-a"] == [PeerConsoleCapability.v1])
+    }
+
     @Test func sendToPeerOnlyReachesACarryingLink() throws {
         let store = InMemoryPeerStore()
         store.save([verifiedPeer(), unverifiedPeer()])

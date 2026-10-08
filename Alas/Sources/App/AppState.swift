@@ -700,6 +700,9 @@ final class AppState {
     /// by `syncRemoteServer()`.
     @ObservationIgnored
     private(set) var remoteServer: RemoteServer?
+    /// Built on first peer console request; see `AppState+PeerConsoles`.
+    /// Observable so a pane drawn before it existed still shows peer control.
+    var _peerConsoleHost: PeerConsoleHost?
     @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
@@ -910,6 +913,7 @@ final class AppState {
             if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
+            _peerConsoleHost?.shutdown()
             remotePort = nil
             remoteAdvertisedAddresses = []
             remoteConnectedDeviceCountsSnapshot = [:]
@@ -935,7 +939,8 @@ final class AppState {
                 let client = NativePeerSessions(
                     federation: remoteFederation,
                     peers: { [weak self] in self?.remotePeers.helloPeers ?? [] },
-                    comparisonMode: { [weak self] in self?.config.changes.comparisonMode }
+                    comparisonMode: { [weak self] in self?.config.changes.comparisonMode },
+                    consoles: makeNativePeerConsoles()
                 )
                 nativePeerSessions = client
                 client.start()
@@ -2719,7 +2724,8 @@ final class AppState {
     /// pane posts under its pseudo worktree id.
     var inAppBannerWorktreeID: String? {
         if isPreviewingForestScenes
-            || nativePeerSessions?.selectedSessionId != nil { return nil }
+            || nativePeerSessions?.selectedSessionId != nil
+            || nativePeerSessions?.consoles?.viewer != nil { return nil }
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: selectedWorktreeId,
             projects: navigationProjects,
@@ -9856,7 +9862,7 @@ final class AppState {
         return nil
     }
 
-    private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
+    func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
         if let focused = workspaceSelectedWorktree(matching: id),
            let project = projects.first(where: { $0.id == focused.worktree.projectId }) {
             return (project, focused.worktree)

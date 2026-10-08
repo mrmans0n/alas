@@ -269,8 +269,19 @@ final class RemoteServer {
             },
             accessPolicy: accessPolicy,
             originPolicy: originPolicy,
-            makeGateway: { send in
-                RemoteSessionGateway(provider: provider, federation: federation, send: send)
+            makeGateway: { [weak self] channel in
+                // Consoles are served only to paired Alas instances, never
+                // to browsers; revocation closes the socket and the link.
+                let device = self?.pairing.devices.first { $0.id == channel.deviceId }
+                let consoleLink = device.flatMap { device -> PeerConsoleLink? in
+                    guard device.kind == .alasInstance else { return nil }
+                    let sendTracked = channel.sendTracked
+                    return PeerConsoleLink(peerName: device.name) { event, onWritten in
+                        sendTracked(.console(event), onWritten)
+                    }
+                }
+                return RemoteSessionGateway(
+                    provider: provider, federation: federation, consoleLink: consoleLink, send: channel.send)
             },
             makeHello: { RemoteServerMessage.hello(identity()) },
             identityProof: proveIdentity,

@@ -8,6 +8,54 @@ struct RemoteProtocolTests {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    @Test func peerConsoleMessagesRoundTripAndStayUnscoped() throws {
+        let bytes = Data([0x1B, 0x5B, 0x41, 0x00, 0xFF])
+        let requests: [PeerConsoleRequest] = [
+            .list,
+            .attach(consoleId: "c", attachmentId: "a", scrollbackRows: 500),
+            .takeControl(attachmentId: "a"),
+            .releaseControl(attachmentId: "a"),
+            .input(attachmentId: "a", generation: 3, sequence: 9, data: bytes),
+            .resync(attachmentId: "a"),
+            .detach(attachmentId: "a"),
+        ]
+        let control = PeerConsoleControl(owner: .you, generation: 3, change: .granted)
+        let events: [PeerConsoleEvent] = [
+            .list(consoles: [PeerConsoleSummary(
+                consoleId: "c", title: "zsh", worktreeId: "w", projectId: nil,
+                projectName: "alas", worktreeName: nil, rows: 40, columns: 120)]),
+            .attached(attachmentId: "a", rows: 40, columns: 120, control: control),
+            .snapshot(attachmentId: "a", sequence: 0, reason: .peerBackpressure, data: bytes),
+            .output(attachmentId: "a", sequence: 1, data: bytes),
+            .control(attachmentId: "a", control: control),
+            .inputAck(attachmentId: "a", sequence: 9, accepted: false),
+            .geometry(attachmentId: "a", rows: 50, columns: 132),
+            .detached(attachmentId: "a", reason: .restartRequired),
+        ]
+        for request in requests {
+            let message = RemoteClientMessage.console(request)
+            #expect(try roundTrip(message) == message)
+            #expect(message.sessionId == nil)
+        }
+        for event in events {
+            let message = RemoteServerMessage.console(event)
+            #expect(try roundTrip(message) == message)
+            #expect(message.sessionId == nil)
+        }
+        let futureReason = Data(#"{"type":"console","console":{"detached":{"attachmentId":"a","reason":"later"}}}"#.utf8)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: futureReason)
+            == .console(.detached(attachmentId: "a", reason: .unknown)))
+    }
+
+    @Test func helloAdvertisesPeerConsoleCapability() throws {
+        let advertised = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n"))
+        guard case .hello(_, _, _, _, _, let capabilities) = try roundTrip(advertised) else {
+            Issue.record("expected hello")
+            return
+        }
+        #expect(capabilities == [PeerConsoleCapability.v1])
+    }
+
     @Test func commitInspectionMessagesPreserveRevisionAndSessionRouting() throws {
         let requests: [RemoteClientMessage] = [
             .listCommitFiles(sessionId: "B:s", sha: "abc1234"),
