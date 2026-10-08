@@ -29,12 +29,15 @@ struct PeerConsoleInputFilter {
     /// coordinates. Only sizes the legacy reports it can emit in the instant
     /// before the SGR override lands, so they are dropped whole.
     var legacyMouseUTF8 = false
+    private var pendingLegacyUTF8 = false
     /// Bytes of an oversized string sequence already discarded; nil while
     /// not inside one.
     private var discarding: Int?
 
     mutating func filter(_ chunk: Data) -> Data {
         let bytes = pending + chunk
+        // A report split across reads keeps the encoding it started in.
+        let legacyUTF8 = pending.isEmpty ? legacyMouseUTF8 : pendingLegacyUTF8
         pending = []
         var kept = Data()
         var i = 0
@@ -52,7 +55,7 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
-            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents, legacyUTF8: legacyMouseUTF8) {
+            switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents, legacyUTF8: legacyUTF8) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
                 // byte stream, so a reply can split there. Those prefixes are
@@ -60,6 +63,7 @@ struct PeerConsoleInputFilter {
                 // releases once nothing followed them.
                 if bytes.count - i <= Self.maxPending {
                     pending = Array(bytes[i...])
+                    pendingLegacyUTF8 = legacyUTF8
                 } else if Self.isStringIntroducer(bytes[i + 1]) {
                     continueDiscarding(bytes[i...], alreadyDiscarded: 0)
                 }
