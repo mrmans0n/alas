@@ -77,6 +77,13 @@ import Testing
         // The surface is told to leave 1005 before the rest arrives.
         filter.legacyMouseUTF8 = false
         #expect(filter.filter(Data([0xA0, 0x21]) + Data("k".utf8)) == Data("k".utf8))
+        // Only that report keeps the old encoding: a raw report after it in
+        // the same read is sized as X10.
+        filter.legacyMouseUTF8 = true
+        #expect(filter.filter(Data([0x1B, 0x5B, 0x4D, 0x20, 0xC2])).isEmpty)
+        filter.legacyMouseUTF8 = false
+        let rest = Data([0xA0, 0x21, 0x1B, 0x5B, 0x4D, 0x20, 0xC5, 0x21]) + Data("k".utf8)
+        #expect(filter.filter(rest) == Data("k".utf8))
     }
 
     @Test func repliesSplitAcrossReadsAreDroppedAndKeysAroundThemKept() {

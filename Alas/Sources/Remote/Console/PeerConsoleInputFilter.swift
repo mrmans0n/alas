@@ -36,8 +36,7 @@ struct PeerConsoleInputFilter {
 
     mutating func filter(_ chunk: Data) -> Data {
         let bytes = pending + chunk
-        // A report split across reads keeps the encoding it started in.
-        let legacyUTF8 = pending.isEmpty ? legacyMouseUTF8 : pendingLegacyUTF8
+        let resumesPending = !pending.isEmpty
         pending = []
         var kept = Data()
         var i = 0
@@ -55,6 +54,9 @@ struct PeerConsoleInputFilter {
                 i += 1
                 continue
             }
+            // A report split across reads keeps the encoding it started in;
+            // anything after it uses the current one.
+            let legacyUTF8 = resumesPending && i == 0 ? pendingLegacyUTF8 : legacyMouseUTF8
             switch Self.sequence(in: bytes, at: i, mouseEvents: forwardedMouseEvents, legacyUTF8: legacyUTF8) {
             case .incomplete:
                 // Includes a lone ESC or ESC plus one byte: the bridge is a
