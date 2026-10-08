@@ -209,6 +209,15 @@ struct NativePeerSidebarSnapshotTests {
         #expect(repos[1].worktrees.map(\.title) == ["legacy"])
     }
 
+    @Test func consoleWithAnEmptyProjectIdLandsInTheUnassignedRepo() {
+        let repos = NativePeerRepoGroup.build(
+            sessions: [], consoles: [console("c1", project: "", worktreeId: "w")]
+        )
+
+        #expect(repos.count == 1)
+        #expect(repos[0].projectId == nil)
+    }
+
     @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {
         let waiting = NativePeerWorktreeGroup(id: "w", sessions: [
             worktreeRow("a", project: "alas", worktreeId: "w", status: "streaming"),

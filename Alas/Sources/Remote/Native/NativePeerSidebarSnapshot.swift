@@ -82,7 +82,9 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
     /// falling back to a shared sentinel only for sessions with no project
     /// metadata at all.
     private static func repoKey(projectId: String?) -> String {
-        projectId.map { "id:\($0)" } ?? unassignedKey
+        // A console in a workspace checkout reports an empty id.
+        guard let projectId, !projectId.isEmpty else { return unassignedKey }
+        return "id:\(projectId)"
     }
 
     /// Groups sessions and consoles by project, then by worktree. Repos keep
