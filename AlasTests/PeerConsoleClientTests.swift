@@ -153,6 +153,11 @@ import Testing
         #expect(tracker.hostFormat == .x10)
         #expect(!observe("\u{1B}[?99991006h\u{1B}[?1006000000h"))
         #expect(tracker.hostFormat == .x10)
+        // Event modes follow the same rules in their own group.
+        #expect(observe("\u{1B}[?1002h"))
+        #expect(tracker.hostEvents == .button)
+        #expect(observe("\u{1B}[?1000l"))
+        #expect(tracker.hostEvents == .none)
         // A mode saved while another format was selected is still saved set.
         #expect(observe("\u{1B}[?1006h\u{1B}[?1015h\u{1B}[?1006s\u{1B}[?1006l"))
         #expect(tracker.hostFormat == .x10)
@@ -261,6 +266,11 @@ import Testing
         // The host turns SGR off; the bytes may still be held by the write
         // gate, but forwarding already stops.
         relay.observeHostOutput(Data("\u{1B}[?1006l".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
+        // Likewise when it stops wanting mouse events while keeping SGR.
+        relay.observeHostOutput(Data("\u{1B}[?1006h".utf8))
+        #expect(relay.relay(click, attachmentId: "a", control: lease).count == 1)
+        relay.observeHostOutput(Data("\u{1B}[?1000l".utf8))
         #expect(relay.relay(click, attachmentId: "a", control: lease).isEmpty)
         // The surface still gets its SGR override when the bytes arrive.
         #expect(relay.prepareForSurface(Data("\u{1B}[?1006l".utf8)) == Data("\u{1B}[?1006l\u{1B}[?1006h".utf8))

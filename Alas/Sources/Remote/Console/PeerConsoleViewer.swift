@@ -113,10 +113,10 @@ struct PeerConsoleInputRelay {
 
     /// Feeds in-order output as soon as it is accepted, even while the write
     /// gate holds it: mouse reports are forwarded only while the host program
-    /// itself uses SGR.
+    /// wants mouse events and itself uses SGR.
     mutating func observeHostOutput(_ data: Data) {
         _ = hostMouse.observe(data)
-        filter.forwardsMouse = hostMouse.hostFormat == .sgr
+        filter.forwardsMouse = hostMouse.hostWantsSGRMouse
     }
 
     /// Returns output about to reach the surface with the surface kept in

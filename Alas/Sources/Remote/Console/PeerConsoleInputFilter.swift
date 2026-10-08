@@ -191,42 +191,54 @@ struct PeerConsoleInputFilter {
     }
 }
 
-/// The mouse format a host program selected (`CSI ? 1005/1006/1015/1016`
-/// with `h` set, `l` reset, `s` save, `r` restore), followed in the output
-/// written to the viewer's surface. Mirrors Ghostty: each format is its own
-/// mode with a saved value, setting one selects it, and resetting or
-/// restoring-unset any of them falls back to X10. Handles combined mode
-/// changes of any length and sequences split across writes; RIS (`ESC c`),
-/// sent before every snapshot, clears it.
+/// The host program's mouse modes, followed in the output written to the
+/// viewer's surface: which events it wants (`CSI ? 9/1000/1002/1003`) and in
+/// which format (`CSI ? 1005/1006/1015/1016`), with `h` set, `l` reset, `s`
+/// save, and `r` restore. Mirrors Ghostty: every mode has its own set and
+/// saved bit, setting one selects it within its group, and resetting or
+/// restoring-unset any of them falls back to no events or X10 format.
+/// Handles combined mode changes of any length and sequences split across
+/// writes; RIS (`ESC c`), sent before every snapshot, clears everything.
 struct PeerConsoleMouseModeTracker {
     enum Format: Equatable {
         case x10, utf8, sgr, urxvt, sgrPixels
+    }
+
+    enum Events: Equatable {
+        case none, x10, normal, button, any
     }
 
     private enum State {
         case ground, escape, controlSequence, privateParameters
     }
 
+    private static let formats: [Int: Format] = [1005: .utf8, 1006: .sgr, 1015: .urxvt, 1016: .sgrPixels]
+    private static let events: [Int: Events] = [9: .x10, 1000: .normal, 1002: .button, 1003: .any]
+
     private(set) var hostFormat = Format.x10
-    /// Format modes currently set, and as last saved with `CSI ? n s`.
-    private var modesSet: Set<Format> = []
-    private var savedSet: Set<Format> = []
+    private(set) var hostEvents = Events.none
+    /// Mouse modes currently set, and as last saved with `CSI ? n s`.
+    private var modesSet: Set<Int> = []
+    private var savedSet: Set<Int> = []
     private var state = State.ground
     /// Numeric value of the parameter being read, as Ghostty parses it
     /// (`01006` is 1006); saturates so long digit runs never overflow or
     /// wrap into a mode number.
     private var parameter = 0
     private static let parameterLimit = 100_000
-    /// Format modes named so far in the current sequence, last occurrence
-    /// last, applied once its final byte says what to do. At most four.
-    private var named: [Format] = []
+    /// Mouse modes named so far in the current sequence, last occurrence
+    /// last, applied once its final byte says what to do. At most eight.
+    private var named: [Int] = []
 
     /// Selects SGR mouse reports on the viewer's own surface; never sent to
     /// the host.
     static let sgrOverride = Data("\u{1B}[?1006h".utf8)
 
+    /// Whether the host program wants mouse events, in SGR format.
+    var hostWantsSGRMouse: Bool { hostEvents != .none && hostFormat == .sgr }
+
     /// Returns whether `data` set, reset, saved, restored, or cleared any
-    /// mouse format mode.
+    /// mouse mode.
     mutating func observe(_ data: Data) -> Bool {
         var changed = false
         for byte in data where step(byte) { changed = true }
@@ -234,7 +246,7 @@ struct PeerConsoleMouseModeTracker {
     }
 
     /// Follows `data` and returns it with `sgrOverride` inserted right after
-    /// every format change, so the surface never reports the mouse in
+    /// every mouse mode change, so the surface never reports the mouse in
     /// another format while it is still consuming the rest of `data`.
     mutating func forcingSGR(_ data: Data) -> Data {
         var output = Data()
@@ -260,6 +272,7 @@ struct PeerConsoleMouseModeTracker {
             state = byte == UInt8(ascii: "[") ? .controlSequence : .ground
             guard byte == UInt8(ascii: "c") else { return false }
             hostFormat = .x10
+            hostEvents = .none
             modesSet = []
             savedSet = []
             return true
@@ -279,7 +292,7 @@ struct PeerConsoleMouseModeTracker {
             case UInt8(ascii: "h"), UInt8(ascii: "l"), UInt8(ascii: "s"), UInt8(ascii: "r"):
                 nameCurrentParameter()
                 state = .ground
-                for format in named { apply(byte, to: format) }
+                for mode in named { apply(byte, to: mode) }
                 return !named.isEmpty
             default:
                 state = .ground
@@ -289,37 +302,30 @@ struct PeerConsoleMouseModeTracker {
     }
 
     private mutating func nameCurrentParameter() {
-        let format: Format? = switch parameter {
-        case 1005: .utf8
-        case 1006: .sgr
-        case 1015: .urxvt
-        case 1016: .sgrPixels
-        default: nil
-        }
+        let mode = parameter
         parameter = 0
-        guard let format else { return }
-        named.removeAll { $0 == format }
-        named.append(format)
+        guard Self.formats[mode] != nil || Self.events[mode] != nil else { return }
+        named.removeAll { $0 == mode }
+        named.append(mode)
     }
 
-    private mutating func apply(_ action: UInt8, to format: Format) {
+    private mutating func apply(_ action: UInt8, to mode: Int) {
         switch action {
         case UInt8(ascii: "s"):
-            if modesSet.contains(format) { savedSet.insert(format) } else { savedSet.remove(format) }
+            if modesSet.contains(mode) { savedSet.insert(mode) } else { savedSet.remove(mode) }
         case UInt8(ascii: "r"):
-            set(format, savedSet.contains(format))
+            set(mode, savedSet.contains(mode))
         default:
-            set(format, action == UInt8(ascii: "h"))
+            set(mode, action == UInt8(ascii: "h"))
         }
     }
 
-    private mutating func set(_ format: Format, _ enabled: Bool) {
-        if enabled {
-            modesSet.insert(format)
-            hostFormat = format
-        } else {
-            modesSet.remove(format)
-            hostFormat = .x10
+    private mutating func set(_ mode: Int, _ enabled: Bool) {
+        if enabled { modesSet.insert(mode) } else { modesSet.remove(mode) }
+        if let format = Self.formats[mode] {
+            hostFormat = enabled ? format : .x10
+        } else if let events = Self.events[mode] {
+            hostEvents = enabled ? events : .none
         }
     }
 }
