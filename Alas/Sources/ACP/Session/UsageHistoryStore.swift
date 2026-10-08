@@ -333,7 +333,8 @@ extension AppState {
         let agent = session.agentId
         // The model the prompt went out with: a stopped turn's result can come after the user switched models.
         let model = completion.model ?? session.currentModel
-        let endedAt = Int64(Date().timeIntervalSince1970 * 1000)
+        // A turn's usage can be held for an earlier one's, so it ended when the runner says.
+        let endedAt = completion.endedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
         let episode = completion.result == .limited ? session.usageLimit.map {
             UsageLimitEpisode($0, session: completion.sessionId, project: project, worktree: worktree, agent: session.agentId)
         } : nil

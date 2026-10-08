@@ -64,6 +64,31 @@ private final class QueueDispatchHandoffTracker: @unchecked Sendable {
     }
 }
 
+/// Prompts whose request crossed the transport handoff, marked from the transport's own callback, which may run off
+/// the main actor and before the prompt's continuation does.
+private final class PromptHandoffs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var promptIDs: Set<Int> = []
+
+    func mark(_ promptID: Int) {
+        lock.lock()
+        promptIDs.insert(promptID)
+        lock.unlock()
+    }
+
+    func contains(_ promptID: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return promptIDs.contains(promptID)
+    }
+
+    func forget(below promptID: Int) {
+        lock.lock()
+        promptIDs = promptIDs.filter { $0 >= promptID }
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class ACPSessionRunner {
     let session: ACPSession
@@ -148,6 +173,11 @@ final class ACPSessionRunner {
     private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
     private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
+    /// Which of them reached the transport; see `takeUnreportedUsage`.
+    private let promptHandoffs = PromptHandoffs()
+    /// Finished prompts' usage, by prompt id, held until every prompt sent before them has reported: a session's
+    /// turns are recorded in the order they were sent, each turn's cost being measured from the one before.
+    private var heldUsage: [Int: ACPTurnCompletion] = [:]
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
@@ -1971,6 +2001,7 @@ final class ACPSessionRunner {
             quota: quota,
             cost: turnCost(streamStart: activePromptStreamStart),
             sentAt: unreportedPrompts[promptID]?.sentAt,
+            endedAt: Self.now(),
             model: unreportedPrompts[promptID]?.model
         )
         activePromptStartedAt = nil
@@ -1981,7 +2012,7 @@ final class ACPSessionRunner {
         guard unreportedPrompts[promptID] != nil else { return }
         guard usageAwaitsResult else {
             unreportedPrompts[promptID] = nil
-            onTurnUsage?(completion)
+            reportUsageInOrder(promptID, completion)
             return
         }
         reportUsageWithoutResult(promptID)
@@ -1990,8 +2021,39 @@ final class ACPSessionRunner {
     /// When a prompt goes out, in epoch milliseconds, later than any before it: usage history orders turns by it, so
     /// two prompts sent within one millisecond still get their order.
     private func nextSentAt() -> Int64 {
-        lastSentAt = max(Int64(Date().timeIntervalSince1970 * 1000), lastSentAt + 1)
+        lastSentAt = max(Self.now(), lastSentAt + 1)
         return lastSentAt
+    }
+
+    private static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    /// Reports a prompt's usage once every prompt sent before it has reported, and with it any later ones it held.
+    private func reportUsageInOrder(_ promptID: Int, _ completion: ACPTurnCompletion) {
+        heldUsage[promptID] = completion
+        reportHeldUsage()
+    }
+
+    private func reportHeldUsage() {
+        let waitingFor = unreportedPrompts.keys.min() ?? .max
+        for promptID in heldUsage.keys.sorted() where promptID < waitingFor {
+            if let completion = heldUsage.removeValue(forKey: promptID) { onTurnUsage?(completion) }
+        }
+    }
+
+    /// The connection is being replaced, and with it this runner: the results its prompts still wait for will not
+    /// come. Returns every turn not reported yet, in the order sent; one without its result is a cancelled turn
+    /// without tokens. The caller records them, since this runner's reports no longer count once it is replaced.
+    /// A prompt that never crossed the transport handoff is no turn: the agent never got it.
+    func takeUnreportedUsage() -> [ACPTurnCompletion] {
+        for promptID in unreportedPrompts.keys {
+            if promptHandoffs.contains(promptID) {
+                heldUsage[promptID] = supersededTurnUsage(promptID, quota: nil, result: .cancelled)
+            } else {
+                unreportedPrompts[promptID] = nil
+            }
+        }
+        defer { heldUsage = [:] }
+        return heldUsage.sorted { $0.key < $1.key }.map(\.value)
     }
 
     /// A turn's cost is the newest entry before the next prompt went out, so of the entries between two sends only
@@ -2007,6 +2069,8 @@ final class ACPSessionRunner {
         sentStreamStarts[promptID] = streamStart
         // ponytail: only the newest bound anything, the few prompts still waiting being older than them.
         if sentStreamStarts.count > 16, let oldest = sentStreamStarts.keys.min() { sentStreamStarts[oldest] = nil }
+        // Only prompts not reported yet are ever asked about.
+        promptHandoffs.forget(below: unreportedPrompts.keys.min() ?? promptID)
     }
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
@@ -2014,6 +2078,7 @@ final class ACPSessionRunner {
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
         if case ACPClientError.jsonrpc = error { return }
         unreportedPrompts[promptID] = nil
+        reportHeldUsage()
     }
 
     /// Reported once: by the result when it arrives (see `reportSupersededTurnUsage`), or after
@@ -2032,14 +2097,21 @@ final class ACPSessionRunner {
     private func reportSupersededTurnUsage(
         _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result = .cancelled
     ) {
-        guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return }
-        onTurnUsage?(ACPTurnCompletion(
+        guard let completion = supersededTurnUsage(promptID, quota: quota, result: result) else { return }
+        reportUsageInOrder(promptID, completion)
+    }
+
+    private func supersededTurnUsage(
+        _ promptID: Int, quota: ACPPromptQuota?, result: ACPTurnCompletion.Result
+    ) -> ACPTurnCompletion? {
+        guard let prompt = unreportedPrompts.removeValue(forKey: promptID) else { return nil }
+        return ACPTurnCompletion(
             sessionId: sessionId, startedAt: prompt.startedAt, result: result, delegatedSource: nil, lastAgentText: nil,
             quota: quota,
             // Capped where the first later prompt was sent; one still preparing has not started its usage.
             cost: turnCost(
                 streamStart: prompt.streamStart, end: sentStreamStarts.filter { $0.key > promptID }.map(\.value).min()),
-            sentAt: prompt.sentAt, model: prompt.model, recovery: prompt.recovery))
+            sentAt: prompt.sentAt, endedAt: Self.now(), model: prompt.model, recovery: prompt.recovery)
     }
 
     /// The active turn's cost: the newest cost-bearing `usage_update` sent on the stream after the prompt started
@@ -4347,8 +4419,16 @@ extension ACPSessionRunner {
                     self.session.expectSymbolExpansionEchoes(symbolExpansion.sentBlocks)
                     // ponytail: a prompt whose result never arrives (a lost connection) leaves its entry; keep a few.
                     // The oldest is reported without tokens before it goes, so every sent turn still gets a row.
-                    if self.unreportedPrompts.count > 8, let oldest = self.unreportedPrompts.keys.min() {
-                        self.reportSupersededTurnUsage(oldest, quota: nil)
+                    // Usage it holds counts too, or a result that never comes would hold every later turn's.
+                    if self.unreportedPrompts.count + self.heldUsage.count > 8,
+                       let oldest = self.unreportedPrompts.keys.min() {
+                        // One that never reached the transport is no turn, and only goes.
+                        if self.promptHandoffs.contains(oldest) {
+                            self.reportSupersededTurnUsage(oldest, quota: nil)
+                        } else {
+                            self.unreportedPrompts[oldest] = nil
+                            self.reportHeldUsage()
+                        }
                     }
                     return true
                 }) else {
@@ -4361,7 +4441,8 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
-                    onTransportHandoff: { [weak self] in
+                    onTransportHandoff: { [weak self, promptHandoffs] in
+                        promptHandoffs.mark(promptID)
                         Task { @MainActor in
                             guard let self, !self.stopped, self.isConnectionCurrent(),
                                   self.activePromptID == promptID,
@@ -4626,7 +4707,9 @@ extension ACPSessionRunner {
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
-                let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
+                let promptOutcome = try await self.connection.prompt(
+                    sessionId: remoteId, blocks: [.text(prompt)],
+                    onTransportHandoff: { [promptHandoffs] in promptHandoffs.mark(promptID) })
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil

@@ -1266,10 +1266,12 @@ struct ACPSessionManagerAttachRestoreTests {
         let oldService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
         let replacementService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
         var serviceFactoryCalls = 0
+        var usage: [ACPTurnCompletion] = []
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            onTurnUsage: { usage.append($0) },
             setupEvaluator: { _ in .ready },
             brokerServiceFactory: {
                 serviceFactoryCalls += 1
@@ -1311,6 +1313,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.queue.first?.deliveryUncertain == false)
         #expect(await oldService.sent.filter { $0.method == "session/prompt" }.isEmpty)
         #expect(try store.loadQueue(sessionId: session.id).first?.dispatchedBrokerGeneration == nil)
+        // Never handed off, so it is no turn: the detach records no usage for it.
+        #expect(usage.isEmpty)
 
         let reopenedSession = try #require(manager.placeholderSession(id: session.id))
         await manager.hydrateIfNeeded(id: reopenedSession.id)
@@ -1643,6 +1647,37 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { session.transcript.streamingState == .idle && !session.directTurnInFlight }
         await manager.flushAllPersistence()
         #expect(try store.interruptedQueueSessionIds().isEmpty)
+    }
+
+    @Test("a turn in flight when its runner is retired is still recorded as usage, without its result",
+          arguments: [true, false])
+    func aRetiredRunnersTurnIsStillRecordedAsUsage(restarts: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-restarted")
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-restarted")
+        let (never, keepOpen) = AsyncStream<Void>.makeStream()
+        defer { keepOpen.finish() }
+        client.scriptAsync(method: "session/prompt") { _ in
+            for await _ in never {}
+            throw CancellationError()
+        }
+        var usage: [ACPTurnCompletion] = []
+        let manager = manager(store: store, client: client, onTurnUsage: { usage.append($0) })
+        let session = manager.createSession(id: "restarted", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
+        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+
+        if restarts {
+            await manager.restartConnection(to: session.id)
+        } else {
+            await manager.detach(sessionId: session.id)
+        }
+
+        #expect(usage.map(\.result) == [.cancelled])
+        #expect(usage.first?.sentAt != nil && usage.first?.quota == nil)
     }
 
     @Test("a direct send interrupted by a restart is continued only with the setting on", arguments: [true, false])
@@ -6258,7 +6293,8 @@ struct ACPSessionManagerAttachRestoreTests {
         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         delegatedReasoningRefreshTimeout: Duration = .seconds(5),
-        continueInterruptedSessions: Bool = false
+        continueInterruptedSessions: Bool = false,
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
@@ -6266,6 +6302,7 @@ struct ACPSessionManagerAttachRestoreTests {
             store: store,
             continueInterruptedSessions: { continueInterruptedSessions },
             onQueueChanged: onQueueChanged,
+            onTurnUsage: onTurnUsage,
             onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
