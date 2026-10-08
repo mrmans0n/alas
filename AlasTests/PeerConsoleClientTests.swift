@@ -206,6 +206,9 @@ import Testing
         #expect(tracker.hostFormat == .x10)
         #expect(!observe("\u{1B}[?99991006h\u{1B}[?1006000000h"))
         #expect(tracker.hostFormat == .x10)
+        // Colon sub-parameters make Ghostty ignore a mode sequence.
+        #expect(!observe("\u{1B}[?1005:0h"))
+        #expect(tracker.hostFormat == .x10)
         // Embedded C0 controls and DEL do not end a sequence; CAN does.
         #expect(observe("\u{1B}[?1005\u{07}h"))
         #expect(tracker.hostFormat == .utf8)

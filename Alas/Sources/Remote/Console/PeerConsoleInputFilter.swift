@@ -285,6 +285,9 @@ struct PeerConsoleMouseModeTracker {
     /// Mouse modes named so far in the current sequence, last occurrence
     /// last, applied once its final byte says what to do. At most eight.
     private var named: [Int] = []
+    /// Set by a colon: Ghostty accepts colon sub-parameters only for SGR, so
+    /// it ignores the whole mode sequence.
+    private var ignored = false
 
     /// Selects SGR mouse reports on the viewer's own surface; never sent to
     /// the host.
@@ -356,18 +359,23 @@ struct PeerConsoleMouseModeTracker {
             state = byte == UInt8(ascii: "?") ? .privateParameters : .ground
             parameter = 0
             named = []
+            ignored = false
             return false
         case .privateParameters:
             switch byte {
             case UInt8(ascii: "0")...UInt8(ascii: "9"):
                 parameter = min(parameter * 10 + Int(byte - UInt8(ascii: "0")), Self.parameterLimit)
                 return false
-            case UInt8(ascii: ";"), UInt8(ascii: ":"):
+            case UInt8(ascii: ";"):
                 nameCurrentParameter()
+                return false
+            case UInt8(ascii: ":"):
+                ignored = true
                 return false
             case UInt8(ascii: "h"), UInt8(ascii: "l"), UInt8(ascii: "s"), UInt8(ascii: "r"):
                 nameCurrentParameter()
                 state = .ground
+                guard !ignored else { return false }
                 for mode in named { apply(byte, to: mode) }
                 return !named.isEmpty
             default:
