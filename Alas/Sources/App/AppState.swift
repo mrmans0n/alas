@@ -14288,7 +14288,9 @@ final class AppState {
     }
 
     /// Pins the owner before suspension, including when sidebar focus reopens history.
-    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
+    /// `activate: false` (peer requests) neither focuses an existing tab nor
+    /// activates a new one, so the host's visible tab never changes.
+    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree, activate: Bool = true) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -14300,7 +14302,7 @@ final class AppState {
             return nil
         }.first
         if let id = tabIdToFocus {
-            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
+            if activate { activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id) }
             return
         }
 
@@ -14323,7 +14325,7 @@ final class AppState {
         // Another open may have added the tab while this one was suspended.
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
-        tabs.append(acpSession: state, to: worktree.id)
+        tabs.append(acpSession: state, to: worktree.id, activate: activate)
     }
 
     /// Reopen a persisted ACP session inside a typed session-owner bucket.
@@ -15612,15 +15614,10 @@ extension AppState: RemoteSessionsProvider {
         }
         guard let stored else { return .failure("This session is no longer available.") }
         if stored.archived { return .failure("This session is archived.") }
-        // Appending activates the new tab; a peer's request must not switch
-        // the tab the host user is looking at.
-        let hostActiveTab = tabs.activeTabId(forWorktree: worktree.id)
-        await openExistingACPSession(sessionId: id, worktree: worktree)
+        // A peer's request must not switch the tab the host user is looking at.
+        await openExistingACPSession(sessionId: id, worktree: worktree, activate: false)
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
             return .failure("Could not open this session.")
-        }
-        if let hostActiveTab, tabs.tabs(forWorktree: worktree.id).contains(where: { $0.id == hostActiveTab }) {
-            tabs.activate(worktreeId: worktree.id, tabId: hostActiveTab)
         }
         // Opening hydrated the transcript, but a tab in a worktree the host is
         // not showing has no view to retain it. Balance that here so an idle
