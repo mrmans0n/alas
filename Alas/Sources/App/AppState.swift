@@ -15599,10 +15599,22 @@ extension AppState: RemoteSessionsProvider {
         }
         // Already open is success, and must not focus the tab on the host.
         if openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil { return .success }
+        guard let manager = acpManager(for: worktree) else {
+            return .failure("Could not open this session.")
+        }
+        // `sessionRows` can predate an archive made by another Alas process.
+        if (try? await manager.persistence.loadSession(id: id))?.archived == true {
+            return .failure("This session is archived.")
+        }
         await openExistingACPSession(sessionId: id, worktree: worktree)
         guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
             return .failure("Could not open this session.")
         }
+        // Opening hydrated the transcript, but a tab in a worktree the host is
+        // not showing has no view to retain it. Balance that here so an idle
+        // session is evicted; the tab re-hydrates when it is shown.
+        manager.retainSession(id: id)
+        manager.releaseSession(id: id)
         return .success
     }
 

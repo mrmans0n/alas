@@ -503,6 +503,8 @@ struct RemoteAppStateAccessTests {
         #expect(!acpTabs(in: state).contains { $0.sessionId == id })
 
         #expect(await state.openSessionTab(for: id) == .success)
+        // No view retains the new tab here, so its hydrated transcript is not kept.
+        #expect(manager.liveSession(for: id) == nil)
         #expect(await state.openSessionTab(for: id) == .success)
         #expect(acpTabs(in: state).filter { $0.sessionId == id }.count == 1)
         #expect(await state.sessionSummaries().first { $0.id == id }?.isActive == true)
@@ -512,6 +514,28 @@ struct RemoteAppStateAccessTests {
         let closed = try #require(await state.sessionSummaries().first { $0.id == id })
         #expect(!closed.isActive)
         #expect(state.canReopenClosedTab)
+    }
+
+    @Test func remoteOpenSessionTabRejectsASessionArchivedByAnotherProcess() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "archived-elsewhere-\(UUID().uuidString)"
+        try await seedStoredSession(id: id, title: "Stale", in: manager)
+        try await manager.persistence.setArchived(id: id, archived: true)
+        #expect(manager.sessionRows.contains { $0.id == id && !$0.archived })
+
+        #expect(await state.openSessionTab(for: id) == .failure("This session is archived."))
+        #expect(!acpTabs(in: state).contains { $0.sessionId == id })
     }
 
     @Test(arguments: [true, false])
