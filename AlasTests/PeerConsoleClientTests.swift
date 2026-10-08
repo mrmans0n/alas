@@ -182,9 +182,12 @@ import Testing
         #expect(tracker.hostFormat == .x10)
         #expect(observe("\u{1B}c"))
         #expect(tracker.hostFormat == .x10)
-        // A combined mode change far longer than any fixed buffer.
-        let long = String(repeating: "1000;", count: 30) + "1006h"
-        #expect(observe("\u{1B}[?\(long)"))
+        // Up to Ghostty's 24 parameters apply; one more drops the sequence.
+        let fullest = String(repeating: "1000;", count: 23) + "1006h"
+        #expect(observe("\u{1B}[?\(fullest)"))
+        #expect(tracker.hostFormat == .sgr)
+        let tooMany = String(repeating: "1;", count: 24) + "1005h"
+        #expect(!observe("\u{1B}[?\(tooMany)"))
         #expect(tracker.hostFormat == .sgr)
         // Every recognized parameter counts, however many come first.
         #expect(observe("\u{1B}[?" + String(repeating: "1005;", count: 9) + "1006l"))
