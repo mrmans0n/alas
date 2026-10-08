@@ -1441,14 +1441,16 @@ private final class RemoteRefusalWindowBox {
 
 /// Cheap size bounds for a `visualAidResponse`, checked before the handler builds a `Set` or trims the
 /// note, so a hostile client cannot make the main actor hash or scan megabytes. `utf8.count` is O(1) for
-/// native strings, and four bytes per character is the most any limit can need; the exact checks follow.
+/// native strings. Option ids are ASCII, so four bytes per allowed character is generous. The note cap is a
+/// transport limit, not a grapheme limit: a valid note of multi-scalar graphemes (family emoji) is far
+/// larger than `noteMaxLength` bytes, and the exact `String.count` check follows in the handler.
 enum RemoteVisualAidLimits {
-    static let maxNoteUTF8Bytes = ACPVisualAidQuestionForm.noteMaxLength * 4 + 64
+    static let maxNoteBytes = 256 * 1024
     static let maxIdUTF8Bytes = ACPVisualAid.Limits.optionIdMaxCharacters * 4
 
     static func exceedsBounds(ids: [String], note: String?) -> Bool {
         ids.count > ACPVisualAid.Limits.optionCount.upperBound
             || ids.contains { $0.utf8.count > maxIdUTF8Bytes }
-            || (note?.utf8.count ?? 0) > maxNoteUTF8Bytes
+            || (note?.utf8.count ?? 0) > maxNoteBytes
     }
 }

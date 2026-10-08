@@ -61,6 +61,20 @@ enum ACPSessionForkCreationError: Error, Equatable {
     case sourceReadOnly
 }
 
+/// Set from a task's cancellation handler, which runs off the main actor while the task is suspended.
+final class VisualAidAnswerCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.withLock { cancelled }
+    }
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -411,11 +425,18 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true, onResult: @escaping @MainActor (Bool) -> Void) async {
+    ///
+    /// `isStillWanted` is asked once the lease is confirmed and before anything is
+    /// submitted; when it says no, `onResult(false)` fires and nothing is sent.
+    func sendPrompt(
+        for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true,
+        isStillWanted: (@MainActor () -> Bool)? = nil, onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
         let suggestionSession = sessions[id]
         suggestionSession?.nextPromptWorkCount += 1
         defer { suggestionSession?.nextPromptWorkCount -= 1 }
-        guard await confirmedWriterLease(for: id) else {
+        await beforeLeaseConfirmationForTesting?()
+        guard await confirmedWriterLease(for: id), isStillWanted?() ?? true else {
             onResult(false)
             return
         }
@@ -1353,6 +1374,8 @@ final class ACPSessionManager: ObservableObject {
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforePersistenceForTesting: (@MainActor () async -> Void)?
+    /// Runs inside `sendPrompt`, just before the writer lease is confirmed.
+    var beforeLeaseConfirmationForTesting: (@MainActor () async -> Void)?
     var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
         pendingFreshBrokerNamespaces
@@ -8748,11 +8771,27 @@ extension ACPSessionManager {
         // ends, so a Stop ordered after this answer finds the turn it started. The wait is bounded: a
         // stalled lease confirmation must not hold the card on "Sending" or the phone's ordered chain.
         // On timeout the answer stays stored and the send keeps running; `onResult(false)` still rolls back.
-        _ = await Self.raceWithTimeout({ [weak self] in
-            await self?.sendPrompt(for: sessionId, text: prompt, attachments: []) { ok in
-                if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
-            }
-        }, timeout: Self.visualAidPromptRegistrationTimeout)
+        //
+        // A Stop cancels this task, but the send outlives it after a timeout and its lease check cannot be
+        // cancelled. The cancellation flag is therefore asked right after the lease check: a cancelled
+        // answer sends nothing and rolls back like any other failed send.
+        let cancellation = VisualAidAnswerCancellation()
+        guard !Task.isCancelled else {
+            await rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId)
+            return false
+        }
+        await withTaskCancellationHandler {
+            _ = await Self.raceWithTimeout({ [weak self] in
+                await self?.sendPrompt(
+                    for: sessionId, text: prompt, attachments: [],
+                    isStillWanted: { !cancellation.isCancelled }
+                ) { ok in
+                    if !ok { Task { @MainActor in await self?.rollBackVisualAidAnswer(id: visualId, answer: answer, in: sessionId) } }
+                }
+            }, timeout: Self.visualAidPromptRegistrationTimeout)
+        } onCancel: {
+            cancellation.cancel()
+        }
         return true
     }
 

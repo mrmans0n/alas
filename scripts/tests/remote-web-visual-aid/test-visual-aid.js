@@ -121,6 +121,9 @@ assert.ok(V.parseVisual(JSON.stringify(visual({ answer: { kind: "dismissed" }, q
 // Note length counts grapheme clusters like Swift String.count.
 assert.equal(V.canSubmit(question(false), ["a"], "😀".repeat(2000)), true);
 assert.equal(V.canSubmit(question(false), ["a"], "😀".repeat(2001)), false);
+const family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+assert.equal(V.canSubmit(question(false), ["a"], family.repeat(2000)), true, "multi-scalar graphemes count once");
+assert.equal(V.canSubmit(question(false), ["a"], family.repeat(2001)), false);
 assert.equal(V.noteLength("👨‍👩‍👧‍👦"), 1);
 assert.equal(V.noteLength("  hi  "), 2);
 

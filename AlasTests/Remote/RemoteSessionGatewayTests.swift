@@ -1833,11 +1833,25 @@ struct RemoteSessionGatewayTests {
         ([String(repeating: "a", count: 64)], nil, false),
         ([String(repeating: "a", count: 256)], nil, false),
         ([String(repeating: "a", count: 257)], nil, true),
-        (["a"], String(repeating: "x", count: 8064), false),
-        (["a"], String(repeating: "x", count: 8065), true),
+        (["a"], String(repeating: "x", count: 256 * 1024), false),
+        (["a"], String(repeating: "x", count: 256 * 1024 + 1), true),
     ])
     func visualResponseBoundsRejectOversizedInputBeforeAnyWork(ids: [String], note: String?, exceeds: Bool) {
         #expect(RemoteVisualAidLimits.exceedsBounds(ids: ids, note: note) == exceeds)
+    }
+
+    @Test(arguments: [(2000, true), (2001, false)])
+    func aNoteIsLimitedByGraphemesNotBytes(count: Int, accepted: Bool) async throws {
+        let provider = FakeSessionsProvider()
+        let (s, visual) = try makeVisualSession(allowMultiple: false)
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.visualAidResponse(sessionId: "s1", visualId: visual.id.uuidString, action: "answer",
+                                           selectedOptionIds: ["a"], note: String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}", count: count)))
+        #expect(provider.answeredVisuals.count == (accepted ? 1 : 0))
+        #expect(visualRejection(sent) == (accepted ? nil : "invalid"))
     }
 
     @Test func unknownAndAlreadyAnsweredVisualsAreRejected() async throws {

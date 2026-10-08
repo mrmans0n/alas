@@ -1640,6 +1640,41 @@ struct ACPSessionManagerTests {
         while !finished { await Task.yield() }
     }
 
+    @Test("a visual answer cancelled while the lease is being confirmed sends nothing and is reverted")
+    func cancelledVisualAnswerSendsNothingAfterTheLeaseCheck() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        let visual = questionVisual()
+        #expect(await manager.showVisualAid(visual, in: session.id))
+        let answer = ACPVisualAid.Answer.answered(selectedOptionIds: ["a"], note: nil, at: Date(timeIntervalSince1970: 1))
+        let leaseCheck = AsyncGate()
+        manager.beforeLeaseConfirmationForTesting = { await leaseCheck.enterAndWait() }
+
+        let answering = Task { @MainActor in await manager.answerVisualAid(id: visual.id, answer: answer, in: session.id) }
+        await leaseCheck.waitUntilEntered()
+        answering.cancel()
+        await leaseCheck.release()
+        _ = await answering.value
+
+        while session.transcript.visualAid(id: visual.id)?.answer != nil { await Task.yield() }
+        #expect(session.visualAidSendStatus(for: visual.id).error == ACPVisualAidSendStatus.failureMessage)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("sendPrompt that is no longer wanted after the lease check reports failure and sends nothing")
+    func sendPromptHonoursIsStillWanted() async throws {
+        let (manager, session, _, client) = try await attachedVisualAidManager()
+        defer { manager.shutdownBackgroundTasks() }
+        var results: [Bool] = []
+
+        await manager.sendPrompt(for: session.id, text: "hi", attachments: [], isStillWanted: { false }) { results.append($0) }
+
+        #expect(results == [false])
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("answerVisualAid reverts the answer and sends nothing when its row is not written")
     func answerVisualAidRevertsWhenTheWriteFails() async throws {
         let (manager, session, store, client) = try await attachedVisualAidManager()
