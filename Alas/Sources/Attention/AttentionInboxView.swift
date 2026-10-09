@@ -109,8 +109,17 @@ struct AttentionInboxView: View {
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     let onOpenPeer: (RemoteSessionSummary) -> Void
+    /// Nil hides the roll-up entirely, leaving the ordinary inbox.
+    var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
     @State private var historyExpanded = false
+    @State private var rollUpVisible = false
+    @State private var rollUp: AttentionRollUp?
+    @State private var rollUpTask: Task<Void, Never>?
+
+    private var canSummarize: Bool {
+        aggregation.items.count >= AttentionRollUpPolicy.minimumItems && rollUpSummarizer?.isAvailable == true
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -132,6 +141,11 @@ struct AttentionInboxView: View {
                         .foregroundStyle(theme.color("fg-muted"))
                         .accessibilityLabel("\(presentation.totalCount) items needing attention")
                     Spacer()
+                    if canSummarize, !rollUpVisible {
+                        Button("Summarize", action: summarize)
+                            .controlSize(.small)
+                            .help("Group the items needing attention on-device")
+                    }
                     if let acknowledgeLabel = presentation.acknowledgeLabel {
                         Button(acknowledgeLabel) {
                             for item in presentation.activeRows { onDismiss(item.item) }
@@ -145,10 +159,23 @@ struct AttentionInboxView: View {
                 .padding(.vertical, 10)
                 Divider()
                 ScrollView {
-                    AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
-                                       navigationErrors: navigationErrors, onDismiss: onDismiss,
-                                       onOpen: onOpen, onOpenPeer: onOpenPeer)
-                        .padding(14)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if rollUpVisible {
+                            AttentionRollUpCard(
+                                phase: .resolve(isSummarizing: rollUpTask != nil, rollUp: rollUp,
+                                                currentItems: aggregation.items),
+                                now: context.date,
+                                canSummarize: canSummarize,
+                                onSummarize: summarize,
+                                onCancel: dismissRollUp,
+                                onDismiss: dismissRollUp
+                            )
+                        }
+                        AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
+                                           navigationErrors: navigationErrors, onDismiss: onDismiss,
+                                           onOpen: onOpen, onOpenPeer: onOpenPeer)
+                    }
+                    .padding(14)
                 }
             }
             .frame(width: 400)
@@ -156,6 +183,27 @@ struct AttentionInboxView: View {
             .background(theme.color("bg-1"))
             .foregroundStyle(theme.color("fg"))
         }
+        .onDisappear(perform: dismissRollUp)
+    }
+
+    private func summarize() {
+        guard rollUpTask == nil, let rollUpSummarizer, canSummarize else { return }
+        rollUpVisible = true
+        rollUp = nil
+        let items = aggregation.items
+        rollUpTask = Task { @MainActor in
+            let result = await rollUpSummarizer.rollUp(items)
+            guard !Task.isCancelled else { return }
+            rollUp = result
+            rollUpTask = nil
+        }
+    }
+
+    private func dismissRollUp() {
+        rollUpTask?.cancel()
+        rollUpTask = nil
+        rollUp = nil
+        rollUpVisible = false
     }
 }
 
