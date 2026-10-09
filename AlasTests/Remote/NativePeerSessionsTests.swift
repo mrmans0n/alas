@@ -374,31 +374,38 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == "B:s")
     }
 
-    @Test func closingASessionTabWaitsForTheHostListAndClearsOnFailure() throws {
+    /// Open sessions `s` and `h`, with `h` selected and asked to close.
+    private func clientClosingSession() throws -> (FakeLinks, NativePeerSessions) {
         let (links, client) = try clientWithHistorySession()
         links.receive(historyList(hOpen: true), from: "B")
         client.select("B:h")
-
-        // Pending: asked once, the tab stays selected until the host's list drops it.
         client.closeSessionTab("B:h")
+        return (links, client)
+    }
+
+    @Test func aClosingTabIsAskedForOnceAndStaysUntilThePeerDropsIt() throws {
+        let (links, client) = try clientClosingSession()
         client.closeSessionTab("B:h")
         #expect(links.sent(to: "B").filter { $0 == .closeSessionTab(sessionId: "h") }.count == 1)
         #expect(client.closingSessionIds == ["B:h"])
         #expect(client.selectedSessionId == "B:h")
+    }
 
-        // Confirmed: the list drops it and the neighbour takes over.
+    @Test func aClosedTabLeavingThePeerListSelectsItsNeighbour() throws {
+        let (links, client) = try clientClosingSession()
         links.receive(.sessionTabActionSucceeded(sessionId: "h"), from: "B")
         links.receive(historyList(hOpen: false), from: "B")
         #expect(client.closingSessionIds.isEmpty)
         #expect(client.selectedSessionId == "B:s")
+    }
 
-        // Failed: the closing mark clears and the reason surfaces.
-        client.closeSessionTab("B:s")
-        links.receive(.sessionTabActionFailed(sessionId: "s", message: "This session is archived."), from: "B")
+    @Test func aRefusedTabCloseClearsTheMarkAndShowsTheReason() throws {
+        let (links, client) = try clientClosingSession()
+        links.receive(.sessionTabActionFailed(sessionId: "h", message: "This session is archived."), from: "B")
         #expect(client.closingSessionIds.isEmpty)
         #expect(client.tabCloseError == "This session is archived.")
         #expect(client.sessionTabError == nil)
-        #expect(client.selectedSessionId == "B:s")
+        #expect(client.selectedSessionId == "B:h")
     }
 
     @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
