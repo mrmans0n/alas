@@ -32,6 +32,8 @@ enum RunScriptWritingHelp {
         The working directory is relative to the selected worktree root.
         # alas-url: http://localhost:3000
         Add a service URL only when the script starts a service with a known endpoint.
+        # alas-console: hidden
+        Use hidden for long-running or noisy scripts I don't need to watch, such as dev servers. Omit it otherwise.
 
         Check syntax without running the script. Open the finished script for review and explain how to run it with Cmd+R. Do not run it automatically.
 

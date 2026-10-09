@@ -45,6 +45,14 @@ struct RunScriptMetadataTests {
         #expect(meta.displayName == "Spaced Out")
     }
 
+    @Test(arguments: zip(
+        ["# alas-console: hidden\n", "# alas-console: shown\n", "# alas-console: Hidden\n", "echo hi\n"],
+        [RunScriptConsole.hidden, .shown, .shown, .shown]
+    ))
+    func consoleHeaderSetsTheDefault(contents: String, expected: RunScriptConsole) {
+        #expect(RunScriptMetadata.parse(fileName: "a.sh", contents: contents).console == expected)
+    }
+
     @Test func scriptKeyCombinesScopeAndFileName() {
         let script = RunScript(
             scope: .repo, fileName: "dev.sh",
