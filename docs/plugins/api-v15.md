@@ -49,8 +49,9 @@ another rail item is picked, and loads from scratch when shown again: post
 "ready" from the page and answer with the state. Web panels count toward the 4
 live pages per plugin.
 
-A canvas panel is at least 240 points wide. Draw at most that, or the frame
-is clipped at scale 1. It ticks while it is shown.
+The pane is 240 points wide at its narrowest; a frame wider than the pane is
+clipped at scale 1, so draw at most 240 to always fit. A canvas panel ticks
+while it is shown.
 
 ## Messages that name a panel
 
@@ -65,9 +66,9 @@ the two:
 | `web/post` | `{ "panel": "usage", "message": … }` |
 | `web/message` (Alas → plugin) | `{ "panel": "usage", "message": … }` |
 
-A frame, region list or `web/post` for a panel of another kind stops the
-plugin (as a notification) or is answered `-32602` (as a request), as for
-tabs.
+A frame or region list for a panel of another kind stops the plugin, as for
+tabs. `web/post` stops it as a notification and is answered `-32602` as a
+request.
 
 ## Rail badges
 

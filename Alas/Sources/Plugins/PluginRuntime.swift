@@ -242,7 +242,7 @@ final class PluginRuntime: @unchecked Sendable {
             surface = .tab(tab)
         }
         guard width.isNumber, let width = Int(exactly: width.toDouble()) else {
-            return refuse(.badFrame("tab and width must be whole numbers"))
+            return refuse(.badFrame(target.isString ? "width must be a whole number" : "tab and width must be whole numbers"))
         }
         guard (1...limits.maxFrameDimension).contains(width) else {
             return refuse(.badFrame("width \(width) is out of range"))

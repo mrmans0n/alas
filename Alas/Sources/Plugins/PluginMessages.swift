@@ -30,7 +30,6 @@ struct PluginLogParams: Codable, Equatable, Sendable {
     let message: String
 }
 
-/// Encodes as `{}`.
 struct PluginPanelBadgeParams: Decodable, Sendable {
     let panel: String
     let count: Int?
@@ -38,6 +37,7 @@ struct PluginPanelBadgeParams: Decodable, Sendable {
     let tone: String?
 }
 
+/// Encodes as `{}`.
 struct PluginEmptyPayload: Codable, Equatable, Sendable {}
 
 struct PluginResponse<Result: Encodable>: Encodable {

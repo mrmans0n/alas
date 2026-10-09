@@ -71,8 +71,10 @@ struct PluginWebTests {
     /// WebKit accepts the rules, so a page with image hosts doesn't come up without a sandbox.
     @MainActor
     @Test func imageRulesCompile() async throws {
+        let identifier = "alas-plugin-web-test-\(UUID().uuidString)"
+        defer { Task { try? await WKContentRuleListStore.default().removeContentRuleList(forIdentifier: identifier) } }
         let list = try await WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "alas-plugin-web-test-\(UUID().uuidString)",
+            forIdentifier: identifier,
             encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: ["a.com", "cdn.b-c.org"]))
         #expect(list != nil)
     }

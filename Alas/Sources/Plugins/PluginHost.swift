@@ -1369,13 +1369,11 @@ final class PluginHost {
         for token in hostRequests.keys { answer(token, nil) }
     }
 
-    /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
-    /// because a plugin that cannot describe its own canvas is broken rather than noisy.
     /// `panel/badge {panel, count | dot, tone}`: sets a `right` panel's rail badge, or clears it with neither. Returns why
     /// the params are invalid, or nil.
     private func setPanelBadge(_ data: Data) -> String? {
         guard let params = try? JSONDecoder().decode(PluginParams<PluginPanelBadgeParams>.self, from: data).params else {
-            return "needs panel"
+            return "needs panel, and a whole-number count, a boolean dot and a string tone when given"
         }
         guard manifest.panels.contains(where: { $0.id == params.panel && $0.location == .right }) else {
             return "panel \"\(params.panel)\" is not a right panel"
@@ -1396,6 +1394,8 @@ final class PluginHost {
         return nil
     }
 
+    /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
+    /// because a plugin that cannot describe its own canvas is broken rather than noisy.
     private func handleNotification(_ method: String, data: Data) -> Outcome {
         switch method {
         case "log":
