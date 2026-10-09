@@ -153,13 +153,19 @@ final class ACPSubagentRun: ObservableObject, Identifiable {
     /// re-hydrated (open, or a read-only mirror's refresh) so an existing
     /// run keeps its identity — and therefore the row's expanded state —
     /// instead of being replaced wholesale.
-    func adopt(_ descriptor: ACPSubagentRowDescriptor, startedAt: Date?) {
+    func adopt(_ descriptor: ACPSubagentRowDescriptor, startedAt: Date?, finishedAt: Date? = nil) {
         if name != descriptor.name { name = descriptor.name }
         if task != descriptor.task { task = descriptor.task }
         if state != descriptor.state { state = descriptor.state }
         if capabilities != descriptor.capabilities { capabilities = descriptor.capabilities }
         if lastError != descriptor.lastError { lastError = descriptor.lastError }
         if let startedAt { self.startedAt = startedAt }
+        // Mirrors `apply(state:)`: only a terminal child has a finish time.
+        if !descriptor.state.isTerminal {
+            self.finishedAt = nil
+        } else if let finishedAt {
+            self.finishedAt = finishedAt
+        }
     }
 
     func apply(

@@ -588,8 +588,11 @@ struct AgentSidebarSubagentRowView: View {
 
     @ViewBuilder
     private var timing: some View {
-        if let finishedAt = subagent.finishedAt {
-            Text("finished in \(Self.duration(from: subagent.startedAt, to: finishedAt))")
+        if subagent.state.isTerminal {
+            // A row restored from before finish times were persisted has none.
+            if let finishedAt = subagent.finishedAt {
+                Text("finished in \(Self.duration(from: subagent.startedAt, to: finishedAt))")
+            }
         } else {
             TimelineView(.periodic(from: subagent.startedAt, by: 1)) { context in
                 Text("running \(Self.duration(from: subagent.startedAt, to: context.date))")

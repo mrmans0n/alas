@@ -1183,9 +1183,10 @@ struct ACPSubagentSessionTests {
             state: .completed,
             capabilities: .cancellable)
         let created = Date(timeIntervalSince1970: 1_000)
+        let finished = Date(timeIntervalSince1970: 1_090)
 
         session.restoreSubagents(
-            rows: [descriptor.toolCall(executionStartedAt: created, executionFinishedAt: nil)],
+            rows: [descriptor.toolCall(executionStartedAt: created, executionFinishedAt: finished)],
             messages: ["child-1": [
                 (.agent(id: UUID(), StreamingText("restored")), created, 0)
             ]])
@@ -1194,6 +1195,8 @@ struct ACPSubagentSessionTests {
         #expect(run?.name == "Explore")
         #expect(run?.task == "Find the router")
         #expect(run?.state == .completed)
+        // Without it a finished child reads as still running after relaunch.
+        #expect(run?.finishedAt == finished)
         #expect(run?.capabilities.supportsCancel == true)
         #expect(run?.messages.count == 1)
         #expect(run?.createdAt(at: 0) == created)
