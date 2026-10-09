@@ -224,6 +224,8 @@ Changes, Files, Agent, Run and Schedules.
 | `icon` | Optional SF Symbol name; `puzzlepiece.extension` when omitted. |
 | `location` | Optional; `right` is the only one so far. A panel with a location this Alas does not know is skipped, not refused. |
 
+From [API 15](api-v15.md), a `right` panel can also be a canvas or a web page, and carry a badge.
+
 Up to 2 panels. The rail shows them while the plugin runs in the selected
 worktree's project, and keeps them while it has stopped with an error, so the
 panel can say so and offer Restart. Until the first render the panel reads
