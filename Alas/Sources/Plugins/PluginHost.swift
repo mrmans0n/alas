@@ -135,6 +135,7 @@ final class PluginHost {
         "web/post": nil,
         "usage/turns": .usageRead,
         "usage/limits": .usageRead,
+        "panel/badge": nil,
     ]
     /// Methods a manifest for an older API does not know.
     private static let api6Methods: Set<String> = [
@@ -143,6 +144,8 @@ final class PluginHost {
     ]
     private static let api9Methods: Set<String> = ["prompts/set"]
     private static let api12Methods: Set<String> = ["web/post", "usage/turns", "usage/limits"]
+    private static let api15Methods: Set<String> = ["panel/badge"]
+    static let maxBadgeCount = 9999
     /// Messages a web tab's page posted that the plugin has not yet handled, per page (API 12).
     static let maxWebQueue = 32
     /// Bytes one page may post per second (API 12), each message counting at least `minWebPostCost`. The queue bounds
@@ -199,6 +202,8 @@ final class PluginHost {
     private(set) var panelPlaces: [String: PluginPanelPlace] = [:]
     /// Badges the plugin put on rows with `decorations/set`. Cleared whenever the instance ends.
     private(set) var decorations: [PluginDecorationKey: [PluginDecoration]] = [:]
+    /// Rail badges of `right` panels, by id (API 15). Cleared whenever the instance ends.
+    private(set) var panelBadges: [String: PluginPanelBadge] = [:]
     /// Long-running processes this instance started, shown in the Run tab; kept after they exit until the next start.
     private(set) var processRuns: [PluginProcessRun] = []
     /// Slash prompts the instance set with `prompts/set` (API 9), offered beside the manifest's. Cleared when it ends.
@@ -529,6 +534,7 @@ final class PluginHost {
         panelViews = [:]
         panelPlaces = [:]
         decorations = [:]
+        panelBadges = [:]
         lastTick = nil
     }
 
@@ -683,7 +689,8 @@ final class PluginHost {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
               manifest.api >= 9 || !Self.api9Methods.contains(method),
-              manifest.api >= 12 || !Self.api12Methods.contains(method)
+              manifest.api >= 12 || !Self.api12Methods.contains(method),
+              manifest.api >= 15 || !Self.api15Methods.contains(method)
         else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -843,6 +850,9 @@ final class PluginHost {
             return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
         case "web/post":
             if let refusal = postToPage(data) { return errorReply(id, code: -32602, refusal) }
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "panel/badge":
+            if let refusal = setPanelBadge(data) { return errorReply(id, code: -32602, refusal) }
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         case "usage/turns", "usage/limits":
             return usageReply(method, id: id, data: data)
@@ -1361,6 +1371,31 @@ final class PluginHost {
 
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
     /// because a plugin that cannot describe its own canvas is broken rather than noisy.
+    /// `panel/badge {panel, count | dot, tone}`: sets a `right` panel's rail badge, or clears it with neither. Returns why
+    /// the params are invalid, or nil.
+    private func setPanelBadge(_ data: Data) -> String? {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginPanelBadgeParams>.self, from: data).params else {
+            return "needs panel"
+        }
+        guard manifest.panels.contains(where: { $0.id == params.panel && $0.location == .right }) else {
+            return "panel \"\(params.panel)\" is not a right panel"
+        }
+        var tone = PluginViewNode.Tone.normal
+        if let raw = params.tone {
+            guard let parsed = PluginViewNode.Tone(rawValue: raw) else { return "unknown tone \"\(raw)\"" }
+            tone = parsed
+        }
+        let dot = params.dot ?? false
+        if let count = params.count {
+            guard !dot else { return "count and dot can't both be set" }
+            guard (1...Self.maxBadgeCount).contains(count) else { return "count must be 1 to \(Self.maxBadgeCount)" }
+            panelBadges[params.panel] = PluginPanelBadge(count: count, tone: tone)
+        } else {
+            panelBadges[params.panel] = dot ? PluginPanelBadge(count: nil, tone: tone) : nil
+        }
+        return nil
+    }
+
     private func handleNotification(_ method: String, data: Data) -> Outcome {
         switch method {
         case "log":
@@ -1435,6 +1470,8 @@ final class PluginHost {
             return .none
         case "web/post" where manifest.api >= 12:
             return postToPage(data).map { .violation(Self.bounded("plugin sent a malformed web/post: \($0)")) } ?? .none
+        case "panel/badge" where manifest.api >= 15:
+            return setPanelBadge(data).map { .violation(Self.bounded("plugin sent a malformed panel/badge: \($0)")) } ?? .none
         case "canvas/regions":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
                   let surface = PluginSurface(tab: params.tab, panel: params.panel), surfaceIs(surface, .canvas),

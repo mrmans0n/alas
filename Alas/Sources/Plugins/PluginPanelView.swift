@@ -6,20 +6,28 @@ struct PluginPanelRef: Hashable, Sendable {
     let panelID: String
 }
 
+/// What a `right` panel's rail button carries, set with `panel/badge` (API 15): a count, or a dot when `count` is nil.
+struct PluginPanelBadge: Equatable, Sendable {
+    let count: Int?
+    let tone: PluginViewNode.Tone
+}
+
 /// A plugin panel's button in the right pane's rail.
 struct PluginPanelItem: Equatable, Identifiable {
     let ref: PluginPanelRef
     let title: String
     let icon: String
+    var badge: PluginPanelBadge?
     var id: PluginPanelRef { ref }
 
     /// Panels of plugins with a host in the project, in plugin order. A failed host keeps its
     /// panels, so the panel can say it stopped and offer a restart.
-    static func items(_ plugins: [(manifest: PluginManifest, hasHost: Bool)]) -> [PluginPanelItem] {
+    static func items(_ plugins: [(manifest: PluginManifest, hasHost: Bool, badges: [String: PluginPanelBadge])]) -> [PluginPanelItem] {
         plugins.filter(\.hasHost).flatMap { plugin in
             plugin.manifest.panels.filter { $0.location == .right }.map {
                 PluginPanelItem(
-                    ref: PluginPanelRef(pluginID: plugin.manifest.id, panelID: $0.id), title: $0.title, icon: $0.icon)
+                    ref: PluginPanelRef(pluginID: plugin.manifest.id, panelID: $0.id), title: $0.title, icon: $0.icon,
+                    badge: plugin.badges[$0.id])
             }
         }
     }

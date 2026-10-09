@@ -329,7 +329,8 @@ extension AppState {
     func pluginPanels(projectID: String) -> [PluginPanelItem] {
         guard let manager = pluginManager else { return [] }
         return PluginPanelItem.items(manager.plugins.map {
-            ($0.manifest, manager.host(pluginID: $0.id, projectID: projectID) != nil)
+            let host = manager.host(pluginID: $0.id, projectID: projectID)
+            return ($0.manifest, host != nil, host?.panelBadges ?? [:])
         })
     }
 

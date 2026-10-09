@@ -55,4 +55,17 @@ struct RightPaneRailModelTests {
         #expect(RightPaneRailModel.tabState(for: .files, active: .changes, collapsed: true) == .inactive)
         #expect(RightPaneRailModel.tabState(for: .files, active: .changes, collapsed: false) == .inactive)
     }
+
+    /// A plugin's badge draws the built-in grey unless it names a tone, and a dot is never the Run tab's green.
+    @Test(arguments: [
+        (PluginPanelBadge?.none, RightPaneRailBadge.none, String?.none),
+        (PluginPanelBadge(count: 120, tone: .normal), .count(120), nil),
+        (PluginPanelBadge(count: 2, tone: .warn), .count(2), "warn"),
+        (PluginPanelBadge(count: nil, tone: .danger), .liveDot, "del"),
+        (PluginPanelBadge(count: nil, tone: .normal), .liveDot, "fg-dim"),
+    ])
+    func pluginPanelBadgesMapToARailBadgeAndTone(plugin: PluginPanelBadge?, badge: RightPaneRailBadge, tone: String?) {
+        let mapped = RightPaneRailModel.badge(for: plugin)
+        #expect(mapped.badge == badge && mapped.tone == tone)
+    }
 }

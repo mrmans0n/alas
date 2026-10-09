@@ -70,7 +70,7 @@ struct PluginHostTests {
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
     static let canvasManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
     nonisolated static let panelsManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":15,"entry":"p.js","web":"ui.js","contributes":{"panels":[{"id":"cv","title":"CV","kind":"canvas"},{"id":"w","title":"W","kind":"web"},{"id":"v","title":"V"}]}}"#
-    static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
+    nonisolated static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
@@ -2060,5 +2060,51 @@ struct PluginHostTests {
             .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any])?["params"] as? [String: Any] }
             .compactMap { $0["message"] as? Int }
         #expect(delivered == Array(0..<count))
+    }
+
+    private static func badge(_ params: String) -> PluginFixtureStep {
+        .send(#"{"jsonrpc":"2.0","method":"panel/badge","params":\#(params)}"#)
+    }
+
+    /// Set, replaced and cleared by the plugin, and gone with the instance, so a stopped plugin shows no stale count.
+    @Test func panelBadgesSetClearAndEndWithTheInstance() async throws {
+        let host = try makeHost(
+            [[.send(activateOK), Self.badge(#"{"panel":"v","count":3,"tone":"warn"}"#), Self.badge(#"{"panel":"w","dot":true}"#),
+              Self.badge(#"{"panel":"cv","count":1}"#), Self.badge(#"{"panel":"cv"}"#)],
+             [.throw]],
+            manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.panelBadges == [
+            "v": PluginPanelBadge(count: 3, tone: .warn), "w": PluginPanelBadge(count: nil, tone: .normal),
+        ])
+        await host.setPanelVisible("v", true)?.value
+        #expect(host.panelBadges.isEmpty)
+    }
+
+    @Test(arguments: [
+        (#"{"panel":"v","count":0}"#, "count must be 1 to 9999"),
+        (#"{"panel":"v","count":10000}"#, "count must be 1 to 9999"),
+        (#"{"panel":"v","count":1,"dot":true}"#, "count and dot"),
+        (#"{"panel":"v","dot":true,"tone":"loud"}"#, #"unknown tone "loud""#),
+        (#"{"panel":"nope","dot":true}"#, #"panel "nope" is not a right panel"#),
+        (#"{"count":1}"#, "needs panel"),
+    ])
+    func malformedPanelBadgesStopThePlugin(params: String, fragment: String) async throws {
+        let host = try makeHost([[.send(activateOK), Self.badge(params)]], manifest: Self.panelsManifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("panel/badge") && reason.contains(fragment))
+    }
+
+    /// As a request, a bad badge is refused and the plugin keeps running; an older plugin doesn't have the method.
+    @Test(arguments: [(PluginHostTests.panelsManifest, "-32602"), (PluginHostTests.viewManifest, "-32601")])
+    func aBadgeRequestIsAnsweredWithoutStopping(manifest: String, code: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(request(1, "panel/badge", #"{"panel":"nope"}"#))]], manifest: manifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(lastReply(host)?.contains(code) == true)
     }
 }

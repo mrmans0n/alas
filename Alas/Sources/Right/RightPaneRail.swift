@@ -45,11 +45,14 @@ struct RightPaneRail: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 3) {
                     ForEach(panels) { panel in
+                        let badge = RightPaneRailModel.badge(for: panel.badge)
                         RightPaneRailButton(
                             label: panel.title,
                             icon: panel.icon,
                             state: panel.ref != activePanel ? .inactive : collapsed ? .activeCollapsed : .active,
-                            badge: .none,
+                            badge: badge.badge,
+                            tone: badge.tone,
+                            dotLabel: "needs attention",
                             collapsed: collapsed,
                             onTap: { onPanel(panel.ref) }
                         )
@@ -95,6 +98,10 @@ private struct RightPaneRailButton: View {
     let icon: String
     let state: RightPaneRailTabState
     let badge: RightPaneRailBadge
+    /// The theme color a badge fills with; nil keeps the built-in look.
+    var tone: String? = nil
+    /// What VoiceOver says for a dot.
+    var dotLabel = "running"
     let collapsed: Bool
     let onTap: () -> Void
 
@@ -168,7 +175,7 @@ private struct RightPaneRailButton: View {
             EmptyView()
         case .liveDot:
             Circle()
-                .fill(theme.color("add"))
+                .fill(theme.color(tone ?? "add"))
                 .frame(width: 7, height: 7)
                 .overlay(Circle().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
                 .offset(x: 2, y: -2)
@@ -176,10 +183,10 @@ private struct RightPaneRailButton: View {
             if let text = badge.displayText {
                 Text(text)
                     .font(.system(size: 8.5, weight: .bold))
-                    .foregroundColor(theme.color("fg-muted"))
+                    .foregroundColor(theme.color(tone == nil ? "fg-muted" : "bg-1"))
                     .padding(.horizontal, 3)
                     .frame(minWidth: 12, minHeight: 12)
-                    .background(Capsule().fill(theme.color("bg-4")))
+                    .background(Capsule().fill(theme.color(tone ?? "bg-4")))
                     .overlay(Capsule().strokeBorder(theme.color("bg-1"), lineWidth: 1.5))
                     .offset(x: 4, y: -3)
             }
@@ -189,7 +196,7 @@ private struct RightPaneRailButton: View {
     private var accessibilityLabel: String {
         // The live dot draws no text, so VoiceOver would otherwise hear
         // nothing at all where a sighted user sees activity.
-        if badge == .liveDot { return "\(label), running" }
+        if badge == .liveDot { return "\(label), \(dotLabel)" }
         guard let text = badge.displayText else { return label }
         return "\(label), \(text)"
     }
