@@ -9279,6 +9279,21 @@ final class AppState {
         closeTabRecordingHistory(worktreeId: worktreeId, projectId: projectId, tab: tab)
     }
 
+    /// Closes a session tab on the paired Mac that hosts it, after the same
+    /// confirmation a local chat tab gets.
+    func requestClosePeerSessionTab(_ sessionId: String) {
+        guard let client = nativePeerSessions,
+              let peer = client.snapshot.groups.first(where: { group in
+                  group.sessions.contains { $0.id == sessionId }
+              }),
+              client.canCloseSessionTabs(on: peer.serverId) else { return }
+        if let prompt = CloseTabConfirmationPolicy.peerSessionPrompt(peerName: peer.name, config: config),
+           !confirmCloseTab(prompt) {
+            return
+        }
+        client.closeSessionTab(sessionId)
+    }
+
     /// Closes `tab` and records it so the user can reopen it.
     private func closeTabRecordingHistory(worktreeId: String, projectId: String?, tab: Tab) {
         closedTabHistory.record(ClosedTabEntry(

@@ -8,6 +8,7 @@ struct NativePeerTabBar: View {
     let agentLookup: (String) -> AgentDefinition?
     let sidebarHidden: Bool
     let onRevealSidebar: () -> Void
+    let onCloseSession: (String) -> Void
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -21,6 +22,7 @@ struct NativePeerTabBar: View {
     var body: some View {
         let rows = rows
         let selectedTab = client.selectedTab
+        let canClose = client.canCloseSessionTabs(on: selection.serverId)
         TabStrip(
             activeId: selectedTab,
             isEmpty: rows.isEmpty,
@@ -35,7 +37,16 @@ struct NativePeerTabBar: View {
                 TabItemView(item: item(for: row), active: row.id == selectedTab) {
                     client.selectTab(row.id, in: selection)
                 } trailing: {
-                    EmptyView()
+                    if canClose, case .session(let session) = row {
+                        if client.closingSessionIds.contains(session.id) {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 20, height: 20)
+                                .help("Closing on \(peer?.name ?? "peer")…")
+                        } else {
+                            TabCloseButton(dirtyLookup: { false }) { onCloseSession(session.id) }
+                        }
+                    }
                 }
                 .id(row.id)
             }

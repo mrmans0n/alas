@@ -314,6 +314,43 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
     }
 
+    @Test func closingASessionTabWaitsForTheHostListAndClearsOnFailure() throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] }
+        )
+        client.start()
+        func tab(_ id: String, _ index: Int?) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+                  isActive: index != nil, tabIndex: index, worktreeId: "w")
+        }
+        links.receive(.sessionList(sessions: [tab("s1", 0), tab("s2", 1)]), from: "B")
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        let selection = NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id)
+        client.selectTab(.session("B:s2"), in: selection)
+
+        // Pending: asked once, the tab stays selected until the host's list drops it.
+        client.closeSessionTab("B:s2")
+        client.closeSessionTab("B:s2")
+        #expect(links.sent(to: "B").filter { $0 == .closeSessionTab(sessionId: "s2") }.count == 1)
+        #expect(client.closingSessionIds == ["B:s2"])
+        #expect(client.selectedSessionId == "B:s2")
+
+        // Confirmed: the list drops it and the neighbour takes over.
+        links.receive(.sessionList(sessions: [tab("s1", 0), tab("s2", nil)]), from: "B")
+        #expect(client.closingSessionIds.isEmpty)
+        #expect(client.selectedSessionId == "B:s1")
+
+        // Failed: the closing mark clears and the reason surfaces.
+        client.closeSessionTab("B:s1")
+        links.receive(.sessionTabActionFailed(sessionId: "s1", message: "This session is archived."), from: "B")
+        #expect(client.closingSessionIds.isEmpty)
+        #expect(client.tabCloseError == "This session is archived.")
+        #expect(client.selectedSessionId == "B:s1")
+    }
+
     @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
