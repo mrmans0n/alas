@@ -246,6 +246,8 @@ final class RemoteSessionGateway {
         case .setAutoRun(let id, let enabled):
             guard provider.isWriter(for: id) else { return }
             await provider.setAutoRun(for: id, enabled: enabled)
+        case .setConfigOption:
+            break
         case .renameSession(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }

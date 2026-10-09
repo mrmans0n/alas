@@ -19,7 +19,7 @@ extension RemoteClientMessage {
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
-             .setMode(let id, _), .setAutoRun(let id, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
+             .setMode(let id, _), .setAutoRun(let id, _), .setConfigOption(let id, _, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
              .listCommitFiles(let id, _), .commitFileDiff(let id, _, _), .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _),
              .visualAidResponse(let id, _, _, _, _, _):
@@ -53,6 +53,7 @@ extension RemoteClientMessage {
         case .setModel(_, let modelId): return .setModel(sessionId: new, modelId: modelId)
         case .setMode(_, let modeId): return .setMode(sessionId: new, modeId: modeId)
         case .setAutoRun(_, let enabled): return .setAutoRun(sessionId: new, enabled: enabled)
+        case .setConfigOption(_, let configId, let value): return .setConfigOption(sessionId: new, configId: configId, value: value)
         case .renameSession(_, let title): return .renameSession(sessionId: new, title: title)
         case .fetchOlder(_, let beforeIndex, let limit):
             return .fetchOlder(sessionId: new, beforeIndex: beforeIndex, limit: limit)

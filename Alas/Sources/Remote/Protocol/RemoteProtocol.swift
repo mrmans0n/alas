@@ -50,6 +50,46 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
     let currentMode: String?
     let autoRunEnabled: Bool
     let acceptsImages: Bool
+    var chips: RemoteChipState? = nil
+    var supportsSteering: Bool? = nil
+}
+
+struct RemoteChipState: Codable, Equatable, Sendable {
+    var model: RemoteChip?
+    var thinking: RemoteChip?
+    var mode: RemoteChip?
+    var parameters: [RemoteParameterChip]
+    var booleans: [RemoteBooleanOption]
+    /// "supported" | "ignored"
+    var autoRun: String
+}
+
+struct RemoteChip: Codable, Equatable, Sendable {
+    /// "model" | "mode" | "config"
+    var source: String
+    var configId: String?
+    var options: [RemoteChipOption]
+    var currentId: String?
+}
+
+struct RemoteChipOption: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var description: String?
+    var kind: String?
+}
+
+struct RemoteParameterChip: Codable, Equatable, Sendable {
+    var id: String
+    var label: String
+    var presentation: String
+    var chip: RemoteChip
+}
+
+struct RemoteBooleanOption: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var value: Bool
 }
 
 /// Client → server. `type` discriminates.
@@ -93,6 +133,7 @@ enum RemoteClientMessage: Equatable, Sendable {
     case setModel(sessionId: String, modelId: String)
     case setMode(sessionId: String, modeId: String)
     case setAutoRun(sessionId: String, enabled: Bool)
+    case setConfigOption(sessionId: String, configId: String, value: ACPConfigValue)
     case renameSession(sessionId: String, title: String)
     case fetchOlder(sessionId: String, beforeIndex: Int, limit: Int)
     case queueForceSend(sessionId: String, itemId: String)
@@ -128,7 +169,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -214,6 +255,11 @@ extension RemoteClientMessage: Codable {
             self = .setModel(sessionId: try c.decode(String.self, forKey: .sessionId), modelId: try c.decode(String.self, forKey: .modelId))
         case "setMode":
             self = .setMode(sessionId: try c.decode(String.self, forKey: .sessionId), modeId: try c.decode(String.self, forKey: .modeId))
+        case "setConfigOption":
+            self = .setConfigOption(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                configId: try c.decode(String.self, forKey: .configId),
+                value: try c.decode(ACPConfigValue.self, forKey: .value))
         case "setAutoRun":
             self = .setAutoRun(sessionId: try c.decode(String.self, forKey: .sessionId), enabled: try c.decode(Bool.self, forKey: .enabled))
         case "renameSession":
@@ -379,6 +425,11 @@ extension RemoteClientMessage: Codable {
             try c.encode("setMode", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(m, forKey: .modeId)
+        case .setConfigOption(let id, let configId, let value):
+            try c.encode("setConfigOption", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(configId, forKey: .configId)
+            try c.encode(value, forKey: .value)
         case .setAutoRun(let id, let e):
             try c.encode("setAutoRun", forKey: .type)
             try c.encode(id, forKey: .sessionId)
@@ -616,6 +667,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
+        case chips, supportsSteering
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, itemId, text
@@ -748,14 +800,19 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 message: try c.decode(String.self, forKey: .message))
         case "sessionConfig":
-            self = .sessionConfig(RemoteSessionConfig(
+            var config = RemoteSessionConfig(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 models: try c.decode([RemoteModelInfo].self, forKey: .models),
                 modes: try c.decode([RemoteModelInfo].self, forKey: .modes),
                 currentModel: try c.decodeIfPresent(String.self, forKey: .currentModel),
                 currentMode: try c.decodeIfPresent(String.self, forKey: .currentMode),
                 autoRunEnabled: try c.decode(Bool.self, forKey: .autoRunEnabled),
-                acceptsImages: try c.decode(Bool.self, forKey: .acceptsImages)))
+                acceptsImages: try c.decode(Bool.self, forKey: .acceptsImages))
+            // Deliberately lenient: a malformed or future-shaped chips payload
+            // degrades to the legacy model/mode UI instead of dropping the frame.
+            config.chips = try? c.decodeIfPresent(RemoteChipState.self, forKey: .chips) ?? nil
+            config.supportsSteering = try c.decodeIfPresent(Bool.self, forKey: .supportsSteering)
+            self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -997,6 +1054,8 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.currentMode, forKey: .currentMode)
             try c.encode(cfg.autoRunEnabled, forKey: .autoRunEnabled)
             try c.encode(cfg.acceptsImages, forKey: .acceptsImages)
+            try c.encodeIfPresent(cfg.chips, forKey: .chips)
+            try c.encodeIfPresent(cfg.supportsSteering, forKey: .supportsSteering)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)

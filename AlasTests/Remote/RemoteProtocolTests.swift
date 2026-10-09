@@ -828,6 +828,48 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(cfg) == cfg)
     }
 
+    @Test func sessionConfigWithChipsRoundTrips() throws {
+        let chip = RemoteChip(source: "config", configId: "effort",
+                              options: [.init(id: "high", name: "High", description: nil, kind: nil)],
+                              currentId: "high")
+        var config = RemoteSessionConfig(sessionId: "s1", models: [], modes: [], currentModel: nil,
+                                         currentMode: nil, autoRunEnabled: false, acceptsImages: true)
+        config.chips = RemoteChipState(
+            model: RemoteChip(source: "model", configId: nil,
+                              options: [.init(id: "opus", name: "Opus", description: "Big", kind: nil)],
+                              currentId: "opus"),
+            thinking: chip,
+            mode: RemoteChip(source: "mode", configId: nil,
+                             options: [.init(id: "yolo", name: "YOLO", description: nil, kind: "full_access")],
+                             currentId: "yolo"),
+            parameters: [.init(id: "fast", label: "Fast", presentation: "fastMode", chip: chip)],
+            booleans: [.init(id: "web", name: "Web search", value: true)],
+            autoRun: "supported")
+        config.supportsSteering = true
+        let message = RemoteServerMessage.sessionConfig(config)
+        #expect(try roundTrip(message) == message)
+    }
+
+    @Test func sessionConfigFromOlderHostDecodesWithoutChips() throws {
+        let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false}"#
+        guard case .sessionConfig(let config) = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
+        else { Issue.record("not a sessionConfig"); return }
+        #expect(config.chips == nil)
+        #expect(config.supportsSteering == nil)
+    }
+
+    @Test(arguments: [ACPConfigValue.string("high"), .boolean(true)])
+    func setConfigOptionRoundTrips(_ value: ACPConfigValue) throws {
+        let message = RemoteClientMessage.setConfigOption(sessionId: "s1", configId: "effort", value: value)
+        #expect(try roundTrip(message) == message)
+    }
+
+    @Test func setConfigOptionDecodesBareJSONValue() throws {
+        let json = #"{"type":"setConfigOption","sessionId":"s1","configId":"web","value":false}"#
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: Data(json.utf8))
+            == .setConfigOption(sessionId: "s1", configId: "web", value: .boolean(false)))
+    }
+
     @Test func clientConfigVerbsDecode() throws {
         let setModel = try JSONDecoder().decode(RemoteClientMessage.self,
             from: Data(#"{"type":"setModel","sessionId":"s1","modelId":"opus"}"#.utf8))
