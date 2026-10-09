@@ -202,6 +202,8 @@ final class NativePeerSessions {
         else { return }
         sessionTabError = nil
         if row.isActive {
+            // `select` skips `clearSelection` for the session already shown.
+            pendingSessionId = nil
             select(sessionId)
             return
         }

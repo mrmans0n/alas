@@ -349,6 +349,14 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == "B:s")
         links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: true)]), from: "B")
         #expect(client.selectedSessionId == "B:h")
+
+        // Refocusing the shown session cancels an open still in flight.
+        links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: false)]), from: "B")
+        #expect(client.selectedSessionId == "B:s")
+        client.openSession("B:h")
+        client.openSession("B:s")
+        links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: true)]), from: "B")
+        #expect(client.selectedSessionId == "B:s")
     }
 
     @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
