@@ -179,14 +179,12 @@ extension AppState {
         let incarnation = session.incarnation
         nextPromptActiveIncarnation = incarnation
         nextPromptComposerEnvironment = environment
-        // A submit's own clear reports the old caret after the prompt was allocated;
-        // that is not input after the turn. Other blockers (runtime starting, inactive
-        // tab) still let genuine edits consume it.
-        if environment.hasSubmitInFlight {
-            nextPromptCoordinator.suspend(incarnation: incarnation)
-            return
-        }
-        if environment.hasPendingInput || environment.hasSelection || environment.hasMarkedText ||
+        // A submit's own clear reports the old caret (a selection) after the prompt was
+        // allocated; that is not input after the turn. Everything else a submit does not
+        // produce (pickers, drops, IME, dictation) and other blockers (runtime starting,
+        // inactive tab) still let genuine input consume it.
+        let hasSelection = environment.hasSelection && !environment.hasSubmitInFlight
+        if environment.hasPendingInput || hasSelection || environment.hasMarkedText ||
             environment.isDictating || environment.isPickerPresented {
             nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1,
                                              reason: "composer input")

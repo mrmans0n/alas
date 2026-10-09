@@ -145,7 +145,8 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: [("submit in flight", true), ("typing", false), ("typing while blocked", false)])
+    @Test(arguments: [("submit in flight", true), ("typing", false), ("typing while blocked", false),
+                      ("picker during submit", false)])
     func composerStateDuringARunningTurn(_ state: String, offers: Bool) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -175,10 +176,12 @@ struct NextPromptSettingsTests {
         let promptID = session.allocatePromptID()
 
         // A submit's own clear still reports the old caret (a selection) while in flight.
-        // Typing consumes the turn even when another blocker (runtime starting) is closed.
+        // Typing consumes the turn even when another blocker (runtime starting) is closed,
+        // and so does anything else a submit does not produce (a picker).
         var during = environment
         during.hasSelection = true
-        during.hasSubmitInFlight = state == "submit in flight"
+        during.hasSubmitInFlight = state.hasSuffix("submit") || state == "submit in flight"
+        during.isPickerPresented = state == "picker during submit"
         during.isInputBlocked = state != "typing"
         app.nextPromptComposerChanged(during, owner: owner, sessionID: session.id)
         app.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
