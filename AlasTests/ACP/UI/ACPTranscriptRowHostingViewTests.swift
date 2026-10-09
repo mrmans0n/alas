@@ -121,11 +121,18 @@ struct ACPTranscriptRowHostingViewTests {
         window.layoutIfNeeded()
 
         view.hover.isHovered = true
-        let deadline = Date().addingTimeInterval(0.3)
-        while Date() < deadline, probe.enters < 50 {
+        try await eventually("the hover to reach the row") {
             window.layoutIfNeeded()
             window.displayIfNeeded()
-            try await Task.sleep(for: .milliseconds(10))
+            return probe.enters > 0
+        }
+        // A looping row would keep re-entering across further render passes.
+        var passes = 0
+        try await eventually("further render passes") {
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+            passes += 1
+            return passes >= 20
         }
 
         #expect(probe.enters == 1)

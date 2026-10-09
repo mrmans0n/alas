@@ -60,21 +60,25 @@ struct ACPMessageGutter<Content: View>: View {
     /// when its row mounts mid-scroll. Once built they stay mounted (see below).
     @State private var hasRevealedActions = false
     /// VoiceOver and keyboard users never hover, so for them the actions are
-    /// built with the row and stay reachable.
+    /// built with the row and stay visible and reachable.
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    private var showsActionsWithoutHover: Bool {
+        voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled
+    }
     @Environment(\.theme) private var theme
 
     var body: some View {
         content
             .overlay(alignment: .topTrailing) {
-                if hasRevealedActions || voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled {
+                if hasRevealedActions || showsActionsWithoutHover {
                     actions
                         // Keep the menu label mounted at all times and toggle
                         // visibility via opacity/hit-testing rather than inserting
                         // and removing the view. Removing the label while its menu
                         // is open can dismiss the menu; this avoids that.
-                        .opacity(hover.isVisible ? 1 : 0)
-                        .allowsHitTesting(hover.isVisible)
+                        .opacity(hover.isVisible || showsActionsWithoutHover ? 1 : 0)
+                        .allowsHitTesting(hover.isVisible || showsActionsWithoutHover)
                         // Sit flush with the right edge of the reserved lane: the
                         // button's own visible padding is 4pt each side (8pt total),
                         // so net inset is laneWidth - 8. y: -2 nudges it into optical
