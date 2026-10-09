@@ -442,8 +442,9 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Consumes `text` from the front of `expected`, ignoring whitespace
-    /// between fragments. Clears `expected` once it is fully consumed or when
-    /// `text` diverges from it.
+    /// around fragments. A fully consumed `expected` stays empty rather than
+    /// nil, so trailing whitespace is still consumed; the first text that
+    /// diverges clears it.
     private static func consume(_ text: String, from expected: inout Substring?) -> Bool {
         guard let rest = expected?.drop(while: \.isWhitespace) else { return false }
         let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -452,8 +453,7 @@ final class ACPSession: ObservableObject, Identifiable {
             expected = nil
             return false
         }
-        let remaining = rest.dropFirst(fragment.count)
-        expected = remaining.allSatisfy(\.isWhitespace) ? nil : remaining
+        expected = rest.dropFirst(fragment.count)
         return true
     }
 

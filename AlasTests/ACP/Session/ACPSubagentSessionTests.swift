@@ -1095,7 +1095,7 @@ struct ACPSubagentSessionTests {
         let text = QueuedPrompt.interruptedTurnContinueText
         let split = text.index(text.startIndex, offsetBy: 20)
 
-        for fragment in [String(text[..<split]), " ", String(text[split...])] {
+        for fragment in [String(text[..<split]), " ", String(text[split...]), "\n"] {
             _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text(fragment)))
         }
         if promptReplayedBeforeSpawn {

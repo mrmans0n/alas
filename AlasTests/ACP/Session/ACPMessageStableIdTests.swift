@@ -439,7 +439,7 @@ struct ACPMessageStableIdTests {
         let text = QueuedPrompt.interruptedTurnContinueText
         let split = text.index(text.startIndex, offsetBy: 20)
 
-        for fragment in [String(text[..<split]), " ", String(text[split...])] {
+        for fragment in [String(text[..<split]), " ", String(text[split...]), "\n"] {
             #expect(s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(fragment)))).isEmpty)
         }
         #expect(s.transcript.messages.count == 1)
