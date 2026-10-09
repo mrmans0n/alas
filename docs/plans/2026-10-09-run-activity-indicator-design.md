@@ -48,21 +48,25 @@ Only the tab is hidden:
   `CodingKeys`, so it is never encoded and decodes as `false`.
 - `TabsManager.appendTerminal(…, isHidden:)` appends without activating when
   hidden (`append(_:to:activate:)` already takes `activate`).
-- `TabsManager.reveal(tabId:worktreeId:)` clears the flag and activates the tab.
+- Invariant: **the active tab is never hidden.** `TabsManager.activate` clears
+  the flag on the tab it activates. Run on an active hidden run, the Run tab's
+  "Terminal" and the pill's "Output" all go through
+  `activateWorktreeCenterTab` → `TabsManager.activate`, and so does any other
+  caller that activates the tab by ID. Revealing needs no separate API.
 - `CenterTabComposition` filters out hidden tabs in both initializers. The
-  strip, ⌘1–9, previous/next, close-other/left/right plans, and the empty
+  strip, ⌘1–9, previous/next, close-other/all/left/right plans, and the empty
   center state all read the composition, so this one filter covers them.
-- When the active tab closes, `TabsManager` picks the nearest neighbor that is
-  not hidden. Without this, the composition would fall back to the first tab
-  instead of the neighbor.
-- Closing a hidden tab does not add a `ClosedTabEntry`. Reopening a run tab
-  already drops its run markers, so ⌘⇧T would bring back a bare shell for a
-  console the user never saw.
-- The full-list close wrappers in `AppState` (close-others/all/left/right)
-  skip hidden tabs. "Close All Tabs" must not kill a background dev server.
-- Unchanged: sidebar harness badges, Attention session lookup, Terminate All
-  and worktree cleanup counts. They still see hidden sessions, which is
-  correct because those processes are real.
+- When the active tab closes, `TabsManager.close` picks the nearest neighbor
+  that is not hidden (left first, then right), or `nil` when only hidden tabs
+  remain. Without this the active ID would point at a hidden tab.
+- No change to closed-tab history or bulk close. The user can only close
+  visible tabs: every UI close path passes composed IDs to
+  `closeComposedCenterTabs`. Stop and restart close through `closeTab`, which
+  doesn't record history. The full-list `AppState.closeOtherTabs` /
+  `closeTabsToLeft` / `closeTabsToRight` wrappers have no app callers.
+- Unchanged: sidebar harness badges, Attention session lookup, peer console
+  listing, Terminate All and worktree cleanup counts. They still see hidden
+  sessions, which is correct because those processes are real.
 
 ### Launch flow
 
@@ -70,9 +74,12 @@ Only the tab is hidden:
 `RunScriptMetadata` from `alas-console`.
 
 `launchScript`, `startScriptLaunch`, `restartScript` and `runOrFocusScript`
-take `console: RunScriptConsole?`. `nil` means use `script.console`. The value
-goes through `openTerminalTabPreparingRemoteZmxIfNeeded` and `openTerminalTab`
-to `appendTerminal(isHidden:)`.
+take `console: RunScriptConsole?`. `nil` means use `script.console`, except in
+`restartScript`: when the script already has a tab, a restart without an
+explicit console keeps that tab's visibility. Restart repeats the run the way
+you were seeing it, so restarting a dev server you opened with ⌥ doesn't hide
+it again. The value goes through `openTerminalTabPreparingRemoteZmxIfNeeded`
+and `openTerminalTab` to `appendTerminal(isHidden:)`.
 
 `runOrFocusScript` today focuses any run tab whose shell is alive. With
 hidden runs:
@@ -82,10 +89,23 @@ hidden runs:
 | none | any | launch with the resolved console |
 | visible | any | focus it (today's behavior) |
 | hidden | active | reveal and focus it (an explicit click on a running script means "show me") |
-| hidden | finished (`alas-on-exit: keep` shell idle) | restart with the resolved console, replacing the hidden tab |
+| hidden | finished (`alas-on-exit: keep` shell idle) | restart, replacing the hidden tab; stays hidden unless ⌥ flips it |
 
-`focusScriptTerminal`, used by the Run tab's "Terminal" action, reveals before
-activating.
+`focusScriptTerminal`, used by the Run tab's "Terminal" action, needs no
+change: it activates, and activation reveals.
+
+The pill identifies runs by `scriptKey` (from `RunRecord`), not by
+`RunScript`. `AppState` gains key-based entry points so the pill doesn't need
+a script catalog for stop and output:
+
+- `scriptTab(scriptKey:worktreeID:)` and
+  `runningScriptTab(scriptKey:worktreeID:)`; the existing `RunScript`
+  overloads forward to them.
+- `stopScript(scriptKey:in:)`; the existing overload forwards.
+- `focusScriptTerminal(scriptKey:in:)`; the existing overload forwards.
+- `restartScript(scriptKey:in:)` resolves the script from
+  `RunScriptStore.scripts(worktreeRoot:)` (the same synchronous scan the ▶
+  menu uses) and shows "Run Script Failed" when the script is gone.
 
 `alas-on-exit: close` behaves as today: the shell exits with the command, the
 tab is removed, and only the run report is left. The pill offers "Report" for
@@ -153,9 +173,9 @@ to the existing run-menu closures.
 
 `RunScriptDialog.handleKey`: Return with `.option` and without `.command`
 activates the selection with the flipped console. ⌘↩ (restart) is unchanged.
-The palette has no hint row today. The selected row gets a trailing hint with
-the flipped action ("⌥↩ in background" or "⌥↩ with console"), always visible,
-since `onKeyPress` can't observe ⌥ being held on its own.
+The palette footer already lists shortcuts (`↵ run / focus`, `⌘↵ restart`,
+`⌘E edit`). It gains one label for the selected script: `⌥↵ in background`
+when its default is shown, `⌥↵ with console` when its default is hidden.
 
 ## Writing help
 
@@ -185,10 +205,10 @@ policy:
 - `CenterTabComposition` / `TabsManager` (extend the existing suites):
   - hidden tabs are excluded from the composition;
   - closing the active tab never selects a hidden neighbor;
-  - reveal makes the tab visible and active;
+  - activating a hidden tab makes it visible;
   - an encode/decode round trip drops the hidden flag.
-- `AppState` run tests (extend `AppStateRunRecordTests` or the existing run
-  launch suite with the fake `terminalSessionOpener`):
+- `AppState` run tests (extend `RunScriptLaunchTests`, which has the fake
+  `terminalSessionOpener` fixture):
   - a hidden launch leaves the active tab unchanged;
   - Run on a hidden tab whose record is finished relaunches instead of
     revealing.
