@@ -477,6 +477,8 @@ final class RightPaneStore {
         guard let state = states[worktreeId] else { return }
         state.completeInitialTabSelection()
         guard !state.consumePendingRevealForPaneMount() else { return }
+        // A plugin panel chosen by the user or a command stays; `RightPaneView` drops it if it's no longer offered.
+        guard state.activePluginPanel == nil else { return }
         state.activeTab = .changes
     }
 

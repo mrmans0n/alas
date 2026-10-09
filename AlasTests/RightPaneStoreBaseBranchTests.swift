@@ -93,6 +93,22 @@ struct RightPaneStoreBaseBranchTests {
         #expect(backgroundState.activeTab == .changes)
     }
 
+    /// Mounting the pane shows Changes, unless a plugin panel was chosen: that stays, as a command may have opened it.
+    @Test func mountingThePaneKeepsASelectedPluginPanel() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/panel")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        state.activeTab = .files
+        state.activePluginPanel = PluginPanelRef(pluginID: "io.x.p", panelID: "rail")
+
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+
+        #expect(state.activePluginPanel == PluginPanelRef(pluginID: "io.x.p", panelID: "rail"))
+        #expect(state.activeTab == .files)
+    }
+
     @Test func switchingWorktreesPreservesSelectedTab() async throws {
         let firstRepo = try await makeRepoOnMain()
         defer { try? FileManager.default.removeItem(at: firstRepo) }
