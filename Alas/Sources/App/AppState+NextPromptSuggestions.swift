@@ -179,9 +179,10 @@ extension AppState {
         let incarnation = session.incarnation
         nextPromptActiveIncarnation = incarnation
         nextPromptComposerEnvironment = environment
-        // A blocked composer cannot consume the turn. A submit's own clear reports the
-        // old caret after the prompt was allocated; that is not input after the turn.
-        if environment.isInputBlocked {
+        // A submit's own clear reports the old caret after the prompt was allocated;
+        // that is not input after the turn. Other blockers (runtime starting, inactive
+        // tab) still let genuine edits consume it.
+        if environment.hasSubmitInFlight {
             nextPromptCoordinator.suspend(incarnation: incarnation)
             return
         }
@@ -190,6 +191,10 @@ extension AppState {
             nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1,
                                              reason: "composer input")
             nextPromptComposerEpochs[incarnation, default: 0] &+= 1
+            return
+        }
+        if environment.isInputBlocked {
+            nextPromptCoordinator.suspend(incarnation: incarnation)
             return
         }
         nextPromptCoordinator.reconsider(incarnation: incarnation)

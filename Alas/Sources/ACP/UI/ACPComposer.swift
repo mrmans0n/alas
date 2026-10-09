@@ -1032,7 +1032,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
         state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
         state.hasPendingInput = dropPending || coordinator?.hasPendingNextPromptInput == true
-        state.isInputBlocked = nextPromptInputBlocked() || coordinator?.hasInFlightSubmit == true
+        state.hasSubmitInFlight = coordinator?.hasInFlightSubmit == true
+        state.isInputBlocked = nextPromptInputBlocked() || state.hasSubmitInFlight
         return state
     }
 

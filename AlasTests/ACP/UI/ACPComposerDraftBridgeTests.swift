@@ -2207,7 +2207,7 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         #expect(completion != nil)
         #expect(dismissals == 0)
-        #expect(!reported.isEmpty && reported.allSatisfy { $0.isInputBlocked && !$0.hasPendingInput })
+        #expect(!reported.isEmpty && reported.allSatisfy { $0.hasSubmitInFlight && $0.isInputBlocked && !$0.hasPendingInput })
         completion?(true)
         #expect(reported.last?.isInputBlocked == false)
     }

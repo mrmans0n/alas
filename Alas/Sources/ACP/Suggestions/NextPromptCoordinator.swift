@@ -21,6 +21,9 @@ struct NextPromptEligibilitySnapshot {
         /// The composer cannot take a suggestion right now (a submit awaiting its turn,
         /// an inactive tab, setup). Blocks presentation without consuming the turn.
         var isInputBlocked = false
+        /// The user's own submit is awaiting its turn. What its clear reports (a stale
+        /// caret, a dismissal) is not input after the turn, so it must not consume it.
+        var hasSubmitInFlight = false
         var hasSelection = false
         var hasMarkedText = false
         var isDictating = false
