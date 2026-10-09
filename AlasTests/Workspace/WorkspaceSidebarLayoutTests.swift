@@ -44,6 +44,28 @@ struct WorkspaceSidebarLayoutTests {
         #expect(rows == [.formerWorkspace, .checkout(former.id)])
     }
 
+    @Test func collapsedWorkspaceCheckoutsAndMembersAreNotDrawn() {
+        let open = UUID()
+        let collapsed = UUID()
+        let openCheckout = WorkspaceCheckout(workspaceID: open, fallbackWorkspaceName: "Open", executionLocation: .local, branch: "a", rootPath: "/tmp/a", members: [])
+        let hiddenCheckout = WorkspaceCheckout(workspaceID: collapsed, fallbackWorkspaceName: "Collapsed", executionLocation: .local, branch: "b", rootPath: "/tmp/b", members: [])
+        let rows: [WorkspaceSidebarRow] = [
+            .project("known"), .project("removed"),
+            .workspace(open), .checkout(openCheckout.id), .member(UUID()),
+            .workspace(collapsed), .checkout(hiddenCheckout.id),
+        ]
+
+        let drawn = WorkspaceSidebarLayout.drawnRows(
+            rows,
+            projectIDs: ["known"],
+            workspaceIDs: [open, collapsed],
+            checkouts: [openCheckout.id: openCheckout, hiddenCheckout.id: hiddenCheckout],
+            collapsedWorkspaces: [collapsed]
+        )
+
+        #expect(drawn == [.project("known"), .workspace(open), .checkout(openCheckout.id), .workspace(collapsed)])
+    }
+
     @Test func visibleCheckoutIDsIgnoreWorkspaceCheckoutsFromOtherSpaces() {
         let visibleWorkspaceID = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
         let hiddenWorkspaceID = UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!

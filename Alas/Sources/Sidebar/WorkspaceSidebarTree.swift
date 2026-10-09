@@ -61,9 +61,16 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         let workspaces = Dictionary(uniqueKeysWithValues: state.workspacesManager.workspaces.map { ($0.id, $0) })
         let checkouts = Dictionary(uniqueKeysWithValues: state.workspacesManager.checkouts.map { ($0.id, $0) })
         let projects = Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0) })
+        let drawnRows = WorkspaceSidebarLayout.drawnRows(
+            rows,
+            projectIDs: Set(projects.keys),
+            workspaceIDs: Set(workspaces.keys),
+            checkouts: checkouts,
+            collapsedWorkspaces: model.collapsedWorkspaces
+        )
 
-        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-            // The 2pt gap a VStack spaced rows with.
+        ForEach(Array(drawnRows.enumerated()), id: \.offset) { index, row in
+            // The 2pt gap a VStack spaced drawn rows with.
             if index > 0 {
                 Color.clear.frame(height: 2)
             }
