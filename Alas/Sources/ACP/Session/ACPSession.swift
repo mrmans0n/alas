@@ -4248,9 +4248,13 @@ final class ACPSession: ObservableObject, Identifiable {
                         && phase != nil
                         && buf.phase != phase
                     if !startsNewPhasedRow {
+                        let phaseBefore = buf.phase
                         buf.adopt(phase: phase, metadata: metadata)
                         buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
                         transcript.noteStreamingChange(at: i)
+                        // Chunks do not republish the transcript, but a phase
+                        // decides how the row renders and groups.
+                        if buf.phase != phaseBefore { transcript.objectWillChange.send() }
                         return i
                     }
                 default:

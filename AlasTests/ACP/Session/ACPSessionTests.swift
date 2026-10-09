@@ -497,6 +497,23 @@ struct ACPSessionTests {
         #expect(persistedMetadata == buffer.metadata)
     }
 
+    /// Streamed chunks no longer republish the transcript, but a phase decides
+    /// how a row renders and groups, and row specs read it from the message.
+    @Test("a phase adopted by a later chunk republishes the transcript")
+    func laterChunkPhaseRepublishesTranscript() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        session.apply(.agentMessageChunk(.init(messageId: "message-1", content: .text("Checking"))))
+        var publishes = 0
+        let observer = session.transcript.objectWillChange.sink { publishes += 1 }
+
+        session.apply(.agentMessageChunk(.init(
+            messageId: "message-1", content: .text(" files"), metadata: commentary)))
+
+        #expect(publishes > 0)
+        withExtendedLifetime(observer) {}
+    }
+
     @Test("phased replay does not duplicate or change hydrated output")
     func phasedReplayPreservesHydratedMessage() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
