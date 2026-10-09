@@ -16,10 +16,12 @@ enum PluginWebPolicy {
     static func shellURL(pluginID: String) -> URL { URL(string: "\(scheme)://\(pluginID)/")! }
 
     /// Sent as a header, which the page cannot remove, and repeated in the shell's `<meta>`. No inline or eval'd
-    /// script, nothing from the network, and no frames or workers, which would get a fresh realm.
-    static func contentSecurityPolicy(pluginID: String) -> String {
-        "default-src 'none'; script-src \(scheme)://\(pluginID)\(scriptPath); style-src 'unsafe-inline'; "
-            + "img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; "
+    /// script, nothing from the network but images from `imageHosts` (API 15), and no frames or workers, which would
+    /// get a fresh realm.
+    static func contentSecurityPolicy(pluginID: String, imageHosts: [String] = []) -> String {
+        let images = (["data:", "blob:"] + imageHosts.map { "https://\($0)" }).joined(separator: " ")
+        return "default-src 'none'; script-src \(scheme)://\(pluginID)\(scriptPath); style-src 'unsafe-inline'; "
+            + "img-src \(images); font-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; "
             + "form-action 'none'; base-uri 'none'"
     }
 
@@ -30,9 +32,9 @@ enum PluginWebPolicy {
     }
 
     /// The scheme handler serves exactly two resources, the shell and the page script; anything else is a 404.
-    static func response(for url: URL, pluginID: String, shell: Data, script: Data) -> Response {
+    static func response(for url: URL, pluginID: String, imageHosts: [String] = [], shell: Data, script: Data) -> Response {
         var headers = [
-            "Content-Security-Policy": contentSecurityPolicy(pluginID: pluginID),
+            "Content-Security-Policy": contentSecurityPolicy(pluginID: pluginID, imageHosts: imageHosts),
             "X-DNS-Prefetch-Control": "off",
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "no-store",
@@ -62,15 +64,23 @@ enum PluginWebPolicy {
         return url
     }
 
-    /// Blocks every load outside `alas-plugin:`, besides the `data:` and `blob:` resources the CSP allows.
-    static let contentRules = """
-    [
-      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
-      {"trigger": {"url-filter": "^alas-plugin:"}, "action": {"type": "ignore-previous-rules"}},
-      {"trigger": {"url-filter": "^data:", "resource-type": ["image", "font"]}, "action": {"type": "ignore-previous-rules"}},
-      {"trigger": {"url-filter": "^blob:", "resource-type": ["image"]}, "action": {"type": "ignore-previous-rules"}}
+    private static let baseRules = [
+        #"{"trigger": {"url-filter": ".*"}, "action": {"type": "block"}}"#,
+        #"{"trigger": {"url-filter": "^alas-plugin:"}, "action": {"type": "ignore-previous-rules"}}"#,
+        #"{"trigger": {"url-filter": "^data:", "resource-type": ["image", "font"]}, "action": {"type": "ignore-previous-rules"}}"#,
+        #"{"trigger": {"url-filter": "^blob:", "resource-type": ["image"]}, "action": {"type": "ignore-previous-rules"}}"#,
     ]
-    """
+
+    /// Blocks every load outside `alas-plugin:`, besides the `data:` and `blob:` resources the CSP allows and, from API 15,
+    /// `https` images from `imageHosts`. Hosts are validated lowercase names (letters, digits, `-`, `.`), so escaping the
+    /// dots and requiring the `/` after the name makes an exact match: no other port, and no longer host.
+    static func contentRules(imageHosts: [String] = []) -> String {
+        let images = imageHosts.map { host in
+            let pattern = "^https://" + host.replacingOccurrences(of: ".", with: #"\\."#) + "/"
+            return #"{"trigger": {"url-filter": "\#(pattern)", "resource-type": ["image"]}, "action": {"type": "ignore-previous-rules"}}"#
+        }
+        return "[\n" + (baseRules + images).map { "  " + $0 }.joined(separator: ",\n") + "\n]"
+    }
 
     /// Theme tokens the page gets as CSS variables.
     static let themeVariables: [(variable: String, token: String)] = [
@@ -94,13 +104,13 @@ enum PluginWebPolicy {
         return variables
     }
 
-    static func shell(pluginID: String, variables: [String: String]) -> Data {
+    static func shell(pluginID: String, imageHosts: [String] = [], variables: [String: String]) -> Data {
         let css = variables.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value);" }.joined(separator: " ")
         return Data("""
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
         <meta http-equiv="x-dns-prefetch-control" content="off">
-        <meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy(pluginID: pluginID))">
+        <meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy(pluginID: pluginID, imageHosts: imageHosts))">
         <style>:root { color-scheme: light dark; font: 13px -apple-system, system-ui, sans-serif; \(css) }
         body { margin: 0; color: var(--alas-text, CanvasText); background: var(--alas-background, Canvas); }</style>
         </head><body><script src="ui.js"></script></body></html>
@@ -236,11 +246,13 @@ enum PluginWebPolicy {
 @MainActor
 private final class PluginWebSchemeHandler: NSObject, WKURLSchemeHandler {
     let pluginID: String
+    let imageHosts: [String]
     var shell: Data
     let script: Data
 
-    init(pluginID: String, shell: Data, script: Data) {
+    init(pluginID: String, imageHosts: [String], shell: Data, script: Data) {
         self.pluginID = pluginID
+        self.imageHosts = imageHosts
         self.shell = shell
         self.script = script
     }
@@ -250,7 +262,7 @@ private final class PluginWebSchemeHandler: NSObject, WKURLSchemeHandler {
             task.didFailWithError(URLError(.badURL))
             return
         }
-        let response = PluginWebPolicy.response(for: url, pluginID: pluginID, shell: shell, script: script)
+        let response = PluginWebPolicy.response(for: url, pluginID: pluginID, imageHosts: imageHosts, shell: shell, script: script)
         guard let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1", headerFields: response.headers)
         else {
             task.didFailWithError(URLError(.badServerResponse))
@@ -297,12 +309,13 @@ final class PluginWebPageSlots {
 @MainActor
 final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
     static let bridgeWorld = WKContentWorld.world(name: "alas-plugin-bridge")
-    private static var compiledRules: Task<WKContentRuleList?, Never>?
+    private static var compiledRules: [String: Task<WKContentRuleList?, Never>] = [:]
 
     let webView: WKWebView
     private let host: PluginHost
     private let surface: PluginSurface
     private let pluginID: String
+    private let imageHosts: [String]
     private let inEvent = "alas-in-" + UUID().uuidString
     private let outEvent = "alas-out-" + UUID().uuidString
     private let themeEvent = "alas-theme-" + UUID().uuidString
@@ -330,8 +343,10 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         self.slots = slots
         self.surface = surface
         pluginID = host.manifest.id
+        imageHosts = host.manifest.webImageHosts
         schemeHandler = PluginWebSchemeHandler(
-            pluginID: pluginID, shell: PluginWebPolicy.shell(pluginID: pluginID, variables: PluginWebPolicy.cssVariables(theme)),
+            pluginID: pluginID, imageHosts: imageHosts,
+            shell: PluginWebPolicy.shell(pluginID: pluginID, imageHosts: imageHosts, variables: PluginWebPolicy.cssVariables(theme)),
             script: script)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -358,7 +373,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
 
     /// Loads the shell once the content rules are in place; without them the page stays blank.
     private func load() async {
-        guard let rules = await Self.contentRuleList() else {
+        guard let rules = await Self.contentRuleList(imageHosts: imageHosts) else {
             return report("could not set up the page's sandbox (its content rules did not compile)")
         }
         guard !isClosed else { return }
@@ -366,13 +381,14 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         webView.load(URLRequest(url: PluginWebPolicy.shellURL(pluginID: pluginID)))
     }
 
-    private static func contentRuleList() async -> WKContentRuleList? {
-        if let compiledRules, let rules = await compiledRules.value { return rules }
+    private static func contentRuleList(imageHosts: [String]) async -> WKContentRuleList? {
+        let identifier = (["alas-plugin-web-v1"] + imageHosts).joined(separator: ",")
+        if let compiled = compiledRules[identifier], let rules = await compiled.value { return rules }
         let task = Task { @MainActor in
             try? await WKContentRuleListStore.default().compileContentRuleList(
-                forIdentifier: "alas-plugin-web-v1", encodedContentRuleList: PluginWebPolicy.contentRules)
+                forIdentifier: identifier, encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: imageHosts))
         }
-        compiledRules = task
+        compiledRules[identifier] = task
         return await task.value
     }
 
@@ -392,7 +408,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func apply(_ theme: Theme) {
         guard !isClosed else { return }
         let variables = PluginWebPolicy.cssVariables(theme)
-        schemeHandler.shell = PluginWebPolicy.shell(pluginID: pluginID, variables: variables)
+        schemeHandler.shell = PluginWebPolicy.shell(pluginID: pluginID, imageHosts: imageHosts, variables: variables)
         // The next document starts with the new context; the current one gets it as data.
         installScripts(theme)
         webView.callAsyncJavaScript(

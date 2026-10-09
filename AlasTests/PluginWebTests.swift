@@ -50,6 +50,33 @@ struct PluginWebTests {
         #expect(PluginWebPolicy.context(surface: .panel("usage"), theme: .fallback) == #"{"panel":"usage","theme":"dark"}"#)
     }
 
+    @Test func theCSPLetsImagesInFromTheDeclaredHostsOverHTTPSOnly() {
+        #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id, imageHosts: ["a.com", "cdn.b.org"]).contains(
+            "; img-src data: blob: https://a.com https://cdn.b.org; font-src data:; connect-src 'none';"))
+    }
+
+    /// The rule for a host matches that host over https, and nothing that merely starts with it.
+    @Test(arguments: [
+        ("https://a.com/x.png", true), ("https://a.com/", true), ("http://a.com/x.png", false),
+        ("https://a.com.evil.net/x.png", false), ("https://xa.com/x.png", false), ("https://a.com:8443/x.png", false),
+    ])
+    func imageRulesMatchOnlyTheExactHost(url: String, allowed: Bool) throws {
+        let rules = try #require(try JSONSerialization.jsonObject(with: Data(PluginWebPolicy.contentRules(imageHosts: ["a.com"]).utf8)) as? [[String: Any]])
+        let filters = rules.compactMap { ($0["trigger"] as? [String: Any])?["url-filter"] as? String }.filter { $0.hasPrefix("^https") }
+        let filter = try #require(filters.first)
+        let regex = try NSRegularExpression(pattern: filter)
+        #expect((regex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil) == allowed)
+    }
+
+    /// WebKit accepts the rules, so a page with image hosts doesn't come up without a sandbox.
+    @MainActor
+    @Test func imageRulesCompile() async throws {
+        let list = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "alas-plugin-web-test-\(UUID().uuidString)",
+            encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: ["a.com", "cdn.b-c.org"]))
+        #expect(list != nil)
+    }
+
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
         #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id) == "default-src 'none'; "
             + "script-src alas-plugin://io.x.p/ui.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "

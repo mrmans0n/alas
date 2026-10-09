@@ -294,6 +294,17 @@ struct PluginManifest: Equatable, Sendable {
     /// The panel Settings → Plugins opens with Configure… (API 9).
     var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
 
+    /// Hosts the web page may load `https` images from (API 15): the `network` list.
+    var webImageHosts: [String] { web != nil && api >= 15 ? network : [] }
+
+    /// The approval sheet's line about the web page, or nil without one.
+    var webSummary: String? {
+        guard web != nil else { return nil }
+        return webImageHosts.isEmpty
+            ? "Show its own web content, with no network access"
+            : "Show its own web content, with images from \(webImageHosts.joined(separator: ", "))"
+    }
+
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
         do {

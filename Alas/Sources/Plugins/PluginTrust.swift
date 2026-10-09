@@ -51,7 +51,7 @@ enum PluginPermissionChange {
             for host in setting.hosts where !before.contains(host) { added.append("Use \(setting.title) with \(host)") }
         }
         if new.remote, !old.remote { added.append("Act in projects on SSH hosts, as your user there") }
-        if new.web != nil, old.web == nil { added.append("Show its own web content, with no network access") }
+        if let summary = new.webSummary, summary != old.webSummary { added.append(summary) }
         return added
     }
 }
