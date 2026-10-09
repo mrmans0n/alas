@@ -432,6 +432,23 @@ struct ACPMessageStableIdTests {
         #expect(attachments == [attachment])
     }
 
+    @Test("a restart continuation's echo stays out of the transcript, even in fragments, until the turn ends")
+    func continuationEchoIsDropped() {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.recordInterruptedTurnContinuation()
+        let text = QueuedPrompt.interruptedTurnContinueText
+        let split = text.index(text.startIndex, offsetBy: 20)
+
+        for fragment in [text[..<split], text[split...]] {
+            #expect(s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(String(fragment))))).isEmpty)
+        }
+        #expect(s.transcript.messages.count == 1)
+
+        s.endPromptEchoTurn()
+        s.apply(.userMessageChunk(.init(messageId: "user-2", content: .text(String(text[..<split])))))
+        #expect(s.transcript.messages.count == 2)
+    }
+
     @Test("echoed expansions are expected for the whole turn, steers included, and only an exact resource matches")
     func echoedSymbolExpansionsAreScopedToTheTurn() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -463,7 +480,7 @@ struct ACPMessageStableIdTests {
         #expect(!s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("kept")))).isEmpty)
         #expect(!s.apply(.userMessageChunk(.init(messageId: "user-1", content: edited))).isEmpty)
 
-        s.endSymbolExpansionEchoTurn()
+        s.endPromptEchoTurn()
         s.apply(.userMessageChunk(.init(messageId: "user-2", content: .text(reference))))
         guard case .user(_, _, let later, _, _, _) = s.transcript.messages.last else {
             Issue.record("expected user message")

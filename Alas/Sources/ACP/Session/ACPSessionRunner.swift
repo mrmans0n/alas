@@ -4907,7 +4907,7 @@ extension ACPSessionRunner {
             return
         }
         // The turn's updates have drained: its echoes have all arrived.
-        session.endSymbolExpansionEchoTurn()
+        session.endPromptEchoTurn()
         session.transcript.streamingState = .idle
         guard flushQueueWhenReady else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: queue flush deferred") }

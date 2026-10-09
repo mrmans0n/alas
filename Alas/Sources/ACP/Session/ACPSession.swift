@@ -417,9 +417,25 @@ final class ACPSession: ObservableObject, Identifiable {
         expectedSymbolExpansionEchoes.append(contentsOf: blocks)
     }
 
-    /// The turn ended: a later user chunk is never an echo of its expansions.
-    func endSymbolExpansionEchoTurn() {
+    /// The turn ended: a later user chunk is never an echo of its prompt.
+    func endPromptEchoTurn() {
         expectedSymbolExpansionEchoes.removeAll()
+        expectedContinuationEcho = nil
+    }
+
+    /// The part of a restart continuation's echo not seen yet this turn. An
+    /// agent may stream the echo in fragments, none equal to the full text.
+    private var expectedContinuationEcho: Substring?
+
+    /// Whether `text` is (the next fragment of) a restart continuation's echo,
+    /// consuming it from the expectation.
+    private func consumeContinuationEcho(_ text: String) -> Bool {
+        if text == QueuedPrompt.interruptedTurnContinueText { return true }
+        guard let rest = expectedContinuationEcho?.drop(while: \.isWhitespace) else { return false }
+        let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fragment.isEmpty, rest.hasPrefix(fragment) else { return false }
+        expectedContinuationEcho = rest.dropFirst(fragment.count)
+        return true
     }
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
@@ -945,7 +961,7 @@ final class ACPSession: ObservableObject, Identifiable {
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             // Recorded as a notice, not a user row: an echo has nothing to merge into.
-            guard txt != QueuedPrompt.interruptedTurnContinueText else { return [] }
+            guard !consumeContinuationEcho(txt) else { return [] }
             var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
@@ -2201,6 +2217,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func recordInterruptedTurnContinuation() {
         appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
         transcript.completedOutputBoundaryMessageIds.removeAll()
+        expectedContinuationEcho = Substring(QueuedPrompt.interruptedTurnContinueText)
     }
 
     func appendSystemNotice(_ text: String) {
