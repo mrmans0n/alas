@@ -145,6 +145,51 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test(arguments: [("submit in flight", true), ("typing", false)])
+    func composerStateDuringARunningTurn(_ state: String, offers: Bool) async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() },
+            load: { _ in { _ in #"{"suggestion":"Show an example."}"# } })
+        let app = makeState(fixture, SettingsStore(), inference: inference)
+        await app.enableNextPromptSuggestions()
+        let worktree = Worktree(id: UUID().uuidString, projectId: "p", name: "Test", branch: "test",
+                                path: fixture.root, status: .clean, lastActivity: .now)
+        let owner = SessionOwnerID.worktree(worktree.id)
+        let manager = try #require(app.acpManager(for: worktree))
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(id: UUID().uuidString, agentId: "test")
+        session.agentState = .ready
+        app.nextPromptCoordinator = NextPromptCoordinator(engine: inference) { [weak app, weak session] turn in
+            guard let app, let session else { return nil }
+            return app.nextPromptSnapshot(session: session, turn: turn, environment: app.nextPromptComposerEnvironment)
+        }
+        var environment = NextPromptEligibilitySnapshot.Environment()
+        environment.isAppActive = true
+        environment.isActiveVisibleWriter = true
+        environment.hasComposerFocus = true
+        environment.hasKeyWindow = true
+        let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        let promptID = session.allocatePromptID()
+
+        // A submit's own clear still reports the old caret (a selection) while blocked.
+        var during = environment
+        during.hasSelection = true
+        during.isInputBlocked = state == "submit in flight"
+        app.nextPromptComposerChanged(during, owner: owner, sessionID: session.id)
+        app.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        app.nextPromptCompleted(NextPromptCompletedTurn(sessionID: session.id, incarnation: session.incarnation,
+            promptID: promptID, userMessageID: userID, transcriptRevision: session.transcript.messagesGeneration),
+            owner: owner)
+        await app.nextPromptCoordinator.generationTask?.value
+
+        #expect(app.nextPromptCoordinator.offer == (offers ? "Show an example." : nil))
+        await app.shutdownLocalTextFeatures()
+    }
+
     @Test(arguments: ["stream", "delivery", "pending message"])
     func delegatedChildWorkBlocksAndInvalidatesParentSuggestions(_ work: String) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()

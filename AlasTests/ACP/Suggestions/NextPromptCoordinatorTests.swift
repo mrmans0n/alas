@@ -413,8 +413,8 @@ struct NextPromptCoordinatorTests {
         withExtendedLifetime((observation, childObservation)) {}
     }
 
-    @Test(arguments: ["enabled", "verified", "runtime", "app", "writer", "focus", "paste/drop/image", "selection",
-                      "IME", "dictation", "picker", "prompt", "fork/delegation"])
+    @Test(arguments: ["enabled", "verified", "runtime", "app", "writer", "focus", "paste/drop/image", "blocked",
+                      "selection", "IME", "dictation", "picker", "prompt", "fork/delegation"])
     func liveProjectionRejectsExternalBlockers(_ blocker: String) {
         let (session, turn, initial) = readySession()
         var environment = initial
@@ -426,6 +426,7 @@ struct NextPromptCoordinatorTests {
         case "writer": environment.isActiveVisibleWriter = false
         case "focus": environment.hasComposerFocus = false
         case "paste/drop/image": environment.hasPendingInput = true
+        case "blocked": environment.isInputBlocked = true
         case "selection": environment.hasSelection = true
         case "IME": environment.hasMarkedText = true
         case "dictation": environment.isDictating = true
