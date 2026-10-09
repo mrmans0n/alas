@@ -943,6 +943,20 @@ struct NativePeerSessionsTests {
         #expect(client.draft == expected)
     }
 
+    @Test func queueEditRestoredAfterSwitchingSessionsReturnsWithTheSession() {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        client.queueEdit("i")
+        client.select("B:t")
+        links.receive(.queueEditRestored(sessionId: "s", itemId: "i", text: "fix this"), from: "B")
+        #expect(client.draft.isEmpty)
+        client.select("B:s")
+        #expect(client.draft == "fix this")
+        client.select("B:t")
+        client.select("B:s")
+        #expect(client.draft.isEmpty)
+    }
+
     private func queued(canRemove: Bool? = nil, images: Int = 0, resources: Int = 0) -> RemoteQueuedPrompt {
         RemoteQueuedPrompt(id: UUID().uuidString, text: "t", imageCount: images, resourceCount: resources,
                            status: "pending", lastError: nil, scheduledAt: nil, canRemove: canRemove)
