@@ -58,15 +58,14 @@ struct NativePeerGroup: Identifiable, Equatable {
     let state: NativePeerState
     let sessions: [RemoteSessionSummary]
     var consoles: [PeerConsoleSummary] = []
+    var projects: [RemoteProjectOption] = []
     let attentionCount: Int
 
     var id: String { serverId }
 
-    /// The peer's sessions and consoles folded into the same repo → worktree
-    /// shape the local sidebar uses, so a peer reads like another Mac's
-    /// workspace tree rather than a flat list of chats.
+    /// All peer projects, with sessions and consoles folded into worktrees.
     func repos(ordering: AppConfig.WorktreeSortMode) -> [NativePeerRepoGroup] {
-        NativePeerRepoGroup.build(sessions: sessions, consoles: consoles, ordering: ordering)
+        NativePeerRepoGroup.build(sessions: sessions, consoles: consoles, projects: projects, ordering: ordering)
     }
 }
 
@@ -97,16 +96,14 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         return "id:\(projectId)"
     }
 
-    /// Groups sessions and consoles by project, then by worktree. Repos keep
-    /// the order of their most recently updated session, which is the order
-    /// `sessions` already arrives in; repos with only consoles have no
-    /// recency to go by and follow in the order the peer listed them.
-    /// Worktrees follow the local sidebar's rule: the main worktree is pinned
-    /// first, the rest are sorted by `ordering`. `.manual` has no peer-side
-    /// order to follow, so it keeps arrival order.
+    /// Groups sessions and consoles by project, then by worktree. Active
+    /// repos retain session recency order; inventory-only projects follow
+    /// in the peer's order. Inventory labels take precedence after a rename.
+    /// Main worktrees are pinned first; `.manual` keeps arrival order.
     static func build(
         sessions: [RemoteSessionSummary],
         consoles: [PeerConsoleSummary] = [],
+        projects: [RemoteProjectOption] = [],
         ordering: AppConfig.WorktreeSortMode = .lastUpdateDesc
     ) -> [NativePeerRepoGroup] {
         var repoOrder: [String] = []
@@ -143,6 +140,11 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
                 name: console.worktree?.projectName ?? console.projectName ?? unassignedName
             )
             consoleBuckets[key, default: []].append(console)
+        }
+        for project in projects {
+            let repo = repoKey(projectId: project.id)
+            if repoNames[repo] == nil { repoOrder.append(repo) }
+            repoNames[repo] = project.name
         }
         return repoOrder.map { repo in
             NativePeerRepoGroup(
@@ -316,12 +318,12 @@ struct NativePeerSidebarSnapshot: Equatable {
 
     var attentionCount: Int { attentionRows.count }
 
-    /// `consoles` is keyed by peer `serverId`; like sessions, they are only
-    /// shown for peers whose link is online.
+    /// Inventories are keyed by peer `serverId` and shown only online.
     static func build(
         peers: [RemoteHelloPeer],
         rows: [RemoteSessionSummary],
-        consoles: [String: [PeerConsoleSummary]] = [:]
+        consoles: [String: [PeerConsoleSummary]] = [:],
+        projects: [String: [RemoteProjectOption]] = [:]
     ) -> Self {
         var uniqueRows: [String: [String: RemoteSessionSummary]] = [:]
         for row in rows {
@@ -350,6 +352,7 @@ struct NativePeerSidebarSnapshot: Equatable {
                 state: state,
                 sessions: sessions,
                 consoles: state.carriesSessions ? consoles[peer.serverId] ?? [] : [],
+                projects: state.carriesSessions ? projects[peer.serverId] ?? [] : [],
                 attentionCount: sessions.count { waitingStatuses.contains($0.status) }
             )
         }.sorted { ($0.name, $0.serverId) < ($1.name, $1.serverId) }
