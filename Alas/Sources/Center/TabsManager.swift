@@ -267,6 +267,7 @@ final class TabsManager {
         for id in worktreeIds {
             if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
                 Self.virtualizeLegacyPaths(&file, worktreeId: id)
+                Self.keepHiddenRuns(of: byWorktree[id], in: &file)
                 if !restoringActiveTabs {
                     file.activeTabId = nil
                 }
@@ -279,10 +280,25 @@ final class TabsManager {
         hasLoaded = true
     }
 
+    /// The hidden flag is never on disk, so a reload of a bucket that is already
+    /// in memory would otherwise expose its live background runs.
+    private static func keepHiddenRuns(of live: TabsFile?, in loaded: inout TabsFile) {
+        guard let live else { return }
+        let hiddenIDs = Set(live.tabs.filter(\.isHiddenRunTab).map(\.id))
+        guard !hiddenIDs.isEmpty else { return }
+        for index in loaded.tabs.indices {
+            guard hiddenIDs.contains(loaded.tabs[index].id),
+                  case .terminal(var state) = loaded.tabs[index] else { continue }
+            state.isHidden = true
+            loaded.tabs[index] = .terminal(state)
+        }
+    }
+
     func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
         let key = owner.storageKey
         if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
             Self.virtualizeLegacyPaths(&file, worktreeId: key)
+            Self.keepHiddenRuns(of: byWorktree[key], in: &file)
             if !restoringActiveTabs {
                 file.activeTabId = nil
             }

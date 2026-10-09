@@ -7,6 +7,8 @@ struct RunActivityInput: Equatable, Sendable {
     var failures: [RunScriptFailure] = []
     /// Script keys whose run tab still has a live shell to show.
     var liveTerminalKeys: Set<String> = []
+    /// Run IDs that have a report to open.
+    var reportRunIDs: Set<String> = []
 }
 
 /// Pure decision for the activity pill and its run list.
@@ -39,13 +41,14 @@ struct RunActivityPresentation: Equatable {
             case starting
             case running
             case failed(exitCode: Int32)
+            case succeeded(duration: TimeInterval)
         }
 
         let runID: String
         let scriptKey: String
         let name: String
         let kind: Kind
-        /// Start time for active runs, completion time for failures.
+        /// Start time for active runs, completion time for finished ones.
         let since: Date
         let actions: [RowAction]
 
@@ -88,15 +91,25 @@ struct RunActivityPresentation: Equatable {
             )
         }
 
-        var expiresAt: Date?
+        let success = recentSuccess(in: input.records, now: now)
+        let successRows = success.map { success in
+            [Row(
+                runID: success.record.id,
+                scriptKey: success.record.scriptKey,
+                name: success.record.scriptName,
+                kind: .succeeded(duration: success.finishedAt.timeIntervalSince(success.record.startedAt)),
+                since: success.finishedAt,
+                actions: (input.reportRunIDs.contains(success.record.id) ? [.report] : []) + [.rerun]
+            )]
+        } ?? []
+
         let pill: Pill
         switch active.count {
         case 0:
             if let failure = failures.first {
                 pill = .failed(failureID: failure.id, runID: failure.runID, name: failure.scriptName, exitCode: failure.exitCode)
-            } else if let success = recentSuccess(in: input.records, now: now) {
+            } else if let success {
                 pill = .succeeded(name: success.record.scriptName, duration: success.finishedAt.timeIntervalSince(success.record.startedAt))
-                expiresAt = success.finishedAt.addingTimeInterval(successLinger)
             } else {
                 pill = .none
             }
@@ -112,8 +125,8 @@ struct RunActivityPresentation: Equatable {
         return RunActivityPresentation(
             pill: pill,
             hasUndismissedFailure: !active.isEmpty && !failures.isEmpty,
-            rows: activeRows + failureRows,
-            expiresAt: expiresAt
+            rows: activeRows + failureRows + successRows,
+            expiresAt: success.map { $0.finishedAt.addingTimeInterval(successLinger) }
         )
     }
 

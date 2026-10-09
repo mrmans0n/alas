@@ -379,7 +379,7 @@ struct TabsManagerTests {
     }
 
     @Test func hiddenTerminalStaysInactiveUntilActivated() {
-        let mgr = TabsManager()
+        let mgr = TabsManager(store: RestoreMemoryStore())
         let visible = mgr.appendTerminal(worktreeId: "wt", title: "zsh", sessionId: "s1")
         let hidden = mgr.appendTerminal(
             worktreeId: "wt", title: "dev", sessionId: "s2", runScriptKey: "repo:dev.sh", isHidden: true
@@ -394,7 +394,7 @@ struct TabsManagerTests {
     }
 
     @Test func closingTheActiveTabNeverSelectsAHiddenTab() {
-        let mgr = TabsManager()
+        let mgr = TabsManager(store: RestoreMemoryStore())
         let left = mgr.appendTerminal(worktreeId: "wt", title: "a", sessionId: "a")
         _ = mgr.appendTerminal(worktreeId: "wt", title: "dev", sessionId: "dev", runScriptKey: "repo:dev.sh", isHidden: true)
         let closing = mgr.appendTerminal(worktreeId: "wt", title: "b", sessionId: "b")
@@ -420,6 +420,24 @@ struct TabsManagerTests {
             return
         }
         #expect(restored.runScriptKey == "repo:dev.sh")
+    }
+
+    @Test func reloadingALoadedWorktreeKeepsItsHiddenRunsHidden() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-hidden-reload-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mgr = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        _ = mgr.appendTerminal(worktreeId: "wt", title: "zsh", sessionId: "s1")
+        let hidden = mgr.appendTerminal(
+            worktreeId: "wt", title: "dev", sessionId: "s2", runScriptKey: "repo:dev.sh", isHidden: true
+        )
+
+        mgr.loadAll(worktreeIds: ["wt"])
+        #expect(mgr.tabs(forWorktree: "wt").first { $0.id == hidden.id }?.isHiddenRunTab == true)
+
+        let cold = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        cold.loadAll(worktreeIds: ["wt"])
+        #expect(cold.tabs(forWorktree: "wt").first { $0.id == hidden.id }?.isHiddenRunTab == false)
     }
 
     @Test func closingActivatesNeighbour() {

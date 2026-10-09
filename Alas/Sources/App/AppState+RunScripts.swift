@@ -297,8 +297,17 @@ extension AppState {
         launchScript(script, in: worktree, console: console)
     }
 
+    /// How the script's current run is shown: a launch still starting keeps its
+    /// mode, otherwise the tab's visibility. Nil when there is nothing to repeat.
+    func currentRunConsole(scriptKey: String, worktreeID: String) -> RunScriptConsole? {
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: scriptKey)
+        if let pending = pendingScriptLaunches[launchKey] { return pending.isHidden ? .hidden : .shown }
+        guard let tab = scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return nil }
+        return tab.isHiddenRunTab ? .hidden : .shown
+    }
+
     /// Restart repeats the run the way it was shown: without an explicit
-    /// `console`, an existing tab's visibility wins over the script default.
+    /// `console`, the current run's visibility wins over the script default.
     @discardableResult
     func restartScript(
         _ script: RunScript,
@@ -307,13 +316,12 @@ extension AppState {
         console: RunScriptConsole? = nil
     ) -> RunScriptLaunchStart {
         let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
+        let resolvedConsole = console ?? currentRunConsole(scriptKey: script.key, worktreeID: worktree.id)
         if pendingScriptLaunches[launchKey] != nil {
             stopScript(script, in: worktree)
-            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: console)
+            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: resolvedConsole)
         }
-        var resolvedConsole = console
         if let existing = scriptTab(for: script, in: worktree) {
-            resolvedConsole = resolvedConsole ?? (existing.isHiddenRunTab ? .hidden : .shown)
             let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
             let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
             archiveFinalizedRun(finalized, capture: capture)
@@ -323,13 +331,26 @@ extension AppState {
     }
 
     /// Restart from a run record, which only knows the script key. Resolves
-    /// the script with the same scan the ▶ menu uses.
+    /// the script through the same host-aware discovery the Run tab uses, so a
+    /// remote worktree's repo scripts are found.
     func restartScript(scriptKey: String, in worktree: Worktree) {
-        guard let script = RunScriptStore.scripts(worktreeRoot: worktree.path).first(where: { $0.key == scriptKey }) else {
-            showFileActionError(title: "Run Script Failed", message: "This script no longer exists.")
-            return
+        let runID = runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)?.id
+        let host = webPreviewRemoteHost(for: worktree)
+        Task { @MainActor in
+            let result = await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: host)
+            // Another launch took the slot while discovery ran.
+            guard runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)?.id == runID else { return }
+            switch result {
+            case .scripts(let found):
+                guard let script = found.first(where: { $0.key == scriptKey }) else {
+                    showFileActionError(title: "Run Script Failed", message: "This script no longer exists.")
+                    return
+                }
+                restartScript(script, in: worktree)
+            case .failed(let message):
+                showFileActionError(title: "Run Script Failed", message: message)
+            }
         }
-        restartScript(script, in: worktree)
     }
 
     func stopScript(_ script: RunScript, in worktree: Worktree) {
@@ -544,7 +565,8 @@ extension AppState {
         pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: worktree.id,
-            scriptKey: script.key
+            scriptKey: script.key,
+            isHidden: isHidden
         )
         let launchTask = Task { @MainActor in
             defer {

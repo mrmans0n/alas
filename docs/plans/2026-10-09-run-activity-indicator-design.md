@@ -103,9 +103,15 @@ a script catalog for stop and output:
   overloads forward to them.
 - `stopScript(scriptKey:in:)`; the existing overload forwards.
 - `focusScriptTerminal(scriptKey:in:)`; the existing overload forwards.
-- `restartScript(scriptKey:in:)` resolves the script from
-  `RunScriptStore.scripts(worktreeRoot:)` (the same synchronous scan the ▶
-  menu uses) and shows "Run Script Failed" when the script is gone.
+- `restartScript(scriptKey:in:)` resolves the script with
+  `RunScriptStore.discoverScripts(worktreeRoot:remoteHost:)`, the host-aware
+  discovery the Run tab uses, so remote repo scripts are found. It drops the
+  request if another launch took the slot while discovery ran, and shows "Run
+  Script Failed" when the script is gone.
+- `currentRunConsole(scriptKey:worktreeID:)` reports how the current run is
+  shown (a launch still starting keeps its mode, otherwise the tab's
+  visibility). Every restart path reads it before stopping, because stopping
+  closes the tab.
 
 `alas-on-exit: close` behaves as today: the shell exits with the command, the
 tab is removed, and only the run report is left. The pill offers "Report" for
@@ -134,10 +140,12 @@ active state with a red leading dot (`hasUndismissedFailure`).
 `.stopped` and `.unknown` outcomes produce no pill.
 
 The popover rows come from the same input: active runs first (newest start
-first), then undismissed failures (newest first). Each row lists its actions:
+first), then undismissed failures (newest first), then a success still inside
+its 4 s linger. Each row lists its actions:
 
 - Active: Output (only when the run tab is live), Restart, Stop.
 - Failed: Report, Rerun.
+- Succeeded: Report (only when a report exists), Rerun.
 
 ### View
 

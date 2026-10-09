@@ -78,6 +78,7 @@ struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
     let scriptKey: String
+    var isHidden = false
 }
 
 struct PendingRunScriptLaunchKey: Hashable {

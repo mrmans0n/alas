@@ -1028,6 +1028,25 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func restartWhileStartingKeepsTheRequestedConsole() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        var script = fixture.script
+        script.console = .hidden
+        fixture.state.runOrFocusScript(script, in: fixture.worktree, console: .shown)
+
+        // The first launch has not opened its terminal yet.
+        fixture.state.restartScript(script, in: fixture.worktree)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
+        #expect(!runTab.isHiddenRunTab)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == runTab.id)
+    }
+
+    @MainActor
     private func makeAppStateFixture(
         waiter: @escaping AppState.RunScriptCompletionWaiter,
         terminalSessionOpener: AppState.TerminalSessionOpener? = nil,

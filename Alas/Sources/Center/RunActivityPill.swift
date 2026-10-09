@@ -69,7 +69,12 @@ struct RunActivityPill: View {
     private func leadingMark(_ presentation: RunActivityPresentation) -> some View {
         switch presentation.pill {
         case .starting:
-            ProgressView().controlSize(.mini)
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                if presentation.hasUndismissedFailure {
+                    Circle().fill(theme.color("del")).frame(width: 6, height: 6)
+                }
+            }
         case .running, .runningMany:
             Circle()
                 .fill(theme.color(presentation.hasUndismissedFailure ? "del" : "add"))
@@ -189,6 +194,8 @@ private struct RunActivityList: View {
             Circle().fill(theme.color("add")).frame(width: 7, height: 7)
         case .failed:
             Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(theme.color("del"))
+        case .succeeded:
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(theme.color("add"))
         }
     }
 
@@ -201,6 +208,8 @@ private struct RunActivityList: View {
             Text(row.since, style: .timer).monospacedDigit()
         case .failed(let exitCode):
             Text("exit \(exitCode) · \(row.since, style: .relative) ago")
+        case .succeeded(let duration):
+            Text("Succeeded in \(Duration.seconds(duration).formatted(.units(allowed: [.minutes, .seconds], width: .narrow)))")
         }
     }
 

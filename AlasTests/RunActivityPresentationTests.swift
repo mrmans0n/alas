@@ -118,6 +118,20 @@ struct RunActivityPresentationTests {
         #expect(expired.expiresAt == nil)
     }
 
+    @Test func aRecentSuccessOffersItsReportOnlyWhenOneExists() {
+        func rows(reports: Set<String>) -> [[RunActivityPresentation.RowAction]] {
+            RunActivityPresentation.make(
+                input: RunActivityInput(
+                    records: [Self.record("test", .finished(.succeeded), finished: -1)],
+                    reportRunIDs: reports
+                ),
+                now: Self.now
+            ).rows.map(\.actions)
+        }
+        #expect(rows(reports: ["run-test"]) == [[.report, .rerun]])
+        #expect(rows(reports: []) == [[.rerun]])
+    }
+
     @Test func rowsListActiveRunsBeforeFailuresAndOfferOutputOnlyForLiveTerminals() {
         let presentation = RunActivityPresentation.make(
             input: RunActivityInput(
