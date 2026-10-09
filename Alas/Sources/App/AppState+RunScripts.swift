@@ -334,12 +334,12 @@ extension AppState {
     /// the script through the same host-aware discovery the Run tab uses, so a
     /// remote worktree's repo scripts are found.
     func restartScript(scriptKey: String, in worktree: Worktree) {
-        let runID = runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)?.id
+        let before = runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)
         let host = webPreviewRemoteHost(for: worktree)
         Task { @MainActor in
             let result = await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: host)
-            // Another launch took the slot while discovery ran.
-            guard runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)?.id == runID else { return }
+            let now = runRecords.record(worktreeID: worktree.id, scriptKey: scriptKey)
+            guard Self.restartStillWanted(before: before, now: now) else { return }
             switch result {
             case .scripts(let found):
                 guard let script = found.first(where: { $0.key == scriptKey }) else {
@@ -351,6 +351,15 @@ extension AppState {
                 showFileActionError(title: "Run Script Failed", message: message)
             }
         }
+    }
+
+    /// Whether a restart requested before async discovery should still run.
+    /// Another launch taking the slot, or the user stopping the run while
+    /// discovery was in flight, cancels it: the later action wins.
+    nonisolated static func restartStillWanted(before: RunRecord?, now: RunRecord?) -> Bool {
+        guard now?.id == before?.id else { return false }
+        let stoppedMeanwhile = now?.status == .finished(.stopped) && before?.status != .finished(.stopped)
+        return !stoppedMeanwhile
     }
 
     func stopScript(_ script: RunScript, in worktree: Worktree) {

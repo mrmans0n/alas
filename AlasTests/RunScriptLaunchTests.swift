@@ -1027,6 +1027,22 @@ struct RunScriptLaunchTests {
         #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == runTab.id)
     }
 
+    @Test func restartRequestedBeforeDiscoveryIsDroppedWhenTheRunWasStoppedMeanwhile() {
+        func record(id: String, _ status: RunStatus) -> RunRecord {
+            RunRecord(
+                id: id, scriptKey: "repo:dev.sh", scriptName: "Dev", worktreeID: "wt", branch: "main",
+                target: RunExecutionTarget(host: nil, workingDirectory: "/wt"),
+                status: status, startedAt: Date(timeIntervalSinceReferenceDate: 0)
+            )
+        }
+        let running = record(id: "a", .running)
+        #expect(AppState.restartStillWanted(before: running, now: running))
+        #expect(AppState.restartStillWanted(before: running, now: record(id: "a", .finished(.succeeded))))
+        #expect(AppState.restartStillWanted(before: record(id: "a", .finished(.failed(exitCode: 1))), now: record(id: "a", .finished(.failed(exitCode: 1)))))
+        #expect(!AppState.restartStillWanted(before: running, now: record(id: "a", .finished(.stopped))))
+        #expect(!AppState.restartStillWanted(before: running, now: record(id: "b", .starting)))
+    }
+
     @MainActor
     @Test func restartWhileStartingKeepsTheRequestedConsole() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
