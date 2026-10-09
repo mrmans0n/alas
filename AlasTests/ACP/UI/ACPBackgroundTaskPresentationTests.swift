@@ -27,15 +27,9 @@ struct ACPBackgroundTaskPresentationTests {
         #expect(ACPBackgroundTaskPresentation.commandParts(name) == nil)
     }
 
-    @Test("tray starts collapsed above three tasks")
-    func defaultExpansion() {
-        #expect(ACPBackgroundTaskPresentation.defaultExpanded(taskCount: 3))
-        #expect(!ACPBackgroundTaskPresentation.defaultExpanded(taskCount: 4))
-    }
-
     @Test("tray height follows task count, errors, expansion and the scroll cap", arguments: [
-        (0, 0, nil, 0.0), (1, 0, nil, 58.0), (3, 0, nil, 110.0), (4, 0, nil, 32.0),
-        (4, 0, true, 136.0), (2, 0, false, 32.0), (1, 1, nil, 90.0), (10, 0, true, 188.0),
+        (0, 0, nil, 0.0), (1, 0, nil, 36.0), (1, 0, false, 36.0), (3, 0, nil, 110.0), (4, 0, nil, 32.0),
+        (4, 0, true, 136.0), (2, 0, false, 32.0), (1, 1, nil, 68.0), (10, 0, true, 188.0),
     ] as [(Int, Int, Bool?, CGFloat)])
     func trayHeight(count: Int, errorCount: Int, override: Bool?, expected: CGFloat) {
         let tasks = (0..<count).map { index -> ACPBackgroundTask in
@@ -44,6 +38,16 @@ struct ACPBackgroundTaskPresentationTests {
             return task
         }
         #expect(ACPBackgroundTaskPresentation.trayHeight(tasks: tasks, expandedOverride: override) == expected)
+    }
+
+    @Test("header animates only while collapsed and some task is running", arguments: [
+        (false, false, ACPBackgroundTaskPresentation.HeaderIcon.spinner),
+        (false, true, .paused),
+        (true, false, .list),
+        (true, true, .list),
+    ])
+    func headerIcon(expanded: Bool, allPaused: Bool, expected: ACPBackgroundTaskPresentation.HeaderIcon) {
+        #expect(ACPBackgroundTaskPresentation.headerIcon(expanded: expanded, allPaused: allPaused) == expected)
     }
 
     @Test("elapsed time formats by magnitude", arguments: [
