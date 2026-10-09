@@ -49,10 +49,21 @@ enum NativePeerComposerState {
     static func queuedPrompt(_ item: RemoteQueuedPrompt) -> QueuedPrompt? {
         guard let id = UUID(uuidString: item.id) else { return nil }
         return QueuedPrompt(
-            id: id, blocks: [.text(item.text)],
+            id: id, blocks: [.text(displayText(for: item))],
             scheduledAt: item.scheduledAt.map { Date(timeIntervalSince1970: $0 / 1_000) },
             status: item.status == "sending" ? .sending : .pending,
             lastError: item.lastError)
+    }
+
+    /// The wire carries attachments only as counts. Without a marker an
+    /// image-only or resource-only item would render as "(empty prompt)".
+    static func displayText(for item: RemoteQueuedPrompt) -> String {
+        var markers: [String] = []
+        if item.imageCount > 0 { markers.append("🖼 ×\(item.imageCount)") }
+        if item.resourceCount > 0 { markers.append("📎 ×\(item.resourceCount)") }
+        guard !markers.isEmpty else { return item.text }
+        let summary = markers.joined(separator: " ")
+        return item.text.isEmpty ? summary : item.text + "\n" + summary
     }
 
     private static func spec(_ chip: RemoteChip) -> ChipSpec? {

@@ -859,7 +859,7 @@ final class NativePeerSessions {
             return
         }
         if case .queueEditRestored(_, _, let text) = message {
-            draft = text
+            draft = draft.isEmpty ? text : draft + "\n" + text
             return
         }
         let isChangesReply: Bool = switch message {

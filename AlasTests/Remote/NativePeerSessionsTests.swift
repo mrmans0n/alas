@@ -933,10 +933,24 @@ struct NativePeerSessionsTests {
         #expect(!client.isPromptPending)
     }
 
-    @Test func queueEditRestoredFillsTheDraft() {
+    @Test(arguments: [("", "fix this"), ("unsent", "unsent\nfix this")])
+    func queueEditRestoredKeepsAnUnsentDraft(existing: String, expected: String) {
         let (links, client) = drivenClient(canDrive: true)
+        client.draft = existing
         links.receive(.queueEditRestored(sessionId: "s", itemId: "i", text: "fix this"), from: "B")
-        #expect(client.draft == "fix this")
+        #expect(client.draft == expected)
+    }
+
+    @Test(arguments: [
+        ("hello", 0, 0, "hello"),
+        ("", 2, 0, "🖼 ×2"),
+        ("", 0, 1, "📎 ×1"),
+        ("see", 1, 3, "see\n🖼 ×1 📎 ×3"),
+    ])
+    func queuedItemsWithAttachmentsShowCountMarkers(text: String, images: Int, resources: Int, expected: String) {
+        let item = RemoteQueuedPrompt(id: UUID().uuidString, text: text, imageCount: images,
+                                      resourceCount: resources, status: "pending", lastError: nil, scheduledAt: nil)
+        #expect(NativePeerComposerState.displayText(for: item) == expected)
     }
 
     @Test func selectedSessionResubscribesWhenPeerReturns() {
