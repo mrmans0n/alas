@@ -142,7 +142,8 @@ enum PluginPanelLocation: String, Sendable {
     }
 }
 
-/// A view tree the plugin describes with `view/render {panel}`, shown outside the center tabs.
+/// What the plugin shows outside the center tabs: a view tree (`view/render {panel}`), or at `right` from API 15 a canvas
+/// or web page.
 struct PluginPanelContribution: Equatable, Sendable {
     static let defaultIcon = "puzzlepiece.extension"
 
@@ -150,6 +151,7 @@ struct PluginPanelContribution: Equatable, Sendable {
     let title: String
     var icon: String = defaultIcon
     var location: PluginPanelLocation = .right
+    var kind: PluginTabContribution.Kind = .view
 }
 
 /// A value the user sets for the plugin in Settings → Plugins.
@@ -253,7 +255,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = 4...14
+    static let supportedAPIVersions = 4...15
     static let maxTabs = 4
     static let maxTabTitleLength = 40
     static let maxCommands = 16
@@ -291,6 +293,17 @@ struct PluginManifest: Equatable, Sendable {
 
     /// The panel Settings → Plugins opens with Configure… (API 9).
     var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
+
+    /// Hosts the web page may load `https` images from (API 15): the `network` list.
+    var webImageHosts: [String] { web != nil && api >= 15 ? network : [] }
+
+    /// The approval sheet's line about the web page, or nil without one.
+    var webSummary: String? {
+        guard web != nil else { return nil }
+        return webImageHosts.isEmpty
+            ? "Show its own web content, with no network access"
+            : "Show its own web content, with images from \(webImageHosts.joined(separator: ", "))"
+    }
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
         let raw: Raw
@@ -345,16 +358,18 @@ struct PluginManifest: Equatable, Sendable {
             }
             guard !pathsCollide(web, "plugin.json") else { throw .invalidWeb("\"web\" can't use the name plugin.json") }
         }
+        if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
+        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
         if let tab = tabs.first(where: { $0.kind == .web }) {
             guard api >= 12 else { throw .needsNewerAPI("tab \"\(tab.id)\" kind \"web\"", api: 12) }
             guard raw.web != nil else { throw .invalidWeb("tab \"\(tab.id)\" has kind \"web\", so the manifest needs \"web\"") }
+        } else if let panel = panels.first(where: { $0.kind == .web }) {
+            guard raw.web != nil else { throw .invalidWeb("panel \"\(panel.id)\" has kind \"web\", so the manifest needs \"web\"") }
         } else if raw.web != nil {
-            throw .invalidWeb("\"web\" needs a tab with kind \"web\"")
+            throw .invalidWeb("\"web\" needs a tab or panel with kind \"web\"")
         }
         if raw.contributes?.commands != nil, api < 5 { throw .needsNewerAPI("\"contributes.commands\"") }
-        let commands = try parseCommands(raw.contributes?.commands ?? [], tabs: tabs, api: api)
-        if raw.contributes?.panels != nil, api < 5 { throw .needsNewerAPI("\"contributes.panels\"") }
-        let panels = try parsePanels(raw.contributes?.panels ?? [], tabs: tabs, api: api)
+        let commands = try parseCommands(raw.contributes?.commands ?? [], tabs: tabs, panels: panels, api: api)
         if raw.contributes?.prompts != nil, api < 7 { throw .needsNewerAPI("\"contributes.prompts\"", api: 7) }
         let prompts = try parsePrompts((raw.contributes?.prompts ?? []).map { ($0.name, $0.description) }, max: maxPrompts)
         if raw.network != nil || raw.settings != nil, api < 5 {
@@ -492,7 +507,7 @@ struct PluginManifest: Equatable, Sendable {
     }
 
     private static func parseCommands(
-        _ raw: [Raw.RawCommand], tabs: [PluginTabContribution], api: Int
+        _ raw: [Raw.RawCommand], tabs: [PluginTabContribution], panels: [PluginPanelContribution], api: Int
     ) throws(PluginManifestError) -> [PluginCommandContribution] {
         guard raw.count <= maxCommands else { throw .invalidCommand("at most \(maxCommands) commands") }
         var commands: [PluginCommandContribution] = []
@@ -507,8 +522,10 @@ struct PluginManifest: Equatable, Sendable {
             guard let slots = entry.slots, !slots.isEmpty else { throw .invalidCommand("command \"\(id)\" needs at least one slot") }
             if let opens = entry.opens {
                 guard api >= 8 else { throw .needsNewerAPI("command \"\(id)\" \"opens\"", api: 8) }
-                guard tabs.contains(where: { $0.id == opens }) else {
-                    throw .invalidCommand("command \"\(id)\" opens \"\(opens)\", which is not a declared tab")
+                let opensPanel = api >= 15 && panels.contains { $0.id == opens && $0.location == .right }
+                guard tabs.contains(where: { $0.id == opens }) || opensPanel else {
+                    throw .invalidCommand(
+                        "command \"\(id)\" opens \"\(opens)\", which is not a declared \(api >= 15 ? "tab or right panel" : "tab")")
                 }
             }
             // Slots will keep growing, so one this Alas does not know is skipped rather than refused, and so is one
@@ -547,9 +564,24 @@ struct PluginManifest: Equatable, Sendable {
             // Locations will keep growing, so one this Alas does not know is skipped rather than refused, and so is
             // one newer than the manifest's API, as an Alas of that API would.
             guard let location = PluginPanelLocation(rawValue: entry.location ?? "right"), location.api <= api else { continue }
+            var kind = PluginTabContribution.Kind.view
+            if let rawKind = entry.kind {
+                guard let parsed = PluginTabContribution.Kind(rawValue: rawKind) else {
+                    throw .invalidPanel("panel \"\(id)\" has unknown kind \"\(rawKind)\"")
+                }
+                kind = parsed
+            }
+            if kind != .view {
+                guard api >= 15 else { throw .needsNewerAPI("panel \"\(id)\" kind \"\(kind.rawValue)\"", api: 15) }
+                // Inline sections and the configure sheet size to their content, which a canvas or a page doesn't.
+                guard location == .right else {
+                    throw .invalidPanel("panel \"\(id)\" at \(location.rawValue) can only have kind \"view\"")
+                }
+            }
             let icon = (entry.icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             panels.append(PluginPanelContribution(
-                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon, location: location))
+                id: id, title: title, icon: icon.isEmpty ? PluginPanelContribution.defaultIcon : icon, location: location,
+                kind: kind))
         }
         return panels
     }
@@ -608,6 +640,7 @@ private struct Raw: Decodable {
         let title: String?
         let icon: String?
         let location: String?
+        let kind: String?
     }
     struct RawProcess: Decodable {
         let id: String?

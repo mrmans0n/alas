@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Plugin API 15: right-rail panels can show canvases and web pages, carry badges, and open from commands; web pages may show images from the plugin's declared hosts. A selected plugin panel now stays selected when the right pane remounts.
+
 ### Fixes
 
 - Show every project from an online peer in the sidebar, including projects with no sessions or consoles.

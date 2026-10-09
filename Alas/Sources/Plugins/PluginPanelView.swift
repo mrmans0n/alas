@@ -6,20 +6,28 @@ struct PluginPanelRef: Hashable, Sendable {
     let panelID: String
 }
 
+/// What a `right` panel's rail button carries, set with `panel/badge` (API 15): a count, or a dot when `count` is nil.
+struct PluginPanelBadge: Equatable, Sendable {
+    let count: Int?
+    let tone: PluginViewNode.Tone
+}
+
 /// A plugin panel's button in the right pane's rail.
 struct PluginPanelItem: Equatable, Identifiable {
     let ref: PluginPanelRef
     let title: String
     let icon: String
+    var badge: PluginPanelBadge?
     var id: PluginPanelRef { ref }
 
     /// Panels of plugins with a host in the project, in plugin order. A failed host keeps its
     /// panels, so the panel can say it stopped and offer a restart.
-    static func items(_ plugins: [(manifest: PluginManifest, hasHost: Bool)]) -> [PluginPanelItem] {
+    static func items(_ plugins: [(manifest: PluginManifest, hasHost: Bool, badges: [String: PluginPanelBadge])]) -> [PluginPanelItem] {
         plugins.filter(\.hasHost).flatMap { plugin in
             plugin.manifest.panels.filter { $0.location == .right }.map {
                 PluginPanelItem(
-                    ref: PluginPanelRef(pluginID: plugin.manifest.id, panelID: $0.id), title: $0.title, icon: $0.icon)
+                    ref: PluginPanelRef(pluginID: plugin.manifest.id, panelID: $0.id), title: $0.title, icon: $0.icon,
+                    badge: plugin.badges[$0.id])
             }
         }
     }
@@ -41,14 +49,27 @@ struct PluginPanelView: View {
         let manager = state.pluginManager
         let host = manager?.host(pluginID: item.ref.pluginID, projectID: projectID)
         let panel = item.ref.panelID
+        let kind = manager?.plugin(id: item.ref.pluginID)?.manifest.panels.first { $0.id == panel }?.kind ?? .view
+        // A web panel's page is its own content; it posts "ready" when it loads.
+        let hasContent: Bool = switch kind {
+        case .view: host?.panelViews[panel] != nil
+        case .canvas: host?.frames[.panel(panel)] != nil
+        case .web: true
+        }
         // Hosts exist only for approved, enabled plugins.
         let content = PluginTabContent.resolve(
             pluginsOn: manager != nil, found: host != nil, approved: true, enabled: true,
-            hostState: host?.state, hasContent: host?.panelViews[panel] != nil)
+            hostState: host?.state, hasContent: hasContent)
         Group {
             switch content {
             case .content:
-                if let host { PluginViewTabView(host: host, panel: panel) }
+                if let host {
+                    switch kind {
+                    case .view: PluginViewTabView(host: host, panel: panel)
+                    case .canvas: PluginCanvasView(host: host, surface: .panel(panel))
+                    case .web: PluginWebTabView(host: host, surface: .panel(panel), script: manager?.plugin(id: item.ref.pluginID)?.web ?? Data())
+                    }
+                }
             case .stopped(let reason):
                 VStack(spacing: 12) {
                     Text("Plugin stopped: \(reason)")

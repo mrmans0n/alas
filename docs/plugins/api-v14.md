@@ -4,6 +4,8 @@
 > [api-v4.md](api-v4.md), and APIs 5 to 13 in [api-v5.md](api-v5.md) to
 > [api-v13.md](api-v13.md); everything there still applies.
 
+[API 15](api-v15.md) lets panels show canvases and web pages, and adds rail badges.
+
 API 14 adds a `progressBar` view node for work made of steps, and lets an
 `hstack` center its items vertically.
 

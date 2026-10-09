@@ -67,4 +67,20 @@ struct PluginTrustTests {
         let old = try PermissionCase(name: "old", process: c.oldProcess, added: []).manifest()
         #expect(PluginPermissionChange.added(approved: old, granted: old.capabilities, update: try c.manifest()) == c.added)
     }
+
+    /// From API 15 a page may show images from the plugin's hosts, so the update says so even with nothing else new;
+    /// dropping or reordering those hosts asks nothing.
+    @Test func anAPI15PageAsksForTheHostsItShowsImagesFrom() throws {
+        func manifest(api: Int, network: String = #""a.com""#) throws -> PluginManifest {
+            try PluginManifest.parse(Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(api),"entry":"p.js","capabilities":["network"],"network":[\#(network)],"web":"ui.js","contributes":{"tabs":[{"id":"w","title":"W","kind":"web"}]}}"#.utf8))
+        }
+        let old = try manifest(api: 12)
+        #expect(PluginPermissionChange.added(approved: old, granted: old.capabilities, update: try manifest(api: 15))
+            == ["Show its own web content, with images from a.com"])
+        let approved = try manifest(api: 15, network: #""a.com","b.com""#)
+        for network in [#""b.com""#, #""b.com","a.com""#] {
+            #expect(PluginPermissionChange.added(
+                approved: approved, granted: approved.capabilities, update: try manifest(api: 15, network: network)).isEmpty)
+        }
+    }
 }

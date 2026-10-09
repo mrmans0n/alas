@@ -45,9 +45,49 @@ struct PluginWebTests {
     }
 
     /// What `alas.context` holds, sent as data to a running page when the theme changes.
-    @Test func theContextNamesTheTabAndWhetherTheThemeIsDark() {
-        #expect(PluginWebPolicy.context(tab: 2, theme: Theme(id: "light", name: "Light", tokens: [:])) == #"{"tab":2,"theme":"light"}"#)
-        #expect(PluginWebPolicy.context(tab: 0, theme: .fallback) == #"{"tab":0,"theme":"dark"}"#)
+    @Test func theContextNamesTheTabOrPanelAndWhetherTheThemeIsDark() {
+        #expect(PluginWebPolicy.context(surface: .tab(2), theme: Theme(id: "light", name: "Light", tokens: [:])) == #"{"tab":2,"theme":"light"}"#)
+        #expect(PluginWebPolicy.context(surface: .panel("usage"), theme: .fallback) == #"{"panel":"usage","theme":"dark"}"#)
+    }
+
+    @Test func theCSPLetsImagesInFromTheDeclaredHostsOverHTTPSOnly() {
+        #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id, imageHosts: ["a.com", "cdn.b.org"]).contains(
+            "; img-src data: blob: https://a.com https://cdn.b.org; font-src data:; connect-src 'none';"))
+    }
+
+    /// The rule for a host matches that host over https, and nothing that merely starts with it.
+    @Test(arguments: [
+        ("https://a.com/x.png", true), ("https://a.com/", true), ("http://a.com/x.png", false),
+        ("https://a.com.evil.net/x.png", false), ("https://xa.com/x.png", false), ("https://a.com:8443/x.png", false),
+    ])
+    func imageRulesMatchOnlyTheExactHost(url: String, allowed: Bool) throws {
+        let rules = try #require(try JSONSerialization.jsonObject(with: Data(PluginWebPolicy.contentRules(imageHosts: ["a.com"]).utf8)) as? [[String: Any]])
+        let filters = rules.compactMap { ($0["trigger"] as? [String: Any])?["url-filter"] as? String }.filter { $0.hasPrefix("^https") }
+        let filter = try #require(filters.first)
+        let regex = try NSRegularExpression(pattern: filter)
+        #expect((regex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil) == allowed)
+    }
+
+    /// WebKit accepts the rules, so a page with image hosts doesn't come up without a sandbox.
+    @MainActor
+    @Test func imageRulesCompile() async throws {
+        let identifier = "alas-plugin-web-test-\(UUID().uuidString)"
+        defer { Task { try? await WKContentRuleListStore.default().removeContentRuleList(forIdentifier: identifier) } }
+        let list = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: identifier,
+            encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: ["a.com", "cdn.b-c.org"]))
+        #expect(list != nil)
+    }
+
+    /// WebKit uses the list's name as a file name, so a plugin with many long hosts still gets its page.
+    @MainActor
+    @Test func aLongHostListStillCompiles() async throws {
+        let hosts = (1...12).map { "service-number-\($0).example-host.com" }
+        let identifier = PluginWebPolicy.ruleListIdentifier(imageHosts: hosts)
+        defer { Task { try? await WKContentRuleListStore.default().removeContentRuleList(forIdentifier: identifier) } }
+        let list = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: identifier, encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: hosts))
+        #expect(list != nil)
     }
 
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
@@ -115,12 +155,12 @@ struct PluginWebTests {
         var page: PluginWebPage?
         let done = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             var resumed = false
-            _ = host.attachWebPage(tab: 0) { json in
+            _ = host.attachWebPage(surface: .tab(0)) { json in
                 guard !resumed, json.contains(#""done":true"#) else { return }
                 resumed = true
                 continuation.resume(returning: json)
             }
-            page = PluginWebPage.open(host: host, tab: 0, script: Data(Self.hostilePage(origin: origin).utf8), theme: .fallback)
+            page = PluginWebPage.open(host: host, surface: .tab(0), script: Data(Self.hostilePage(origin: origin).utf8), theme: .fallback)
             page?.openExternal = { opened.append($0) }
         }
         defer { page?.close() }
@@ -139,7 +179,7 @@ struct PluginWebTests {
     @Test(.timeLimit(.minutes(1)))
     func aFailingPageReportsWhyInThePluginLog() async throws {
         let host = try await Self.webHost(source: Self.plugin(ping: ""))
-        let page = try #require(PluginWebPage.open(host: host, tab: 0, script: Data(#"throw new Error("boom");"#.utf8), theme: .fallback))
+        let page = try #require(PluginWebPage.open(host: host, surface: .tab(0), script: Data(#"throw new Error("boom");"#.utf8), theme: .fallback))
         defer { page.close() }
         var shown: [String] = []
         page.onProblem = { shown.append($0) }

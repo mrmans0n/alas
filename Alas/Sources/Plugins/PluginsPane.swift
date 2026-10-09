@@ -594,7 +594,7 @@ private struct PluginApprovalSheet: View {
             if !sandboxed.isEmpty || manifest.web != nil {
                 Text("Sandboxed. It will be able to:").font(.subheadline.weight(.semibold))
                 ForEach(sandboxed, id: \.self) { Text("• \($0.summary)") }
-                if manifest.web != nil { Text("• Show its own web content, with no network access") }
+                if let summary = manifest.webSummary { Text("• \(summary)") }
             }
             if !manifest.network.isEmpty {
                 Text("Web requests: " + manifest.network.joined(separator: ", "))

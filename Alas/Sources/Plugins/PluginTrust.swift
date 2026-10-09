@@ -51,7 +51,11 @@ enum PluginPermissionChange {
             for host in setting.hosts where !before.contains(host) { added.append("Use \(setting.title) with \(host)") }
         }
         if new.remote, !old.remote { added.append("Act in projects on SSH hosts, as your user there") }
-        if new.web != nil, old.web == nil { added.append("Show its own web content, with no network access") }
+        // Only a new page or a new image host asks again; dropping or reordering hosts grants nothing.
+        if let summary = new.webSummary,
+           old.webSummary == nil || new.webImageHosts.contains(where: { !old.webImageHosts.contains($0) }) {
+            added.append(summary)
+        }
         return added
     }
 }

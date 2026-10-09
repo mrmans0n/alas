@@ -69,7 +69,8 @@ struct PluginHostTests {
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
     static let canvasManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
-    static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
+    nonisolated static let panelsManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":15,"entry":"p.js","web":"ui.js","contributes":{"panels":[{"id":"cv","title":"CV","kind":"canvas"},{"id":"w","title":"W","kind":"web"},{"id":"v","title":"V"}]}}"#
+    nonisolated static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
@@ -222,8 +223,8 @@ struct PluginHostTests {
             [[.send(activateOK), .send(Self.regionsR), .present(tab: 0, length: 16, width: 2)], [.throw]],
             manifest: Self.canvasManifest)
         await host.activate()
-        #expect(host.frames[0]?.height == 2)
-        #expect(host.regions[0]?.map(\.id) == ["r"])
+        #expect(host.frames[.tab(0)]?.height == 2)
+        #expect(host.regions[.tab(0)]?.map(\.id) == ["r"])
         host.setTabVisible(0, true)
         await host.tick(at: .now)
         #expect(host.frames.isEmpty)
@@ -233,11 +234,50 @@ struct PluginHostTests {
     @Test func aClickOnAKnownRegionReachesThePlugin() async throws {
         let host = try makeHost([[.send(activateOK), .send(Self.regionsR)]], manifest: Self.canvasManifest)
         await host.activate()
-        await host.click(tab: 0, region: "nope")
-        await host.click(tab: 0, region: "r")
+        await host.click(surface: .tab(0), region: "nope")
+        await host.click(surface: .tab(0), region: "r")
         let clicks = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("canvas/click") }
         #expect(clicks.count == 1)
         #expect(clicks.first?.text.contains(#""region":"r""#) == true)
+    }
+
+    @Test func aCanvasPanelGetsFramesRegionsClicksAndTicks() async throws {
+        let regions = #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"cv","regions":[{"id":"r","label":"R","rect":[0,0,4,4]}]}}"#
+        let host = try makeHost(
+            [[.send(activateOK), .send(regions), .script("alas.present('cv', new Uint8Array(16), 2);")]],
+            manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(host.frames[.panel("cv")]?.height == 2)
+        #expect(host.regions[.panel("cv")]?.map(\.id) == ["r"])
+        await host.click(surface: .panel("cv"), region: "r")
+        // Key order is the encoder's, so check each field.
+        let click = try #require(lastReply(host))
+        #expect(click.contains(#""panel":"cv""#) && click.contains(#""region":"r""#) && !click.contains(#""tab""#))
+        // Ticks only while the panel is shown.
+        await host.tick(at: .now)
+        #expect(ticks(host).isEmpty)
+        await host.setPanelVisible("cv", true)?.value
+        await host.tick(at: .now)
+        #expect(ticks(host).count == 1)
+    }
+
+    /// A panel of another kind, both targets at once, or a panel from a plugin older than API 15 stops it.
+    @Test(arguments: [
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"v","regions":[]}}"#),
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"panel":"cv","regions":[]}}"#),
+        (#"{"id":"io.test.plugin","name":"Test","version":"1","api":14,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}],"panels":[{"id":"cv","title":"CV"}]}}"#,
+         #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"cv","regions":[]}}"#),
+        (PluginHostTests.panelsManifest, render(panel: "cv")),
+    ])
+    func misdirectedPanelMessagesStopThePlugin(manifest: String, message: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains(message.contains("view/render") ? "not a view panel" : "canvas/regions"))
     }
 
     @Test(arguments: [
@@ -266,8 +306,8 @@ struct PluginHostTests {
         ]], limits: limits, manifest: Self.canvasManifest)
         await host.activate()
         #expect(host.state == .active)
-        #expect(host.regions[0]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
-        #expect(host.regions[0]?.first?.label.unicodeScalars.count == PluginHost.regionLabelLimit)
+        #expect(host.regions[.tab(0)]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
+        #expect(host.regions[.tab(0)]?.first?.label.unicodeScalars.count == PluginHost.regionLabelLimit)
     }
 
     struct FocusCase: Sendable {
@@ -1869,6 +1909,36 @@ struct PluginHostTests {
         .send(#"{"jsonrpc":"2.0",\#(id.map { #""id":\#($0),"# } ?? "")"method":"web/post","params":{"tab":\#(tab),"message":\#(message)}}"#)
     }
 
+    @Test func aWebPanelsPagesTalkToThePluginByPanel() async throws {
+        let post = #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"w","message":{"n":1}}}"#
+        let host = try makeHost([[.send(activateOK)], [.send(post)]], manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.attachWebPage(surface: .panel("v")) { _ in } == nil)
+        var received: [String] = []
+        let page = try #require(host.attachWebPage(surface: .panel("w")) { received.append($0) })
+        #expect(await host.webMessage(surface: .panel("w"), page: page, json: #"{"ready":true}"#) == nil)
+        #expect(host.trace.contains { $0.direction == .toPlugin && $0.text.contains(#""panel":"w","message":{"ready":true}"#) })
+        #expect(received == [#"{"n":1}"#])
+        #expect(await host.webMessage(surface: .panel("v"), page: page, json: "1") == #"panel "v" is not a web panel"#)
+    }
+
+    /// A `web/post` to a panel that is not a web panel stops the plugin, from API 15 and below it.
+    @Test(arguments: [
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"v","message":1}}"#, #"panel "v" is not a web panel"#),
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"web/post","params":{"tab":0,"panel":"w","message":1}}"#, "needs one of tab and panel"),
+        (#"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"t","title":"T","kind":"web"}],"panels":[{"id":"w","title":"W"}]}}"#,
+         #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"w","message":1}}"#, #"panel "w" is not a web panel"#),
+    ])
+    func misdirectedWebPostsStopThePlugin(manifest: String, message: String, fragment: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains(fragment))
+    }
+
     /// `web/post`, as a notification or a request, reaches every live page of the tab as JSON text; one to a tab
     /// that is not a web tab stops the plugin.
     @Test func webPostReachesTheTabsPagesAndOnlyWebTabs() async throws {
@@ -1877,10 +1947,10 @@ struct PluginHostTests {
             manifest: Self.webManifest)
         await host.activate()
         var first: [String] = [], second: [String] = []
-        #expect(host.attachWebPage(tab: 1) { _ in } == nil)
-        let page = try #require(host.attachWebPage(tab: 0) { first.append($0) })
-        let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
-        #expect(await host.webMessage(tab: 0, page: page, json: #"{"ready":true}"#) == nil)
+        #expect(host.attachWebPage(surface: .tab(1)) { _ in } == nil)
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { first.append($0) })
+        let detached = try #require(host.attachWebPage(surface: .tab(0)) { second.append($0) })
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: #"{"ready":true}"#) == nil)
         #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
         // Decoded, not matched as text: the encoder does not promise a key order.
         #expect(host.trace.contains { entry in
@@ -1890,9 +1960,9 @@ struct PluginHostTests {
             return reply["id"] as? Int == 7 && (reply["result"] as? [String: Any])?.isEmpty == true
         })
 
-        host.detachWebPage(tab: 0, detached)
-        #expect(await host.webMessage(tab: 0, page: detached, json: "0") == "the page is closed")
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == nil)
+        host.detachWebPage(surface: .tab(0), detached)
+        #expect(await host.webMessage(surface: .tab(0), page: detached, json: "0") == "the page is closed")
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == nil)
         #expect(host.state == .failed("plugin sent a malformed web/post: tab 1 is not a web tab"))
         #expect(second.count == 2)
     }
@@ -1901,14 +1971,14 @@ struct PluginHostTests {
     @Test func webMessagesAreBoundedByTheirEnvelopeAndMustBeJSON() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
-        let limit = host.webMessageLimit(tab: 0)
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let limit = host.webMessageLimit(surface: .tab(0))
         let fits = "\"" + String(repeating: "a", count: limit - 2) + "\""
-        #expect(PluginHost.webMessage(tab: 0, json: fits).count == Self.limits.maxMessageBytes)
-        #expect(await host.webMessage(tab: 0, page: page, json: fits) == nil)
-        #expect(await host.webMessage(tab: 0, page: page, json: fits + " ") == "message too large")
-        #expect(await host.webMessage(tab: 0, page: page, json: "{") == "message is not JSON")
-        #expect(await host.webMessage(tab: 1, page: page, json: "1") == "tab 1 is not a web tab")
+        #expect(PluginHost.webMessage(surface: .tab(0), json: fits).count == Self.limits.maxMessageBytes)
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: fits) == nil)
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: fits + " ") == "message too large")
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "{") == "message is not JSON")
+        #expect(await host.webMessage(surface: .tab(1), page: page, json: "1") == "tab 1 is not a web tab")
     }
 
     /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per page, the
@@ -1916,17 +1986,17 @@ struct PluginHostTests {
     @Test func aPageCanQueueOnlySoManyMessages() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let busy = try #require(host.attachWebPage(tab: 0) { _ in })
-        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let busy = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let other = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         // Every task starts on the main actor before the first delivery returns to it.
-        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: busy, json: "\(index)") } }
-        let fromOther = Task { await host.webMessage(tab: 0, page: other, json: "0") }
+        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: busy, json: "\(index)") } }
+        let fromOther = Task { await host.webMessage(surface: .tab(0), page: other, json: "0") }
         var results: [String?] = []
         for post in posts { results.append(await post.value) }
         #expect(results.filter { $0 == nil }.count == PluginHost.maxWebQueue)
         #expect(results.last == "busy")
         #expect(await fromOther.value == nil)
-        #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
+        #expect(await host.webMessage(surface: .tab(0), page: busy, json: "0") == nil)
     }
 
     /// A page may post twice `maxWebBytesPerSecond` at once, then that rate as time passes, so a page posting in a
@@ -1937,18 +2007,18 @@ struct PluginHostTests {
         limits.maxMessageBytes = 1 << 20
         let host = try makeHost([[.send(activateOK)]], limits: limits, manifest: Self.webManifest, now: { time })
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
-        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let other = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         let eighth = "\"" + String(repeating: "a", count: PluginHost.maxWebBytesPerSecond / 8 - 2) + "\""
-        for _ in 0..<16 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
-        #expect(await host.webMessage(tab: 0, page: other, json: "0") == nil)
+        for _ in 0..<16 { #expect(await host.webMessage(surface: .tab(0), page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == "busy")
+        #expect(await host.webMessage(surface: .tab(0), page: other, json: "0") == nil)
         time += .milliseconds(500)
-        for _ in 0..<4 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        for _ in 0..<4 { #expect(await host.webMessage(surface: .tab(0), page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == "busy")
         // Reloading does not refill it.
-        let reloaded = try #require(host.attachWebPage(tab: 0, replacing: page) { _ in })
-        #expect(await host.webMessage(tab: 0, page: reloaded, json: "0") == "busy")
+        let reloaded = try #require(host.attachWebPage(surface: .tab(0), replacing: page) { _ in })
+        #expect(await host.webMessage(surface: .tab(0), page: reloaded, json: "0") == "busy")
     }
 
     /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's
@@ -1956,16 +2026,16 @@ struct PluginHostTests {
     @Test func aReloadedPageGetsAFreshQueueAndTheOldOneIsClosed() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let old = try #require(host.attachWebPage(tab: 0) { _ in })
-        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: old, json: "\(index)") } }
+        let old = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: old, json: "\(index)") } }
         // Runs after every old post took its place in the queue, before any delivery returns to the main actor.
         let renewed = Task {
-            host.detachWebPage(tab: 0, old)
-            return host.attachWebPage(tab: 0) { _ in }
+            host.detachWebPage(surface: .tab(0), old)
+            return host.attachWebPage(surface: .tab(0)) { _ in }
         }
         let page = try #require(await renewed.value)
-        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: page, json: "\(index)") } }
-        #expect(await host.webMessage(tab: 0, page: old, json: "0") == "the page is closed")
+        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: page, json: "\(index)") } }
+        #expect(await host.webMessage(surface: .tab(0), page: old, json: "0") == "the page is closed")
         for post in newPosts { #expect(await post.value == nil) }
         // The old document's messages still waiting behind the one being delivered are stale, so they are dropped.
         for post in oldPosts { #expect([nil, "the page is closed"].contains(await post.value)) }
@@ -1975,12 +2045,12 @@ struct PluginHostTests {
     @Test func aPagesPostsReachThePluginInOrder() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         let count = 8
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var left = count
             for index in 0..<count {
-                host.webMessage(tab: 0, page: page, json: "\(index)") { failure in
+                host.webMessage(surface: .tab(0), page: page, json: "\(index)") { failure in
                     #expect(failure == nil)
                     left -= 1
                     if left == 0 { continuation.resume() }
@@ -1991,5 +2061,51 @@ struct PluginHostTests {
             .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any])?["params"] as? [String: Any] }
             .compactMap { $0["message"] as? Int }
         #expect(delivered == Array(0..<count))
+    }
+
+    private static func badge(_ params: String) -> PluginFixtureStep {
+        .send(#"{"jsonrpc":"2.0","method":"panel/badge","params":\#(params)}"#)
+    }
+
+    /// Set, replaced and cleared by the plugin, and gone with the instance, so a stopped plugin shows no stale count.
+    @Test func panelBadgesSetClearAndEndWithTheInstance() async throws {
+        let host = try makeHost(
+            [[.send(activateOK), Self.badge(#"{"panel":"v","count":3,"tone":"warn"}"#), Self.badge(#"{"panel":"w","dot":true}"#),
+              Self.badge(#"{"panel":"cv","count":1}"#), Self.badge(#"{"panel":"cv"}"#)],
+             [.throw]],
+            manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.panelBadges == [
+            "v": PluginPanelBadge(count: 3, tone: .warn), "w": PluginPanelBadge(count: nil, tone: .normal),
+        ])
+        await host.setPanelVisible("v", true)?.value
+        #expect(host.panelBadges.isEmpty)
+    }
+
+    @Test(arguments: [
+        (#"{"panel":"v","count":0}"#, "count must be 1 to 9999"),
+        (#"{"panel":"v","count":10000}"#, "count must be 1 to 9999"),
+        (#"{"panel":"v","count":1,"dot":true}"#, "count and dot"),
+        (#"{"panel":"v","dot":true,"tone":"loud"}"#, #"unknown tone "loud""#),
+        (#"{"panel":"nope","dot":true}"#, #"panel "nope" is not a right panel"#),
+        (#"{"count":1}"#, "needs panel"),
+    ])
+    func malformedPanelBadgesStopThePlugin(params: String, fragment: String) async throws {
+        let host = try makeHost([[.send(activateOK), Self.badge(params)]], manifest: Self.panelsManifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("panel/badge") && reason.contains(fragment))
+    }
+
+    /// As a request, a bad badge is refused and the plugin keeps running; an older plugin doesn't have the method.
+    @Test(arguments: [(PluginHostTests.panelsManifest, "-32602"), (PluginHostTests.viewManifest, "-32601")])
+    func aBadgeRequestIsAnsweredWithoutStopping(manifest: String, code: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(request(1, "panel/badge", #"{"panel":"nope"}"#))]], manifest: manifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(lastReply(host)?.contains(code) == true)
     }
 }

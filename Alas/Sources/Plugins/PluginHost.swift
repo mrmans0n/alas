@@ -135,6 +135,7 @@ final class PluginHost {
         "web/post": nil,
         "usage/turns": .usageRead,
         "usage/limits": .usageRead,
+        "panel/badge": nil,
     ]
     /// Methods a manifest for an older API does not know.
     private static let api6Methods: Set<String> = [
@@ -143,6 +144,8 @@ final class PluginHost {
     ]
     private static let api9Methods: Set<String> = ["prompts/set"]
     private static let api12Methods: Set<String> = ["web/post", "usage/turns", "usage/limits"]
+    private static let api15Methods: Set<String> = ["panel/badge"]
+    static let maxBadgeCount = 9999
     /// Messages a web tab's page posted that the plugin has not yet handled, per page (API 12).
     static let maxWebQueue = 32
     /// Bytes one page may post per second (API 12), each message counting at least `minWebPostCost`. The queue bounds
@@ -191,14 +194,16 @@ final class PluginHost {
     private(set) var state: PluginHostState = .loaded
     private(set) var trace: [PluginTraceEntry] = []
     private(set) var log: [PluginLogEntry] = []
-    private(set) var frames: [Int: PluginFrame] = [:]
-    private(set) var regions: [Int: [PluginRegion]] = [:]
+    private(set) var frames: [PluginSurface: PluginFrame] = [:]
+    private(set) var regions: [PluginSurface: [PluginRegion]] = [:]
     private(set) var views: [Int: PluginViewNode] = [:]
     /// Panel trees, by the manifest's panel id, and the worktree or run each was last rendered for.
     private(set) var panelViews: [String: PluginViewNode] = [:]
     private(set) var panelPlaces: [String: PluginPanelPlace] = [:]
     /// Badges the plugin put on rows with `decorations/set`. Cleared whenever the instance ends.
     private(set) var decorations: [PluginDecorationKey: [PluginDecoration]] = [:]
+    /// Rail badges of `right` panels, by id (API 15). Cleared whenever the instance ends.
+    private(set) var panelBadges: [String: PluginPanelBadge] = [:]
     /// Long-running processes this instance started, shown in the Run tab; kept after they exit until the next start.
     private(set) var processRuns: [PluginProcessRun] = []
     /// Slash prompts the instance set with `prompts/set` (API 9), offered beside the manifest's. Cleared when it ends.
@@ -296,7 +301,8 @@ final class PluginHost {
         processRuns = []
         do {
             let loaded = try await PluginRuntime.load(
-                source: source, limits: limits, tabCount: manifest.tabs.count)
+                source: source, limits: limits, tabCount: manifest.tabs.count,
+                canvasPanels: Set(manifest.panels.filter { $0.kind == .canvas }.map(\.id)))
             guard state == .activating else { return }  // deactivated while the script loaded
             runtime = loaded
         } catch {
@@ -345,6 +351,7 @@ final class PluginHost {
         let before = visiblePanels[place, default: 0]
         let after = max(0, before + (visible ? 1 : -1))
         visiblePanels[place] = after == 0 ? nil : after
+        if !canvasVisible { lastTick = nil }
         guard (before == 0) != (after == 0) else { return nil }
         return queueVisibility { await $0.sendPanelVisible(place, visible) }
     }
@@ -527,10 +534,15 @@ final class PluginHost {
         panelViews = [:]
         panelPlaces = [:]
         decorations = [:]
+        panelBadges = [:]
         lastTick = nil
     }
 
-    private var canvasVisible: Bool { visibleTabs.keys.contains { tabIs($0, .canvas) } }
+    /// A canvas ticks while one of its tabs is on screen, or one of its panels is shown (API 15).
+    private var canvasVisible: Bool {
+        visibleTabs.keys.contains { surfaceIs(.tab($0), .canvas) }
+            || visiblePanels.keys.contains { surfaceIs(.panel($0.panel), .canvas) }
+    }
 
     var isTicking: Bool { state == .active && canvasVisible }
 
@@ -543,10 +555,10 @@ final class PluginHost {
     }
 
     /// Only regions the plugin declared can be clicked.
-    func click(tab: Int, region: String) async {
-        guard state == .active, regions[tab]?.contains(where: { $0.id == region }) == true else { return }
+    func click(surface: PluginSurface, region: String) async {
+        guard state == .active, regions[surface]?.contains(where: { $0.id == region }) == true else { return }
         await deliver(encode(JSONRPCEnvelope(
-            id: nil, method: "canvas/click", params: PluginClickParams(tab: tab, region: region))))
+            id: nil, method: "canvas/click", params: PluginClickParams(tab: surface.tab, panel: surface.panel, region: region))))
     }
 
     /// Only nodes in the tab's current tree can send events.
@@ -572,8 +584,12 @@ final class PluginHost {
         node.id == id || node.children.contains { contains($0, id: id) }
     }
 
-    private func tabIs(_ tab: Int, _ kind: PluginTabContribution.Kind) -> Bool {
-        manifest.tabs.indices.contains(tab) && manifest.tabs[tab].kind == kind
+    /// Whether `surface` is a declared tab of `kind`, or from API 15 a `right` panel of `kind`.
+    private func surfaceIs(_ surface: PluginSurface, _ kind: PluginTabContribution.Kind) -> Bool {
+        switch surface {
+        case .tab(let tab): manifest.tabs.indices.contains(tab) && manifest.tabs[tab].kind == kind
+        case .panel(let id): manifest.api >= 15 && manifest.panels.contains { $0.id == id && $0.location == .right && $0.kind == kind }
+        }
     }
 
     // MARK: - Delivery
@@ -610,7 +626,8 @@ final class PluginHost {
                 return
             }
             guard isRunning, self.runtime === runtime else { return }
-            if let tab = delivery.frames.keys.sorted().first(where: { !tabIs($0, .canvas) }) {
+            // The runtime only takes declared canvas panels, so a misdirected frame is one for a tab of another kind.
+            if case .tab(let tab)? = delivery.frames.keys.first(where: { !surfaceIs($0, .canvas) }) {
                 fail("plugin presented a frame to \(manifest.tabs[tab].kind.rawValue) tab \(tab)")
                 return
             }
@@ -672,7 +689,8 @@ final class PluginHost {
         // `methods[method]` is a double optional: unwrap only the lookup, the entry itself may be nil.
         guard let capability = Self.methods[method], manifest.api >= 6 || !Self.api6Methods.contains(method),
               manifest.api >= 9 || !Self.api9Methods.contains(method),
-              manifest.api >= 12 || !Self.api12Methods.contains(method)
+              manifest.api >= 12 || !Self.api12Methods.contains(method),
+              manifest.api >= 15 || !Self.api15Methods.contains(method)
         else {
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
@@ -832,6 +850,9 @@ final class PluginHost {
             return fileReply(id, params.worktree, .write(path: params.path, content: params.content))
         case "web/post":
             if let refusal = postToPage(data) { return errorReply(id, code: -32602, refusal) }
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "panel/badge":
+            if let refusal = setPanelBadge(data) { return errorReply(id, code: -32602, refusal) }
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         case "usage/turns", "usage/limits":
             return usageReply(method, id: id, data: data)
@@ -1348,6 +1369,31 @@ final class PluginHost {
         for token in hostRequests.keys { answer(token, nil) }
     }
 
+    /// `panel/badge {panel, count | dot, tone}`: sets a `right` panel's rail badge, or clears it with neither. Returns why
+    /// the params are invalid, or nil.
+    private func setPanelBadge(_ data: Data) -> String? {
+        guard let params = try? JSONDecoder().decode(PluginParams<PluginPanelBadgeParams>.self, from: data).params else {
+            return "needs panel, and a whole-number count, a boolean dot and a string tone when given"
+        }
+        guard manifest.panels.contains(where: { $0.id == params.panel && $0.location == .right }) else {
+            return "panel \"\(params.panel)\" is not a right panel"
+        }
+        var tone = PluginViewNode.Tone.normal
+        if let raw = params.tone {
+            guard let parsed = PluginViewNode.Tone(rawValue: raw) else { return "unknown tone \"\(raw)\"" }
+            tone = parsed
+        }
+        let dot = params.dot ?? false
+        if let count = params.count {
+            guard !dot else { return "count and dot can't both be set" }
+            guard (1...Self.maxBadgeCount).contains(count) else { return "count must be 1 to \(Self.maxBadgeCount)" }
+            panelBadges[params.panel] = PluginPanelBadge(count: count, tone: tone)
+        } else {
+            panelBadges[params.panel] = dot ? PluginPanelBadge(count: nil, tone: tone) : nil
+        }
+        return nil
+    }
+
     /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
     /// because a plugin that cannot describe its own canvas is broken rather than noisy.
     private func handleNotification(_ method: String, data: Data) -> Outcome {
@@ -1367,13 +1413,17 @@ final class PluginHost {
             }
             switch (header.tab, header.panel) {
             case (let tab?, nil):
-                guard tabIs(tab, .view), header.worktree == nil, header.run == nil else {
+                guard surfaceIs(.tab(tab), .view), header.worktree == nil, header.run == nil else {
                     return .violation("plugin sent view/render to tab \(tab), which is not a view tab")
                 }
             case (nil, let panel?):
-                guard let location = manifest.panels.first(where: { $0.id == panel })?.location else {
+                guard let declared = manifest.panels.first(where: { $0.id == panel }) else {
                     return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which it does not declare"))
                 }
+                guard declared.kind == .view else {
+                    return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which is not a view panel"))
+                }
+                let location = declared.location
                 // A panel names exactly the context its location has.
                 let needs: (worktree: Bool, run: Bool) = switch location {
                 case .right, .configure: (false, false)
@@ -1424,12 +1474,14 @@ final class PluginHost {
             return .none
         case "web/post" where manifest.api >= 12:
             return postToPage(data).map { .violation(Self.bounded("plugin sent a malformed web/post: \($0)")) } ?? .none
+        case "panel/badge" where manifest.api >= 15:
+            return setPanelBadge(data).map { .violation(Self.bounded("plugin sent a malformed panel/badge: \($0)")) } ?? .none
         case "canvas/regions":
             guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
-                  tabIs(params.tab, .canvas),
+                  let surface = PluginSurface(tab: params.tab, panel: params.panel), surfaceIs(surface, .canvas),
                   params.regions.allSatisfy({ $0.rect.count == 4 })
             else { return .violation("plugin sent a malformed canvas/regions") }
-            regions[params.tab] = params.regions.prefix(Self.maxRegions).map {
+            regions[surface] = params.regions.prefix(Self.maxRegions).map {
                 PluginRegion(
                     id: Self.prefix($0.id, utf8Bytes: Self.regionIDByteLimit),
                     label: String(String.UnicodeScalarView($0.label.unicodeScalars.prefix(Self.regionLabelLimit))),
@@ -1483,10 +1535,10 @@ final class PluginHost {
         }
     }
 
-    // MARK: - Web tabs (API 12)
+    // MARK: - Web tabs (API 12) and panels (API 15)
 
-    /// Live pages of each web tab, by index: one tab may show in several worktrees of the project.
-    @ObservationIgnored private var webPages: [Int: [UUID: (String) -> Void]] = [:]
+    /// Live pages of each web tab or panel: one may show in several worktrees of the project.
+    @ObservationIgnored private var webPages: [PluginSurface: [UUID: (String) -> Void]] = [:]
     /// Messages from each page that the plugin has not yet handled, by the page's token. Per page, as the page's
     /// bridge counts them, so a page under its own cap is never refused here because of another page.
     @ObservationIgnored private var webQueued: [UUID: Int] = [:]
@@ -1495,49 +1547,64 @@ final class PluginHost {
     /// Bytes each page may still post, and when that was worked out; refilled at `maxWebBytesPerSecond`.
     @ObservationIgnored private var webBudget: [UUID: (bytes: Double, at: ContinuousClock.Instant)] = [:]
 
-    /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
-    /// to detach with, or nil for a tab that is not a web tab. `replacing` is the same view's previous document:
+    /// A page of web tab or panel `surface` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
+    /// to detach with, or nil for a surface that is not web. `replacing` is the same view's previous document:
     /// it is detached, and its post budget carries over, so reloading does not refill it.
-    func attachWebPage(tab: Int, replacing previous: UUID? = nil, receive: @escaping (String) -> Void) -> UUID? {
+    func attachWebPage(surface: PluginSurface, replacing previous: UUID? = nil, receive: @escaping (String) -> Void) -> UUID? {
         let budget = previous.flatMap { webBudget[$0] }
-        if let previous { detachWebPage(tab: tab, previous) }
-        guard tabIs(tab, .web) else { return nil }
+        if let previous { detachWebPage(surface: surface, previous) }
+        guard surfaceIs(surface, .web) else { return nil }
         let token = UUID()
-        webPages[tab, default: [:]][token] = receive
+        webPages[surface, default: [:]][token] = receive
         webBudget[token] = budget
         return token
     }
 
-    func detachWebPage(tab: Int, _ token: UUID) {
-        webPages[tab]?[token] = nil
+    func detachWebPage(surface: PluginSurface, _ token: UUID) {
+        webPages[surface]?[token] = nil
         webQueued[token] = nil
         webTails[token] = nil
         webBudget[token] = nil
     }
 
-    /// The largest JSON text a page of `tab` may post: the `web/message` it becomes must fit in one message.
-    func webMessageLimit(tab: Int) -> Int {
-        limits.maxMessageBytes - Self.webMessage(tab: tab, json: "").count
+    /// The largest JSON text a page of `surface` may post: the `web/message` it becomes must fit in one message.
+    func webMessageLimit(surface: PluginSurface) -> Int {
+        limits.maxMessageBytes - Self.webMessage(surface: surface, json: "").count
     }
 
-    /// Something kept a page of web tab `tab` from working (a script error, a failed load): logged as an error, so
-    /// it shows in Settings → Plugins instead of only as a blank tab.
-    func webPageProblem(tab: Int, _ text: String) {
-        let title = tab < manifest.tabs.count ? manifest.tabs[tab].title : "web tab"
+    /// Something kept a page of a web tab or panel from working (a script error, a failed load): logged as an error,
+    /// so it shows in Settings → Plugins instead of only as a blank page.
+    func webPageProblem(surface: PluginSurface, _ text: String) {
+        let title = switch surface {
+        case .tab(let tab): tab < manifest.tabs.count ? manifest.tabs[tab].title : "web tab"
+        case .panel(let id): manifest.panels.first { $0.id == id }?.title ?? "web panel"
+        }
         appendLog("error", "\(title) page: \(text)")
     }
 
-    /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured.
-    static func webMessage(tab: Int, json: String) -> Data {
-        Data(#"{"jsonrpc":"2.0","method":"web/message","params":{"tab":\#(tab),"message":\#(json)}}"#.utf8)
+    /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured. Panel
+    /// ids are manifest-validated (`[a-z0-9.-]`), so they need no escaping.
+    static func webMessage(surface: PluginSurface, json: String) -> Data {
+        let target = switch surface {
+        case .tab(let tab): #""tab":\#(tab)"#
+        case .panel(let id): #""panel":"\#(id)""#
+        }
+        return Data(#"{"jsonrpc":"2.0","method":"web/message","params":{\#(target),"message":\#(json)}}"#.utf8)
     }
 
-    /// The page `page` of web tab `tab` called `alas.post`. The bridge already checked the size and the page's queue,
+    private func notWeb(_ surface: PluginSurface) -> String {
+        switch surface {
+        case .tab(let tab): "tab \(tab) is not a web tab"
+        case .panel(let id): "panel \"\(id)\" is not a web panel"
+        }
+    }
+
+    /// The page `page` of a web tab or panel called `alas.post`. The bridge already checked the size and the page's queue,
     /// and threw for the page if either was exceeded; they are checked again here, since nothing the page's process
     /// sends is trusted. Checked and queued at once, in call order, then delivered after the page's earlier messages;
     /// `done` gets nil once the plugin has handled it, or why it was dropped.
-    func webMessage(tab: Int, page: UUID, json: String, done: @escaping @MainActor (String?) -> Void) {
-        if let refusal = webMessageRefusal(tab: tab, page: page, json: json) {
+    func webMessage(surface: PluginSurface, page: UUID, json: String, done: @escaping @MainActor (String?) -> Void) {
+        if let refusal = webMessageRefusal(surface: surface, page: page, json: json) {
             done(refusal)
             return
         }
@@ -1548,24 +1615,24 @@ final class PluginHost {
             guard let self else { return done("the plugin is not running") }
             defer { if self.webQueued[page] != nil { self.webQueued[page, default: 1] -= 1 } }
             // The page may have gone, or the plugin stopped, while earlier messages were delivered.
-            guard self.webPages[tab]?[page] != nil else { return done("the page is closed") }
+            guard self.webPages[surface]?[page] != nil else { return done("the page is closed") }
             guard self.state == .active else { return done("the plugin is not running") }
-            await self.deliver(Self.webMessage(tab: tab, json: json))
+            await self.deliver(Self.webMessage(surface: surface, json: json))
             done(nil)
         }
     }
 
-    func webMessage(tab: Int, page: UUID, json: String) async -> String? {
+    func webMessage(surface: PluginSurface, page: UUID, json: String) async -> String? {
         await withCheckedContinuation { continuation in
-            webMessage(tab: tab, page: page, json: json) { continuation.resume(returning: $0) }
+            webMessage(surface: surface, page: page, json: json) { continuation.resume(returning: $0) }
         }
     }
 
-    private func webMessageRefusal(tab: Int, page: UUID, json: String) -> String? {
+    private func webMessageRefusal(surface: PluginSurface, page: UUID, json: String) -> String? {
         guard state == .active else { return "the plugin is not running" }
-        guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
-        guard webPages[tab]?[page] != nil else { return "the page is closed" }
-        guard json.utf8.count <= webMessageLimit(tab: tab) else { return "message too large" }
+        guard surfaceIs(surface, .web) else { return notWeb(surface) }
+        guard webPages[surface]?[page] != nil else { return "the page is closed" }
+        guard json.utf8.count <= webMessageLimit(surface: surface) else { return "message too large" }
         guard webQueued[page, default: 0] < Self.maxWebQueue, spendWebBudget(page, bytes: json.utf8.count) else {
             return "busy"
         }
@@ -1586,19 +1653,20 @@ final class PluginHost {
         return left >= cost
     }
 
-    /// `web/post {tab, message}`: hands `message` to every live page of the tab, as JSON text. Without one it is
-    /// dropped; the page posts its own "ready" when it loads. Returns why the params are invalid, or nil.
+    /// `web/post {tab | panel, message}`: hands `message` to every live page of the tab or panel, as JSON text. Without
+    /// one it is dropped; the page posts its own "ready" when it loads. Returns why the params are invalid, or nil.
     private func postToPage(_ data: Data) -> String? {
-        // The tab through the decoder, which takes only a whole number; the message as any JSON value.
-        guard let tab = (try? JSONDecoder().decode(PluginParams<PluginTabParams>.self, from: data))?.params.tab,
+        // The target through the decoder, which takes only a whole-number tab; the message as any JSON value.
+        guard let target = (try? JSONDecoder().decode(PluginParams<PluginSurfaceParams>.self, from: data))?.params,
+              let surface = PluginSurface(tab: target.tab, panel: target.panel),
               let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
               let message = params["message"]
-        else { return "needs tab and message" }
-        guard tabIs(tab, .web) else { return "tab \(tab) is not a web tab" }
+        else { return "needs one of tab and panel, and message" }
+        guard surfaceIs(surface, .web) else { return notWeb(surface) }
         guard let json = try? JSONSerialization.data(withJSONObject: message, options: [.fragmentsAllowed, .withoutEscapingSlashes])
         else { return "message is not JSON" }
         let text = String(decoding: json, as: UTF8.self)
-        for receive in (webPages[tab] ?? [:]).values { receive(text) }
+        for receive in (webPages[surface] ?? [:]).values { receive(text) }
         return nil
     }
 

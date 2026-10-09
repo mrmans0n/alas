@@ -45,6 +45,14 @@ enum RightPaneRailTabState: Equatable {
 }
 
 enum RightPaneRailModel {
+    /// A plugin panel's badge (API 15) and the theme color it fills with. `normal` counts keep the built-in grey; a dot
+    /// never takes the Run tab's green, which means "running".
+    static func badge(for plugin: PluginPanelBadge?) -> (badge: RightPaneRailBadge, tone: String?) {
+        guard let plugin else { return (.none, nil) }
+        guard let count = plugin.count else { return (.liveDot, plugin.tone == .normal ? "fg-dim" : plugin.tone.colorKey) }
+        return (.count(count), plugin.tone == .normal ? nil : plugin.tone.colorKey)
+    }
+
     static func badge(
         for tab: RightPaneTab,
         changesCount: Int,

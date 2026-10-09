@@ -84,8 +84,9 @@ struct PluginTabTests {
         }
         let a = try plugin("io.x.a", panels: #"[{"id":"issues","title":"Issues","icon":"checklist"},{"id":"b","title":"B"}]"#)
         let b = try plugin("io.x.b", panels: #"[{"id":"issues","title":"Other"}]"#)
-        let items = PluginPanelItem.items([(a, true), (b, false)])
+        let items = PluginPanelItem.items([(a, true, ["b": PluginPanelBadge(count: 2, tone: .danger)]), (b, false, [:])])
         #expect(items.map(\.ref) == [PluginPanelRef(pluginID: "io.x.a", panelID: "issues"), PluginPanelRef(pluginID: "io.x.a", panelID: "b")])
+        #expect(items.map(\.badge) == [nil, PluginPanelBadge(count: 2, tone: .danger)])
         #expect(items.map(\.icon) == ["checklist", PluginPanelContribution.defaultIcon])
         #expect(PluginPanelItem.selected(PluginPanelRef(pluginID: "io.x.a", panelID: "b"), in: items)?.title == "B")
         #expect(PluginPanelItem.selected(PluginPanelRef(pluginID: "io.x.b", panelID: "issues"), in: items) == nil)
