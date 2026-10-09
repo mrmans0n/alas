@@ -14,6 +14,9 @@ final class NativePeerSessions {
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var isFetchingOlderMessages = false
     private(set) var pendingPrompt: String?
+    /// Queue items with the pending prompt's text at send time, so only a new
+    /// item (not a re-pushed older duplicate) confirms the send.
+    @ObservationIgnored private var pendingPromptPriorQueueIds: Set<String> = []
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
     /// The peer worktree shown in the center pane. Set with no selected tab
@@ -399,13 +402,14 @@ final class NativePeerSessions {
         guard !text.isEmpty else { return }
         pendingPrompt = text
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
+        pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter { $0.text == text }.map(\.id))
         let wireIntent = intent == .steer ? "steer" : "auto"
         if drive({ .sendPrompt(sessionId: $0, text: text, attachments: [], intent: wireIntent) }) {
             deliveryError = nil
         } else {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
-            deliveryError = Self.peerUnavailableMessage
+            deliveryError = Self.peerUnavailableMessage + " Your draft was kept."
         }
     }
 
@@ -914,7 +918,7 @@ final class NativePeerSessions {
             promptConfirmationRows = []
         }
         if case .queueState(_, let items) = message, let pendingPrompt,
-           items.contains(where: { $0.text == pendingPrompt }) {
+           items.contains(where: { $0.text == pendingPrompt && !pendingPromptPriorQueueIds.contains($0.id) }) {
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingPrompt { draft = "" }
             self.pendingPrompt = nil
             pendingPromptExpectedIndex = nil

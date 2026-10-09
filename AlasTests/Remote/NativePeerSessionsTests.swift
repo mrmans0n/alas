@@ -903,6 +903,26 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").contains(.sendPrompt(sessionId: "s", text: "after", attachments: [], intent: "auto")))
     }
 
+    @Test func queueStateWithAnIdenticalOlderItemDoesNotConfirmTheSend() {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true, upserts: [],
+                                       epoch: 1, revision: 1), from: "B")
+        func item(_ id: UUID) -> RemoteQueuedPrompt {
+            RemoteQueuedPrompt(id: id.uuidString, text: "continue", imageCount: 0, resourceCount: 0,
+                               status: "pending", lastError: nil, scheduledAt: nil)
+        }
+        let older = UUID()
+        links.receive(.queueState(sessionId: "s", items: [item(older)]), from: "B")
+        client.draft = "continue"
+        client.sendPrompt()
+        links.receive(.queueState(sessionId: "s", items: [item(older)]), from: "B")
+        #expect(client.draft == "continue")
+        #expect(client.isPromptPending)
+        links.receive(.queueState(sessionId: "s", items: [item(older), item(UUID())]), from: "B")
+        #expect(client.draft.isEmpty)
+        #expect(!client.isPromptPending)
+    }
+
     @Test func queueEditRestoredFillsTheDraft() {
         let (links, client) = drivenClient(canDrive: true)
         links.receive(.queueEditRestored(sessionId: "s", itemId: "i", text: "fix this"), from: "B")
