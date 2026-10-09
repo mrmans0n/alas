@@ -434,13 +434,20 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// Whether `text` is (the next fragment of) a restart continuation's echo,
-    /// consuming it from the expectation.
+    /// consuming it from the expectation. Whitespace between fragments is part
+    /// of the echo. A chunk that diverges ends the expectation, so a later
+    /// prompt's echo that happens to share a prefix is never swallowed.
     private func consumeContinuationEcho(_ text: String) -> Bool {
         if text == QueuedPrompt.interruptedTurnContinueText { return true }
         guard let rest = expectedContinuationEcho?.drop(while: \.isWhitespace) else { return false }
         let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !fragment.isEmpty, rest.hasPrefix(fragment) else { return false }
-        expectedContinuationEcho = rest.dropFirst(fragment.count)
+        if fragment.isEmpty { return true }
+        guard rest.hasPrefix(fragment) else {
+            expectedContinuationEcho = nil
+            return false
+        }
+        let remaining = rest.dropFirst(fragment.count)
+        expectedContinuationEcho = remaining.allSatisfy(\.isWhitespace) ? nil : remaining
         return true
     }
 
@@ -672,6 +679,8 @@ final class ACPSession: ObservableObject, Identifiable {
         // of the user message instead of being dropped. The runner persists
         // from the pre-call message count, so the flushed rows are saved too.
         _ = flushPendingReplayCandidates()
+        // Echoes from here on belong to this prompt, not a restart continuation.
+        expectedContinuationEcho = nil
         let id = UUID()
         transcript.appendMessage(.user(
             id: id,
@@ -1570,7 +1579,7 @@ final class ACPSession: ObservableObject, Identifiable {
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
-                ?? replayedUserTurnMatch(text: text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
+                ?? replayedUserTurnMatch(chunk.content, atOrAfter: suppressedReplayInsertionCursor)
         case .plan:
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
@@ -3857,9 +3866,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// echo resolves to its notice, which stands in for the user row. Agents
     /// may replay that echo in fragments: each one resolves to the notice the
     /// cursor just passed, so none claims a later user turn.
-    private func replayedUserTurnMatch(text: String, atOrAfter cursor: Int) -> Int? {
-        let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isContinuationEcho = !fragment.isEmpty && QueuedPrompt.interruptedTurnContinueText.contains(fragment)
+    private func replayedUserTurnMatch(_ block: ACPContentBlock, atOrAfter cursor: Int) -> Int? {
+        let isContinuationEcho: Bool = {
+            guard case .text(let text) = block else { return false }
+            let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return fragment.isEmpty || QueuedPrompt.interruptedTurnContinueText.contains(fragment)
+        }()
         let start = min(cursor, transcript.messages.count)
         if isContinuationEcho, start > 0, transcript.messages[start - 1].isInterruptedTurnContinuationNotice {
             return start - 1

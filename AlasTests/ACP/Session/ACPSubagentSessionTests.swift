@@ -1093,8 +1093,8 @@ struct ACPSubagentSessionTests {
         let text = QueuedPrompt.interruptedTurnContinueText
         let split = text.index(text.startIndex, offsetBy: 20)
 
-        for fragment in [text[..<split], text[split...]] {
-            _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text(String(fragment))))
+        for fragment in [String(text[..<split]), " ", String(text[split...])] {
+            _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text(fragment)))
         }
         _ = session.applySuppressedReplaySideEffects(
             .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))

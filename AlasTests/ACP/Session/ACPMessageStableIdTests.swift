@@ -439,14 +439,31 @@ struct ACPMessageStableIdTests {
         let text = QueuedPrompt.interruptedTurnContinueText
         let split = text.index(text.startIndex, offsetBy: 20)
 
-        for fragment in [text[..<split], text[split...]] {
-            #expect(s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(String(fragment))))).isEmpty)
+        for fragment in [String(text[..<split]), " ", String(text[split...])] {
+            #expect(s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(fragment)))).isEmpty)
         }
         #expect(s.transcript.messages.count == 1)
 
         s.endPromptEchoTurn()
         s.apply(.userMessageChunk(.init(messageId: "user-2", content: .text(String(text[..<split])))))
         #expect(s.transcript.messages.count == 2)
+    }
+
+    @Test("a steer's echo sharing the continuation's prefix is kept when the continuation was never echoed")
+    func steerEchoIsNotTakenForContinuationEcho() {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.recordInterruptedTurnContinuation()
+        s.recordUserPrompt(text: "Your previous answer was wrong", attachments: [])
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("Your previous "))))
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("answer was wrong"))))
+
+        guard case .user(_, _, let text, _, _, _) = s.transcript.messages.last else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(s.transcript.messages.count == 2)
+        #expect(text == "Your previous answer was wrong")
     }
 
     @Test("output after a restart continuation starts a new row instead of extending the interrupted turn's",
