@@ -865,16 +865,11 @@ struct RemoteProtocolTests {
         #expect(config.chips == nil)
     }
 
-    @Test(arguments: [ACPConfigValue.string("high"), .boolean(true)])
-    func setConfigOptionRoundTrips(_ value: ACPConfigValue) throws {
-        let message = RemoteClientMessage.setConfigOption(sessionId: "s1", configId: "effort", value: value)
-        #expect(try roundTrip(message) == message)
-    }
-
-    @Test func setConfigOptionDecodesBareJSONValue() throws {
-        let json = #"{"type":"setConfigOption","sessionId":"s1","configId":"web","value":false}"#
+    @Test(arguments: [("\"high\"", ACPConfigValue.string("high")), ("false", .boolean(false))])
+    func setConfigOptionDecodesBareJSONValue(literal: String, expected: ACPConfigValue) throws {
+        let json = #"{"type":"setConfigOption","sessionId":"s1","configId":"web","value":"# + literal + "}"
         #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: Data(json.utf8))
-            == .setConfigOption(sessionId: "s1", configId: "web", value: .boolean(false)))
+            == .setConfigOption(sessionId: "s1", configId: "web", value: expected))
     }
 
     @Test func clientConfigVerbsDecode() throws {
@@ -894,6 +889,8 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(RemoteClientMessage.setModel(sessionId: "s1", modelId: "opus")) == .setModel(sessionId: "s1", modelId: "opus"))
         #expect(try roundTrip(RemoteClientMessage.setMode(sessionId: "s1", modeId: "ask")) == .setMode(sessionId: "s1", modeId: "ask"))
         #expect(try roundTrip(RemoteClientMessage.setAutoRun(sessionId: "s1", enabled: true)) == .setAutoRun(sessionId: "s1", enabled: true))
+        #expect(try roundTrip(RemoteClientMessage.setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
+            == .setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
     }
 
     @Test func clientRenameSessionRoundTrips() throws {
