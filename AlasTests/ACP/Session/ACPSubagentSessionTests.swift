@@ -1084,6 +1084,27 @@ struct ACPSubagentSessionTests {
         #expect(ACPSubagentRowDescriptor(toolCall: spawnRow)?.subagentSessionId == "child-1")
     }
 
+    @Test("a replayed restart continuation echo, even in fragments, does not move recovery past a later user turn")
+    func replayedContinuationEchoKeepsRecoveryPosition() {
+        let session = makeSession()
+        session.transcript.appendMessage(.systemNotice(id: UUID(), text: QueuedPrompt.interruptedTurnContinueNotice))
+        session.transcript.appendMessage(.user(id: UUID(), text: "next", attachments: []))
+        session.beginSuppressedReplaySideEffects()
+        let text = QueuedPrompt.interruptedTurnContinueText
+        let split = text.index(text.startIndex, offsetBy: 20)
+
+        for fragment in [text[..<split], text[split...]] {
+            _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text(String(fragment))))
+        }
+        _ = session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        guard session.transcript.messages.count == 3, case .toolCall = session.transcript.messages[1] else {
+            Issue.record("expected the recovered spawn between the continuation notice and the later prompt")
+            return
+        }
+    }
+
     // MARK: - Row projection
 
     @Test("a subagent row is never folded into a tool-call bundle")

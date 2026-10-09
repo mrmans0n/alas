@@ -1567,12 +1567,10 @@ final class ACPSession: ObservableObject, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
-            // A restart continuation has no user row (see `recordInterruptedTurnContinuation`).
-            guard text(of: chunk.content) != QueuedPrompt.interruptedTurnContinueText else { return [] }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
-                ?? firstIdLessMatch(of: .user, atOrAfter: suppressedReplayInsertionCursor)
+                ?? replayedUserTurnMatch(text: text(of: chunk.content), atOrAfter: suppressedReplayInsertionCursor)
         case .plan:
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
@@ -3851,6 +3849,24 @@ final class ACPSession: ObservableObject, Identifiable {
             case (.user, .user(_, nil, _, _, _, _)): return i
             default: continue
             }
+        }
+        return nil
+    }
+
+    /// `firstIdLessMatch(of: .user, …)`, except that a restart continuation's
+    /// echo resolves to its notice, which stands in for the user row. Agents
+    /// may replay that echo in fragments: each one resolves to the notice the
+    /// cursor just passed, so none claims a later user turn.
+    private func replayedUserTurnMatch(text: String, atOrAfter cursor: Int) -> Int? {
+        let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isContinuationEcho = !fragment.isEmpty && QueuedPrompt.interruptedTurnContinueText.contains(fragment)
+        let start = min(cursor, transcript.messages.count)
+        if isContinuationEcho, start > 0, transcript.messages[start - 1].isInterruptedTurnContinuationNotice {
+            return start - 1
+        }
+        for i in start..<transcript.messages.count {
+            if case .user(_, nil, _, _, _, _) = transcript.messages[i] { return i }
+            if isContinuationEcho, transcript.messages[i].isInterruptedTurnContinuationNotice { return i }
         }
         return nil
     }
