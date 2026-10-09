@@ -568,6 +568,15 @@ struct RemoteWebAssetTests {
         #expect(js.contains("let queueItems = [];"))
     }
 
+    @Test func remoteWebRendersChipsFromSessionConfig() throws {
+        let js = try asset("app.js")
+        let html = try asset("index.html")
+
+        #expect(js.contains(#"type: "setConfigOption""#))
+        #expect(js.contains("function renderChipSections(chips)"))
+        #expect(html.contains(#"id="cfg-chips""#))
+    }
+
     @Test func remoteWebDisplaysScheduledQueueDeadlines() throws {
         let js = try asset("app.js")
 

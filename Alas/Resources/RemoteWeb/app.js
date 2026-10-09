@@ -4070,24 +4070,76 @@ function renderConfigAffordances() {
   renderConfigSheet();
 }
 
+// Host-normalized chips (newer hosts). Each chip dispatches by its source,
+// so a config-backed model goes through setConfigOption, not setModel.
+function sendChip(chip, id) {
+  ensureWriter();
+  if (chip.source === "model") send({ type: "setModel", sessionId: currentSession, modelId: id });
+  else if (chip.source === "mode") send({ type: "setMode", sessionId: currentSession, modeId: id });
+  else if (chip.source === "config" && chip.configId)
+    send({ type: "setConfigOption", sessionId: currentSession, configId: chip.configId, value: id });
+}
+
+function renderChipSections(chips) {
+  const box = $("cfg-chips");
+  box.innerHTML = "";
+  const section = (title, chip) => {
+    if (!chip || !["model", "mode", "config"].includes(chip.source) || chip.options.length === 0) return;
+    box.appendChild(el("p", "sheet-title", title));
+    const list = el("div", "");
+    chip.options.forEach(opt => {
+      const btn = el("button", "option-btn", opt.name);
+      if (opt.id === chip.currentId) btn.classList.add("is-selected");
+      btn.onclick = () => sendChip(chip, opt.id);
+      list.appendChild(btn);
+    });
+    box.appendChild(list);
+  };
+  section("Model", chips.model);
+  section("Thinking", chips.thinking);
+  section("Mode", chips.mode);
+  (chips.parameters || []).forEach(p => section(p.label, p.chip));
+  (chips.booleans || []).forEach(b => {
+    const row = el("label", "cfg-toggle-row");
+    row.appendChild(el("span", "", b.name));
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!b.value;
+    input.onchange = () => {
+      ensureWriter();
+      send({ type: "setConfigOption", sessionId: currentSession, configId: b.id, value: input.checked });
+    };
+    row.appendChild(input);
+    box.appendChild(row);
+  });
+}
+
 function renderConfigSheet() {
   const cfg = sessionConfig;
-  const models = (cfg && cfg.models) || [];
-  const modes = (cfg && cfg.modes) || [];
-  $("cfg-model-section").classList.toggle("hidden", models.length === 0);
-  $("cfg-mode-section").classList.toggle("hidden", modes.length === 0);
+  const chips = cfg && cfg.chips;
+  $("cfg-chips").classList.toggle("hidden", !chips);
+  if (chips) {
+    $("cfg-model-section").classList.add("hidden");
+    $("cfg-mode-section").classList.add("hidden");
+    renderChipSections(chips);
+  } else {
+    const models = (cfg && cfg.models) || [];
+    const modes = (cfg && cfg.modes) || [];
+    $("cfg-model-section").classList.toggle("hidden", models.length === 0);
+    $("cfg-mode-section").classList.toggle("hidden", modes.length === 0);
 
-  const fill = (box, items, current, act) => {
-    box.innerHTML = "";
-    items.forEach(it => {
-      const btn = el("button", "option-btn", it.name);
-      if (it.id === current) btn.classList.add("is-selected");
-      btn.onclick = () => { ensureWriter(); act(it.id); };
-      box.appendChild(btn);
-    });
-  };
-  fill($("cfg-models"), models, cfg && cfg.currentModel, id => send({ type: "setModel", sessionId: currentSession, modelId: id }));
-  fill($("cfg-modes"), modes, cfg && cfg.currentMode, id => send({ type: "setMode", sessionId: currentSession, modeId: id }));
+    const fill = (box, items, current, act) => {
+      box.innerHTML = "";
+      items.forEach(it => {
+        const btn = el("button", "option-btn", it.name);
+        if (it.id === current) btn.classList.add("is-selected");
+        btn.onclick = () => { ensureWriter(); act(it.id); };
+        box.appendChild(btn);
+      });
+    };
+    fill($("cfg-models"), models, cfg && cfg.currentModel, id => send({ type: "setModel", sessionId: currentSession, modelId: id }));
+    fill($("cfg-modes"), modes, cfg && cfg.currentMode, id => send({ type: "setMode", sessionId: currentSession, modeId: id }));
+  }
   $("cfg-autorun").checked = !!(cfg && cfg.autoRunEnabled);
 }
 
