@@ -201,7 +201,7 @@ struct RootView: View {
             hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
             hasAttentionHistory: !state.attentionStore.events.isEmpty,
             hasAttentionHistoryLoadError: state.attentionStore.loadError != nil,
-            hasPeerGroups: state.nativePeerSessions?.snapshot.groups.isEmpty == false
+            hasPeerGroups: state.nativePeerSessions?.hasGroups == true
         ) {
             EmptyState(onAddProject: { showNewProject = true })
         } else {

@@ -18,6 +18,45 @@ struct NativePeerSessionRowPresentation {
     }
 }
 
+/// Expansion and hover state of the peers section. It lives outside the
+/// section because the section's rows are lazy-stack elements that mount
+/// only on screen; default expansion must not wait for one to appear.
+@MainActor
+@Observable
+final class NativePeerSidebarModel {
+    var expandedPeerIDs: Set<String> = []
+    /// Peer ids already given an expansion state. Lets a peer that pairs
+    /// later still default open, without re-expanding one the user
+    /// explicitly collapsed earlier.
+    private(set) var knownPeerIDs: Set<String> = []
+    var collapsedRepoIDs: Set<String> = []
+    var headerHovering = false
+    var plusHovering = false
+
+    /// Default-expands any peer id seen for the first time, leaving known
+    /// peers' expansion state, including an explicit collapse, untouched.
+    func expandNewPeers(_ ids: [String]) {
+        let newIDs = Set(ids).subtracting(knownPeerIDs)
+        guard !newIDs.isEmpty else { return }
+        expandedPeerIDs.formUnion(newIDs)
+        knownPeerIDs.formUnion(newIDs)
+    }
+}
+
+/// Feeds peer ids into `NativePeerSidebarModel` from outside the lazy stack.
+/// A leaf, so reading the snapshot re-renders nothing but itself.
+struct NativePeerSidebarExpansion: View {
+    let client: NativePeerSessions
+    let model: NativePeerSidebarModel
+
+    var body: some View {
+        Color.clear
+            .onChange(of: client.snapshot.groups.map(\.id), initial: true) { _, ids in
+                model.expandNewPeers(ids)
+            }
+    }
+}
+
 /// App-scoped peer groups live beside the workspace tree, never inside a
 /// worktree's Agents list.
 ///
@@ -26,50 +65,31 @@ struct NativePeerSessionRowPresentation {
 /// the local tree draws, so a peer's work reads in the sidebar's own grammar.
 struct NativePeerSidebarView: View {
     @Bindable var client: NativePeerSessions
+    @Bindable var model: NativePeerSidebarModel
     /// Resolves a repo tile for a peer's project name. Peers do not send icon
     /// metadata, so the caller can match a local project of the same name.
     var icon: (String) -> ProjectIcon = { _ in .default() }
     var onAddPeer: (() -> Void)?
     /// The local sidebar's worktree ordering, applied to every peer's worktrees.
     var worktreeOrdering: AppConfig.WorktreeSortMode = .lastUpdateDesc
+    /// Gap above the section, from whatever precedes it in the sidebar.
+    var topSpacing: CGFloat = 0
     @Environment(\.theme) private var theme
-    @State private var expandedPeerIDs: Set<String> = []
-    /// Peer ids this view has already decided an expansion state for. Lets a
-    /// peer that pairs after the section first appears still default open,
-    /// without re-expanding one the user explicitly collapsed earlier.
-    @State private var knownPeerIDs: Set<String> = []
-    @State private var collapsedRepoIDs: Set<String> = []
-    @State private var headerHovering = false
-    @State private var plusHovering = false
 
+    /// Every header and row is its own element, so a lazy stack around the
+    /// section mounts only the rows on screen. Insets a wrapping VStack used
+    /// to supply are applied per element instead.
     var body: some View {
         // No peers, no section: the caption plus the "pair a peer" affordance
         // would only advertise infrastructure the user never wired up. The empty
         // pairing state is explained in Settings' Remote pane instead.
-        if client.snapshot.groups.isEmpty {
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                sectionHeader
-                ForEach(client.snapshot.groups) { group in
-                    peerGroup(group)
-                }
+        if !client.snapshot.groups.isEmpty {
+            sectionHeader
+                .padding(.top, topSpacing)
+            ForEach(client.snapshot.groups) { group in
+                peerGroup(group)
             }
-            .onAppear { expandNewPeers() }
-            .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
         }
-    }
-
-    /// Default-expands any peer id seen for the first time — covering both
-    /// the section's initial appearance and a peer pairing later — while
-    /// leaving already-known peers' expansion state (including an explicit
-    /// collapse) untouched.
-    private func expandNewPeers() {
-        let currentIDs = Set(client.snapshot.groups.map(\.id))
-        let newIDs = currentIDs.subtracting(knownPeerIDs)
-        guard !newIDs.isEmpty else { return }
-        expandedPeerIDs.formUnion(newIDs)
-        knownPeerIDs.formUnion(newIDs)
     }
 
     private var sectionHeader: some View {
@@ -83,16 +103,16 @@ struct NativePeerSidebarView: View {
             if let onAddPeer {
                 Button(action: onAddPeer) {
                     Icon(name: "plus", size: 11,
-                         color: plusHovering ? theme.color("fg") : theme.color("fg-faint"))
+                         color: model.plusHovering ? theme.color("fg") : theme.color("fg-faint"))
                         .frame(width: 19, height: 19)
-                        .background(plusHovering ? theme.color("bg-4") : .clear)
+                        .background(model.plusHovering ? theme.color("bg-4") : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
-                .onHover { plusHovering = $0 }
+                .onHover { model.plusHovering = $0 }
                 .help("Pair a peer…")
-                .opacity(headerHovering ? 1 : 0)
-                .allowsHitTesting(headerHovering)
+                .opacity(model.headerHovering ? 1 : 0)
+                .allowsHitTesting(model.headerHovering)
             }
         }
         .frame(minHeight: 19)
@@ -107,34 +127,31 @@ struct NativePeerSidebarView: View {
         }
         .padding(.top, 6)
         .contentShape(Rectangle())
-        .onHover { headerHovering = $0 }
+        .onHover { model.headerHovering = $0 }
     }
+
+    /// Puts each repo's chevron under the peer's tile, one level in, the way
+    /// worktrees sit under their repo.
+    private static let repoIndent: CGFloat = 19
 
     @ViewBuilder
     private func peerGroup(_ group: NativePeerGroup) -> some View {
         let online = group.state.carriesSessions
-        let expanded = online && expandedPeerIDs.contains(group.id)
+        let expanded = online && model.expandedPeerIDs.contains(group.id)
         let repos = group.repos(ordering: worktreeOrdering)
-        VStack(alignment: .leading, spacing: 0) {
-            NativePeerHeaderRow(
-                group: group,
-                repoCount: repos.count,
-                expanded: expanded,
-                onToggle: {
-                    guard online else { return }
-                    if expandedPeerIDs.contains(group.id) { expandedPeerIDs.remove(group.id) }
-                    else { expandedPeerIDs.insert(group.id) }
-                }
-            )
-            if expanded {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(repos) { repo in
-                        repoGroup(repo, peer: group)
-                    }
-                }
-                // Puts each repo's chevron under the peer's tile, one level
-                // in, the way worktrees sit under their repo.
-                .padding(.leading, 19)
+        NativePeerHeaderRow(
+            group: group,
+            repoCount: repos.count,
+            expanded: expanded,
+            onToggle: {
+                guard online else { return }
+                if model.expandedPeerIDs.contains(group.id) { model.expandedPeerIDs.remove(group.id) }
+                else { model.expandedPeerIDs.insert(group.id) }
+            }
+        )
+        if expanded {
+            ForEach(repos) { repo in
+                repoGroup(repo, peer: group)
             }
         }
     }
@@ -142,37 +159,35 @@ struct NativePeerSidebarView: View {
     @ViewBuilder
     private func repoGroup(_ repo: NativePeerRepoGroup, peer: NativePeerGroup) -> some View {
         let key = "\(peer.id)\u{1F}\(repo.id)"
-        let collapsed = collapsedRepoIDs.contains(key)
-        VStack(alignment: .leading, spacing: 0) {
-            NativePeerRepoHeaderRow(
-                repo: repo,
-                icon: repo.name == NativePeerRepoGroup.unassignedName ? nil : icon(repo.name),
-                collapsed: collapsed,
-                peerName: peer.name,
-                onNewSession: peer.state.carriesSessions && repo.projectId != nil
-                    ? { client.beginNewSession(peer: peer, repo: repo) }
-                    : nil,
-                onToggle: {
-                    if collapsed { collapsedRepoIDs.remove(key) }
-                    else { collapsedRepoIDs.insert(key) }
-                }
-            )
-            if !collapsed {
-                VStack(spacing: 1) {
-                    ForEach(repo.worktrees) { worktree in
-                        let selection = NativePeerWorktreeSelection(serverId: peer.serverId, worktreeId: worktree.id)
-                        let isSelected = client.selectedWorktree == selection
-                        NativePeerWorktreeRow(
-                            worktree: worktree,
-                            peerName: peer.name,
-                            isSelected: isSelected,
-                            selectedTab: isSelected ? client.selectedTab : nil,
-                            onSelect: { client.selectWorktree(selection) },
-                            onSelectTab: { client.selectTab($0, in: selection) }
-                        )
-                    }
-                }
-                .padding(.leading, RepoGroupView.worktreeIndent)
+        let collapsed = model.collapsedRepoIDs.contains(key)
+        NativePeerRepoHeaderRow(
+            repo: repo,
+            icon: repo.name == NativePeerRepoGroup.unassignedName ? nil : icon(repo.name),
+            collapsed: collapsed,
+            peerName: peer.name,
+            onNewSession: peer.state.carriesSessions && repo.projectId != nil
+                ? { client.beginNewSession(peer: peer, repo: repo) }
+                : nil,
+            onToggle: {
+                if collapsed { model.collapsedRepoIDs.remove(key) }
+                else { model.collapsedRepoIDs.insert(key) }
+            }
+        )
+        .padding(.leading, Self.repoIndent)
+        if !collapsed {
+            ForEach(Array(repo.worktrees.enumerated()), id: \.element.id) { index, worktree in
+                let selection = NativePeerWorktreeSelection(serverId: peer.serverId, worktreeId: worktree.id)
+                let isSelected = client.selectedWorktree == selection
+                NativePeerWorktreeRow(
+                    worktree: worktree,
+                    peerName: peer.name,
+                    isSelected: isSelected,
+                    selectedTab: isSelected ? client.selectedTab : nil,
+                    onSelect: { client.selectWorktree(selection) },
+                    onSelectTab: { client.selectTab($0, in: selection) }
+                )
+                .padding(.top, index == 0 ? 0 : 1)
+                .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
                 .padding(.trailing, 6)
             }
         }

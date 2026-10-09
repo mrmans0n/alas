@@ -157,13 +157,75 @@ private final class PointerTransparentMenuButton: NSButton {
 }
 
 extension View {
+    /// - Parameter mountsWhileHovered: Mount the AppKit host only while the
+    ///   pointer is over the view, or while an assistive technology that
+    ///   drives its "Show Menu" element runs. For long lists: every mounted
+    ///   host is an AppKit hit-test target that SwiftUI re-checks on each
+    ///   scroll frame.
     func nativeContextMenu<MenuItems: View>(
+        mountsWhileHovered: Bool = false,
         @ViewBuilder menuItems: () -> MenuItems
     ) -> some View {
-        overlay {
-            NativeContextMenuHost(menuItems: menuItems())
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        modifier(NativeContextMenuModifier(mountsWhileHovered: mountsWhileHovered, menuItems: menuItems()))
+    }
+}
+
+private struct NativeContextMenuModifier<MenuItems: View>: ViewModifier {
+    let mountsWhileHovered: Bool
+    let menuItems: MenuItems
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        if mountsWhileHovered {
+            content
+                .onHover { hovering = $0 }
+                .overlay { if hovering || AssistiveTechnologyStatus.shared.drivesShowMenu { host } }
+        } else {
+            content.overlay { host }
         }
+    }
+
+    private var host: some View {
+        NativeContextMenuHost(menuItems: menuItems)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Whether an assistive technology that reaches a context menu through its
+/// accessibility element, rather than a hovered pointer, is running.
+@MainActor
+@Observable
+final class AssistiveTechnologyStatus {
+    static let shared = AssistiveTechnologyStatus()
+
+    private(set) var drivesShowMenu = false
+    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
+
+    private init() {
+        let workspace = NSWorkspace.shared
+        observations = [
+            workspace.observe(\.isVoiceOverEnabled) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            },
+            workspace.observe(\.isSwitchControlEnabled) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            },
+        ]
+        // Full Keyboard Access posts no change notification; activation is
+        // the next chance to notice it was toggled in System Settings.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        refresh()
+    }
+
+    private func refresh() {
+        let active = NSWorkspace.shared.isVoiceOverEnabled
+            || NSWorkspace.shared.isSwitchControlEnabled
+            || NSApp?.isFullKeyboardAccessEnabled == true
+        if drivesShowMenu != active { drivesShowMenu = active }
     }
 }
 

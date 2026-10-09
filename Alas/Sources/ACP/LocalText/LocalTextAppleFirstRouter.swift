@@ -93,10 +93,23 @@ private final class AppleGenerationRace {
 }
 
 enum LocalTextAppleIntelligence {
+    /// Cached briefly: each query is a round trip to the model service, and
+    /// the sidebar asks once per worktree row on every render. Settings reads
+    /// `LocalTextAppleAvailability.current()` directly, so it never shows a
+    /// stale value.
     @MainActor
     static var isAvailable: Bool {
-        LocalTextAppleAvailability.current().isAvailable
+        let now = ContinuousClock.now
+        if let cached = cachedAvailability, now - cached.at < availabilityTTL {
+            return cached.value
+        }
+        let value = LocalTextAppleAvailability.current().isAvailable
+        cachedAvailability = (value, now)
+        return value
     }
+
+    private static let availabilityTTL: Duration = .seconds(5)
+    @MainActor private static var cachedAvailability: (value: Bool, at: ContinuousClock.Instant)?
 
     @MainActor
     static func generate(_ request: LocalTextGenerationRequest) async -> String? {

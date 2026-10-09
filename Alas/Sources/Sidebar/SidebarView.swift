@@ -33,6 +33,7 @@ struct SidebarView: View {
     /// filter row, so per-frame scroll updates re-render it alone rather than
     /// the whole tree.
     @State private var scrollOffsets = SidebarScrollOffsets()
+    @State private var peerSidebarModel = NativePeerSidebarModel()
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -50,266 +51,277 @@ struct SidebarView: View {
                     showingNewWorkspace: $showingNewWorkspace
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
-                    SidebarFilterSlotScrollView(
-                        scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
-                        onScroll: { scrollOffsets.setOffset($0, forSpace: spaceID) }
-                    ) {
-                        VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
-                            // The filter row's slot; the row itself is drawn
-                            // by the overlay below so it can also pin.
-                            Color.clear.frame(height: SidebarFilterRowMetrics.slotHeight)
-                            WorkspaceSidebarTree(
-                                state: state,
-                                spaceID: spaceID,
-                                isInteractive: spaceID == state.spacesManager.activeSpaceId
-                            ) { project in
-                                RepoGroupView(
-                                    project: project,
-                                    icon: { state.effectiveIcon(for: $0) },
-                                    worktrees: WorktreeSidebarFilter.apply(
-                                        worktreeFilter,
-                                        to: state.projectsManager.visibleWorktrees(projectId: project.id)
-                                    ),
-                                    collapsed: Binding(
-                                        get: { collapsedProjects.contains(project.id) },
-                                        set: { collapsed in
-                                            if collapsed { collapsedProjects.insert(project.id) }
-                                            else { collapsedProjects.remove(project.id) }
-                                        }
-                                    ),
-                                    selectedWorktreeId: state.selectedWorktreeId,
-                                    isMain: { wt in state.projectsManager.isMain(wt, in: project) },
-                                    upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
-                                    onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
-                                    isPullUpstreamInFlight: { wt in
-                                        state.worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: wt.id)
-                                            || state.rightPaneStore.activeState(worktreeId: wt.id)?.pullInFlight == true
-                                    },
-                                    workspaceCheckout: { wt in
-                                        WorkspaceCheckoutWorktreeResolver.presentation(
-                                            for: wt,
-                                            checkouts: state.workspacesManager.checkouts
-                                        )
-                                    },
-                                    onOpenWorkspaceCheckout: { checkout in
-                                        state.openWorkspaceCheckoutMember(
-                                            checkoutID: checkout.checkoutID,
-                                            memberID: checkout.memberID
-                                        )
-                                    },
-                                    operationState: { wt in
-                                        state.projectsManager.operationState(
-                                            forWorktreeId: wt.id,
-                                            projectId: wt.projectId
-                                        )
-                                    },
-                                    harnessSummary: { worktreeId in
-                                        let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
-                                            switch tab {
-                                            case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                                            case .acpSession(let s): return [s.sessionId]
-                                            default:                 return []
+                    WorkspaceSidebarTreeHost(state: state) { treeModel in
+                        SidebarFilterSlotScrollView(
+                            scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
+                            onScroll: { scrollOffsets.setOffset($0, forSpace: spaceID) }
+                        ) {
+                            // Lazy, and every header and row below is its own
+                            // element: a scroll frame costs SwiftUI work for each
+                            // mounted row (display list and hover hit-testing),
+                            // so only the rows on screen may be mounted.
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                // The filter row's slot; the row itself is drawn
+                                // by the overlay below so it can also pin.
+                                Color.clear.frame(height: SidebarFilterRowMetrics.slotHeight)
+                                    .padding(.bottom, SidebarFilterRowMetrics.slotSpacing)
+                                WorkspaceSidebarTree(
+                                    state: state,
+                                    model: treeModel,
+                                    spaceID: spaceID,
+                                    isInteractive: spaceID == state.spacesManager.activeSpaceId
+                                ) { project in
+                                    RepoGroupView(
+                                        project: project,
+                                        icon: { state.effectiveIcon(for: $0) },
+                                        worktrees: WorktreeSidebarFilter.apply(
+                                            worktreeFilter,
+                                            to: state.projectsManager.visibleWorktrees(projectId: project.id)
+                                        ),
+                                        collapsed: Binding(
+                                            get: { collapsedProjects.contains(project.id) },
+                                            set: { collapsed in
+                                                if collapsed { collapsedProjects.insert(project.id) }
+                                                else { collapsedProjects.remove(project.id) }
                                             }
-                                        }
-                                        return state.harness.summary(forSessionIds: ids)
-                                    },
-                                    ggMenuModel: { wt in
-                                        state.ggWorktreeMenuModel(project: project, worktree: wt)
-                                    },
-                                    onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
-                                    onNewWorktree: { onNewWorktree(project.id) },
-                                    onEditProject: { onEditProject(project.id) },
-                                    onRemoveProject: { onRemoveProject(project.id) },
-                                    onOpenGGInbox: state.ggSidebarInboxAvailable(projectId: project.id)
-                                        ? { state.openGGInbox(projectId: project.id) }
-                                        : nil,
-                                    onResetSort: {
-                                        state.projectsManager.resetWorktreeOrder(projectId: project.id)
-                                        state.saveProjects()
-                                    },
-                                    spaces: state.spacesManager.spaces,
-                                    activeSpaceId: state.spacesManager.activeSpaceId,
-                                    isProjectInSpace: { spaceId in
-                                        state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
-                                    },
-                                    canRemoveFromSpace: { _ in
-                                        state.spacesManager.membershipCount(forProject: project.id) > 1
-                                    },
-                                    onToggleSpaceMembership: { spaceId in
-                                        state.toggleProject(projectId: project.id, inSpace: spaceId)
-                                    },
-                                    onOpenTerminal: { wt in
-                                        state.selectWorktree(id: wt.id)
-                                        Task { @MainActor in
-                                            _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
-                                        }
-                                    },
-                                    onOpenIssue: { wt in
-                                        guard let attachment = state.projectsManager.issueAttachment(
-                                            projectId: project.id,
-                                            worktreeId: wt.id
-                                        ) else { return nil }
-                                        return { NSWorkspace.shared.open(attachment.canonicalURL) }
-                                    },
-                                    onCopyPath: { wt in
-                                        let pb = NSPasteboard.general
-                                        pb.clearContents()
-                                        pb.setString(RemotePath.realPath(wt.path.path), forType: .string)
-                                    },
-                                    onCopyBranch: { wt in
-                                        let pb = NSPasteboard.general
-                                        pb.clearContents()
-                                        pb.setString(wt.branch, forType: .string)
-                                    },
-                                    onRevealInFinder: { wt in
-                                        NSWorkspace.shared.activateFileViewerSelecting([wt.path])
-                                    },
-                                    onArchive: { wt in state.archiveWorktree(wt) },
-                                    onCleanupWorktrees: { onCleanupWorktrees(project.id) },
-                                    onDelete: { wt in state.deleteWorktree(wt) },
-                                    onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
-                                    showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
-                                    onActivateHarness: { wt, sessionId in
-                                        state.activateHarnessSession(
-                                            projectId: project.id,
-                                            worktreeId: wt.id,
-                                            sessionId: sessionId
-                                        )
-                                    },
-                                    onCopyError: { message in
-                                        let pb = NSPasteboard.general
-                                        pb.clearContents()
-                                        pb.setString(message, forType: .string)
-                                    },
-                                    onRetryCreate: { wt in
-                                        let retry = Self.retryCreateParameters(
-                                            operationState: state.projectsManager.operationState(
+                                        ),
+                                        selectedWorktreeId: state.selectedWorktreeId,
+                                        isMain: { wt in state.projectsManager.isMain(wt, in: project) },
+                                        upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
+                                        onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
+                                        isPullUpstreamInFlight: { wt in
+                                            state.worktreeUpstreamStatusStore.isPullingUpstream(worktreeID: wt.id)
+                                                || state.rightPaneStore.activeState(worktreeId: wt.id)?.pullInFlight == true
+                                        },
+                                        workspaceCheckout: { wt in
+                                            WorkspaceCheckoutWorktreeResolver.presentation(
+                                                for: wt,
+                                                checkouts: state.workspacesManager.checkouts
+                                            )
+                                        },
+                                        onOpenWorkspaceCheckout: { checkout in
+                                            state.openWorkspaceCheckoutMember(
+                                                checkoutID: checkout.checkoutID,
+                                                memberID: checkout.memberID
+                                            )
+                                        },
+                                        operationState: { wt in
+                                            state.projectsManager.operationState(
                                                 forWorktreeId: wt.id,
                                                 projectId: wt.projectId
-                                            ),
-                                            defaultBase: state.config.worktrees.baseBranch
-                                        )
-                                        Task { @MainActor in
-                                            await state.createWorktree(
-                                                projectId: project.id,
-                                                base: retry.base,
-                                                branch: wt.branch,
-                                                destination: wt.path,
-                                                runStartup: false,
-                                                launchSurface: retry.launchSurface,
-                                                ggWorktreeMode: retry.ggWorktreeMode,
-                                                issueAttachment: retry.issueAttachment
                                             )
-                                        }
-                                    },
-                                    onRetryLaunch: { wt in
-                                        Task { @MainActor in
-                                            await state.retryWorktreeLaunch(wt, project: project)
-                                        }
-                                    },
-                                    onRetryDelete: { wt in state.deleteWorktree(wt) },
-                                    onSetGGWorktreeMode: { wt, mode in
-                                        state.setGGWorktreeMode(
-                                            projectId: project.id,
-                                            worktreeId: wt.id,
-                                            mode: mode
-                                        )
-                                    },
-                                    onRemoveFailed: { wt in
-                                        state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
-                                    },
-                                    onDropWorktree: { draggedId, destinationId in
-                                        state.projectsManager.reorderWorktree(
-                                            projectId: project.id,
-                                            movingId: draggedId,
-                                            destinationId: destinationId
-                                        )
-                                        state.saveProjects()
-                                    },
-                                    onDropProject: { draggedId, destinationId in
-                                        state.spacesManager.reorderProjectInActiveSpace(
-                                            movingId: draggedId,
-                                            destinationId: destinationId
-                                        )
-                                        state.saveSpaces()
-                                    },
-                                    commitQuery: { wt in
-                                        guard !state.projectsManager.isMain(wt, in: project) else { return nil }
-                                        let pane = state.rightPaneStore.activeState(worktreeId: wt.id)
-                                        let override = pane.flatMap { pane in
-                                            pane.userOverrodeBaseBranch
-                                                && pane.lastConfigBaseBranch == state.config.worktrees.baseBranch
-                                                ? pane.baseBranch : nil
-                                        }
-                                        return WorktreeRowView.CommitQuery(
-                                            path: wt.path,
-                                            branch: wt.branch,
-                                            baseBranch: override ?? state.config.worktrees.baseBranch,
-                                            preferLocal: override != nil,
-                                            revision: state.revisionChangeGeneration(worktreeID: wt.id)
-                                        )
-                                    },
-                                    worktreeExplanation: { wt in
-                                        guard let evidence = state.worktreeExplainerEvidence(
-                                            for: wt,
-                                            in: project
-                                        ) else { return nil }
-                                        return state.worktreeExplainerStore.explanation(
-                                            for: wt.id,
-                                            evidence: evidence
-                                        )
-                                    },
-                                    worktreeExplainerEvidence: { wt in
-                                        state.worktreeExplainerEvidence(for: wt, in: project)
-                                    },
-                                    onPrepareWorktreeExplanation: { wt, evidence in
-                                        await state.worktreeExplainerStore.prepare(
-                                            worktreeID: wt.id,
-                                            evidence: evidence
-                                        )
-                                    },
-                                    pluginCommands: { state.pluginCommands($0, projectID: project.id) },
-                                    onRunPluginCommand: { item, slot, wt in
-                                        state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
-                                    },
-                                    pluginDecorations: { wt in
-                                        wt.map { state.pluginDecorations(.worktreeRow, projectID: project.id, target: $0.id) }
-                                            ?? state.pluginDecorations(.repoRow, projectID: project.id, target: project.id)
-                                    },
-                                    onRunPluginDecoration: { state.runPluginDecoration($0) },
-                                    isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
-                                    highlightedWorktreeId: highlightedWorktreeId
-                                )
-                            }
-                            if let nativePeerSessions = state.nativePeerSessions {
-                                NativePeerSidebarView(
-                                    client: nativePeerSessions,
-                                    icon: { name in
-                                        state.projectsManager.projects
-                                            .first { $0.name == name }
-                                            .map { state.effectiveIcon(for: $0) } ?? .default()
-                                    },
-                                    onAddPeer: {
-                                        state.pendingSettingsSection = .remote
-                                        onSettings()
-                                    },
-                                    worktreeOrdering: state.config.worktrees.defaultOrdering
-                                )
-                            }
-                            Color.clear
-                                .frame(maxWidth: .infinity, minHeight: 40)
-                                .contentShape(Rectangle())
-                                .dropDestination(for: ProjectDragId.self) { items, _ in
-                                    guard let draggedId = items.first?.id else { return false }
-                                    state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
-                                    state.saveSpaces()
-                                    return true
+                                        },
+                                        harnessSummary: { worktreeId in
+                                            let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                                                switch tab {
+                                                case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                                                case .acpSession(let s): return [s.sessionId]
+                                                default:                 return []
+                                                }
+                                            }
+                                            return state.harness.summary(forSessionIds: ids)
+                                        },
+                                        ggMenuModel: { wt in
+                                            state.ggWorktreeMenuModel(project: project, worktree: wt)
+                                        },
+                                        onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
+                                        onNewWorktree: { onNewWorktree(project.id) },
+                                        onEditProject: { onEditProject(project.id) },
+                                        onRemoveProject: { onRemoveProject(project.id) },
+                                        onOpenGGInbox: state.ggSidebarInboxAvailable(projectId: project.id)
+                                            ? { state.openGGInbox(projectId: project.id) }
+                                            : nil,
+                                        onResetSort: {
+                                            state.projectsManager.resetWorktreeOrder(projectId: project.id)
+                                            state.saveProjects()
+                                        },
+                                        spaces: state.spacesManager.spaces,
+                                        activeSpaceId: state.spacesManager.activeSpaceId,
+                                        isProjectInSpace: { spaceId in
+                                            state.spacesManager.space(id: spaceId)?.projectIds.contains(project.id) == true
+                                        },
+                                        canRemoveFromSpace: { _ in
+                                            state.spacesManager.membershipCount(forProject: project.id) > 1
+                                        },
+                                        onToggleSpaceMembership: { spaceId in
+                                            state.toggleProject(projectId: project.id, inSpace: spaceId)
+                                        },
+                                        onOpenTerminal: { wt in
+                                            state.selectWorktree(id: wt.id)
+                                            Task { @MainActor in
+                                                _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
+                                            }
+                                        },
+                                        onOpenIssue: { wt in
+                                            guard let attachment = state.projectsManager.issueAttachment(
+                                                projectId: project.id,
+                                                worktreeId: wt.id
+                                            ) else { return nil }
+                                            return { NSWorkspace.shared.open(attachment.canonicalURL) }
+                                        },
+                                        onCopyPath: { wt in
+                                            let pb = NSPasteboard.general
+                                            pb.clearContents()
+                                            pb.setString(RemotePath.realPath(wt.path.path), forType: .string)
+                                        },
+                                        onCopyBranch: { wt in
+                                            let pb = NSPasteboard.general
+                                            pb.clearContents()
+                                            pb.setString(wt.branch, forType: .string)
+                                        },
+                                        onRevealInFinder: { wt in
+                                            NSWorkspace.shared.activateFileViewerSelecting([wt.path])
+                                        },
+                                        onArchive: { wt in state.archiveWorktree(wt) },
+                                        onCleanupWorktrees: { onCleanupWorktrees(project.id) },
+                                        onDelete: { wt in state.deleteWorktree(wt) },
+                                        onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
+                                        showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
+                                        onActivateHarness: { wt, sessionId in
+                                            state.activateHarnessSession(
+                                                projectId: project.id,
+                                                worktreeId: wt.id,
+                                                sessionId: sessionId
+                                            )
+                                        },
+                                        onCopyError: { message in
+                                            let pb = NSPasteboard.general
+                                            pb.clearContents()
+                                            pb.setString(message, forType: .string)
+                                        },
+                                        onRetryCreate: { wt in
+                                            let retry = Self.retryCreateParameters(
+                                                operationState: state.projectsManager.operationState(
+                                                    forWorktreeId: wt.id,
+                                                    projectId: wt.projectId
+                                                ),
+                                                defaultBase: state.config.worktrees.baseBranch
+                                            )
+                                            Task { @MainActor in
+                                                await state.createWorktree(
+                                                    projectId: project.id,
+                                                    base: retry.base,
+                                                    branch: wt.branch,
+                                                    destination: wt.path,
+                                                    runStartup: false,
+                                                    launchSurface: retry.launchSurface,
+                                                    ggWorktreeMode: retry.ggWorktreeMode,
+                                                    issueAttachment: retry.issueAttachment
+                                                )
+                                            }
+                                        },
+                                        onRetryLaunch: { wt in
+                                            Task { @MainActor in
+                                                await state.retryWorktreeLaunch(wt, project: project)
+                                            }
+                                        },
+                                        onRetryDelete: { wt in state.deleteWorktree(wt) },
+                                        onSetGGWorktreeMode: { wt, mode in
+                                            state.setGGWorktreeMode(
+                                                projectId: project.id,
+                                                worktreeId: wt.id,
+                                                mode: mode
+                                            )
+                                        },
+                                        onRemoveFailed: { wt in
+                                            state.removeFailedOptimisticWorktree(id: wt.id, projectId: project.id)
+                                        },
+                                        onDropWorktree: { draggedId, destinationId in
+                                            state.projectsManager.reorderWorktree(
+                                                projectId: project.id,
+                                                movingId: draggedId,
+                                                destinationId: destinationId
+                                            )
+                                            state.saveProjects()
+                                        },
+                                        onDropProject: { draggedId, destinationId in
+                                            state.spacesManager.reorderProjectInActiveSpace(
+                                                movingId: draggedId,
+                                                destinationId: destinationId
+                                            )
+                                            state.saveSpaces()
+                                        },
+                                        commitQuery: { wt in
+                                            guard !state.projectsManager.isMain(wt, in: project) else { return nil }
+                                            let pane = state.rightPaneStore.activeState(worktreeId: wt.id)
+                                            let override = pane.flatMap { pane in
+                                                pane.userOverrodeBaseBranch
+                                                    && pane.lastConfigBaseBranch == state.config.worktrees.baseBranch
+                                                    ? pane.baseBranch : nil
+                                            }
+                                            return WorktreeRowView.CommitQuery(
+                                                path: wt.path,
+                                                branch: wt.branch,
+                                                baseBranch: override ?? state.config.worktrees.baseBranch,
+                                                preferLocal: override != nil,
+                                                revision: state.revisionChangeGeneration(worktreeID: wt.id)
+                                            )
+                                        },
+                                        worktreeExplanation: { wt in
+                                            guard let evidence = state.worktreeExplainerEvidence(
+                                                for: wt,
+                                                in: project
+                                            ) else { return nil }
+                                            return state.worktreeExplainerStore.explanation(
+                                                for: wt.id,
+                                                evidence: evidence
+                                            )
+                                        },
+                                        worktreeExplainerEvidence: { wt in
+                                            state.worktreeExplainerEvidence(for: wt, in: project)
+                                        },
+                                        onPrepareWorktreeExplanation: { wt, evidence in
+                                            await state.worktreeExplainerStore.prepare(
+                                                worktreeID: wt.id,
+                                                evidence: evidence
+                                            )
+                                        },
+                                        pluginCommands: { state.pluginCommands($0, projectID: project.id) },
+                                        onRunPluginCommand: { item, slot, wt in
+                                            state.runPluginCommand(item, slot: slot, worktreeID: wt?.id)
+                                        },
+                                        pluginDecorations: { wt in
+                                            wt.map { state.pluginDecorations(.worktreeRow, projectID: project.id, target: $0.id) }
+                                                ?? state.pluginDecorations(.repoRow, projectID: project.id, target: project.id)
+                                        },
+                                        onRunPluginDecoration: { state.runPluginDecoration($0) },
+                                        isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
+                                        highlightedWorktreeId: highlightedWorktreeId
+                                    )
                                 }
+                                if let nativePeerSessions = state.nativePeerSessions {
+                                    NativePeerSidebarView(
+                                        client: nativePeerSessions,
+                                        model: peerSidebarModel,
+                                        icon: { name in
+                                            state.projectsManager.projects
+                                                .first { $0.name == name }
+                                                .map { state.effectiveIcon(for: $0) } ?? .default()
+                                        },
+                                        onAddPeer: {
+                                            state.pendingSettingsSection = .remote
+                                            onSettings()
+                                        },
+                                        worktreeOrdering: state.config.worktrees.defaultOrdering,
+                                        topSpacing: SidebarFilterRowMetrics.slotSpacing
+                                    )
+                                }
+                                Color.clear
+                                    .frame(maxWidth: .infinity, minHeight: 40)
+                                    .contentShape(Rectangle())
+                                    .dropDestination(for: ProjectDragId.self) { items, _ in
+                                        guard let draggedId = items.first?.id else { return false }
+                                        state.spacesManager.moveProjectToEndInActiveSpace(id: draggedId)
+                                        state.saveSpaces()
+                                        return true
+                                    }
+                                    .padding(.top, SidebarFilterRowMetrics.slotSpacing)
+                            }
+                            .padding(.top, 6)
+                            .padding(.horizontal, 8)
+                            // Leaves room below the last repo for the drop target.
+                            .padding(.bottom, 20)
                         }
-                        .padding(.top, 6)
-                        .padding(.horizontal, 8)
-                        // Leaves room below the last repo for the drop target.
-                        .padding(.bottom, 20)
                     }
                 }
                 .overlay(alignment: .top) {
@@ -348,6 +360,11 @@ struct SidebarView: View {
                 }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
+            .background {
+                if let nativePeerSessions = state.nativePeerSessions {
+                    NativePeerSidebarExpansion(client: nativePeerSessions, model: peerSidebarModel)
+                }
+            }
             .background {
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerScrollCaptureView { offset in
@@ -527,10 +544,17 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
     @State private var position = ScrollPosition(idType: String.self)
     @State private var viewportHeight: CGFloat = 0
     @State private var parked = false
+    @State private var dropTargets = SidebarWorktreeDropTargets()
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             content()
+                .environment(\.sidebarWorktreeDropTargets, dropTargets)
+                .coordinateSpace(.named(SidebarWorktreeDropTargets.coordinateSpace))
+                .dropDestination(for: String.self) { ids, location in
+                    guard let draggedId = ids.first else { return false }
+                    return dropTargets.drop(draggedId, at: location)
+                }
                 // Lay the tree out at its ideal height, as the bare ScrollView
                 // did, and only then pad it. A min-height frame alone proposes
                 // that height to the content, and flexible views inside it

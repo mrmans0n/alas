@@ -28,7 +28,10 @@ final class RemoteHostStatusStore: ObservableObject {
     func reportConnectionFailure(host: String) {
         let count = (consecutiveFailures[host] ?? 0) + 1
         consecutiveFailures[host] = count
-        if count >= 2, offlineHosts.insert(host).inserted {
+        // Touch the published set only on a real change: every mutation, even
+        // a no-op one, re-renders each view observing this store.
+        if count >= 2, !offlineHosts.contains(host) {
+            offlineHosts.insert(host)
             observedHosts.insert(host)
             onStatusTransition?(host, true, now())
         }
@@ -36,7 +39,9 @@ final class RemoteHostStatusStore: ObservableObject {
 
     func reportSuccess(host: String) {
         consecutiveFailures[host] = nil
-        let wasOffline = offlineHosts.remove(host) != nil
+        // Polls report success many times a second; see above.
+        let wasOffline = offlineHosts.contains(host)
+        if wasOffline { offlineHosts.remove(host) }
         let isFirstObservation = observedHosts.insert(host).inserted
         if wasOffline || isFirstObservation {
             onStatusTransition?(host, false, now())

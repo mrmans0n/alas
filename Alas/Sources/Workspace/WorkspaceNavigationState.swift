@@ -218,6 +218,30 @@ enum WorkspaceCheckoutWorktreeResolver {
 /// Pure presentation plan for the full sidebar tree. Views own disclosure
 /// state; this type only protects ordering and archive visibility.
 enum WorkspaceSidebarLayout {
+    /// The rows that draw something: rows for unknown projects or
+    /// workspaces, checkouts of collapsed workspaces, and members draw
+    /// nothing. Gaps between sidebar rows are only placed between these.
+    static func drawnRows(
+        _ rows: [WorkspaceSidebarRow],
+        projectIDs: Set<String>,
+        workspaceIDs: Set<UUID>,
+        checkouts: [UUID: WorkspaceCheckout],
+        collapsedWorkspaces: Set<UUID>
+    ) -> [WorkspaceSidebarRow] {
+        rows.filter { row in
+            switch row {
+            case .project(let id): projectIDs.contains(id)
+            case .workspace(let id): workspaceIDs.contains(id)
+            case .formerWorkspace: true
+            case .checkout(let id):
+                checkouts[id].map { checkout in
+                    checkout.workspaceID.map { !collapsedWorkspaces.contains($0) } ?? true
+                } ?? false
+            case .member: false
+            }
+        }
+    }
+
     static func visibleCheckoutIDs(
         members: [SpaceMemberReference],
         workspaces: [Workspace],
