@@ -21,13 +21,20 @@ struct PluginRuntimeTests {
         #expect(Self.strings(try await runtime.handle(Data(#"{"é":1}"#.utf8))) == ["string", #"{"é":1}"#])
     }
 
+    @Test func aCanvasPanelIsPresentedToByItsID() async throws {
+        let runtime = try await PluginRuntime.load(
+            source: PluginJSFixture.source([[.script("alas.present('cv', new Uint8Array(8), 1);")]]),
+            limits: Self.limits, canvasPanels: ["cv"])
+        #expect(try await runtime.handle(Data()).frames[.panel("cv")]?.height == 2)
+    }
+
     /// The pixels come from the view, not from the start of the buffer behind it.
     @Test func aPresentedFrameIsCopiedFromTheView() async throws {
         let runtime = try await Self.load([[.script("""
             const buffer = new Uint8Array(32).fill(9);
             alas.present(0, buffer.subarray(8).fill(1, 0, 4), 2);
             """)]], tabCount: 1)
-        let frame = try #require(try await runtime.handle(Data()).frames[0])
+        let frame = try #require(try await runtime.handle(Data()).frames[.tab(0)])
         #expect(frame.width == 2 && frame.height == 3)
         #expect(Array(frame.pixels) == [1, 1, 1, 1] + Array(repeating: 9, count: 20))
     }
@@ -40,7 +47,7 @@ struct PluginRuntimeTests {
         (.present(tab: 0, length: 4100, width: 1), "does not fit"),
         (.present(tab: 0, length: 5 << 20, width: 1024), "frame size limit"),
         (.script("alas.present(0, new Float32Array(4), 1);"), "Uint8Array"),
-        (.script("alas.present('0', new Uint8Array(4), 1);"), "whole numbers"),
+        (.script("alas.present('0', new Uint8Array(4), 1);"), "is not a canvas panel"),
         (.script("alas.present(0.7, new Uint8Array(4), 1);"), "whole numbers"),
     ])
     func invalidFramesSurfaceAsErrors(step: PluginFixtureStep, fragment: String) async throws {

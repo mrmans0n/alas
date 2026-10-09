@@ -51,11 +51,30 @@ struct PluginFrame: Equatable, Sendable {
     let pixels: Data
 }
 
+/// What a canvas frame, a region list or a web page belongs to: a tab, by index in the manifest, or a `right` panel, by
+/// id (API 15).
+enum PluginSurface: Hashable, Sendable {
+    case tab(Int)
+    case panel(String)
+
+    /// A message's target: exactly one of `tab` and `panel`.
+    init?(tab: Int?, panel: String?) {
+        switch (tab, panel) {
+        case (let tab?, nil): self = .tab(tab)
+        case (nil, let panel?): self = .panel(panel)
+        default: return nil
+        }
+    }
+
+    var tab: Int? { if case .tab(let tab) = self { tab } else { nil } }
+    var panel: String? { if case .panel(let panel) = self { panel } else { nil } }
+}
+
 /// What one `handle` call produced.
 struct PluginDelivery: Sendable {
     var messages: [Data] = []
-    /// Last frame per tab index presented during the call.
-    var frames: [Int: PluginFrame] = [:]
+    /// Last frame per tab or panel presented during the call.
+    var frames: [PluginSurface: PluginFrame] = [:]
 }
 
 // Private, but exported unchanged by JavaScriptCore since 2014. The watchdog is the only way to stop a
@@ -77,20 +96,22 @@ final class PluginRuntime: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.nlopez.alas.plugin-runtime")
     private let limits: PluginLimits
     private let tabCount: Int
+    private let canvasPanels: Set<String>
     private let group: JSContextGroupRef
     private let context: JSContext
     private var handleFunction: JSValue?
     private var outbox: [Data] = []
-    private var frames: [Int: PluginFrame] = [:]
+    private var frames: [PluginSurface: PluginFrame] = [:]
     /// Why a host function refused. Set once per call; it wins over the exception it raised, which the
     /// script may have caught.
     private var hostFailure: PluginRuntimeError?
     /// Set by the watchdog's callback, which runs on the thread executing the script, so on `queue`.
     private let terminated = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
 
-    private init(limits: PluginLimits, tabCount: Int) {
+    private init(limits: PluginLimits, tabCount: Int, canvasPanels: Set<String>) {
         self.limits = limits
         self.tabCount = tabCount
+        self.canvasPanels = canvasPanels
         group = JSContextGroupCreate()
         let global = JSGlobalContextCreateInGroup(group, nil)
         context = JSContext(jsGlobalContextRef: global)
@@ -102,15 +123,18 @@ final class PluginRuntime: @unchecked Sendable {
         terminated.deallocate()
     }
 
-    /// `tabCount` is the number of tabs the manifest declares; `alas.present` exists only when it is positive.
-    static func load(source: Data, limits: PluginLimits, tabCount: Int = 0) async throws -> PluginRuntime {
+    /// `tabCount` is the number of tabs the manifest declares and `canvasPanels` its canvas panels' ids; `alas.present`
+    /// exists only when there is one of either.
+    static func load(
+        source: Data, limits: PluginLimits, tabCount: Int = 0, canvasPanels: Set<String> = []
+    ) async throws -> PluginRuntime {
         guard source.count <= limits.maxSourceBytes else {
             throw PluginRuntimeError.instantiation("script of \(source.count) bytes exceeds the size limit")
         }
         guard let script = String(data: source, encoding: .utf8) else {
             throw PluginRuntimeError.instantiation("script is not UTF-8")
         }
-        let runtime = PluginRuntime(limits: limits, tabCount: tabCount)
+        let runtime = PluginRuntime(limits: limits, tabCount: tabCount, canvasPanels: canvasPanels)
         try await runtime.run { try runtime.evaluate(script) }
         return runtime
     }
@@ -144,9 +168,9 @@ final class PluginRuntime: @unchecked Sendable {
         let alas = JSValue(newObjectIn: context)!
         let send: @convention(block) (JSValue) -> Void = { [unowned self] value in receive(value) }
         alas.setValue(send, forProperty: "send")
-        if tabCount > 0 {
-            let present: @convention(block) (JSValue, JSValue, JSValue) -> Void = { [unowned self] tab, pixels, width in
-                self.present(tab: tab, pixels: pixels, width: width)
+        if tabCount > 0 || !canvasPanels.isEmpty {
+            let present: @convention(block) (JSValue, JSValue, JSValue) -> Void = { [unowned self] target, pixels, width in
+                self.present(target: target, pixels: pixels, width: width)
             }
             alas.setValue(present, forProperty: "present")
         }
@@ -201,12 +225,25 @@ final class PluginRuntime: @unchecked Sendable {
         outbox.append(data)
     }
 
-    private func present(tab: JSValue, pixels: JSValue, width: JSValue) {
+    private func present(target: JSValue, pixels: JSValue, width: JSValue) {
         guard hostFailure == nil else { return }
-        // Whole numbers only, so a fractional tab cannot quietly draw to another one.
-        guard tab.isNumber, width.isNumber, let tab = Int(exactly: tab.toDouble()), let width = Int(exactly: width.toDouble())
-        else { return refuse(.badFrame("tab and width must be whole numbers")) }
-        guard (0..<tabCount).contains(tab) else { return refuse(.badFrame("tab \(tab) is not declared")) }
+        let surface: PluginSurface
+        if target.isString, let panel = target.toString() {
+            guard canvasPanels.contains(panel) else {
+                return refuse(.badFrame("panel \"\(panel.prefix(64))\" is not a canvas panel"))
+            }
+            surface = .panel(panel)
+        } else {
+            // Whole numbers only, so a fractional tab cannot quietly draw to another one.
+            guard target.isNumber, let tab = Int(exactly: target.toDouble()) else {
+                return refuse(.badFrame("tab and width must be whole numbers"))
+            }
+            guard (0..<tabCount).contains(tab) else { return refuse(.badFrame("tab \(tab) is not declared")) }
+            surface = .tab(tab)
+        }
+        guard width.isNumber, let width = Int(exactly: width.toDouble()) else {
+            return refuse(.badFrame("tab and width must be whole numbers"))
+        }
         guard (1...limits.maxFrameDimension).contains(width) else {
             return refuse(.badFrame("width \(width) is out of range"))
         }
@@ -226,7 +263,7 @@ final class PluginRuntime: @unchecked Sendable {
         }
         // The pointer is the start of the whole buffer, not of this view.
         let offset = JSObjectGetTypedArrayByteOffset(ref, object, nil)
-        frames[tab] = PluginFrame(width: width, height: length / rowBytes, pixels: Data(bytes: base + offset, count: length))
+        frames[surface] = PluginFrame(width: width, height: length / rowBytes, pixels: Data(bytes: base + offset, count: length))
     }
 
     /// At most `units` UTF-16 code units of `value` as text, without copying the rest out of JavaScriptCore.

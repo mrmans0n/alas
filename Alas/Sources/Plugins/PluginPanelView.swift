@@ -41,14 +41,27 @@ struct PluginPanelView: View {
         let manager = state.pluginManager
         let host = manager?.host(pluginID: item.ref.pluginID, projectID: projectID)
         let panel = item.ref.panelID
+        let kind = manager?.plugin(id: item.ref.pluginID)?.manifest.panels.first { $0.id == panel }?.kind ?? .view
+        // A web panel's page is its own content; it posts "ready" when it loads.
+        let hasContent: Bool = switch kind {
+        case .view: host?.panelViews[panel] != nil
+        case .canvas: host?.frames[.panel(panel)] != nil
+        case .web: true
+        }
         // Hosts exist only for approved, enabled plugins.
         let content = PluginTabContent.resolve(
             pluginsOn: manager != nil, found: host != nil, approved: true, enabled: true,
-            hostState: host?.state, hasContent: host?.panelViews[panel] != nil)
+            hostState: host?.state, hasContent: hasContent)
         Group {
             switch content {
             case .content:
-                if let host { PluginViewTabView(host: host, panel: panel) }
+                if let host {
+                    switch kind {
+                    case .view: PluginViewTabView(host: host, panel: panel)
+                    case .canvas: PluginCanvasView(host: host, surface: .panel(panel))
+                    case .web: EmptyView()  // Task 3
+                    }
+                }
             case .stopped(let reason):
                 VStack(spacing: 12) {
                     Text("Plugin stopped: \(reason)")

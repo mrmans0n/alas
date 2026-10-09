@@ -59,7 +59,7 @@ struct PluginTabView: View {
                 switch kind {
                 case .view: host?.views[$0] != nil
                 case .web: true
-                default: host?.frames[$0] != nil
+                default: host?.frames[.tab($0)] != nil
                 }
             } ?? false)
         ZStack {
@@ -70,7 +70,7 @@ struct PluginTabView: View {
                     switch kind {
                     case .view: PluginViewTabView(host: host, tabIndex: tabIndex)
                     case .web: PluginWebTabView(host: host, tabIndex: tabIndex, script: plugin?.web ?? Data())
-                    default: PluginCanvasView(host: host, tabIndex: tabIndex)
+                    default: PluginCanvasView(host: host, surface: .tab(tabIndex))
                     }
                 }
             case .loading:
@@ -102,15 +102,15 @@ struct PluginTabView: View {
     }
 }
 
-private struct PluginCanvasView: View {
+struct PluginCanvasView: View {
     let host: PluginHost
-    let tabIndex: Int
+    let surface: PluginSurface
     /// Index into the region list: ids are plugin-chosen and the host truncates them, so they can collide.
     @FocusState private var focused: Int?
 
     var body: some View {
         GeometryReader { geometry in
-            if let frame = host.frames[tabIndex], let image = frame.cgImage {
+            if let frame = host.frames[surface], let image = frame.cgImage {
                 let size = CGSize(width: frame.width, height: frame.height)
                 let scale = CGFloat(PluginCanvasLayout.scale(frame: size, in: geometry.size))
                 let origin = CGPoint(
@@ -123,9 +123,9 @@ private struct PluginCanvasView: View {
                         .frame(width: size.width * scale, height: size.height * scale)
                         .offset(x: origin.x, y: origin.y)
                         .accessibilityHidden(true)
-                    ForEach(Array((host.regions[tabIndex] ?? []).enumerated()), id: \.offset) { index, region in
+                    ForEach(Array((host.regions[surface] ?? []).enumerated()), id: \.offset) { index, region in
                         // Rects are not range-checked by the host: never hand SwiftUI a negative size.
-                        let activate = { Task { await host.click(tab: tabIndex, region: region.id) } }
+                        let activate = { Task { await host.click(surface: surface, region: region.id) } }
                         Button(action: { activate() }) {
                             Color.clear.contentShape(Rectangle())
                         }

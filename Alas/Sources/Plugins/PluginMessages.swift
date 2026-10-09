@@ -96,7 +96,8 @@ struct PluginTabVisibleParams: Codable, Equatable, Sendable {
 }
 
 struct PluginClickParams: Codable, Equatable, Sendable {
-    let tab: Int
+    var tab: Int?
+    var panel: String?
     let region: String
 }
 
@@ -108,7 +109,8 @@ struct PluginRegion: Codable, Equatable, Sendable {
 }
 
 struct PluginRegionsParams: Codable, Equatable, Sendable {
-    let tab: Int
+    var tab: Int?
+    var panel: String?
     let regions: [PluginRegion]
 }
 

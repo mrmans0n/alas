@@ -69,6 +69,7 @@ struct PluginHostTests {
 
     static let plainManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js"}"#
     static let canvasManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":4,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
+    nonisolated static let panelsManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":15,"entry":"p.js","web":"ui.js","contributes":{"panels":[{"id":"cv","title":"CV","kind":"canvas"},{"id":"w","title":"W","kind":"web"},{"id":"v","title":"V"}]}}"#
     static let viewManifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":5,"entry":"p.js","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}],"panels":[{"id":"p","title":"P"}]}}"#
 
     func makeHost(
@@ -222,8 +223,8 @@ struct PluginHostTests {
             [[.send(activateOK), .send(Self.regionsR), .present(tab: 0, length: 16, width: 2)], [.throw]],
             manifest: Self.canvasManifest)
         await host.activate()
-        #expect(host.frames[0]?.height == 2)
-        #expect(host.regions[0]?.map(\.id) == ["r"])
+        #expect(host.frames[.tab(0)]?.height == 2)
+        #expect(host.regions[.tab(0)]?.map(\.id) == ["r"])
         host.setTabVisible(0, true)
         await host.tick(at: .now)
         #expect(host.frames.isEmpty)
@@ -233,11 +234,49 @@ struct PluginHostTests {
     @Test func aClickOnAKnownRegionReachesThePlugin() async throws {
         let host = try makeHost([[.send(activateOK), .send(Self.regionsR)]], manifest: Self.canvasManifest)
         await host.activate()
-        await host.click(tab: 0, region: "nope")
-        await host.click(tab: 0, region: "r")
+        await host.click(surface: .tab(0), region: "nope")
+        await host.click(surface: .tab(0), region: "r")
         let clicks = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("canvas/click") }
         #expect(clicks.count == 1)
         #expect(clicks.first?.text.contains(#""region":"r""#) == true)
+    }
+
+    @Test func aCanvasPanelGetsFramesRegionsClicksAndTicks() async throws {
+        let regions = #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"cv","regions":[{"id":"r","label":"R","rect":[0,0,4,4]}]}}"#
+        let host = try makeHost(
+            [[.send(activateOK), .send(regions), .script("alas.present('cv', new Uint8Array(16), 2);")]],
+            manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(host.frames[.panel("cv")]?.height == 2)
+        #expect(host.regions[.panel("cv")]?.map(\.id) == ["r"])
+        await host.click(surface: .panel("cv"), region: "r")
+        // Key order is the encoder's, so check each field.
+        let click = try #require(lastReply(host))
+        #expect(click.contains(#""panel":"cv""#) && click.contains(#""region":"r""#) && !click.contains(#""tab""#))
+        // Ticks only while the panel is shown.
+        await host.tick(at: .now)
+        #expect(ticks(host).isEmpty)
+        await host.setPanelVisible("cv", true)?.value
+        await host.tick(at: .now)
+        #expect(ticks(host).count == 1)
+    }
+
+    /// A panel of another kind, both targets at once, or a panel from a plugin older than API 15 stops it.
+    @Test(arguments: [
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"v","regions":[]}}"#),
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"panel":"cv","regions":[]}}"#),
+        (#"{"id":"io.test.plugin","name":"Test","version":"1","api":14,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}],"panels":[{"id":"cv","title":"CV"}]}}"#,
+         #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"cv","regions":[]}}"#),
+    ])
+    func misdirectedCanvasRegionsStopThePlugin(manifest: String, message: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("canvas/regions"))
     }
 
     @Test(arguments: [
@@ -266,8 +305,8 @@ struct PluginHostTests {
         ]], limits: limits, manifest: Self.canvasManifest)
         await host.activate()
         #expect(host.state == .active)
-        #expect(host.regions[0]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
-        #expect(host.regions[0]?.first?.label.unicodeScalars.count == PluginHost.regionLabelLimit)
+        #expect(host.regions[.tab(0)]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
+        #expect(host.regions[.tab(0)]?.first?.label.unicodeScalars.count == PluginHost.regionLabelLimit)
     }
 
     struct FocusCase: Sendable {
