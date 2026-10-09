@@ -5,9 +5,10 @@ enum RightPaneSelectionState: Equatable {
     case active(Worktree)
     case creating(Worktree)
     case createFailed(Worktree)
-    /// A peer session is selected. `selectedWorktreeId` still holds the last
-    /// local worktree, which must not be shown in its place.
-    case peer(sessionId: String)
+    /// A peer worktree is selected, with or without a tab open in it.
+    /// `selectedWorktreeId` still holds the last local worktree, which must
+    /// not be shown in its place.
+    case peer(NativePeerWorktreeSelection)
 
     var showsRightPane: Bool {
         switch self {
@@ -26,24 +27,19 @@ struct RightPaneSelectionStateResolver {
     /// See `CenterSelectionStateResolver.allowedWorktreeIDs`.
     var allowedWorktreeIDs: Set<String>? = nil
     var checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope? = nil
-    var peerSessionId: String? = nil
-    /// Meaningful only when `peerSessionId` is set. A peer session with no
-    /// assigned worktree can't serve changes or files — the peer answers
+    /// Whether any peer surface (a session, a console, or a worktree with no
+    /// tab open) fills the center pane.
+    var peerSelected: Bool = false
+    /// The selected peer worktree, when it is a git worktree. Rows with no
+    /// worktree can't serve changes or files — the peer answers
     /// `worktreeUnavailable` for both — so the rail hides rather than
     /// filling with error messages, or worse, falling through to show
     /// whatever local worktree happened to be selected before.
-    var peerSessionHasWorktree: Bool = true
-    /// A peer console, or a peer worktree with no tab open, fills the center
-    /// pane. It has no worktree on this Mac, so the rail hides instead of
-    /// showing the stale local selection.
-    var peerSelectedWithoutSession: Bool = false
+    var peerWorktree: NativePeerWorktreeSelection? = nil
 
     @MainActor
     func resolve() -> RightPaneSelectionState {
-        if peerSelectedWithoutSession { return .empty }
-        if let peerSessionId {
-            return peerSessionHasWorktree ? .peer(sessionId: peerSessionId) : .empty
-        }
+        if peerSelected { return peerWorktree.map { .peer($0) } ?? .empty }
         guard let id = selectedWorktreeId else { return .empty }
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }

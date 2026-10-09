@@ -28,6 +28,23 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func peerSessionsSplitIntoOpenTabsInTabOrderThenHistory() {
+        func session(_ id: String, tab: Int?, status: String = "idle") -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: status, canDrive: false,
+                  isActive: tab != nil, tabIndex: tab)
+        }
+        let rollup = AgentSidebarRollupBuilder.peer([
+            session("history", tab: nil, status: "streaming"),
+            session("second", tab: 1, status: "awaitingPermission"),
+            session("first", tab: 0),
+        ])
+
+        #expect(rollup.active.map(\.title) == ["first", "second"])
+        #expect(rollup.active.map(\.state) == [.idle, .permissionRequest])
+        #expect(rollup.history.map(\.title) == ["history"])
+    }
+
+    @Test @MainActor
     func liveACPRowOverridesPersistedHistoryAndBindsUsageAndPlan() {
         let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
         session.currentModel = "gpt-5"

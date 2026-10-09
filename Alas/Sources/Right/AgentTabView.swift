@@ -78,6 +78,7 @@ struct AgentTabView: View {
     let actions: AgentSidebarActions
     var controllableSessionIDs: Set<ACPSession.ID> = []
     @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
+    var disabledReason: (AgentSidebarRow) -> String? = { _ in nil }
 
     var body: some View {
         ScrollView {
@@ -114,7 +115,8 @@ struct AgentTabView: View {
                                 followUps[sessionID, default: .init()].text = text
                             }
                         }
-                    )
+                    ),
+                    disabledReason: disabledReason(row)
                 )
                 .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
                 .background(alignment: .topLeading) {

@@ -314,6 +314,66 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
     }
 
+    /// Open session `s` is selected; `h` is history in the same worktree.
+    private func clientWithHistorySession() throws -> (FakeLinks, NativePeerSessions) {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] }
+        )
+        client.start()
+        links.receive(historyList(hOpen: false), from: "B")
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        client.selectWorktree(NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id))
+        return (links, client)
+    }
+
+    private func historyList(hOpen: Bool) -> RemoteServerMessage {
+        func session(_ id: String, tab: Int?) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+                  isActive: tab != nil, tabIndex: tab, worktreeId: "w")
+        }
+        return .sessionList(sessions: [session("s", tab: 0), session("h", tab: hOpen ? 1 : nil)])
+    }
+
+    @Test func openingAHistorySessionSelectsItOnceThePeerListsItOpen() throws {
+        let (links, client) = try clientWithHistorySession()
+        client.openSession("B:h")
+        #expect(links.sent(to: "B").last == .openSessionTab(sessionId: "h"))
+        #expect(client.selectedSessionId == "B:s")
+        links.receive(historyList(hOpen: true), from: "B")
+        #expect(client.selectedSessionId == "B:h")
+    }
+
+    @Test func aRefusedTabOpenShowsTheReasonAndKeepsTheSelection() throws {
+        let (links, client) = try clientWithHistorySession()
+        client.openSession("B:h")
+        links.receive(.sessionTabActionFailed(sessionId: "h", message: "Session is archived."), from: "B")
+        #expect(client.sessionTabError == "Session is archived.")
+        #expect(client.selectedSessionId == "B:s")
+    }
+
+    @Test func aRetriedTabOpenIgnoresTheEarlierAttemptsLateFailure() throws {
+        let (links, client) = try clientWithHistorySession()
+        client.openSession("B:h")
+        client.clearSelection()
+        client.select("B:s")
+        client.openSession("B:h")
+        links.receive(.sessionTabActionFailed(sessionId: "h", message: "Late."), from: "B")
+        #expect(client.sessionTabError == nil)
+        links.receive(historyList(hOpen: true), from: "B")
+        #expect(client.selectedSessionId == "B:h")
+    }
+
+    @Test func refocusingTheShownSessionCancelsAPendingTabOpen() throws {
+        let (links, client) = try clientWithHistorySession()
+        client.openSession("B:h")
+        client.openSession("B:s")
+        links.receive(historyList(hOpen: true), from: "B")
+        #expect(client.selectedSessionId == "B:s")
+    }
+
     @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

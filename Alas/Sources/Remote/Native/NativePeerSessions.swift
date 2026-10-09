@@ -32,9 +32,14 @@ final class NativePeerSessions {
     private(set) var deliveryError: String?
     static let peerUnavailableMessage = FederatedSessionsProvider.peerUnavailableMessage
     private(set) var newSession: NativePeerNewSession?
-    /// A session the peer just created for us, selected once its row arrives
-    /// in the peer's next session list.
-    @ObservationIgnored private var pendingCreatedSessionId: String?
+    /// A session the peer just created or opened for us, selected once the
+    /// peer's session list reports it as an open tab.
+    @ObservationIgnored private var pendingSessionId: String?
+    /// Why the peer refused to open or close a tab.
+    private(set) var sessionTabError: String?
+    /// Open requests awaiting the peer's reply, per session. Replies arrive
+    /// in request order, so only the last one answers the current attempt.
+    @ObservationIgnored private var tabOpensInFlight: [String: Int] = [:]
     private(set) var workspace = NativePeerWorkspace()
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
@@ -174,6 +179,44 @@ final class NativePeerSessions {
         }
     }
 
+    var selectedWorktreeGroup: NativePeerWorktreeGroup? {
+        selectedWorktree.flatMap(worktree)
+    }
+
+    var selectedWorktreePeer: NativePeerGroup? {
+        guard let selectedWorktree else { return nil }
+        return snapshot.groups.first { $0.serverId == selectedWorktree.serverId }
+    }
+
+    /// Whether the peer serves `openSessionTab`, so a history session can be
+    /// opened from here.
+    func canOpenSessionTabs(serverId: String) -> Bool {
+        federation.peerSupports(PeerSessionTabsCapability.v1, serverId: serverId)
+    }
+
+    /// Selects an open session's tab, or asks the peer to open a history
+    /// session and selects it once the peer lists it as open.
+    func openSession(_ sessionId: String) {
+        guard let downstream,
+              let row = snapshot.groups.lazy.flatMap(\.sessions).first(where: { $0.id == sessionId })
+        else { return }
+        sessionTabError = nil
+        if row.isActive {
+            // `select` skips `clearSelection` for the session already shown.
+            pendingSessionId = nil
+            select(sessionId)
+            return
+        }
+        pendingSessionId = sessionId
+        // Counted first: a peer without the capability is refused inside `route`.
+        tabOpensInFlight[sessionId, default: 0] += 1
+        if !federation.route(.openSessionTab(sessionId: sessionId), from: downstream) {
+            tabOpensInFlight[sessionId, default: 1] -= 1
+            pendingSessionId = nil
+            sessionTabError = Self.peerUnavailableMessage
+        }
+    }
+
     var selectedRow: RemoteSessionSummary? {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.flatMap(\.sessions).first { $0.id == selectedSessionId }
@@ -218,8 +261,10 @@ final class NativePeerSessions {
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
         deliveryError = nil
+        sessionTabError = nil
+        tabOpensInFlight = [:]
         newSession = nil
-        pendingCreatedSessionId = nil
+        pendingSessionId = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
@@ -235,9 +280,9 @@ final class NativePeerSessions {
         rebuildSnapshot()
         consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
         reconcileNewSession()
-        if let pending = pendingCreatedSessionId,
-           snapshot.groups.contains(where: { $0.sessions.contains { $0.id == pending } }) {
-            pendingCreatedSessionId = nil
+        if let pending = pendingSessionId,
+           snapshot.groups.contains(where: { $0.sessions.contains { $0.id == pending && $0.isActive } }) {
+            pendingSessionId = nil
             select(pending)
             return
         }
@@ -317,13 +362,14 @@ final class NativePeerSessions {
         selectedSessionId = nil
         // Any explicit navigation away (another peer session, a local
         // worktree) outranks auto-selecting a session created earlier.
-        pendingCreatedSessionId = nil
+        pendingSessionId = nil
         transcript = nil
         draft = ""
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
         deliveryError = nil
+        sessionTabError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
@@ -357,7 +403,7 @@ final class NativePeerSessions {
 
     func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup) {
         guard downstream != nil, peer.state.carriesSessions else { return }
-        pendingCreatedSessionId = nil
+        pendingSessionId = nil
         newSession = NativePeerNewSession(
             serverId: peer.serverId, peerName: peer.name, projectId: repo.projectId, repoName: repo.name
         )
@@ -461,7 +507,7 @@ final class NativePeerSessions {
             }
         case .sessionCreated(let summary), .worktreeSessionCreated(let summary):
             newSession = nil
-            pendingCreatedSessionId = summary.id
+            pendingSessionId = summary.id
             refresh()
         default:
             break
@@ -692,6 +738,21 @@ final class NativePeerSessions {
     }
 
     private func receive(_ message: RemoteServerMessage) {
+        // Tab actions answer for any session, not just the selected one. A
+        // reply to a request the user has since moved on from, or retried,
+        // is dropped.
+        switch message {
+        case .sessionTabActionSucceeded(let sessionId), .sessionTabActionFailed(let sessionId, _):
+            let remaining = (tabOpensInFlight[sessionId] ?? 1) - 1
+            tabOpensInFlight[sessionId] = remaining > 0 ? remaining : nil
+            if case .sessionTabActionFailed(_, let text) = message, remaining <= 0, pendingSessionId == sessionId {
+                pendingSessionId = nil
+                sessionTabError = text
+            }
+            return
+        default:
+            break
+        }
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
         switch message {
         case .transcriptSnapshot, .transcriptPage:
