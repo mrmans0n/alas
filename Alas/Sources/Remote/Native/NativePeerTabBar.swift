@@ -9,6 +9,8 @@ struct NativePeerTabBar: View {
     let sidebarHidden: Bool
     let onRevealSidebar: () -> Void
     let onCloseSession: (String) -> Void
+    /// Closes a console tab, which ends the console on the peer.
+    let onCloseConsole: (_ consoleId: String, _ peerName: String) -> Void
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -22,7 +24,8 @@ struct NativePeerTabBar: View {
     var body: some View {
         let rows = rows
         let selectedTab = client.selectedTab
-        let canClose = client.canCloseSessionTabs(on: selection.serverId)
+        let canCloseSessions = client.canCloseSessionTabs(on: selection.serverId)
+        let canCloseConsoles = client.consoles?.canTerminate(serverId: selection.serverId) == true
         TabStrip(
             activeId: selectedTab,
             isEmpty: rows.isEmpty,
@@ -37,7 +40,8 @@ struct NativePeerTabBar: View {
                 TabItemView(item: item(for: row), active: row.id == selectedTab) {
                     client.selectTab(row.id, in: selection)
                 } trailing: {
-                    if canClose, case .session(let session) = row {
+                    switch row {
+                    case .session(let session) where canCloseSessions:
                         if client.closingSessionIds.contains(session.id) {
                             ProgressView()
                                 .controlSize(.mini)
@@ -46,6 +50,14 @@ struct NativePeerTabBar: View {
                         } else {
                             TabCloseButton(dirtyLookup: { false }) { onCloseSession(session.id) }
                         }
+                    case .console(let console) where canCloseConsoles:
+                        if let peer {
+                            TabCloseButton(dirtyLookup: { false }) {
+                                onCloseConsole(console.consoleId, peer.name)
+                            }
+                        }
+                    default:
+                        EmptyView()
                     }
                 }
                 .id(row.id)

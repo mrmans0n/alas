@@ -91,6 +91,7 @@ import Testing
         var sockets: [ZmxSocketPair] = []
         var connectCount = 0
         var suppressed: [Bool] = []
+        var terminated: [String] = []
         var known = ["c"]
         lazy var host = PeerConsoleHost(environment: .init(
             consoles: { [] },
@@ -98,6 +99,10 @@ import Testing
                 known.contains(id) ? PeerConsoleTarget(consoleId: id, socketPath: "/unused", rows: 40, columns: 120) : nil
             },
             setLocalInputSuppressed: { [unowned self] _, on in suppressed.append(on) },
+            terminate: { [unowned self] id in
+                terminated.append(id)
+                known.removeAll { $0 == id }
+            },
             // The host connects on the main actor.
             connect: { [unowned self] _ in try MainActor.assumeIsolated { try self.makeSocket() } }
         ))
@@ -162,6 +167,34 @@ import Testing
         #expect(peer.control("a").last == PeerConsoleControl(owner: .host, generation: 2, change: .revoked))
         #expect(fixture.suppressed == [true, false])
         #expect(fixture.host.controllers.isEmpty)
+    }
+
+    @Test func terminateDetachesEveryViewerClosesTheConsoleAndRelists() {
+        let fixture = Fixture()
+        let owner = FakePeer()
+        let other = FakePeer()
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: owner.link)
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "b", scrollbackRows: 0), from: other.link)
+        fixture.host.handle(.takeControl(attachmentId: "a"), from: owner.link)
+
+        // Terminating needs no attachment or lease.
+        let requester = FakePeer()
+        fixture.host.handle(.terminate(consoleId: "c"), from: requester.link)
+        #expect(owner.events.all.last == .detached(attachmentId: "a", reason: .terminated))
+        #expect(other.events.all.last == .detached(attachmentId: "b", reason: .terminated))
+        #expect(fixture.terminated == ["c"])
+        #expect(requester.events.all == [.list(consoles: [])])
+        #expect(fixture.suppressed == [true, false])
+        #expect(fixture.host.controllers.isEmpty)
+    }
+
+    @Test func terminatingAnUnknownConsoleIsRejected() {
+        let fixture = Fixture()
+        let viewer = FakePeer()
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: viewer.link)
+        fixture.host.handle(.terminate(consoleId: "gone"), from: viewer.link)
+        #expect(fixture.terminated.isEmpty)
+        #expect(viewer.events.all.count == 1)
     }
 
     @Test func controlIsExclusiveGenerationScopedAndEnforcedByTheHost() async throws {

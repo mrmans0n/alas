@@ -43,6 +43,8 @@ final class PeerConsoleHost {
         var consoles: @MainActor () -> [PeerConsoleSummary]
         var resolve: @MainActor (String) -> PeerConsoleTarget?
         var setLocalInputSuppressed: @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void
+        /// Closes a console `resolve` accepted, as a local tab close does.
+        var terminate: @MainActor (String) -> Void
         var connect: @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) }
         var captureTimeout: DispatchTimeInterval = .seconds(3)
         var limits = PeerConsoleOutbox.Limits()
@@ -98,6 +100,8 @@ final class PeerConsoleHost {
         case .detach(let attachmentId):
             guard let attachment = attachment(attachmentId, of: link) else { return }
             remove(attachment, reason: .detached)
+        case .terminate(let consoleId):
+            terminate(consoleId: consoleId, link: link)
         }
     }
 
@@ -175,6 +179,18 @@ final class PeerConsoleHost {
         ) { [weak self] reason in
             Task { @MainActor in self?.passiveClientClosed(attachmentId, reason: reason) }
         }
+    }
+
+    /// Viewers detach before the console closes, so its exit reaches them as
+    /// `terminated` rather than racing in as `targetExited`.
+    private func terminate(consoleId: String, link: PeerConsoleLink) {
+        guard environment.resolve(consoleId) != nil else { return }
+        for attachment in attachments.values where attachment.consoleId == consoleId {
+            remove(attachment, reason: .terminated)
+        }
+        environment.terminate(consoleId)
+        logger.info("peer terminated console \(consoleId, privacy: .public)")
+        link.send(.list(consoles: environment.consoles()))
     }
 
     private func passiveClientClosed(_ attachmentId: String, reason: ZmxPassiveClient.CloseReason) {

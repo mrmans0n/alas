@@ -514,6 +514,7 @@ final class PeerConsoleViewer {
         case .limitReached: "Too many consoles are open from this Mac. Close one and try again."
         case .protocolError: "The console stream failed."
         case .localOverflow: "The console produced more output than could be relayed."
+        case .terminated: "The console was closed."
         case .unknown: "The console ended."
         }
     }

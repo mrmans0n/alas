@@ -1109,7 +1109,7 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [PeerConsoleCapability.v1, PeerSessionTabsCapability.v1])
+            capabilities: [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
     }
 }
 

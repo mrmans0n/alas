@@ -349,7 +349,12 @@ struct RootView: View {
                             state.config.sidebarVisible = true
                             state.saveConfig()
                         },
-                        onCloseSession: { state.requestClosePeerSessionTab($0) }
+                        onCloseSession: { state.requestClosePeerSessionTab($0) },
+                        onCloseConsole: { consoleId, peerName in
+                            state.requestTerminatePeerConsole(
+                                serverId: selection.serverId, consoleId: consoleId, peerName: peerName
+                            )
+                        }
                     )
                 }
                 peerCenterContent(client)
@@ -1106,7 +1111,17 @@ private struct RootBaseHandlers: ViewModifier {
                 // A peer worktree covers the center pane while the local
                 // selection stays set underneath; never close a hidden tab.
                 if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
-                    if case .session(let id) = client.selectedTab { state.requestClosePeerSessionTab(id) }
+                    switch client.selectedTab {
+                    case .session(let id):
+                        state.requestClosePeerSessionTab(id)
+                    case .console(let id):
+                        if let serverId = client.selectedWorktree?.serverId,
+                           let peer = client.snapshot.groups.first(where: { $0.serverId == serverId }) {
+                            state.requestTerminatePeerConsole(serverId: serverId, consoleId: id, peerName: peer.name)
+                        }
+                    case nil:
+                        break
+                    }
                     return
                 }
                 let closingWorktree = selectedWorktree()
