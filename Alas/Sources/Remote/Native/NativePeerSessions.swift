@@ -37,6 +37,9 @@ final class NativePeerSessions {
     private(set) var selectedSessionId: String?
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
+    /// Queue Edit text the host restored after the user left that session,
+    /// put back into the draft when the session is selected again.
+    @ObservationIgnored private var restoredDrafts: [String: String] = [:]
     private(set) var deliveryError: String?
     static let peerUnavailableMessage = FederatedSessionsProvider.peerUnavailableMessage
     private(set) var newSession: NativePeerNewSession?
@@ -276,6 +279,7 @@ final class NativePeerSessions {
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
         draft = ""
+        restoredDrafts = [:]
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
@@ -360,6 +364,7 @@ final class NativePeerSessions {
         clearSelection()
         noteSelected(.session(sessionId), serverId: peer.serverId)
         selectedSessionId = sessionId
+        draft = restoredDrafts.removeValue(forKey: sessionId) ?? ""
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
         reloadWorkspace()
@@ -826,6 +831,10 @@ final class NativePeerSessions {
         return federation.route(makeMessage(selectedSessionId), from: downstream)
     }
 
+    private static func appending(_ text: String, to draft: String) -> String {
+        draft.isEmpty ? text : draft + "\n" + text
+    }
+
     private func receive(_ message: RemoteServerMessage) {
         // Tab actions answer for any session, not just the selected one. A
         // reply to a request the user has since moved on from, or retried,
@@ -847,6 +856,15 @@ final class NativePeerSessions {
                 sessionTabError = text
             }
             return
+        case .queueEditRestored(let sessionId, _, let text):
+            // The edit was requested from the session it names; the reply
+            // can land after the user switched away.
+            if sessionId == selectedSessionId {
+                draft = Self.appending(text, to: draft)
+            } else {
+                restoredDrafts[sessionId] = Self.appending(text, to: restoredDrafts[sessionId] ?? "")
+            }
+            return
         default:
             break
         }
@@ -861,10 +879,6 @@ final class NativePeerSessions {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
             deliveryError = "Prompt was not delivered. Your draft was kept."
-            return
-        }
-        if case .queueEditRestored(_, _, let text) = message {
-            draft = draft.isEmpty ? text : draft + "\n" + text
             return
         }
         let isChangesReply: Bool = switch message {

@@ -189,6 +189,42 @@ struct FederatedSessionsProviderTests {
         #expect(second.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
     }
 
+    @Test func aRestoredQueueEditReachesEveryUnsubscribedAskerOnlyOnce() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let second = Client()
+        provider.attach(first.downstream)
+        provider.attach(second.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        // The peer answers one of these and silently refuses the other,
+        // without saying which.
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: first.downstream)
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: second.downstream)
+        let restored = RemoteServerMessage.queueEditRestored(sessionId: "s1", itemId: "i", text: "edit me")
+        links.receive(restored, from: "srv-b")
+        links.receive(restored, from: "srv-b")
+        let routed = RemoteServerMessage.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "edit me")
+        #expect(first.received == [routed])
+        #expect(second.received == [routed])
+    }
+
+    @Test func unansweredQueueEditsAreForgottenPastTheLimit() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        // The peer never answers an edit it refuses, so these stay unanswered.
+        // Spread over sessions: the bound must not be per session.
+        for n in 0...FederatedSessionsProvider.queueEditRequesterLimit {
+            _ = provider.route(.queueEdit(sessionId: "srv-b:s\(n)", itemId: "i"), from: client.downstream)
+        }
+        links.receive(.queueEditRestored(sessionId: "s0", itemId: "i", text: "oldest"), from: "srv-b")
+        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i", text: "kept"), from: "srv-b")
+        #expect(client.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "kept")])
+    }
+
     @Test func tabActionsForAPeerWithoutTheCapabilityFailWithoutBeingSent() {
         let links = FakeLinks()
         links.olderPeers = ["srv-b"]

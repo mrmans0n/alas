@@ -49,6 +49,9 @@ final class FederatedSessionsProvider {
     static let listPollInterval: TimeInterval = 15
     /// Several phones polling at once must not turn into a burst upstream.
     static let listRequestThrottle: TimeInterval = 2
+    /// Unanswered queue edits remembered across all sessions. The peer never
+    /// answers an edit it refuses, so the oldest are dropped past this.
+    static let queueEditRequesterLimit = 32
 
     /// Fired whenever any peer's link state or advertised record may have
     /// changed, so the server can push a fresh `hello` (its `peers` list —
@@ -172,6 +175,12 @@ final class FederatedSessionsProvider {
     /// reply goes to the head; the asker need not be subscribed. A detached
     /// requester stays as nil so the next reply still lines up.
     private var tabActionRequesters: [String: [UUID?]] = [:]
+    /// Downstreams that asked to edit a queue item, oldest first. The
+    /// restored text goes back to the asker even after it unsubscribed, or
+    /// the dequeued prompt would be lost. The peer stays silent for an item
+    /// it no longer has, so replies are matched by session and item: an
+    /// unanswered request can never misroute a later reply.
+    private var queueEditRequesters: [(sessionId: String, itemId: String, downstreamId: UUID)] = []
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
@@ -221,6 +230,8 @@ final class FederatedSessionsProvider {
         for (namespaced, queue) in tabActionRequesters where queue.contains(id) {
             tabActionRequesters[namespaced] = queue.map { $0 == id ? nil : $0 }
         }
+        // Without its asker, a restore falls back to the session's subscribers.
+        queueEditRequesters.removeAll { $0.downstreamId == id }
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -279,6 +290,11 @@ final class FederatedSessionsProvider {
                     return true
                 }
                 tabActionRequesters[namespaced, default: []].append(downstream.id)
+            case .queueEdit(_, let itemId):
+                queueEditRequesters.append((namespaced, itemId, downstream.id))
+                if queueEditRequesters.count > Self.queueEditRequesterLimit {
+                    queueEditRequesters.removeFirst()
+                }
             default:
                 break
             }
@@ -342,6 +358,7 @@ final class FederatedSessionsProvider {
             case .sessionClosed(let sessionId):
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
                 pendingRequests[namespaced] = nil
+                queueEditRequesters.removeAll { $0.sessionId == namespaced }
                 comparisonRequests = comparisonRequests.filter { $0.key.sessionId != namespaced }
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
@@ -372,6 +389,12 @@ final class FederatedSessionsProvider {
                     tabActionRequesters[namespaced] = queue.isEmpty ? nil : queue
                     requester.flatMap { downstreams[$0]?.value }?.send(routed)
                     return
+                case .queueEditRestored(_, let itemId, _):
+                    let askers = takeQueueEditRequesters(itemId: itemId, for: namespaced)
+                    if !askers.isEmpty {
+                        for asker in askers { asker.send(routed) }
+                        return
+                    }
                 default:
                     break
                 }
@@ -404,6 +427,7 @@ final class FederatedSessionsProvider {
             for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
                 pendingRequests[namespaced] = nil
             }
+            queueEditRequesters.removeAll { $0.sessionId.hasPrefix(prefix) }
             for namespaced in Array(tabActionRequesters.keys) where namespaced.hasPrefix(prefix) {
                 let failure = RemoteServerMessage.sessionTabActionFailed(
                     sessionId: namespaced, message: Self.peerUnavailableMessage)
@@ -552,6 +576,21 @@ final class FederatedSessionsProvider {
         default:
             completed.reply?(message)
         }
+    }
+
+    /// Every live asker for this item's edit. The peer answers at most once
+    /// per item (a restore removes it) and silently refuses the others, and
+    /// the reply does not say which ask it answers, so all of them get the
+    /// text: a duplicated draft beats a lost prompt.
+    private func takeQueueEditRequesters(itemId: String, for namespaced: String) -> [FederatedDownstream] {
+        pruneDeadDownstreams()
+        var askers: [UUID] = []
+        queueEditRequesters.removeAll { request in
+            guard request.sessionId == namespaced, request.itemId == itemId else { return false }
+            if !askers.contains(request.downstreamId) { askers.append(request.downstreamId) }
+            return true
+        }
+        return askers.compactMap { downstreams[$0]?.value }
     }
 
     private func removePeerRequests(for downstreamId: UUID) {
