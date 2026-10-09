@@ -53,7 +53,7 @@ struct NativePeerSessionView: View {
             canFetchOlder: online && transcript.olderPageBeforeIndex != nil,
             isFetchingOlder: client.isFetchingOlderMessages,
             leadingRows: leadingRows(transcript),
-            trailingRows: pendingRequestRows(transcript),
+            trailingRows: queueRows(transcript, contentMaxWidth: contentMaxWidth) + pendingRequestRows(transcript),
             fetchOlder: { _ = client.fetchOlder() }
         )
     }
@@ -66,6 +66,46 @@ struct NativePeerSessionView: View {
             token: ACPRowEqualityToken(true),
             content: { AnyView(NativePeerUnavailableBanner { client.clearSelection() }) }
         )]
+    }
+
+    // MARK: - Queue
+
+    /// "Up next" rows mirror the host queue. The host owns ordering, so the
+    /// rows offer no reordering; removal follows the host's `canRemove`.
+    private func queueRows(_ transcript: NativePeerTranscript, contentMaxWidth: CGFloat) -> [NativePeerTranscriptExtraRow] {
+        let client = client
+        let online = online
+        let typography = typography
+        let items = transcript.queue.compactMap(NativePeerComposerState.queuedPrompt)
+            .filter { ACPTranscriptQueuePolicy.shouldRenderQueueBubble($0) }
+        guard !items.isEmpty else { return [] }
+        let canRemoveById = Dictionary(
+            transcript.queue.map { ($0.id, $0.canRemove ?? true) }, uniquingKeysWith: { first, _ in first })
+        var rows: [NativePeerTranscriptExtraRow] = [NativePeerTranscriptExtraRow(
+            id: "__peer_queue_header__",
+            token: ACPRowEqualityToken([items.count, online ? 1 : 0]),
+            content: {
+                AnyView(ACPQueueHeader(count: items.count, canClear: online, onClear: { client.queueClear() }))
+            })]
+        for (index, item) in items.enumerated() {
+            let id = item.id.uuidString
+            let canRemove = canRemoveById[id] ?? true
+            rows.append(NativePeerTranscriptExtraRow(
+                id: "__peer_queue_\(id)",
+                token: ACPRowEqualityToken(item),
+                content: {
+                    AnyView(ACPQueueItemRow(
+                        item: item, position: index + 1, contentMaxWidth: contentMaxWidth,
+                        typography: typography, canMoveUp: false, canMoveDown: false,
+                        isHeldByUsageLimit: false,
+                        allowsReordering: false, canRemove: canRemove,
+                        onPromote: {}, onSendNow: { client.queueForceSend(id) },
+                        onEdit: { client.queueEdit(id) }, onRemove: { client.queueRemove(id) },
+                        onRetry: { client.queueRetry(id) }, onMoveUp: {}, onMoveDown: {})
+                    .disabled(!online))
+                }))
+        }
+        return rows
     }
 
     // MARK: - Pending requests
@@ -266,6 +306,17 @@ private struct NativePeerComposer: View {
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
+    private var config: RemoteSessionConfig? { transcript.config }
+    private var chipState: ACPChipState? { config.map(NativePeerComposerState.chipState(from:)) }
+    private var sessionOpen: Bool { online && transcript.epoch != nil && !transcript.isClosed }
+    private var hasText: Bool { !client.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var queueCount: Int { RemoteQueueProjection.visibleCount(transcript.queue) }
+    private var action: ComposerAction {
+        composerAction(
+            streamingState: NativePeerComposerState.streamingState(transcript.streamingState),
+            hasText: hasText, agentState: .ready,
+            hasCancellableBackgroundWork: transcript.hasCancellableBackgroundWork)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -294,9 +345,7 @@ private struct NativePeerComposer: View {
     }
 
     private var composerPill: some View {
-        let canSend = canDrive && !client.isPromptPending
-            && !client.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return VStack(spacing: 6) {
+        VStack(spacing: 6) {
             if let error = client.deliveryError {
                 Text(error)
                     .font(.system(size: 11, weight: .medium))
@@ -305,7 +354,7 @@ private struct NativePeerComposer: View {
             }
             ZStack(alignment: .topLeading) {
                 if client.draft.isEmpty {
-                    Text(canDrive ? "Message the peer session" : "Read only until you take over")
+                    Text(sessionOpen ? "Message the peer session" : "Peer session unavailable")
                         .font(typography.swiftUIFont(size: typography.paragraphSize))
                         .foregroundStyle(theme.color("fg-faint"))
                         .padding(.horizontal, 10)
@@ -319,7 +368,7 @@ private struct NativePeerComposer: View {
                     .padding(.horizontal, 5)
                     .padding(.vertical, 6)
                     .focused($composerFocused)
-                    .disabled(!canDrive)
+                    .disabled(!sessionOpen)
                     .accessibilityLabel("Message peer session")
             }
             .frame(minHeight: 44, maxHeight: 140)
@@ -332,43 +381,74 @@ private struct NativePeerComposer: View {
                     shortcutHint
                 }
                 Spacer(minLength: 0)
-                if NativePeerSessionControls.showsStop(for: transcript.streamingState,
-                                                       hasCancellableBackgroundWork: transcript.hasCancellableBackgroundWork) {
-                    ACPComposerActionButton(
-                        action: .stop,
-                        onPrimary: { client.stopSelected() },
-                        onMenu: { _ in },
-                        onSchedule: { _ in },
-                        queueBadgeCount: 0
-                    )
-                    .disabled(!online || transcript.isClosed)
+                if let chipState, let config {
+                    chipRow(chipState: chipState, config: config)
                 }
-                Button {
-                    client.sendPrompt()
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("Send")
-                            .font(.system(size: 11.5, weight: .semibold))
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 10, weight: .bold))
-                    }
-                    .foregroundStyle(theme.color("bg-0"))
-                    .padding(.horizontal, 11)
-                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-                    .background(
-                        RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
-                            .fill(theme.color("accent").opacity(canSend ? 1 : 0.35))
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
+                ACPComposerActionButton(
+                    action: action,
+                    onPrimary: {
+                        switch action {
+                        case .stop: client.stopSelected()
+                        default:
+                            client.sendPrompt(intent: primarySubmitIntent(
+                                for: action,
+                                optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
+                        }
+                    },
+                    onMenu: { item in
+                        switch item {
+                        case .queue: client.sendPrompt(intent: .auto)
+                        case .steer: client.sendPrompt(intent: .steer)
+                        case .stop: client.stopSelected()
+                        }
+                    },
+                    onSchedule: { _ in },
+                    queueBadgeCount: queueCount,
+                    nativeSteering: config?.supportsSteering == true,
+                    showsSchedule: false
+                )
+                .disabled(!sessionOpen || client.isPromptPending)
                 .keyboardShortcut(.return, modifiers: .command)
-                .help("Send (⌘⏎)")
             }
             .padding(.horizontal, 2)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: composerFocused)
+    }
+
+    @ViewBuilder
+    private func chipRow(chipState: ACPChipState, config: RemoteSessionConfig) -> some View {
+        let chips = ACPComposerChips(
+            theme: theme, chipState: chipState,
+            configOptions: NativePeerComposerState.configOptions(from: config),
+            onSelect: { client.selectChip($0, itemId: $1) },
+            onConfigValue: { client.setConfigValue(configId: $0, value: $1) })
+        HStack(spacing: 8) {
+            chips.fastModeToggle()
+            ACPAutoRunToggle(
+                isEnabled: config.autoRunEnabled == true,
+                isDisabled: chipState.autoRun == .ignored || !sessionOpen,
+                help: chipState.autoRun == .ignored
+                    ? "Auto-run has no effect — this agent doesn't request permissions"
+                    : (config.autoRunEnabled == true
+                        ? "Auto-run is ON — agent runs tools without asking"
+                        : "Click to skip permission prompts"),
+                onToggle: { client.toggleAutoRun() })
+            if let thinking = chipState.thinking {
+                chips.thinkingChip(thinking).fixedSize(horizontal: true, vertical: false)
+            }
+            ForEach(chips.parameterChips) { chips.parameterChip($0).fixedSize(horizontal: true, vertical: false) }
+            ForEach(chips.booleanConfigOptions) {
+                chips.booleanConfigToggle($0).fixedSize(horizontal: true, vertical: false)
+            }
+            if let mode = chipState.mode {
+                chips.modeChip(mode).fixedSize(horizontal: true, vertical: false)
+            }
+            if let model = chipState.models {
+                chips.modelChip(model).fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .disabled(!sessionOpen)
     }
 
     private var shortcutHint: some View {

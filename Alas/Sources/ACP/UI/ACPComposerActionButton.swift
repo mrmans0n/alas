@@ -13,6 +13,8 @@ struct ACPComposerActionButton: View {
     let queueBadgeCount: Int
     var queueByDefault = true
     var nativeSteering = false
+    /// Peer composers cannot schedule on the host, so they hide the menu.
+    var showsSchedule = true
 
     @Environment(\.theme) private var theme
     @State private var customScheduleDate = Date()
@@ -47,6 +49,7 @@ struct ACPComposerActionButton: View {
             .buttonStyle(.plain)
             .help("Send (⏎)")
 
+            if showsSchedule {
             chevronHalf(help: "Schedule send") {
                 let now = Date()
                 ForEach(ACPSchedulePreset.allCases) { preset in
@@ -63,6 +66,7 @@ struct ACPComposerActionButton: View {
                         ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
                     showsCustomSchedule = true
                 }
+            }
             }
         }
         .capsuleSurface(
