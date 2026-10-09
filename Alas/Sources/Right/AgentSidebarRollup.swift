@@ -167,6 +167,34 @@ struct AgentSidebarRollupBuilder {
         return AgentSidebarRollup(rows: acpRows + terminalRowsList)
     }
 
+    /// A peer worktree's sessions: open tabs in tab order, then history as
+    /// the peer listed it.
+    static func peer(_ sessions: [RemoteSessionSummary]) -> AgentSidebarRollup {
+        let active = sessions.filter(\.isActive).sorted { ($0.tabIndex ?? .max) < ($1.tabIndex ?? .max) }
+        let rows = (active + sessions.filter { !$0.isActive }).map { session in
+            AgentSidebarRow.acp(
+                id: session.id,
+                agentID: session.agentId,
+                title: session.title,
+                model: nil,
+                state: session.isActive ? peerState(session.status) : .detached,
+                activityAt: Date(timeIntervalSince1970: TimeInterval(session.updatedAt)),
+                isLive: session.isActive
+            )
+        }
+        return AgentSidebarRollup(rows: rows)
+    }
+
+    private static func peerState(_ status: String) -> AgentSidebarState {
+        switch status {
+        case "streaming": .running
+        case "awaitingInput": .awaitingInput
+        case "awaitingPermission": .permissionRequest
+        case "idle": .idle
+        default: .unknown
+        }
+    }
+
     /// Annotates ACP rows with their delegation relationship and moves nested
     /// children directly behind their parent, leaving every other row in place.
     private static func nestDelegations(

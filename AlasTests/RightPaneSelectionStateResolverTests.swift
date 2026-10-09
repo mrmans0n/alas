@@ -19,29 +19,14 @@ struct RightPaneSelectionStateResolverTests {
         #expect(resolver.resolve() == .empty)
     }
 
-    @Test func selectedPeerSessionReplacesTheStaleLocalWorktree() {
-        let project = ProjectConfig(id: "p", name: "P", path: "/tmp/p", color: "#fff", addedAt: .distantPast)
-        let wt = Worktree(id: "wt", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/p"), status: .clean, lastActivity: .distantPast)
-        let manager = ProjectsManager(persistedProjects: [project])
-        manager.insertOptimisticWorktree(wt)
-        let resolver = RightPaneSelectionStateResolver(
-            selectedWorktreeId: wt.id,
-            projects: [project],
-            projectsManager: manager,
-            peerSessionId: "B:s",
-            peerSessionHasWorktree: true
-        )
-        #expect(resolver.resolve() == .peer(sessionId: "B:s"))
-    }
-
+    /// A selected peer worktree shows the rail even with no tab open in it;
+    /// a peer row with no git worktree hides it. Neither falls back to the
+    /// stale local worktree.
     @Test(arguments: [
-        ("B:s" as String?, false),   // peer session without a worktree
-        (nil as String?, true),      // peer console, or a worktree with no tabs
+        NativePeerWorktreeSelection(serverId: "B", worktreeId: "id:w") as NativePeerWorktreeSelection?,
+        nil,
     ])
-    func peerSelectionWithoutWorktreeContentHidesTheRailRatherThanShowingTheStaleWorktree(
-        peerSessionId: String?,
-        peerSelectedWithoutSession: Bool
-    ) {
+    func peerSelectionReplacesTheStaleLocalWorktree(peerWorktree: NativePeerWorktreeSelection?) {
         let project = ProjectConfig(id: "p", name: "P", path: "/tmp/p", color: "#fff", addedAt: .distantPast)
         let wt = Worktree(id: "wt", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/p"), status: .clean, lastActivity: .distantPast)
         let manager = ProjectsManager(persistedProjects: [project])
@@ -50,11 +35,10 @@ struct RightPaneSelectionStateResolverTests {
             selectedWorktreeId: wt.id,
             projects: [project],
             projectsManager: manager,
-            peerSessionId: peerSessionId,
-            peerSessionHasWorktree: false,
-            peerSelectedWithoutSession: peerSelectedWithoutSession
+            peerSelected: true,
+            peerWorktree: peerWorktree
         )
-        #expect(resolver.resolve() == .empty)
+        #expect(resolver.resolve() == (peerWorktree.map { .peer($0) } ?? .empty))
     }
 
     @Test func checkoutScopeQualifiesDuplicateWorktreeIDsByProjectAndLocation() {

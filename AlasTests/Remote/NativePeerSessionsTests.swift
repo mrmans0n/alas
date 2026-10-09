@@ -314,6 +314,37 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").filter { $0 == .unsubscribe(sessionId: "s1") }.count == 2)
     }
 
+    @Test func openingAHistorySessionSelectsItOnceThePeerListsItOpen() throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] }
+        )
+        client.start()
+        func session(_ id: String, open: Bool) -> RemoteSessionSummary {
+            .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+                  isActive: open, tabIndex: open ? 0 : nil, worktreeId: "w")
+        }
+        links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: false)]), from: "B")
+        let worktree = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        client.selectWorktree(NativePeerWorktreeSelection(serverId: "B", worktreeId: worktree.id))
+
+        client.openSession("B:h")
+        #expect(links.sent(to: "B").last == .openSessionTab(sessionId: "h"))
+        links.receive(.sessionTabActionFailed(sessionId: "h", message: "Session is archived."), from: "B")
+        #expect(client.sessionTabError == "Session is archived.")
+        #expect(client.selectedSessionId == "B:s")
+
+        client.openSession("B:h")
+        #expect(client.sessionTabError == nil)
+        // Still history: not selected yet.
+        links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: false)]), from: "B")
+        #expect(client.selectedSessionId == "B:s")
+        links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: true)]), from: "B")
+        #expect(client.selectedSessionId == "B:h")
+    }
+
     @Test func closingTheLastConsoleOfAConsoleOnlyWorktreeLeavesItsEmptyState() throws {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

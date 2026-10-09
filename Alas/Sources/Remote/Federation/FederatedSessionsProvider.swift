@@ -230,6 +230,10 @@ final class FederatedSessionsProvider {
         updatePollTimer()
     }
 
+    func peerSupports(_ capability: String, serverId: String) -> Bool {
+        links.peerSupports(capability, serverId: serverId)
+    }
+
     /// Peer rows for the merged `sessionList`, grouped by peer name.
     var peerSessionSummaries: [RemoteSessionSummary] {
         activePeers.values
