@@ -260,7 +260,9 @@ struct RightPaneView: View {
         }
         // A panel that stops being offered is forgotten, so it cannot take over the pane when it comes back.
         .onChange(of: panels.map(\.ref), initial: true) { _, refs in
-            if let selected = rps.activePluginPanel, !refs.contains(selected) { rps.activePluginPanel = nil }
+            if let selected = rps.activePluginPanel, !refs.contains(selected) {
+                rps.activeTab = .changes // its didSet clears the panel
+            }
         }
     }
 

@@ -99,7 +99,8 @@ item and opens the pane.
 The panel a user or a command picked stays selected when the right pane
 remounts, such as when switching worktrees and back. The choice is kept in
 memory, per worktree, and is lost when Alas quits. If the panel is no longer
-offered any more, the pane falls back to its default item.
+offered, the pane falls back to Changes. Picking a built-in rail item clears
+the remembered panel.
 
 ## Images in web pages
 
