@@ -840,7 +840,8 @@ struct NativePeerSessionsTests {
         let spec = ChipSpec(source: .configOption(id: "effort"), options: [], currentId: "low")
         client.selectChip(spec, itemId: "high")
         let drive = links.sent(to: "B").filter {
-            switch $0 { case .takeOver, .setConfigOption: true; default: false }
+            switch $0 { case .takeOver, .setConfigOption: true
+            default: false }
         }
         #expect(drive == [.takeOver(sessionId: "s"),
                           .setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))])
@@ -856,7 +857,8 @@ struct NativePeerSessionsTests {
         let (links, client) = drivenClient(canDrive: true)
         client.selectChip(ChipSpec(source: source, options: [], currentId: nil), itemId: itemId)
         let verbs = links.sent(to: "B").filter {
-            switch $0 { case .setModel, .setMode, .setConfigOption, .takeOver: true; default: false }
+            switch $0 { case .setModel, .setMode, .setConfigOption, .takeOver: true
+            default: false }
         }
         #expect(verbs == [expected])
     }
@@ -939,6 +941,26 @@ struct NativePeerSessionsTests {
         client.draft = existing
         links.receive(.queueEditRestored(sessionId: "s", itemId: "i", text: "fix this"), from: "B")
         #expect(client.draft == expected)
+    }
+
+    private func queued(canRemove: Bool? = nil, images: Int = 0, resources: Int = 0) -> RemoteQueuedPrompt {
+        RemoteQueuedPrompt(id: UUID().uuidString, text: "t", imageCount: images, resourceCount: resources,
+                           status: "pending", lastError: nil, scheduledAt: nil, canRemove: canRemove)
+    }
+
+    @Test(arguments: [
+        (true, 0, 0, true), (nil, 0, 0, true), (false, 0, 0, false), (true, 1, 0, false), (true, 0, 2, false),
+    ] as [(Bool?, Int, Int, Bool)])
+    func queuedItemIsEditableOnlyWhenRemovableAndAttachmentFree(
+        canRemove: Bool?, images: Int, resources: Int, expected: Bool
+    ) {
+        let item = queued(canRemove: canRemove, images: images, resources: resources)
+        #expect(NativePeerComposerState.canEdit(item) == expected)
+    }
+
+    @Test func clearIsOfferedOnlyWhenSomeQueuedItemIsRemovable() {
+        #expect(!NativePeerComposerState.canClear([queued(canRemove: false), queued(canRemove: false)]))
+        #expect(NativePeerComposerState.canClear([queued(canRemove: false), queued(canRemove: nil)]))
     }
 
     @Test(arguments: [

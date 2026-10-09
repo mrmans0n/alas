@@ -853,7 +853,8 @@ struct RemoteProtocolTests {
     @Test func sessionConfigFromOlderHostDecodesWithoutChips() throws {
         let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false}"#
         guard case .sessionConfig(let config) = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
-        else { Issue.record("not a sessionConfig"); return }
+        else { Issue.record("not a sessionConfig")
+        return }
         #expect(config.chips == nil)
         #expect(config.supportsSteering == nil)
     }
@@ -861,7 +862,8 @@ struct RemoteProtocolTests {
     @Test func sessionConfigWithMalformedChipsStillDecodesWithoutChips() throws {
         let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false,"chips":{"model":"nonsense"}}"#
         guard case .sessionConfig(let config) = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
-        else { Issue.record("not a sessionConfig"); return }
+        else { Issue.record("not a sessionConfig")
+        return }
         #expect(config.chips == nil)
     }
 

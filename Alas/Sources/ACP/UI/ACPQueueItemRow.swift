@@ -23,6 +23,9 @@ struct ACPQueueItemRow: View {
     var allowsReordering = true
     /// Host-reported removability; nil falls back to the local item's own rule.
     var canRemove: Bool?
+    /// False when the host would refuse to edit the item (it holds images or
+    /// mentions that cannot round-trip through the composer).
+    var canEdit = true
     /// Reorder to the front of the queue without interrupting a running
     /// turn. Clears a previous send error.
     let onPromote: () -> Void
@@ -217,7 +220,7 @@ struct ACPQueueItemRow: View {
                 }
                 // Editing the resume item would pull it out of the queue and
                 // silently drop auto-resume.
-                if removable, item.usageLimit == nil {
+                if removable, canEdit, item.usageLimit == nil {
                     actionButton(
                         systemName: "pencil",
                         foreground: theme.color("fg-muted"),
@@ -279,7 +282,7 @@ struct ACPQueueItemRow: View {
             if item.lastError != nil {
                 Button("Retry", action: onRetry)
             }
-            if removable, item.usageLimit == nil {
+            if removable, canEdit, item.usageLimit == nil {
                 Button("Edit", action: onEdit)
             }
             if removable {

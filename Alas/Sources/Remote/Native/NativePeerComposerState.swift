@@ -66,6 +66,18 @@ enum NativePeerComposerState {
         return item.text.isEmpty ? summary : item.text + "\n" + summary
     }
 
+    /// The host refuses to edit an item holding images or mentions, so the
+    /// row hides Edit for them, as the web queue does.
+    static func canEdit(_ item: RemoteQueuedPrompt) -> Bool {
+        item.canRemove != false && item.imageCount == 0 && item.resourceCount == 0
+    }
+
+    /// Clear only helps when it can remove something: host-protected entries
+    /// (`canRemove == false`) survive it.
+    static func canClear(_ items: [RemoteQueuedPrompt]) -> Bool {
+        items.contains { $0.canRemove != false }
+    }
+
     private static func spec(_ chip: RemoteChip) -> ChipSpec? {
         let source: ChipSpec.Source
         switch chip.source {

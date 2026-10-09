@@ -73,6 +73,7 @@ struct NativePeerSessionView: View {
     private struct QueueRowToken: Equatable {
         let item: QueuedPrompt
         let canRemove: Bool
+        let canEdit: Bool
         let online: Bool
     }
 
@@ -85,26 +86,30 @@ struct NativePeerSessionView: View {
         let items = transcript.queue.compactMap(NativePeerComposerState.queuedPrompt)
             .filter { ACPTranscriptQueuePolicy.shouldRenderQueueBubble($0) }
         guard !items.isEmpty else { return [] }
-        let canRemoveById = Dictionary(
-            transcript.queue.map { ($0.id, $0.canRemove ?? true) }, uniquingKeysWith: { first, _ in first })
+        let wireById = Dictionary(
+            transcript.queue.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let canClear = online
+            && NativePeerComposerState.canClear(items.compactMap { wireById[$0.id.uuidString] })
         var rows: [NativePeerTranscriptExtraRow] = [NativePeerTranscriptExtraRow(
             id: "__peer_queue_header__",
-            token: ACPRowEqualityToken([items.count, online ? 1 : 0]),
+            token: ACPRowEqualityToken([items.count, canClear ? 1 : 0]),
             content: {
-                AnyView(ACPQueueHeader(count: items.count, canClear: online, onClear: { client.queueClear() }))
+                AnyView(ACPQueueHeader(count: items.count, canClear: canClear, onClear: { client.queueClear() }))
             })]
         for (index, item) in items.enumerated() {
             let id = item.id.uuidString
-            let canRemove = canRemoveById[id] ?? true
+            let wire = wireById[id]
+            let canRemove = wire?.canRemove ?? true
+            let canEdit = wire.map(NativePeerComposerState.canEdit) ?? true
             rows.append(NativePeerTranscriptExtraRow(
                 id: "__peer_queue_\(id)",
-                token: ACPRowEqualityToken(QueueRowToken(item: item, canRemove: canRemove, online: online)),
+                token: ACPRowEqualityToken(QueueRowToken(item: item, canRemove: canRemove, canEdit: canEdit, online: online)),
                 content: {
                     AnyView(ACPQueueItemRow(
                         item: item, position: index + 1, contentMaxWidth: contentMaxWidth,
                         typography: typography, canMoveUp: false, canMoveDown: false,
                         isHeldByUsageLimit: false,
-                        allowsReordering: false, canRemove: canRemove,
+                        allowsReordering: false, canRemove: canRemove, canEdit: canEdit,
                         onPromote: {}, onSendNow: { client.queueForceSend(id) },
                         onEdit: { client.queueEdit(id) }, onRemove: { client.queueRemove(id) },
                         onRetry: { client.queueRetry(id) }, onMoveUp: {}, onMoveDown: {})
