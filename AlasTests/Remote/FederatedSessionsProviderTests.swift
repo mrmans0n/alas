@@ -92,8 +92,8 @@ struct FederatedSessionsProviderTests {
         links.goOnline("srv-c", name: "Mac C")
         links.sent.removeAll()
         #expect(provider.route(.listSessions, from: client.downstream) == false)
-        #expect(links.sent(to: "srv-b") == [.listSessions])
-        #expect(links.sent(to: "srv-c") == [.listSessions])
+        #expect(links.sent(to: "srv-b") == [.listSessions, .listProjects])
+        #expect(links.sent(to: "srv-c") == [.listSessions, .listProjects])
     }
 
     @Test func subscribeIsForwardedWithTheLocalIdAndRepliesComeBackNamespaced() {
