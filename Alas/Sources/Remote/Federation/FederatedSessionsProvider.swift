@@ -49,6 +49,9 @@ final class FederatedSessionsProvider {
     static let listPollInterval: TimeInterval = 15
     /// Several phones polling at once must not turn into a burst upstream.
     static let listRequestThrottle: TimeInterval = 2
+    /// Unanswered queue edits remembered per session. The peer never answers
+    /// an edit it refuses, so the oldest are dropped past this.
+    static let queueEditRequesterLimit = 16
 
     /// Fired whenever any peer's link state or advertised record may have
     /// changed, so the server can push a fresh `hello` (its `peers` list —
@@ -172,12 +175,12 @@ final class FederatedSessionsProvider {
     /// reply goes to the head; the asker need not be subscribed. A detached
     /// requester stays as nil so the next reply still lines up.
     private var tabActionRequesters: [String: [UUID?]] = [:]
-    /// Namespaced session id → queue item id → downstreams that asked to
-    /// edit it, oldest first. The restored text goes back to the asker even
-    /// after it unsubscribed, or the dequeued prompt would be lost. The peer
-    /// stays silent for an item it no longer has, so entries are keyed by
-    /// item: a dropped request can never misroute a later reply.
-    private var queueEditRequesters: [String: [String: [UUID]]] = [:]
+    /// Namespaced session id → (queue item id, downstream that asked to edit
+    /// it), oldest first. The restored text goes back to the asker even after
+    /// it unsubscribed, or the dequeued prompt would be lost. The peer stays
+    /// silent for an item it no longer has, so replies are matched by item:
+    /// an unanswered request can never misroute a later reply.
+    private var queueEditRequesters: [String: [(itemId: String, downstreamId: UUID)]] = [:]
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
@@ -228,11 +231,8 @@ final class FederatedSessionsProvider {
             tabActionRequesters[namespaced] = queue.map { $0 == id ? nil : $0 }
         }
         // Without its asker, a restore falls back to the session's subscribers.
-        for (namespaced, items) in queueEditRequesters {
-            let remaining = items.compactMapValues { ids in
-                let kept = ids.filter { $0 != id }
-                return kept.isEmpty ? nil : kept
-            }
+        for (namespaced, requests) in queueEditRequesters {
+            let remaining = requests.filter { $0.downstreamId != id }
             queueEditRequesters[namespaced] = remaining.isEmpty ? nil : remaining
         }
     }
@@ -294,7 +294,9 @@ final class FederatedSessionsProvider {
                 }
                 tabActionRequesters[namespaced, default: []].append(downstream.id)
             case .queueEdit(_, let itemId):
-                queueEditRequesters[namespaced, default: [:]][itemId, default: []].append(downstream.id)
+                var requests = queueEditRequesters[namespaced, default: []]
+                requests.append((itemId, downstream.id))
+                queueEditRequesters[namespaced] = Array(requests.suffix(Self.queueEditRequesterLimit))
             default:
                 break
             }
@@ -580,10 +582,10 @@ final class FederatedSessionsProvider {
     /// Pops the oldest live asker for this item's edit.
     private func takeQueueEditRequester(itemId: String, for namespaced: String) -> FederatedDownstream? {
         pruneDeadDownstreams()
-        guard var ids = queueEditRequesters[namespaced]?[itemId], !ids.isEmpty else { return nil }
-        let id = ids.removeFirst()
-        queueEditRequesters[namespaced]?[itemId] = ids.isEmpty ? nil : ids
-        if queueEditRequesters[namespaced]?.isEmpty == true { queueEditRequesters[namespaced] = nil }
+        guard var requests = queueEditRequesters[namespaced],
+              let index = requests.firstIndex(where: { $0.itemId == itemId }) else { return nil }
+        let id = requests.remove(at: index).downstreamId
+        queueEditRequesters[namespaced] = requests.isEmpty ? nil : requests
         return downstreams[id]?.value
     }
 

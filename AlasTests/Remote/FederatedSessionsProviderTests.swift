@@ -189,6 +189,21 @@ struct FederatedSessionsProviderTests {
         #expect(second.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
     }
 
+    @Test func unansweredQueueEditsAreForgottenPastTheLimit() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let client = Client()
+        provider.attach(client.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        // The peer never answers an edit it refuses, so these stay unanswered.
+        for item in 0...FederatedSessionsProvider.queueEditRequesterLimit {
+            _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i\(item)"), from: client.downstream)
+        }
+        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i0", text: "oldest"), from: "srv-b")
+        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i1", text: "kept"), from: "srv-b")
+        #expect(client.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i1", text: "kept")])
+    }
+
     @Test func tabActionsForAPeerWithoutTheCapabilityFailWithoutBeingSent() {
         let links = FakeLinks()
         links.olderPeers = ["srv-b"]
