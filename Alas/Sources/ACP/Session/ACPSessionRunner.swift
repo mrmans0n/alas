@@ -2016,6 +2016,13 @@ final class ACPSessionRunner {
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
     /// (a closed transport) or a turn lost with the connection, and is not recorded.
+    /// A transport reports a handoff even for a request it failed to send, so a failed prompt is unmarked first thing,
+    /// before a restart could read the marker, unless the agent answered it.
+    nonisolated private func unmarkHandoffUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
+        if case ACPClientError.jsonrpc = error { return }
+        handedOffPromptIDs.withLock { _ = $0.remove(promptID) }
+    }
+
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
         if case ACPClientError.jsonrpc = error { return }
         unreportedPrompts[promptID] = nil
@@ -4499,6 +4506,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
+                self.unmarkHandoffUnlessAgentAnswered(promptID, error)
                 await self.waitForPromptUpdateDelivery(promptID: promptID)
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
@@ -4677,6 +4685,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
+                self.unmarkHandoffUnlessAgentAnswered(promptID, error)
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     self.forgetUsageUnlessAgentAnswered(promptID, error)
