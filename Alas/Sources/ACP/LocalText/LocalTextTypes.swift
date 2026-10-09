@@ -16,6 +16,7 @@ enum LocalTextCaller: Hashable, Sendable {
     case runFailureBrief
     case commitMessage
     case changeSummary
+    case attentionRollUp
 }
 
 struct LocalTextMessage: Equatable, Sendable {

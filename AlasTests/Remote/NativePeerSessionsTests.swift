@@ -254,6 +254,82 @@ struct NativePeerSessionsTests {
         #expect(NativePeerRequestBridge.planReply(.init(outcome: .cancelled)).action == "cancel")
     }
 
+    private func startedPeerClient() -> (FakeLinks, NativePeerSessions) {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: {
+                links.sessionCarryingPeers.map {
+                    .init(serverId: $0.serverId, name: $0.name, state: "online")
+                }
+            }
+        )
+        client.start()
+        return (links, client)
+    }
+
+    @Test func peerProjectInventoryGroupsProjectsWithTheirSessions() throws {
+        let (links, client) = startedPeerClient()
+        defer { client.stop() }
+        links.receive(.projectList(projects: [
+            .init(id: "empty", name: "Empty project"),
+            .init(id: "active", name: "Active project")
+        ]), from: "B")
+        links.receive(.sessionList(sessions: [
+            .init(id: "s", title: "Session", agentId: "claude", status: "idle", canDrive: true,
+                  projectId: "active", worktreeId: "w",
+                  worktree: .init(projectName: "Old name", worktreeName: "main", branch: "main",
+                                  path: "/active", metricsAvailable: false, comparisonRef: nil,
+                                  commitCount: 0, changedFileCount: 0, addedLines: 0,
+                                  deletedLines: 0, conflictCount: 0))
+        ]), from: "B")
+
+        let repos = try #require(client.snapshot.groups.first).repos(ordering: .manual)
+        #expect(Set(repos.compactMap(\.projectId)) == ["empty", "active"])
+        let empty = try #require(repos.first { $0.projectId == "empty" })
+        #expect(empty.name == "Empty project")
+        #expect(empty.worktrees.isEmpty)
+        let active = try #require(repos.first { $0.projectId == "active" })
+        #expect(active.name == "Active project")
+        #expect(active.worktrees.first?.sessions.map(\.id) == ["B:s"])
+    }
+
+    @Test func newSessionCanStartFromAnInventoryOnlyPeerProject() throws {
+        let (links, client) = startedPeerClient()
+        defer { client.stop() }
+        links.receive(.projectList(projects: [.init(id: "empty", name: "Empty project")]), from: "B")
+
+        let peer = try #require(client.snapshot.groups.first)
+        let repo = try #require(peer.repos(ordering: .manual).first)
+        client.beginNewSession(peer: peer, repo: repo)
+
+        #expect(client.newSession?.projectId == "empty")
+    }
+
+    @Test func peerProjectInventoryRenameUpdatesItsSidebarLabel() throws {
+        let (links, client) = startedPeerClient()
+        defer { client.stop() }
+        links.receive(.projectList(projects: [.init(id: "empty", name: "Old name")]), from: "B")
+        links.receive(.projectList(projects: [.init(id: "empty", name: "Renamed project")]), from: "B")
+
+        let repo = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first)
+        #expect(repo.name == "Renamed project")
+    }
+
+    @Test func reconnectingPeerReplacesItsProjectInventory() throws {
+        let (links, client) = startedPeerClient()
+        defer { client.stop() }
+        links.receive(.projectList(projects: [.init(id: "old", name: "Old project")]), from: "B")
+        links.offline("B")
+        links.online("B", name: "Mac B")
+        client.refresh()
+
+        #expect(client.snapshot.groups.first?.repos(ordering: .manual).isEmpty == true)
+        links.receive(.projectList(projects: [.init(id: "fresh", name: "Fresh project")]), from: "B")
+        #expect(client.snapshot.groups.first?.repos(ordering: .manual).compactMap(\.projectId) == ["fresh"])
+    }
+
     @Test func startSelectionAndStopOwnOneDownstream() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

@@ -605,6 +605,18 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
+    /// A transport reports a handoff even for a request it failed to send, before or after the failure resumes: a
+    /// failed send stays unsent either way, so a retired runner never records it.
+    @Test func aFailedSendStaysUnsentWhicheverOrderItsHandoffIsReported() {
+        let handoffs = PromptHandoffs()
+        handoffs.markUnsent(1)
+        handoffs.mark(1)
+        handoffs.mark(2)
+        handoffs.markUnsent(2)
+        handoffs.mark(3)
+        #expect(!handoffs.contains(1) && !handoffs.contains(2) && handoffs.contains(3))
+    }
+
     @Test("send attaches its checkpoint before dispatch", arguments: [false, true])
     func sendAttachesCheckpointBeforePrompt(nativeSteering: Bool) async throws {
         let checkpointID = UUID()

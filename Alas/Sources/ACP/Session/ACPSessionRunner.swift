@@ -65,14 +65,24 @@ private final class QueueDispatchHandoffTracker: @unchecked Sendable {
 }
 
 /// Prompts whose request crossed the transport handoff, marked from the transport's own callback, which may run off
-/// the main actor and before the prompt's continuation does.
-private final class PromptHandoffs: @unchecked Sendable {
+/// the main actor and before the prompt's continuation does. A transport reports a handoff even for a request it
+/// failed to send, before or after resuming the failure, so a send failure is final: a later `mark` does not undo it.
+final class PromptHandoffs: @unchecked Sendable {
     private let lock = NSLock()
     private var promptIDs: Set<Int> = []
+    private var unsentIDs: Set<Int> = []
 
     func mark(_ promptID: Int) {
         lock.lock()
-        promptIDs.insert(promptID)
+        if !unsentIDs.contains(promptID) { promptIDs.insert(promptID) }
+        lock.unlock()
+    }
+
+    /// The send failed without the agent answering: the prompt never reached it.
+    func markUnsent(_ promptID: Int) {
+        lock.lock()
+        unsentIDs.insert(promptID)
+        promptIDs.remove(promptID)
         lock.unlock()
     }
 
@@ -85,6 +95,7 @@ private final class PromptHandoffs: @unchecked Sendable {
     func forget(below promptID: Int) {
         lock.lock()
         promptIDs = promptIDs.filter { $0 >= promptID }
+        unsentIDs = unsentIDs.filter { $0 >= promptID }
         lock.unlock()
     }
 }
@@ -2095,6 +2106,12 @@ final class ACPSessionRunner {
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
     /// (a closed transport) or a turn lost with the connection, and is not recorded.
+    /// Called first thing on a send failure, before a teardown could read the handoff.
+    nonisolated private func markUnsentUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
+        if case ACPClientError.jsonrpc = error { return }
+        promptHandoffs.markUnsent(promptID)
+    }
+
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
         if case ACPClientError.jsonrpc = error { return }
         unreportedPrompts[promptID] = nil
@@ -4583,6 +4600,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
+                self.markUnsentUnlessAgentAnswered(promptID, error)
                 await self.waitForPromptUpdateDelivery(promptID: promptID)
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
@@ -4759,6 +4777,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
+                self.markUnsentUnlessAgentAnswered(promptID, error)
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     self.forgetUsageUnlessAgentAnswered(promptID, error)
