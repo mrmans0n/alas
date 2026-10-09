@@ -415,7 +415,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = manager.createSession(agentId: "claude")
         await manager.attach(to: session.id, freshlyCreated: true)
         await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
-        // Marked on the main actor along with the handoff that makes the turn one the agent may have received.
+        // Streaming follows the transport handoff that makes the turn one the agent may have received.
         try await waitUntil { session.transcript.streamingState == .streaming }
 
         await manager.restartConnection(to: session.id)
