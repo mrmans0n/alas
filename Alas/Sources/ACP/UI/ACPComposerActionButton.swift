@@ -50,23 +50,23 @@ struct ACPComposerActionButton: View {
             .help("Send (⏎)")
 
             if showsSchedule {
-            chevronHalf(help: "Schedule send") {
-                let now = Date()
-                ForEach(ACPSchedulePreset.allCases) { preset in
-                    if preset.date(after: now) != nil {
-                        Button(preset.title) {
-                            if let date = preset.date(after: Date()) { onSchedule(date) }
+                chevronHalf(help: "Schedule send") {
+                    let now = Date()
+                    ForEach(ACPSchedulePreset.allCases) { preset in
+                        if preset.date(after: now) != nil {
+                            Button(preset.title) {
+                                if let date = preset.date(after: Date()) { onSchedule(date) }
+                            }
                         }
                     }
+                    Divider()
+                    Button("Custom date and time…") {
+                        let now = Date()
+                        customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
+                            ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
+                        showsCustomSchedule = true
+                    }
                 }
-                Divider()
-                Button("Custom date and time…") {
-                    let now = Date()
-                    customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
-                        ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
-                    showsCustomSchedule = true
-                }
-            }
             }
         }
         .capsuleSurface(

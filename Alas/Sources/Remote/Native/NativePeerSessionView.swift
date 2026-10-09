@@ -70,6 +70,12 @@ struct NativePeerSessionView: View {
 
     // MARK: - Queue
 
+    private struct QueueRowToken: Equatable {
+        let item: QueuedPrompt
+        let canRemove: Bool
+        let online: Bool
+    }
+
     /// "Up next" rows mirror the host queue. The host owns ordering, so the
     /// rows offer no reordering; removal follows the host's `canRemove`.
     private func queueRows(_ transcript: NativePeerTranscript, contentMaxWidth: CGFloat) -> [NativePeerTranscriptExtraRow] {
@@ -92,7 +98,7 @@ struct NativePeerSessionView: View {
             let canRemove = canRemoveById[id] ?? true
             rows.append(NativePeerTranscriptExtraRow(
                 id: "__peer_queue_\(id)",
-                token: ACPRowEqualityToken(item),
+                token: ACPRowEqualityToken(QueueRowToken(item: item, canRemove: canRemove, online: online)),
                 content: {
                     AnyView(ACPQueueItemRow(
                         item: item, position: index + 1, contentMaxWidth: contentMaxWidth,
@@ -390,6 +396,7 @@ private struct NativePeerComposer: View {
                         switch action {
                         case .stop: client.stopSelected()
                         default:
+                            guard !client.isPromptPending else { return }
                             client.sendPrompt(intent: primarySubmitIntent(
                                 for: action,
                                 optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
@@ -397,8 +404,12 @@ private struct NativePeerComposer: View {
                     },
                     onMenu: { item in
                         switch item {
-                        case .queue: client.sendPrompt(intent: .auto)
-                        case .steer: client.sendPrompt(intent: .steer)
+                        case .queue:
+                            guard !client.isPromptPending else { return }
+                            client.sendPrompt(intent: .auto)
+                        case .steer:
+                            guard !client.isPromptPending else { return }
+                            client.sendPrompt(intent: .steer)
                         case .stop: client.stopSelected()
                         }
                     },
@@ -407,7 +418,7 @@ private struct NativePeerComposer: View {
                     nativeSteering: config?.supportsSteering == true,
                     showsSchedule: false
                 )
-                .disabled(!sessionOpen || client.isPromptPending)
+                .disabled(!sessionOpen)
                 .keyboardShortcut(.return, modifiers: .command)
             }
             .padding(.horizontal, 2)
