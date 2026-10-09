@@ -252,7 +252,7 @@ struct ACPBackgroundTaskTray: View {
         .padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.color("bg-2") : .clear))
         .padding(.horizontal, -6)
-        .onHover { inside in
+        .acpTrackingHover { inside in
             if inside { hoveredId = task.id } else if hoveredId == task.id { hoveredId = nil }
         }
         .help([task.name, task.summary ?? task.description].compactMap { $0 }.joined(separator: "\n"))
@@ -431,7 +431,7 @@ private struct StopTaskButton: View {
                     metrics: ToolbarControlMetrics(width: 18, height: 18, cornerRadius: 4))
         }
         .buttonStyle(.toolbarControl)
-        .onHover { hovering = $0 }
+        .acpTrackingHover { hovering = $0 }
         .help("Stop")
         .accessibilityLabel("Stop background task \(taskName)")
     }

@@ -62,7 +62,8 @@ struct AgentWorktreeTabView: View {
     private var sessionUpdates: AnyPublisher<Void, Never> {
         Publishers.MergeMany(manager.sessions.values.flatMap { session in
             [session.objectWillChange.eraseToAnyPublisher(),
-             session.transcript.objectWillChange.eraseToAnyPublisher()]
+             session.transcript.objectWillChange.eraseToAnyPublisher(),
+             session.transcript.streamingTicks.eraseToAnyPublisher()]
         })
         // Published notifications arrive before mutation; deliver after the
         // update and coalesce streaming events into one sidebar refresh.

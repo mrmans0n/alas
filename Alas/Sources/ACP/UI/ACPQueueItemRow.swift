@@ -70,7 +70,7 @@ struct ACPQueueItemRow: View {
         )
         .frame(maxWidth: contentMaxWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onHover { inside in
+        .acpTrackingHover { inside in
             if inside { hover.enter() } else { hover.leave() }
         }
         .onDisappear { hover.reset() }

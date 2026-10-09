@@ -70,15 +70,16 @@ final class ACPTranscript: ObservableObject {
     /// transcript array changes so high-frequency streaming ticks do not scan
     /// the full message list from `ACPSessionView` / plan UI bodies.
     @Published private(set) var currentPlan: [ACPMessage.PlanItem]?
-    /// Tick incremented on every streaming chunk that mutates an existing
-    /// agent/thought buffer. The buffer itself publishes (so the row's
-    /// inner Text re-renders), but the transcript array doesn't change —
-    /// without this tick, `ACPMessageList`'s body wouldn't re-evaluate
-    /// and the tail-scroll signature wouldn't recompute, so long replies
-    /// drift below the viewport mid-stream. Body re-eval is cheap because
-    /// stableId + StreamingText identity equality keep the ForEach row
-    /// tree stable across ticks.
-    @Published var streamingTick: UInt32 = 0
+    /// Tick incremented (throttled) on streaming chunks that mutate an
+    /// existing agent/thought buffer. Deliberately NOT `@Published`: the
+    /// buffer itself publishes to the row rendering it, and that row's
+    /// intrinsic-size invalidation is what re-measures and re-pins the
+    /// transcript. Publishing here re-ran the whole transcript pane's row
+    /// spec rebuild ~30 times a second for content it does not read.
+    /// Observers that summarize streamed text subscribe to `streamingTicks`.
+    var streamingTick: UInt32 = 0
+    /// Fires with every `streamingTick` increment.
+    let streamingTicks = PassthroughSubject<Void, Never>()
     /// Wall-clock time (`ProcessInfo.systemUptime`) of the last `streamingTick`
     /// publish. Used to throttle publishes to `streamingTickMinInterval`.
     private var lastStreamingTickPublish: TimeInterval = 0
@@ -144,7 +145,12 @@ final class ACPTranscript: ObservableObject {
     /// Cleared by `ACPSession.markCompletedOutputBoundary()` so a stale
     /// pointer from a finished turn can never register as live before the
     /// next turn's first chunk lands and sets it fresh.
-    var lastContentTouchIndex: Int?
+    ///
+    /// Publishes only when it moves: a chunk resuming an older row changes
+    /// which row shimmers without changing `messages`.
+    var lastContentTouchIndex: Int? {
+        didSet { if oldValue != lastContentTouchIndex { objectWillChange.send() } }
+    }
 
     // MARK: - Per-message markdown caches
 
@@ -587,18 +593,23 @@ final class ACPTranscript: ObservableObject {
         ) {
         case .publishNow:
             lastStreamingTickPublish = now
-            streamingTick &+= 1
+            publishStreamingTick()
         case .scheduleDrain(let delay):
             streamingTickDrain = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
                 self.streamingTickDrain = nil
                 self.lastStreamingTickPublish = ProcessInfo.processInfo.systemUptime
-                self.streamingTick &+= 1
+                self.publishStreamingTick()
             }
         case .drop:
             break
         }
+    }
+
+    private func publishStreamingTick() {
+        streamingTick &+= 1
+        streamingTicks.send()
     }
 
     // MARK: - Render window helpers

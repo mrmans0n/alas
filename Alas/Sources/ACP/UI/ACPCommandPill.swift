@@ -607,7 +607,7 @@ struct ACPCommandPill: View {
                 )
         )
         .fixedSize()
-        .onHover { isHovering = $0 }
+        .acpTrackingHover { isHovering = $0 }
         .task(id: isHovering) {
             guard isHovering, ACPCommandHoverCard.hasDetails(suggestion) else {
                 if showsCard { showsCard = false }

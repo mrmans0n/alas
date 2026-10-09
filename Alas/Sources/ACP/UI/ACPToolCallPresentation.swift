@@ -26,6 +26,12 @@ struct ACPToolCallPresentation: Equatable, Sendable {
     /// ordinary call whose title merely mentions `visual_show` (`rg visual_show
     /// Alas/`) is not mistaken for the visual tool.
     static func isVisualShow(name: String?, title: String?) -> Bool {
+        // Every match contains the tool name. Checking that first skips
+        // tokenizing long shell-command titles on every transcript update.
+        func mentionsTool(_ text: String?) -> Bool {
+            text?.range(of: "visual_show", options: .caseInsensitive) != nil
+        }
+        guard mentionsTool(name) || mentionsTool(title) else { return false }
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedName.isEmpty { return namesVisualShowTool(trimmedName) }
         return titleLeadsWithVisualShowTool(title ?? "")

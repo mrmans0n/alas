@@ -101,4 +101,59 @@ struct ACPTranscriptRowHostingViewTests {
         // and longHeight would equal shortHeight.
         #expect(longHeight > shortHeight)
     }
+
+    /// A hovered row must settle. Reacting to hover by republishing state
+    /// (as the message gutter does) used to resubscribe the hover stream on
+    /// every render and replay its value, so a row under the pointer
+    /// re-rendered itself until the app beachballed.
+    @Test("a hovered row reports the hover once and settles")
+    func hoveredRowSettles() async throws {
+        let probe = HoverProbe()
+        let view = ACPTranscriptRowHostingView(rootView: AnyView(HoverProbeView(probe: probe)))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.close() }
+        _ = view.measuredHeight(forWidth: 300)
+        window.layoutIfNeeded()
+
+        view.hover.isHovered = true
+        try await eventually("the hover to reach the row") {
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+            return probe.enters > 0
+        }
+        // A looping row would keep re-entering across further render passes.
+        var passes = 0
+        try await eventually("further render passes") {
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+            passes += 1
+            return passes >= 20
+        }
+
+        #expect(probe.enters == 1)
+    }
+}
+
+@MainActor
+private final class HoverProbe: ObservableObject {
+    @Published var revision = 0
+    var enters = 0
+}
+
+private struct HoverProbeView: View {
+    @ObservedObject var probe: HoverProbe
+
+    var body: some View {
+        Text("row \(probe.revision)")
+            .acpRowHover { inside in
+                guard inside else { return }
+                probe.enters += 1
+                probe.revision += 1
+            }
+    }
 }
