@@ -1417,9 +1417,13 @@ final class PluginHost {
                     return .violation("plugin sent view/render to tab \(tab), which is not a view tab")
                 }
             case (nil, let panel?):
-                guard let location = manifest.panels.first(where: { $0.id == panel })?.location else {
+                guard let declared = manifest.panels.first(where: { $0.id == panel }) else {
                     return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which it does not declare"))
                 }
+                guard declared.kind == .view else {
+                    return .violation(Self.bounded("plugin sent view/render to panel \"\(panel)\", which is not a view panel"))
+                }
+                let location = declared.location
                 // A panel names exactly the context its location has.
                 let needs: (worktree: Bool, run: Bool) = switch location {
                 case .right, .configure: (false, false)

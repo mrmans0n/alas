@@ -268,15 +268,16 @@ struct PluginHostTests {
         (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"panel":"cv","regions":[]}}"#),
         (#"{"id":"io.test.plugin","name":"Test","version":"1","api":14,"entry":"p.js","contributes":{"tabs":[{"id":"t","title":"T"}],"panels":[{"id":"cv","title":"CV"}]}}"#,
          #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"panel":"cv","regions":[]}}"#),
+        (PluginHostTests.panelsManifest, render(panel: "cv")),
     ])
-    func misdirectedCanvasRegionsStopThePlugin(manifest: String, message: String) async throws {
+    func misdirectedPanelMessagesStopThePlugin(manifest: String, message: String) async throws {
         let host = try makeHost([[.send(activateOK), .send(message)]], manifest: manifest)
         await host.activate()
         guard case .failed(let reason) = host.state else {
             Issue.record("expected failed, got \(host.state)")
             return
         }
-        #expect(reason.contains("canvas/regions"))
+        #expect(reason.contains(message.contains("view/render") ? "not a view panel" : "canvas/regions"))
     }
 
     @Test(arguments: [
