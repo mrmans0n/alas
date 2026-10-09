@@ -40,7 +40,7 @@ struct ACPSymbolBadge: View {
             pill
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .acpTrackingHover { isHovering = $0 }
         .onDisappear {
             isHovering = false
             showsPreview = false

@@ -514,6 +514,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let fork = Self.readyFork(host: host)
             let forkBoundaryIndex = fork.map { $0.inheritedMessageCount - 1 }
             var forkDividerEmitted = false
+            // Read once: each `@Published` read goes through the property
+            // wrapper, and this loop visits every row in the window.
+            let snapshot = RowSnapshot(host: host)
+            let messages = snapshot.messages
+            let isTurnActive = transcript.streamingState != .idle
+            let latestUserIndex = transcript.latestUserMessageIndex ?? 0
             for renderRow in rows {
                 // The divider normally follows its boundary row (below). But
                 // when the boundary message never becomes a row — a `.plan`,
@@ -531,7 +537,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 switch renderRow {
                 case .message(let row):
                     guard let spec = Self.messageRowSpec(
-                        host: host, row: row, inToolCallGroup: false,
+                        host: host, snapshot: snapshot, row: row, inToolCallGroup: false,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -539,7 +545,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     lastIndex = row.index
                 case .toolCallGroupMember(let row, _):
                     guard let spec = Self.messageRowSpec(
-                        host: host, row: row, inToolCallGroup: true,
+                        host: host, snapshot: snapshot, row: row, inToolCallGroup: true,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ) else { continue }
@@ -547,7 +553,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     lastIndex = row.index
                 case .toolCallGroup(let group), .toolCallGroupHeader(let group):
                     specs.append(Self.toolCallGroupHeaderSpec(
-                        host: host, group: group, expansionSeeds: expansionSeeds
+                        host: host, messages: messages, group: group, expansionSeeds: expansionSeeds
                     ))
                     if case .toolCallGroup = renderRow {
                         // A collapsed bundle stands in for every member, so
@@ -562,15 +568,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         lastIndex = .min
                     }
                 }
-                let isActiveTurnRow = transcript.streamingState != .idle
-                    && Self.firstIndex(of: renderRow) >= (transcript.latestUserMessageIndex ?? 0)
-                if isActiveTurnRow || Self.hasLiveTool(in: renderRow, host: host) {
+                let isActiveTurnRow = isTurnActive && Self.firstIndex(of: renderRow) >= latestUserIndex
+                if isActiveTurnRow || Self.hasLiveTool(in: renderRow, messages: messages, host: host) {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
                 // A parked graph would keep the visual's web page and its process alive.
                 if case .message(let row) = renderRow,
-                   transcript.messages.indices.contains(row.index),
-                   case .visualAid = transcript.messages[row.index] {
+                   messages.indices.contains(row.index),
+                   case .visualAid = messages[row.index] {
                     specs[specs.count - 1].parksWhenReleased = false
                 }
                 // Fork divider follows its boundary row, as in the legacy list.
@@ -593,17 +598,39 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
         }
 
-        private static func hasLiveTool(in renderRow: ACPTranscriptRenderRow, host: ACPTranscriptScroller) -> Bool {
+        private static func hasLiveTool(
+            in renderRow: ACPTranscriptRenderRow, messages: [ACPMessage], host: ACPTranscriptScroller
+        ) -> Bool {
             let indices: [Int] = switch renderRow {
             case .message(let row), .toolCallGroupMember(let row, _): [row.index]
             case .toolCallGroup(let group), .toolCallGroupHeader(let group): group.members.map(\.index)
             }
             return indices.contains { index in
-                guard case .toolCall(let call) = host.transcript.messages[index] else { return false }
+                guard case .toolCall(let call) = messages[index] else { return false }
                 return call.status == "pending" || call.status == "in_progress" || call.terminalIds.contains { id in
                     guard let terminal = host.session.terminalHost.terminal(id: id) else { return false }
                     return !terminal.released && terminal.exitStatus == nil
                 }
+            }
+        }
+
+        /// Transcript state every message row's key reads, captured once per
+        /// spec rebuild instead of once per row.
+        private struct RowSnapshot {
+            let messages: [ACPMessage]
+            let liveNarrationIndex: Int?
+            let canFork: (Int) -> Bool
+
+            @MainActor
+            init(host: ACPTranscriptScroller) {
+                let transcript = host.transcript
+                messages = transcript.messages
+                liveNarrationIndex = ACPNarrationLiveness.liveIndex(
+                    messages: messages,
+                    isStreaming: transcript.streamingState == .streaming,
+                    lastContentTouchIndex: transcript.lastContentTouchIndex
+                )
+                canFork = host.session.forkEligibility()
             }
         }
 
@@ -615,18 +642,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// identity.
         private static func messageRowSpec(
             host: ACPTranscriptScroller,
+            snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             inToolCallGroup: Bool,
             availableRowContentWidth: CGFloat,
             availableTrailingGutterWidth: CGFloat
         ) -> ACPTranscriptRowSpec? {
-            let transcript = host.transcript
-            guard transcript.messages.indices.contains(row.index) else { return nil }
-            let message = transcript.messages[row.index]
+            guard snapshot.messages.indices.contains(row.index) else { return nil }
+            let message = snapshot.messages[row.index]
             let rowToken = token(
                 MessageRowTokenInputs(
                     key: Self.messageRowKey(
-                        host: host, row: row, message: message,
+                        host: host, snapshot: snapshot, row: row, message: message,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
                     ),
@@ -724,6 +751,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private static func messageRowKey(
             host: ACPTranscriptScroller,
+            snapshot: RowSnapshot,
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
             availableRowContentWidth: CGFloat,
@@ -738,9 +766,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 availableTrailingGutterWidth: availableTrailingGutterWidth,
                 typography: host.typography,
                 trustedImageRoot: host.trustedImageRoot,
-                isForkEligible: host.session.canForkMessage(at: row.index),
+                isForkEligible: snapshot.canFork(row.index),
                 forkTargets: host.forkTargets,
-                isLiveNarration: isLiveNarration(host: host, row: row),
+                isLiveNarration: snapshot.liveNarrationIndex == row.index,
                 delegatedLabel: delegatedLabel(host: host, message: message)
             )
         }
@@ -780,13 +808,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// output does not refresh the header.
         private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
+            messages: [ACPMessage],
             group: ACPTranscriptToolCallGroup,
             expansionSeeds: ACPToolCallGroupExpansionSeeds
         ) -> ACPTranscriptRowSpec {
-            let transcript = host.transcript
             let toolCalls: [ACPMessage.ToolCall] = group.members.compactMap { row in
-                guard transcript.messages.indices.contains(row.index),
-                      case .toolCall(let toolCall) = transcript.messages[row.index]
+                guard messages.indices.contains(row.index),
+                      case .toolCall(let toolCall) = messages[row.index]
                 else { return nil }
                 return toolCall
             }

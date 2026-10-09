@@ -7,18 +7,32 @@ enum ACPMessageTimestampFormatter {
         calendar: Calendar = .current,
         locale: Locale = .current
     ) -> String {
+        let format: String
+        if calendar.isDate(date, inSameDayAs: now) {
+            format = "HH:mm"
+        } else if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
+            format = "d MMM, HH:mm"
+        } else {
+            format = "d MMM yyyy, HH:mm"
+        }
+        return formatter(format: format, calendar: calendar, locale: locale).string(from: date)
+    }
+
+    /// Every transcript row formats its timestamp when it mounts, and building
+    /// a `DateFormatter` costs far more than using one. `NSCache` is
+    /// thread-safe, and a configured formatter is only read.
+    nonisolated(unsafe) private static let formatters = NSCache<NSString, DateFormatter>()
+
+    private static func formatter(format: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+        let key = "\(format)|\(locale.identifier)|\(calendar.identifier)|\(calendar.timeZone.identifier)" as NSString
+        if let cached = formatters.object(forKey: key) { return cached }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
-        if calendar.isDate(date, inSameDayAs: now) {
-            formatter.dateFormat = "HH:mm"
-        } else if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-            formatter.dateFormat = "d MMM, HH:mm"
-        } else {
-            formatter.dateFormat = "d MMM yyyy, HH:mm"
-        }
-        return formatter.string(from: date)
+        formatter.dateFormat = format
+        formatters.setObject(formatter, forKey: key)
+        return formatter
     }
 }
 

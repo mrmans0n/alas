@@ -55,37 +55,43 @@ struct ACPMessageGutter<Content: View>: View {
     @ViewBuilder var content: Content
 
     @StateObject private var hover = ACPDelayedHoverVisibility()
+    /// The actions are built on first hover, not with the row: their menu
+    /// button is an AppKit view, and every platform view costs a layout pass
+    /// when its row mounts mid-scroll. Once built they stay mounted (see below).
+    @State private var hasRevealedActions = false
     @Environment(\.theme) private var theme
 
     var body: some View {
         content
             .overlay(alignment: .topTrailing) {
-                actions
-                    // Keep the menu label mounted at all times and toggle
-                    // visibility via opacity/hit-testing rather than inserting
-                    // and removing the view. Removing the label while its menu
-                    // is open can dismiss the menu; this avoids that.
-                    .opacity(hover.isVisible ? 1 : 0)
-                    .allowsHitTesting(hover.isVisible)
-                    // Sit flush with the right edge of the reserved lane: the
-                    // button's own visible padding is 4pt each side (8pt total),
-                    // so net inset is laneWidth - 8. y: -2 nudges it into optical
-                    // alignment with the top of the message content. The offset
-                    // intentionally escapes the content view's bounds into the
-                    // lane reserved by the container; this relies on no ancestor
-                    // applying `clipped()` (SwiftUI does not clip overlays by
-                    // default), which also keeps the button hit-testable.
-                    .offset(x: actionsOffsetX, y: -2)
-                    // The button sits in the lane, outside `content`'s hover
-                    // region, so it must keep itself alive while hovered —
-                    // otherwise pointing at it past the hide delay would fade
-                    // and disable it mid-aim. Mirrors the old copy button.
-                    .onHover { inside in
-                        if inside { hover.enter() } else { hover.leave() }
-                    }
+                if hasRevealedActions {
+                    actions
+                        // Keep the menu label mounted at all times and toggle
+                        // visibility via opacity/hit-testing rather than inserting
+                        // and removing the view. Removing the label while its menu
+                        // is open can dismiss the menu; this avoids that.
+                        .opacity(hover.isVisible ? 1 : 0)
+                        .allowsHitTesting(hover.isVisible)
+                        // Sit flush with the right edge of the reserved lane: the
+                        // button's own visible padding is 4pt each side (8pt total),
+                        // so net inset is laneWidth - 8. y: -2 nudges it into optical
+                        // alignment with the top of the message content. The offset
+                        // intentionally escapes the content view's bounds into the
+                        // lane reserved by the container; this relies on no ancestor
+                        // applying `clipped()` (SwiftUI does not clip overlays by
+                        // default), which also keeps the button hit-testable.
+                        .offset(x: actionsOffsetX, y: -2)
+                }
             }
-            .onHover { inside in
-                if inside { hover.enter() } else { hover.leave() }
+            // The whole row, lane included, so the button stays alive while
+            // the pointer travels to it.
+            .acpRowHover { inside in
+                if inside {
+                    hasRevealedActions = true
+                    hover.enter()
+                } else {
+                    hover.leave()
+                }
             }
             .onDisappear { hover.reset() }
     }

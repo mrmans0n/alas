@@ -438,9 +438,22 @@ final class ACPTranscriptScrollerReconciler {
             updateChangedContent(specs: specs)
         case .inserted(let index, let count):
             let insertedSpecs = Array(specs[index..<(index + count)])
+            let viewportMinY = effectiveViewportMinY(forMutationAt: index)
+            let insertionY = index < tiling.rowCount ? tiling.rowLayout(at: index).minY : tiling.documentHeight
+            let isAboveViewport = tiling.rowCount > 0 && insertionY <= viewportMinY
+            let viewportMaxY = scroller.scrollY + scroller.viewportHeight
+            let isBelowViewport = tiling.rowCount > 0 && insertionY >= viewportMaxY
+            let rows: [(id: String, height: CGFloat)] = if isAboveViewport {
+                measurePage(insertedSpecs.reversed(), distanceFromViewport: viewportMinY - insertionY).reversed()
+            } else if isBelowViewport {
+                measurePage(insertedSpecs, distanceFromViewport: insertionY - viewportMaxY)
+            } else {
+                measure(insertedSpecs)
+            }
             let compensation = tiling.insert(
-                rows: measure(insertedSpecs), at: index,
-                viewportMinY: effectiveViewportMinY(forMutationAt: index)
+                rows: rows,
+                at: index,
+                viewportMinY: viewportMinY
             )
             if compensation != 0 {
                 scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
@@ -658,8 +671,7 @@ final class ACPTranscriptScrollerReconciler {
                ) {
                 return (spec.id, known)
             }
-            let (view, _) = pool.view(for: spec)
-            return (spec.id, view.measuredHeight(forWidth: contentWidth))
+            return (spec.id, measuredHeight(of: pool.view(for: spec).view))
         }
     }
 
@@ -894,9 +906,57 @@ final class ACPTranscriptScrollerReconciler {
     private func measure<S: Sequence>(_ specs: S) -> [(id: String, height: CGFloat)]
     where S.Element == ACPTranscriptRowSpec {
         specs.map { spec in
-            let (view, _) = pool.view(for: spec)
-            return (spec.id, view.measuredHeight(forWidth: contentWidth))
+            (spec.id, measuredHeight(of: pool.view(for: spec).view))
         }
+    }
+
+    /// Heights for a page grafted in entirely off screen: a history page
+    /// above the viewport or a newer page below it. `specs` runs outward
+    /// from the viewport. Only the rows the mount band reaches are measured
+    /// now; the rest take the running mean and are measured when they mount.
+    /// Measuring a whole 30-row page up front cost 40-100ms per page while
+    /// scrolling. A placeholder cannot move what is on screen: a row above
+    /// the viewport is still above it when its real height lands, so
+    /// `applyHeightToTiling` compensates the offset, and a row below it only
+    /// moves content further down.
+    private func measurePage<S: Sequence>(
+        _ specs: S, distanceFromViewport: CGFloat
+    ) -> [(id: String, height: CGFloat)] where S.Element == ACPTranscriptRowSpec {
+        // A page requested well before the reader reaches it lies entirely
+        // beyond the overscan: nothing in it needs measuring yet.
+        var measuredExtent = max(0, distanceFromViewport)
+        return specs.map { spec in
+            guard measuredExtent < Self.overscan else { return (spec.id, estimatedRowHeight) }
+            let height = measuredHeight(of: pool.view(for: spec).view)
+            measuredExtent += height
+            return (spec.id, height)
+        }
+    }
+
+    /// Running mean of measured row heights: the placeholder for rows whose
+    /// measurement is deferred until they mount.
+    private var measuredHeightTotal: CGFloat = 0
+    private var measuredHeightCount = 0
+    private var estimatedRowHeight: CGFloat {
+        measuredHeightCount > 0 ? measuredHeightTotal / CGFloat(measuredHeightCount) : 80
+    }
+
+    /// Measures `view` inside the document view. A hosting view measured
+    /// while detached is laid out again as soon as it is added: `addSubview`
+    /// hands it the window's appearance and backing scale, which invalidates
+    /// its intrinsic size. Attaching first makes the first measurement the
+    /// final one. Rows outside the mount band are released by the layout
+    /// pass that ends every `apply()`.
+    private func measuredHeight(of view: ACPTranscriptRowHostingView) -> CGFloat {
+        if view.superview !== scroller.flippedDocumentView {
+            scroller.flippedDocumentView.addSubview(view)
+        }
+        let height = view.measuredHeight(forWidth: contentWidth)
+        if height > 0 {
+            measuredHeightTotal += height
+            measuredHeightCount += 1
+        }
+        return height
     }
 
     /// Scrolling only changes which rows need hosting views. Between band

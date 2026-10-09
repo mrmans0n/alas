@@ -600,19 +600,31 @@ final class ACPSession: ObservableObject, Identifiable {
     var composerDraftRevision: Int { composer.revision }
 
     func canForkMessage(at index: Int) -> Bool {
-        guard transcript.messages.indices.contains(index) else { return false }
-        switch transcript.messages[index] {
-        case .user(_, _, let text, _, _, _):
-            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .agent(_, _, let buffer):
-            guard !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        forkEligibility()(index)
+    }
+
+    /// `canForkMessage(at:)` for many rows at once: the transcript state it
+    /// depends on is read once, not once per row.
+    func forkEligibility() -> (Int) -> Bool {
+        let messages = transcript.messages
+        let streamingAgentIndex = transcript.streamingState == .idle ? nil : lastAgent()
+        return { index in
+            guard messages.indices.contains(index) else { return false }
+            switch messages[index] {
+            case .user(_, _, let text, _, _, _):
+                return Self.hasVisibleText(text)
+            case .agent(_, _, let buffer):
+                return Self.hasVisibleText(buffer.value) && streamingAgentIndex != index
+            default:
                 return false
             }
-            guard transcript.streamingState != .idle else { return true }
-            return lastAgent() != index
-        default:
-            return false
         }
+    }
+
+    /// Stops at the first visible character. Every transcript update asks
+    /// this of every row, so trimming (which copies the text) adds up.
+    private static func hasVisibleText(_ text: String) -> Bool {
+        text.unicodeScalars.contains { !CharacterSet.whitespacesAndNewlines.contains($0) }
     }
 
     func replaceComposerDraft(_ draft: ACPComposerDraft) {

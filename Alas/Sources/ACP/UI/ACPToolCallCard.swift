@@ -126,7 +126,7 @@ struct ACPToolCallCard: View {
         .onChange(of: toolCall.contentRevision) { _, _ in
             expandedSyntax.clear()
         }
-        .onHover { isHovering = $0 }
+        .acpRowHover { isHovering = $0 }
         .onDisappear { isHovering = false }
     }
 

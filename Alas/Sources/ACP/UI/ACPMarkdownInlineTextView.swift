@@ -16,7 +16,11 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSTextView {
-        let textView = ACPMarkdownInlineNSTextView()
+        // TextKit 1: a TextKit 2 view lays out its viewport again whenever
+        // its visible rect changes, i.e. on every transcript scroll frame,
+        // for text that never scrolls inside it. Measuring goes through
+        // `boundingRect` either way, and nothing here needs TextKit 2.
+        let textView = ACPMarkdownInlineNSTextView(usingTextLayoutManager: false)
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false

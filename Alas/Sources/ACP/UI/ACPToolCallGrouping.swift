@@ -334,11 +334,23 @@ enum ACPToolCallGrouping {
         }
         var result: [Int: ACPTranscriptToolCallGroup.Kind] = [:]
 
+        /// Position of the first row whose message index is past `index`.
+        func firstRow(after index: Int) -> Int {
+            var low = rows.startIndex, high = rows.endIndex
+            while low < high {
+                let mid = (low + high) / 2
+                if rows[mid].index > index { high = mid } else { low = mid + 1 }
+            }
+            return low
+        }
+
         func record(user: Int, answer: Int) {
             guard user < answer, messages.indices.contains(answer) else { return }
-            let memberIndices = rows.lazy.map(\.index).filter { index in
-                index > user && index < answer && isCompletedTurnWork(messages[index])
-            }
+            // Rows are in message order: look only at this turn's slice, so
+            // recording every turn stays linear in the window.
+            let lower = firstRow(after: user), upper = firstRow(after: answer - 1)
+            guard lower < upper else { return }
+            let memberIndices = rows[lower..<upper].map(\.index).filter { isCompletedTurnWork(messages[$0]) }
             guard !memberIndices.isEmpty else { return }
             // A turn can contain several runs separated by readable prose or
             // the fork divider. Show its total duration on the last run only.
