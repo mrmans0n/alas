@@ -2207,7 +2207,10 @@ struct ACPComposerDraftBridgeTests {
         coordinator.submit(textView)
         #expect(completion != nil)
         #expect(dismissals == 0)
-        #expect(!reported.isEmpty && reported.allSatisfy { $0.hasSubmitInFlight && $0.isInputBlocked && !$0.hasPendingInput })
+        #expect(!reported.isEmpty && reported.allSatisfy { $0.isInputBlocked && !$0.hasPendingInput && !$0.hasSelection })
+        // Typing while the turn runs is real input and must still be reported as such.
+        textView.insertText("more", replacementRange: textView.selectedRange())
+        #expect(reported.last?.hasSelection == true)
         completion?(true)
         #expect(reported.last?.isInputBlocked == false)
     }

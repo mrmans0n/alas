@@ -145,8 +145,8 @@ struct NextPromptSettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test(arguments: [("submit in flight", true), ("typing", false), ("typing while blocked", false),
-                      ("picker during submit", false)])
+    @Test(arguments: [("blocked", true), ("typing", false), ("typing while blocked", false),
+                      ("picker while blocked", false)])
     func composerStateDuringARunningTurn(_ state: String, offers: Bool) async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -175,14 +175,12 @@ struct NextPromptSettingsTests {
         let userID = session.recordUserPrompt(text: "Explain the parser.", attachments: [])
         let promptID = session.allocatePromptID()
 
-        // A submit's own clear still reports the old caret (a selection) while in flight.
-        // Typing consumes the turn even when another blocker (runtime starting) is closed,
-        // and so does anything else a submit does not produce (a picker).
+        // A blocked composer (a submit awaiting its turn, the runtime starting) only pauses.
+        // Real input consumes the turn even while blocked.
         var during = environment
-        during.hasSelection = true
-        during.hasSubmitInFlight = state.hasSuffix("submit") || state == "submit in flight"
-        during.isPickerPresented = state == "picker during submit"
         during.isInputBlocked = state != "typing"
+        during.hasSelection = state.hasPrefix("typing")
+        during.isPickerPresented = state == "picker while blocked"
         app.nextPromptComposerChanged(during, owner: owner, sessionID: session.id)
         app.nextPromptComposerChanged(environment, owner: owner, sessionID: session.id)
         session.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))

@@ -349,6 +349,9 @@ struct ACPInputField: NSViewRepresentable {
         var hasPendingNextPromptInput: Bool { pendingImageFileInsertions > 0 }
         /// A sent prompt holds this until its turn finishes; it is not new input.
         var hasInFlightSubmit: Bool { pendingSubmitID != nil || !pendingScheduledSubmitIDs.isEmpty }
+        /// True while a submit empties the text view. The caret it reports then still
+        /// sits after the sent text; that is the submit, not input after its turn.
+        private(set) var isClearingSubmittedDraft = false
         var hasEmptyNextPromptDraft: Bool { lastSyncedDraft.isEmpty }
         private var pendingImageFileInsertions = 0
         private var imageFileInsertionGeneration = 0
@@ -748,6 +751,8 @@ struct ACPInputField: NSViewRepresentable {
         #endif
 
         private func clearVisibleDraft(in textView: NSTextView) {
+            isClearingSubmittedDraft = true
+            defer { isClearingSubmittedDraft = false }
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
                 tv.dismissImageChipHover()
@@ -1027,13 +1032,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         var state = NextPromptEligibilitySnapshot.Environment()
         state.hasComposerFocus = window != nil && window?.firstResponder === self
         state.hasKeyWindow = window?.isKeyWindow == true
-        state.hasSelection = selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0)
+        state.hasSelection = coordinator?.isClearingSubmittedDraft != true
+            && (selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0))
         state.hasMarkedText = hasMarkedText()
         state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
         state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
         state.hasPendingInput = dropPending || coordinator?.hasPendingNextPromptInput == true
-        state.hasSubmitInFlight = coordinator?.hasInFlightSubmit == true
-        state.isInputBlocked = nextPromptInputBlocked() || state.hasSubmitInFlight
+        state.isInputBlocked = nextPromptInputBlocked() || coordinator?.hasInFlightSubmit == true
         return state
     }
 
@@ -1165,7 +1170,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         nextPromptOffer = nil
         // No offer can show while a submit awaits its turn, so a dismissal
         // (the submit clearing its own text) would only consume that turn.
-        guard !insertingAcceptedNextPrompt, coordinator?.hasInFlightSubmit != true else { return }
+        guard !insertingAcceptedNextPrompt, coordinator?.isClearingSubmittedDraft != true else { return }
         dismissNextPromptOffer()
     }
 
