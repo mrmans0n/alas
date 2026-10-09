@@ -106,6 +106,8 @@ struct AgentSidebarRowView: View {
     let canControl: Bool
     let delivery: AgentSidebarFollowUpDelivery?
     @Binding var draft: String
+    /// Set when the row can't be focused; shown as its tooltip.
+    var disabledReason: String? = nil
     @State private var isEditing = false
     @State private var isHovering = false
     @Environment(\.theme) private var theme
@@ -140,7 +142,8 @@ struct AgentSidebarRowView: View {
             .buttonStyle(.plain)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Focus \(row.title), \(accessibilityMetadata), \(row.state.label)")
-            .help("Focus \(row.title)")
+            .disabled(disabledReason != nil)
+            .help(disabledReason ?? "Focus \(row.title)")
 
             if let plan = row.plan {
                 planProgress(plan)

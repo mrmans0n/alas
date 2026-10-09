@@ -319,11 +319,12 @@ struct RootView: View {
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
-            peerSessionId: state.nativePeerSessions?.selectedSessionId,
-            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil,
-            peerSelectedWithoutSession: state.nativePeerSessions.map {
-                $0.selectedSessionId == nil && ($0.selectedWorktree != nil || $0.consoles?.viewer != nil)
-            } ?? false
+            peerSelected: state.nativePeerSessions.map {
+                $0.selectedSessionId != nil || $0.selectedWorktree != nil || $0.consoles?.viewer != nil
+            } ?? false,
+            peerWorktree: state.nativePeerSessions.flatMap {
+                $0.selectedWorktreeGroup?.worktree == nil ? nil : $0.selectedWorktree
+            }
         ).resolve()
     }
 

@@ -202,10 +202,6 @@ final class FederatedSessionsProvider {
     /// downstream to tell and a session-carrying peer to ask.
     var isPollingPeerLists: Bool { pollTimer != nil }
 
-    func peerSupports(_ capability: String, serverId: String) -> Bool {
-        links.peerSupports(capability, serverId: serverId)
-    }
-
     /// Forgets one downstream and everything it had asked for. The clean
     /// `detach(_:)` path and the prune path are deliberately the same code:
     /// a downstream that deallocated is a downstream that left.
@@ -232,6 +228,10 @@ final class FederatedSessionsProvider {
     private func pruneDeadDownstreams() {
         for (id, box) in downstreams where box.value == nil { forget(id) }
         updatePollTimer()
+    }
+
+    func peerSupports(_ capability: String, serverId: String) -> Bool {
+        links.peerSupports(capability, serverId: serverId)
     }
 
     /// Peer rows for the merged `sessionList`, grouped by peer name.
