@@ -21,6 +21,7 @@ final class NativePeerConsoles {
 
     @ObservationIgnored private let send: @MainActor (_ serverId: String, RemoteClientMessage) -> Void
     @ObservationIgnored private let supportsConsoles: @MainActor (_ serverId: String) -> Bool
+    @ObservationIgnored private let supportsTerminate: @MainActor (_ serverId: String) -> Bool
     @ObservationIgnored private let makeSurface: PeerConsoleViewer.MakeSurface
     @ObservationIgnored private var onlinePeers: Set<String> = []
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
@@ -28,10 +29,12 @@ final class NativePeerConsoles {
     init(
         send: @escaping @MainActor (_ serverId: String, RemoteClientMessage) -> Void,
         supportsConsoles: @escaping @MainActor (_ serverId: String) -> Bool,
+        supportsTerminate: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
         makeSurface: @escaping PeerConsoleViewer.MakeSurface
     ) {
         self.send = send
         self.supportsConsoles = supportsConsoles
+        self.supportsTerminate = supportsTerminate
         self.makeSurface = makeSurface
     }
 
@@ -89,6 +92,19 @@ final class NativePeerConsoles {
     func clearSelection() {
         viewer?.close()
         viewer = nil
+    }
+
+    /// Whether `serverId` can close its consoles for a peer; older hosts
+    /// would drop the request.
+    func canTerminate(serverId: String) -> Bool {
+        onlinePeers.contains(serverId) && supportsTerminate(serverId)
+    }
+
+    /// Asks the host to close a console. The host replies with a fresh list,
+    /// which drops the tab without waiting for the next poll.
+    func terminate(serverId: String, consoleId: String) {
+        guard canTerminate(serverId: serverId) else { return }
+        send(serverId, .console(.terminate(consoleId: consoleId)))
     }
 
     private func open(serverId: String, consoleId: String) {

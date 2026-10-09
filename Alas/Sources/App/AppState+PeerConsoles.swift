@@ -9,7 +9,8 @@ extension AppState {
             resolve: { [weak self] in self?.peerConsoleTarget(consoleId: $0) },
             setLocalInputSuppressed: { [weak self] consoleId, suppressed in
                 self?.terminal.registry.session(for: consoleId)?.surface.setReadOnly(suppressed)
-            }
+            },
+            terminate: { [weak self] in self?.closeTerminalPaneWithoutConfirmation(leafId: $0) }
         ))
         _peerConsoleHost = host
         return host
@@ -93,6 +94,9 @@ extension AppState {
             send: { [weak self] serverId, message in self?.remotePeers.sendToPeer(message, serverId: serverId) },
             supportsConsoles: { [weak self] serverId in
                 self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.v1) == true
+            },
+            supportsTerminate: { [weak self] serverId in
+                self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.terminateV1) == true
             },
             makeSurface: { [weak self] executable, args, onExit in
                 guard let self else { throw CancellationError() }

@@ -8,6 +8,8 @@ struct NativePeerTabBar: View {
     let agentLookup: (String) -> AgentDefinition?
     let sidebarHidden: Bool
     let onRevealSidebar: () -> Void
+    /// Closes a console tab, which ends the console on the peer.
+    let onCloseConsole: (_ consoleId: String, _ peerName: String) -> Void
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -21,6 +23,7 @@ struct NativePeerTabBar: View {
     var body: some View {
         let rows = rows
         let selectedTab = client.selectedTab
+        let canCloseConsoles = client.consoles?.canTerminate(serverId: selection.serverId) == true
         TabStrip(
             activeId: selectedTab,
             isEmpty: rows.isEmpty,
@@ -35,7 +38,11 @@ struct NativePeerTabBar: View {
                 TabItemView(item: item(for: row), active: row.id == selectedTab) {
                     client.selectTab(row.id, in: selection)
                 } trailing: {
-                    EmptyView()
+                    if case .console(let console) = row, canCloseConsoles, let peer {
+                        TabCloseButton(dirtyLookup: { false }) {
+                            onCloseConsole(console.consoleId, peer.name)
+                        }
+                    }
                 }
                 .id(row.id)
             }

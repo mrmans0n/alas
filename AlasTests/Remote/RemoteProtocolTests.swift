@@ -18,6 +18,7 @@ struct RemoteProtocolTests {
             .input(attachmentId: "a", generation: 3, sequence: 9, data: bytes),
             .resync(attachmentId: "a"),
             .detach(attachmentId: "a"),
+            .terminate(consoleId: "c"),
         ]
         let control = PeerConsoleControl(owner: .you, generation: 3, change: .granted)
         let events: [PeerConsoleEvent] = [
@@ -31,6 +32,7 @@ struct RemoteProtocolTests {
             .inputAck(attachmentId: "a", sequence: 9, accepted: false),
             .geometry(attachmentId: "a", rows: 50, columns: 132),
             .detached(attachmentId: "a", reason: .restartRequired),
+            .detached(attachmentId: "a", reason: .terminated),
         ]
         for request in requests {
             let message = RemoteClientMessage.console(request)
@@ -66,7 +68,7 @@ struct RemoteProtocolTests {
             Issue.record("expected hello")
             return
         }
-        #expect(capabilities == [PeerConsoleCapability.v1, PeerSessionTabsCapability.v1])
+        #expect(capabilities == [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
     }
 
     @Test func sessionTabMessagesRoundTripAndKeepTheirSessionScope() throws {

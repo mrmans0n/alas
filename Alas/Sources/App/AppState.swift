@@ -8103,19 +8103,46 @@ final class AppState {
         if case .tabRemoved = outcome {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
-            let closedLeafId = outcome.closedLeafId
-            let authExitHandler = takeACPAuthTerminalExitHandler(
-                terminalId: closedLeafId,
-                owner: .worktree(worktreeId)
-            )
-            scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
-            closeTerminalSession(
-                id: closedLeafId,
-                worktreeId: worktreeId,
-                projectPath: projectPath(forWorktreeId: worktreeId)
-            )
-            authExitHandler?()
+            closeRemovedTerminalLeaf(outcome.closedLeafId, worktreeId: worktreeId)
         }
+    }
+
+    /// A peer terminating console `leafId`: closes its pane as a local close
+    /// does, and its tab, with reopen history, when it was the last pane. No
+    /// confirmation here: the requesting Mac already asked its user.
+    func closeTerminalPaneWithoutConfirmation(leafId: String) {
+        guard let owner = terminal.registry.session(for: leafId)?.owner else { return }
+        let owningTab = tabs.tabs(for: owner).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.root.find(leafId: leafId) != nil
+        }
+        if case .worktree(let worktreeId) = owner, let owningTab {
+            switch tabs.removeLeaf(worktreeId: worktreeId, tabId: owningTab.id, leafId: leafId) {
+            case .tabRemoved:
+                closeTabRecordingHistory(worktreeId: worktreeId, projectId: nil, tab: owningTab)
+            case .leafRemoved:
+                closeRemovedTerminalLeaf(leafId, worktreeId: worktreeId)
+            case nil:
+                break
+            }
+        } else if owningTab != nil {
+            closePaneForProcessExit(owner: owner, leafId: leafId)
+        }
+        // A console outside any tab has no pane; end its session directly.
+        if terminal.registry.session(for: leafId) != nil {
+            acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
+            harness.detector.unregister(sessionId: leafId)
+            harness.forgetSession(leafId)
+            terminal.closeSession(id: leafId, owner: owner)
+        }
+    }
+
+    /// Tears down a pane already removed from its split tab.
+    private func closeRemovedTerminalLeaf(_ leafId: String, worktreeId: String) {
+        let authExitHandler = takeACPAuthTerminalExitHandler(terminalId: leafId, owner: .worktree(worktreeId))
+        scheduleRunScriptCompletionCancellation(sessionID: leafId)
+        closeTerminalSession(id: leafId, worktreeId: worktreeId, projectPath: projectPath(forWorktreeId: worktreeId))
+        authExitHandler?()
     }
 
     /// "Terminate All Terminal Sessions" menu action. Confirms with the user,
@@ -9292,13 +9319,21 @@ final class AppState {
         closeTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
-    private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
+    /// Closing a peer console tab always asks, whatever
+    /// `confirmCloseTabs` says: it ends a process on another Mac.
+    func requestTerminatePeerConsole(serverId: String, consoleId: String, peerName: String) {
+        guard let consoles = nativePeerSessions?.consoles, consoles.canTerminate(serverId: serverId),
+              confirmCloseTab(.terminal, onPeer: peerName) else { return }
+        consoles.terminate(serverId: serverId, consoleId: consoleId)
+    }
+
+    private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt, onPeer peer: String? = nil) -> Bool {
         if let closeTabConfirmer {
             return closeTabConfirmer(prompt)
         }
         let alert = NSAlert()
         alert.messageText = prompt.title
-        alert.informativeText = prompt.message
+        alert.informativeText = prompt.message(onPeer: peer)
         alert.alertStyle = .warning
         alert.addButton(withTitle: prompt.confirmButtonTitle)
         alert.addButton(withTitle: "Cancel")
