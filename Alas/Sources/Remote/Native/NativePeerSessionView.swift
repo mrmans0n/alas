@@ -419,7 +419,20 @@ private struct NativePeerComposer: View {
                     showsSchedule: false
                 )
                 .disabled(!sessionOpen)
-                .keyboardShortcut(.return, modifiers: .command)
+                .background {
+                    // Cmd+Return submits only; it must never reach Stop, which
+                    // the primary button shows while a turn runs on an empty draft.
+                    Button("") {
+                        guard sessionOpen, !client.isPromptPending,
+                              let intent = primarySubmitIntent(for: action, optionPressed: false)
+                        else { return }
+                        client.sendPrompt(intent: intent)
+                    }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 2)
         }
