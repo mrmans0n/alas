@@ -1,13 +1,41 @@
 import SwiftUI
 
+struct EmptyTabAction: Identifiable {
+    let icon: String
+    let title: String
+    let subtitle: String
+    var shortcut: String?
+    let action: () -> Void
+    var id: String { title }
+}
+
 struct EmptyTabView: View {
-    let onNewTerminal: () -> Void
-    let onNewAgentInChat: () -> Void
-    let onNewAgentInTerminal: () -> Void
-    let newTerminalShortcut: String?
-    let newAgentInChatShortcut: String?
-    let newAgentInTerminalShortcut: String?
+    var subtitle = "Choose how to start working in this worktree."
+    let actions: [EmptyTabAction]
     @Environment(\.theme) var theme
+
+    init(subtitle: String, actions: [EmptyTabAction]) {
+        self.subtitle = subtitle
+        self.actions = actions
+    }
+
+    init(
+        onNewTerminal: @escaping () -> Void,
+        onNewAgentInChat: @escaping () -> Void,
+        onNewAgentInTerminal: @escaping () -> Void,
+        newTerminalShortcut: String?,
+        newAgentInChatShortcut: String?,
+        newAgentInTerminalShortcut: String?
+    ) {
+        actions = [
+            EmptyTabAction(icon: "terminal", title: "New Terminal", subtitle: "Open a shell in this worktree",
+                           shortcut: newTerminalShortcut, action: onNewTerminal),
+            EmptyTabAction(icon: "sparkle", title: "New Agent in Chat", subtitle: "Pick an ACP-capable agent for chat",
+                           shortcut: newAgentInChatShortcut, action: onNewAgentInChat),
+            EmptyTabAction(icon: "sparkle", title: "New Agent in Terminal", subtitle: "Pick an agent to run in a terminal",
+                           shortcut: newAgentInTerminalShortcut, action: onNewAgentInTerminal),
+        ]
+    }
 
     var body: some View {
         ForestScene(mode: .idle) {
@@ -26,34 +54,17 @@ struct EmptyTabView: View {
                 Text("No tabs open")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
-                Text("Choose how to start working in this worktree.")
+                Text(subtitle)
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
+                    .multilineTextAlignment(.center)
             }
-            VStack(spacing: 8) {
-                EmptyTabActionRow(
-                    icon: "terminal",
-                    title: "New Terminal",
-                    subtitle: "Open a shell in this worktree",
-                    shortcut: newTerminalShortcut,
-                    action: onNewTerminal
-                )
-                EmptyTabActionRow(
-                    icon: "sparkle",
-                    title: "New Agent in Chat",
-                    subtitle: "Pick an ACP-capable agent for chat",
-                    shortcut: newAgentInChatShortcut,
-                    action: onNewAgentInChat
-                )
-                EmptyTabActionRow(
-                    icon: "sparkle",
-                    title: "New Agent in Terminal",
-                    subtitle: "Pick an agent to run in a terminal",
-                    shortcut: newAgentInTerminalShortcut,
-                    action: onNewAgentInTerminal
-                )
+            if !actions.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(actions) { EmptyTabActionRow(item: $0) }
+                }
+                .frame(maxWidth: 420)
             }
-            .frame(maxWidth: 420)
         }
         .padding(24)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -64,27 +75,23 @@ struct EmptyTabView: View {
 }
 
 private struct EmptyTabActionRow: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    let shortcut: String?
-    let action: () -> Void
+    let item: EmptyTabAction
     @Environment(\.theme) var theme
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
+        Button(action: item.action) {
             HStack(spacing: 10) {
-                Icon(name: icon, size: 14,
+                Icon(name: item.icon, size: 14,
                      color: hovering ? theme.color("fg") : theme.color("fg-muted"))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(item.title)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text(subtitle)
+                    Text(item.subtitle)
                         .font(.system(size: 11))
                         .foregroundColor(theme.color("fg-faint"))
                         .lineLimit(1)
@@ -92,7 +99,7 @@ private struct EmptyTabActionRow: View {
                 }
                 .layoutPriority(1)
                 Spacer(minLength: 12)
-                if let shortcut {
+                if let shortcut = item.shortcut {
                     Text(shortcut)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(theme.color("fg-muted"))

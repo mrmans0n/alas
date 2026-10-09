@@ -399,13 +399,20 @@ struct RootView: View {
                 onReconnect: { consoles.reconnect() }
             )
             .id(viewer.attachmentId)
-        } else {
-            ContentUnavailableView(
-                "No Open Tabs",
-                systemImage: "rectangle.stack",
-                description: Text("This worktree has no agent or console tabs open on the peer.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let selection = client.selectedWorktree {
+            if let target = client.newSessionTarget(in: selection) {
+                EmptyTabView(
+                    subtitle: "Start working in this worktree on \(target.peer.name).",
+                    actions: [EmptyTabAction(
+                        icon: "sparkle",
+                        title: "New Session",
+                        subtitle: "Pick an agent on \(target.peer.name)",
+                        action: { client.beginNewSession(in: selection) }
+                    )]
+                )
+            } else {
+                EmptyTabView(subtitle: "This peer can't start sessions right now.", actions: [])
+            }
         }
     }
 
