@@ -2025,6 +2025,12 @@ final class ACPSessionRunner {
         }
     }
 
+    /// The connection is about to be replaced, so no result of it will be heard: every sent turn still waiting for one
+    /// is reported now, cancelled and without tokens, while this runner still owns the session.
+    func reportInterruptedTurnUsage() {
+        for promptID in unreportedPrompts.keys.sorted() { reportSupersededTurnUsage(promptID, quota: nil) }
+    }
+
     /// A prompt a steer superseded, or the user stopped, got its result: its usage is reported as a cancelled turn,
     /// with its own tokens and the cost sent before the next prompt started. A steered one is not a turn completion:
     /// `onTurnCompleted` never hears of it.

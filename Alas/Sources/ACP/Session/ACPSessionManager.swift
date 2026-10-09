@@ -7911,6 +7911,8 @@ extension ACPSessionManager {
                 disposingAttachments.remove(sessionId)
             }
         }
+        // Usage is owner-gated: once ownership moves, the old runner's turns could no longer be recorded.
+        runners[sessionId]?.reportInterruptedTurnUsage()
         connectionOwnerIDs[sessionId] = replacementAttempt.id
         brokerCallbackOwnerIDs[sessionId] = nil
 
