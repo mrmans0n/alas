@@ -4318,6 +4318,25 @@ extension ACPSessionRunner {
                     }
                     return true
                 }()
+                let interruptedTurnContinuation = queuedItemId.flatMap { qid in
+                    self.session.queue.first(where: { $0.id == qid })?.interruptedTurnContinuation
+                } ?? false
+                if shouldRecord, interruptedTurnContinuation, let qid = queuedItemId,
+                   let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
+                    let before = self.session.transcript.messages.count
+                    if !self.session.followsTranscriptTail {
+                        self.session.followsTranscriptTail = true
+                        self.onResumeTranscriptTail?()
+                    }
+                    self.session.recordInterruptedTurnContinuation()
+                    self.persistFromIndex(before)
+                    self.session.queue[idx].transcriptRecorded = true
+                    self.session.queue[idx].turnStartedAt = self.activePromptStartedAt
+                    self.persistQueue()
+                    self.resetStreamingPersistBuffer()
+                    self.session.transcript.streamingState = .sending
+                    return (true, nil)
+                }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
                     let titleBefore = self.session.title

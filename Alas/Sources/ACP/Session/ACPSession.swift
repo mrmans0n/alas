@@ -944,6 +944,8 @@ final class ACPSession: ObservableObject, Identifiable {
         case .userMessageChunk(let chunk):
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
+            // Recorded as a notice, not a user row: an echo has nothing to merge into.
+            guard txt != QueuedPrompt.interruptedTurnContinueText else { return [] }
             var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
@@ -1543,6 +1545,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
+            // A restart continuation has no user row (see `recordInterruptedTurnContinuation`).
+            guard text(of: chunk.content) != QueuedPrompt.interruptedTurnContinueText else { return [] }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
@@ -2189,6 +2193,14 @@ final class ACPSession: ObservableObject, Identifiable {
             self?.contextRecoveryStatus = nil
             self?.contextRecoveryExpiryTask = nil
         }
+    }
+
+    /// Records the continuation Alas sends for a restart-interrupted turn.
+    /// The user never typed it, so it shows as a notice instead of a user
+    /// bubble, but it still opens a new turn like `recordUserPrompt`.
+    func recordInterruptedTurnContinuation() {
+        appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
+        transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
     func appendSystemNotice(_ text: String) {

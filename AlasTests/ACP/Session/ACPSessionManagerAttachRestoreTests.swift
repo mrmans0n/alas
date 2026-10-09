@@ -1698,6 +1698,14 @@ struct ACPSessionManagerAttachRestoreTests {
             try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
             let prompt = try #require(client.sent.compactMap { $0.params as? ACPSessionPromptParams }.first)
             #expect(prompt.prompt.contains(.text(ACPSession.interruptedTurnContinueText)))
+            // The user never typed the continuation, so it is not shown as theirs.
+            let messages = try #require(manager.liveSession(for: "local")).transcript.messages
+            #expect(messages.last.map {
+                if case .systemNotice(_, QueuedPrompt.interruptedTurnContinueNotice) = $0 { true } else { false }
+            } == true)
+            #expect(!messages.contains {
+                if case .user(_, _, QueuedPrompt.interruptedTurnContinueText, _, _, _) = $0 { true } else { false }
+            })
         } else {
             #expect(await manager.bootstrapInterruptedQueueSessions().isEmpty)
             _ = manager.placeholderSession(id: "local")
