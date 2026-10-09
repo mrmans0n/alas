@@ -346,9 +346,12 @@ struct ACPInputField: NSViewRepresentable {
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingScheduledSubmitIDs: Set<Int> = []
-        var hasPendingNextPromptInput: Bool {
-            pendingImageFileInsertions > 0 || pendingSubmitID != nil || !pendingScheduledSubmitIDs.isEmpty
-        }
+        var hasPendingNextPromptInput: Bool { pendingImageFileInsertions > 0 }
+        /// A sent prompt holds this until its turn finishes; it is not new input.
+        var hasInFlightSubmit: Bool { pendingSubmitID != nil || !pendingScheduledSubmitIDs.isEmpty }
+        /// True while a submit empties the text view. The caret it reports then still
+        /// sits after the sent text; that is the submit, not input after its turn.
+        private(set) var isClearingSubmittedDraft = false
         var hasEmptyNextPromptDraft: Bool { lastSyncedDraft.isEmpty }
         private var pendingImageFileInsertions = 0
         private var imageFileInsertionGeneration = 0
@@ -748,6 +751,8 @@ struct ACPInputField: NSViewRepresentable {
         #endif
 
         private func clearVisibleDraft(in textView: NSTextView) {
+            isClearingSubmittedDraft = true
+            defer { isClearingSubmittedDraft = false }
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
                 tv.dismissImageChipHover()
@@ -792,6 +797,11 @@ struct ACPInputField: NSViewRepresentable {
                 if let textView {
                     restore(restoredDraft, into: textView)
                 }
+            }
+            // The turn may publish before its submit settles; nothing else reports
+            // the composer unblocked, so a waiting suggestion would never be rechecked.
+            if let textView = textView as? ACPNSTextView {
+                textView.onNextPromptStateChange(textView.nextPromptInputState)
             }
         }
 
@@ -1022,11 +1032,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         var state = NextPromptEligibilitySnapshot.Environment()
         state.hasComposerFocus = window != nil && window?.firstResponder === self
         state.hasKeyWindow = window?.isKeyWindow == true
-        state.hasSelection = selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0)
+        state.hasSelection = coordinator?.isClearingSubmittedDraft != true
+            && (selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0))
         state.hasMarkedText = hasMarkedText()
         state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
         state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
-        state.hasPendingInput = dropPending || nextPromptInputBlocked() || coordinator?.hasPendingNextPromptInput == true
+        state.hasPendingInput = dropPending || coordinator?.hasPendingNextPromptInput == true
+        state.isInputBlocked = nextPromptInputBlocked() || coordinator?.hasInFlightSubmit == true
         return state
     }
 
@@ -1035,7 +1047,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard isEditable, state.hasComposerFocus, state.hasKeyWindow, string.isEmpty, nextPromptDraftIsEmpty(),
               coordinator?.hasEmptyNextPromptDraft == true,
               !state.hasSelection, !state.hasMarkedText, !state.isDictating,
-              !state.isPickerPresented, !state.hasPendingInput else { return false }
+              !state.isPickerPresented, !state.hasPendingInput, !state.isInputBlocked else { return false }
         return true
     }
 
@@ -1047,15 +1059,43 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var nextPromptPresentation: NSAttributedString? {
         guard let text = nextPromptGhostText else { return nil }
         let baseFont = font ?? chatTypography.appKitFont()
-        let presentation = NSMutableAttributedString(string: text, attributes: [
+        // The no-break space keeps the keycap on the line of the suggestion's last word.
+        let presentation = NSMutableAttributedString(string: text + "\u{00A0}", attributes: [
             .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
             .foregroundColor: NSColor.secondaryLabelColor,
         ])
-        presentation.append(NSAttributedString(string: "\nTab to accept", attributes: [
-            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]))
+        presentation.append(NSAttributedString(attachment: acceptKeycap(for: baseFont)))
         return presentation
+    }
+
+    private var acceptKeycapCache: (font: NSFont, attachment: NSTextAttachment)?
+
+    /// The "⇥ Tab" keycap trailing the suggestion. Its image draws lazily, so the
+    /// semantic colors resolve against the appearance it is drawn in.
+    private func acceptKeycap(for font: NSFont) -> NSTextAttachment {
+        if let cache = acceptKeycapCache, cache.font == font { return cache.attachment }
+        let label = NSAttributedString(string: "⇥ Tab", attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize - 1, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        let labelSize = label.size()
+        let size = NSSize(width: ceil(labelSize.width) + 10, height: ceil(labelSize.height) + 2)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let pill = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+            NSColor.quaternaryLabelColor.setFill()
+            pill.fill()
+            NSColor.tertiaryLabelColor.setStroke()
+            pill.stroke()
+            label.draw(at: NSPoint(x: (rect.width - labelSize.width) / 2, y: (rect.height - labelSize.height) / 2))
+            return true
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        // Centered on the cap height so the pill sits level with the text, not on its baseline.
+        attachment.bounds = NSRect(x: 0, y: round((font.capHeight - size.height) / 2),
+                                   width: size.width, height: size.height)
+        acceptKeycapCache = (font, attachment)
+        return attachment
     }
 
     private var ghostHorizontalInset: CGFloat {
@@ -1128,7 +1168,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func invalidateNextPromptSuggestion() {
         nextPromptInvalidationGeneration &+= 1
         nextPromptOffer = nil
-        if !insertingAcceptedNextPrompt { dismissNextPromptOffer() }
+        // No offer can show while a submit awaits its turn, so a dismissal
+        // (the submit clearing its own text) would only consume that turn.
+        guard !insertingAcceptedNextPrompt, coordinator?.isClearingSubmittedDraft != true else { return }
+        dismissNextPromptOffer()
     }
 
     func clearNextPromptPresentation() {
@@ -1138,7 +1181,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func accessibilityHelp() -> String? {
         guard let text = nextPromptGhostText else { return super.accessibilityHelp() }
-        return "Suggestion: \(text) Press Tab or use Accept Suggestion to insert it."
+        return "Suggestion: \(text) Press Tab or Right Arrow, or use Accept Suggestion to insert it."
     }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
@@ -1574,7 +1617,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
         if !hasMarkedText(), mentionPanel == nil,
            event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
-            if event.keyCode == 48, acceptNextPromptSuggestion() { return }
+            // Tab or Right Arrow. The suggestion only shows in an empty composer,
+            // where Right Arrow has no caret movement to take over.
+            if event.keyCode == 48 || event.keyCode == 124, acceptNextPromptSuggestion() { return }
             if event.keyCode == 53, nextPromptGhostText != nil {
                 invalidateNextPromptSuggestion()
                 return

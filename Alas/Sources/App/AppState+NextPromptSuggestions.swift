@@ -179,11 +179,17 @@ extension AppState {
         let incarnation = session.incarnation
         nextPromptActiveIncarnation = incarnation
         nextPromptComposerEnvironment = environment
+        // Pickers, drops, IME, dictation, selection and typing consume the turn even while
+        // another blocker (runtime starting, a submit awaiting its turn) is closed.
         if environment.hasPendingInput || environment.hasSelection || environment.hasMarkedText ||
             environment.isDictating || environment.isPickerPresented {
             nextPromptCoordinator.invalidate(incarnation: incarnation, throughPromptID: session.nextPromptID - 1,
                                              reason: "composer input")
             nextPromptComposerEpochs[incarnation, default: 0] &+= 1
+            return
+        }
+        if environment.isInputBlocked {
+            nextPromptCoordinator.suspend(incarnation: incarnation)
             return
         }
         nextPromptCoordinator.reconsider(incarnation: incarnation)
@@ -240,15 +246,15 @@ extension AppState {
         guard let owner = nextPromptOwner, let id = nextPromptSessionID,
               let session = acpManager(for: owner)?.sessions[id],
               session.incarnation == turn.incarnation else {
-            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: composer shows another session")
+            NextPromptIneligibility.log(turn, "composer shows another session")
             return nil
         }
         guard !nextPromptInputBlocked(owner: owner, sessionID: id) else {
-            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: input blocked")
+            NextPromptIneligibility.log(turn, "app gate closed")
             return nil
         }
         guard let native = NSApp.keyWindow?.firstResponder as? ACPNSTextView else {
-            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: composer is not first responder")
+            NextPromptIneligibility.log(turn, "composer is not first responder")
             return nil
         }
         var environment = native.nextPromptInputState

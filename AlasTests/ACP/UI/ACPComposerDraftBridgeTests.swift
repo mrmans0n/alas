@@ -2020,8 +2020,9 @@ struct ACPComposerDraftBridgeTests {
         }
     }
 
-    @Test("Tab accepts next prompt once without submitting, with complete undo and redo")
-    func nextPromptTabUndo() async throws {
+    @Test("Tab and Right Arrow accept next prompt once without submitting, with complete undo and redo",
+          arguments: [(UInt16(48), "\t"), (UInt16(124), "\u{F703}")])
+    func nextPromptTabUndo(keyCode: UInt16, characters: String) async throws {
         var submitCount = 0
         let (textView, coordinator, window) = makeSlashTextView { _, _, _, _, _ in
             submitCount += 1
@@ -2031,14 +2032,13 @@ struct ACPComposerDraftBridgeTests {
         let fixture = NextPromptFixture()
         await fixture.offer("Explain the tradeoff.", in: textView)
         #expect(textView.nextPromptGhostText == "Explain the tradeoff.")
-        #expect(textView.nextPromptPresentation?.string == "Explain the tradeoff.\nTab to accept")
         #expect(textView.string.isEmpty)
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()).isEmpty)
         #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0.isEmpty)
         #expect(textView.accessibilityValue() == "")
         #expect(textView.accessibilityHelp()?.contains("Explain the tradeoff.") == true)
         #expect(textView.accessibilityCustomActions()?.map(\.name) == ["Accept Suggestion"])
-        textView.keyDown(with: try keyEvent(keyCode: 48, modifiers: [], characters: "\t"))
+        textView.keyDown(with: try keyEvent(keyCode: keyCode, modifiers: [], characters: characters))
         #expect(textView.string == "Explain the tradeoff.")
         #expect(submitCount == 0)
         textView.undoManager?.undo()
@@ -2187,6 +2187,32 @@ struct ACPComposerDraftBridgeTests {
         #expect(states.last?.hasPendingInput == true)
         coordinator.finishPendingImageFileInsertion(generation: generation)
         #expect(states.last?.hasPendingInput == false)
+    }
+
+    @Test("a submit awaiting its turn is not composer input")
+    func nextPromptInFlightSubmitIsNotInput() {
+        var completion: ACPComposerSubmitCompletion?
+        let (textView, coordinator, window) = makeSlashTextView { _, _, _, _, finished in
+            completion = finished
+            return true
+        }
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.insertText("Explain the parser.", replacementRange: textView.selectedRange())
+        // The prompt is allocated inside onSubmit; everything the submit's own
+        // clear reports afterwards must be non-consuming.
+        var reported: [NextPromptEligibilitySnapshot.Environment] = []
+        var dismissals = 0
+        textView.onNextPromptStateChange = { if completion != nil { reported.append($0) } }
+        textView.dismissNextPromptOffer = { if completion != nil { dismissals += 1 } }
+        coordinator.submit(textView)
+        #expect(completion != nil)
+        #expect(dismissals == 0)
+        #expect(!reported.isEmpty && reported.allSatisfy { $0.isInputBlocked && !$0.hasPendingInput && !$0.hasSelection })
+        // Typing while the turn runs is real input and must still be reported as such.
+        textView.insertText("more", replacementRange: textView.selectedRange())
+        #expect(reported.last?.hasSelection == true)
+        completion?(true)
+        #expect(reported.last?.isInputBlocked == false)
     }
 
     @Test("offer consumption cannot overwrite a draft changed by a synchronous observer")

@@ -16,7 +16,11 @@ struct NextPromptEligibilitySnapshot {
         var isActiveVisibleWriter = false
         var hasComposerFocus = false
         var hasKeyWindow = false
+        /// Input the user made after the turn; it consumes the turn's suggestion.
         var hasPendingInput = false
+        /// The composer cannot take a suggestion right now (a submit awaiting its turn,
+        /// an inactive tab, setup). Blocks presentation without consuming the turn.
+        var isInputBlocked = false
         var hasSelection = false
         var hasMarkedText = false
         var isDictating = false
@@ -33,11 +37,11 @@ struct NextPromptEligibilitySnapshot {
                      environment: Environment) -> Self? {
         let transcript = session.transcript
         if let failed = firstFailedCheck(session: session, turn: turn, environment: environment) {
-            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: \(failed, privacy: .public)")
+            NextPromptIneligibility.log(turn, failed)
             return nil
         }
         guard let turns = NextPromptContext.snapshot(session: session, completedUserID: turn.userMessageID) else {
-            nextPromptLogger.debug("prompt \(turn.promptID) ineligible: no usable context")
+            NextPromptIneligibility.log(turn, "no usable context")
             return nil
         }
         return .init(id: .init(sessionID: session.id, incarnation: session.incarnation, promptID: turn.promptID,
@@ -60,6 +64,7 @@ struct NextPromptEligibilitySnapshot {
         guard environment.isActiveVisibleWriter else { return "not the active visible writer" }
         guard environment.hasComposerFocus else { return "composer unfocused" }
         guard !environment.hasPendingInput else { return "pending input" }
+        guard !environment.isInputBlocked else { return "input blocked" }
         guard !environment.hasSelection else { return "selection" }
         guard !environment.hasMarkedText else { return "marked text" }
         guard !environment.isDictating else { return "dictating" }
@@ -207,10 +212,9 @@ final class NextPromptCoordinator: ObservableObject {
     /// Permanently consumes a prompt even when its completion has not arrived yet.
     func invalidate(incarnation: UUID, throughPromptID promptID: Int, reason: String = "invalidated") {
         invalidate(incarnation: incarnation, reason: reason)
-        consumedPromptIDs[incarnation] = max(
-            consumedPromptIDs[incarnation, default: -1],
-            promptID
-        )
+        guard promptID > consumedPromptIDs[incarnation, default: -1] else { return }
+        nextPromptLogger.notice("prompts through \(promptID) consumed: \(reason, privacy: .public)")
+        consumedPromptIDs[incarnation] = promptID
     }
     func invalidate(sessionID: String) {
         let incarnations = opportunities.values
