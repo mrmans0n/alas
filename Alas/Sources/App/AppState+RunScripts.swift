@@ -1406,7 +1406,7 @@ extension AppState {
             isRunning: { [weak self] script in
                 self?.runningScriptTab(for: script, in: worktree) != nil
             },
-            run: { [weak self] script in self?.runOrFocusScript(script, in: worktree) },
+            run: { [weak self] script, console in self?.runOrFocusScript(script, in: worktree, console: console) },
             restart: { [weak self] script in self?.restartScript(script, in: worktree) },
             edit: { [weak self] script in self?.editScript(script, in: worktree) },
             newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }

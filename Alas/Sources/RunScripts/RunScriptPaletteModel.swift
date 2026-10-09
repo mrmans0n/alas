@@ -111,14 +111,15 @@ final class RunScriptPaletteModel {
     }
 
     /// Enter: run/focus or edit a script depending on mode, or create a new one from the trailing rows.
-    func activateSelection(environment env: RunScriptPaletteEnvironment) {
+    /// `flipsConsole` (⌥↵) runs once against the script's console default.
+    func activateSelection(environment env: RunScriptPaletteEnvironment, flipsConsole: Bool = false) {
         let rows = rows()
         guard rows.indices.contains(selectedIndex) else { return }
         switch rows[selectedIndex] {
         case .script(let script):
             switch mode {
             case .run:
-                env.run(script)
+                env.run(script, flipsConsole ? script.console.flipped : nil)
             case .edit:
                 env.edit(script)
             }
