@@ -125,6 +125,18 @@ struct RootView: View {
             } message: { error in
                 Text(error.message)
             }
+            .alert(
+                "Could not close tab",
+                isPresented: Binding(
+                    get: { state.nativePeerSessions?.tabCloseError != nil },
+                    set: { if !$0 { state.nativePeerSessions?.tabCloseError = nil } }
+                ),
+                presenting: state.nativePeerSessions?.tabCloseError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
+            }
             .task {
                 state.startHarness()
                 let isRecovering = state.suppressesRestoredRightPaneAfterAbandonedStartup
@@ -338,6 +350,7 @@ struct RootView: View {
                             state.config.sidebarVisible = true
                             state.saveConfig()
                         },
+                        onCloseSession: { state.requestClosePeerSessionTab($0) },
                         onCloseConsole: { consoleId, peerName in
                             state.requestTerminatePeerConsole(
                                 serverId: selection.serverId, consoleId: consoleId, peerName: peerName
@@ -1096,6 +1109,22 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+                // A peer worktree covers the center pane while the local
+                // selection stays set underneath; never close a hidden tab.
+                if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+                    switch client.selectedTab {
+                    case .session(let id):
+                        state.requestClosePeerSessionTab(id)
+                    case .console(let id):
+                        if let serverId = client.selectedWorktree?.serverId,
+                           let peer = client.snapshot.groups.first(where: { $0.serverId == serverId }) {
+                            state.requestTerminatePeerConsole(serverId: serverId, consoleId: id, peerName: peer.name)
+                        }
+                    case nil:
+                        break
+                    }
+                    return
+                }
                 let closingWorktree = selectedWorktree()
                 state.handleCloseCenterShortcut(
                     worktreeId: closingWorktree?.id,

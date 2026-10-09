@@ -32,10 +32,16 @@ final class NativePeerSessions {
     private(set) var deliveryError: String?
     static let peerUnavailableMessage = FederatedSessionsProvider.peerUnavailableMessage
     private(set) var newSession: NativePeerNewSession?
+    /// Session tabs the host was asked to close. Each stays in the strip
+    /// until the host's session list drops it, or the host refuses.
+    private(set) var closingSessionIds: Set<String> = []
+    /// Why the host refused the last tab close, until dismissed. Separate
+    /// from `sessionTabError`, which the Agent rail shows for opens.
+    var tabCloseError: String?
     /// A session the peer just created or opened for us, selected once the
     /// peer's session list reports it as an open tab.
     @ObservationIgnored private var pendingSessionId: String?
-    /// Why the peer refused to open or close a tab.
+    /// Why the peer refused to open a tab.
     private(set) var sessionTabError: String?
     /// Open requests awaiting the peer's reply, per session. Replies arrive
     /// in request order, so only the last one answers the current attempt.
@@ -97,6 +103,8 @@ final class NativePeerSessions {
     private func rebuildSnapshot() {
         guard downstream != nil else { return }
         snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries, consoles: consoles?.consoles ?? [:])
+        let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
+        closingSessionIds.formIntersection(openSessionIds)
         reconcileSelectedTab()
     }
 
@@ -265,6 +273,8 @@ final class NativePeerSessions {
         tabOpensInFlight = [:]
         newSession = nil
         pendingSessionId = nil
+        closingSessionIds = []
+        tabCloseError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
@@ -395,6 +405,25 @@ final class NativePeerSessions {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
             deliveryError = "Peer is unavailable. Your draft was kept."
+        }
+    }
+
+    /// Whether `serverId` closes session tabs on request. Older hosts drop
+    /// the request, so their tabs get no close button.
+    func canCloseSessionTabs(on serverId: String) -> Bool {
+        snapshot.groups.first { $0.serverId == serverId }?.state.carriesSessions == true
+            && canOpenSessionTabs(serverId: serverId)
+    }
+
+    /// Asks the host to close a session tab. The tab is marked closing until
+    /// the host's next session list drops it; selection then moves on as
+    /// for any tab the host closes.
+    func closeSessionTab(_ sessionId: String) {
+        guard let downstream, !closingSessionIds.contains(sessionId) else { return }
+        closingSessionIds.insert(sessionId)
+        if !federation.route(.closeSessionTab(sessionId: sessionId), from: downstream) {
+            closingSessionIds.remove(sessionId)
+            tabCloseError = Self.peerUnavailableMessage
         }
     }
 
@@ -743,6 +772,14 @@ final class NativePeerSessions {
         // is dropped.
         switch message {
         case .sessionTabActionSucceeded(let sessionId), .sessionTabActionFailed(let sessionId, _):
+            // Opens target history sessions and closes open tabs, so a
+            // session never has both in flight: no open pending means a close.
+            guard tabOpensInFlight[sessionId] != nil else {
+                if case .sessionTabActionFailed(_, let text) = message, closingSessionIds.remove(sessionId) != nil {
+                    tabCloseError = text
+                }
+                return
+            }
             let remaining = (tabOpensInFlight[sessionId] ?? 1) - 1
             tabOpensInFlight[sessionId] = remaining > 0 ? remaining : nil
             if case .sessionTabActionFailed(_, let text) = message, remaining <= 0, pendingSessionId == sessionId {
