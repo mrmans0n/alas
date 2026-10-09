@@ -15,7 +15,12 @@ final class NativePeerSessions {
     private(set) var isFetchingOlderMessages = false
     private(set) var pendingPrompt: String?
 
-    private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
+    private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: []) {
+        didSet { if hasGroups != !snapshot.groups.isEmpty { hasGroups.toggle() } }
+    }
+    /// Whether any peer is listed. Views that only need this read it instead
+    /// of `snapshot`, which changes on every streamed session update.
+    private(set) var hasGroups = false
     /// The peer worktree shown in the center pane. Set with no selected tab
     /// when the worktree has none open.
     private(set) var selectedWorktree: NativePeerWorktreeSelection?
