@@ -250,9 +250,13 @@ extension AppState {
     /// Stopping or restarting has to reach a stale tab too — otherwise a
     /// relaunch would leave the old one stranded beside the new one.
     func scriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
-        tabs.tabs(forWorktree: worktree.id).first { tab in
+        scriptTab(scriptKey: script.key, worktreeID: worktree.id)
+    }
+
+    func scriptTab(scriptKey: String, worktreeID: String) -> Tab? {
+        tabs.tabs(forWorktree: worktreeID).first { tab in
             guard case .terminal(let state) = tab else { return false }
-            return state.runScriptKey == script.key
+            return state.runScriptKey == scriptKey
         }
     }
 
@@ -260,9 +264,13 @@ extension AppState {
     /// there is a terminal worth jumping to — never to decide whether the
     /// command itself is still running; `runRecords` owns that.
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
-        tabs.tabs(forWorktree: worktree.id).first { tab in
+        runningScriptTab(scriptKey: script.key, worktreeID: worktree.id)
+    }
+
+    func runningScriptTab(scriptKey: String, worktreeID: String) -> Tab? {
+        tabs.tabs(forWorktree: worktreeID).first { tab in
             guard case .terminal(let state) = tab,
-                  state.runScriptKey == script.key,
+                  state.runScriptKey == scriptKey,
                   let runScriptLeafId = state.runScriptLeafId,
                   let leaf = state.root.find(leafId: runScriptLeafId)?.leaf
             else { return false }
@@ -272,58 +280,95 @@ extension AppState {
 
     /// Enter/click semantics: focus the script's open tab when it exists,
     /// otherwise launch a new one. One tab per (script, worktree).
-    func runOrFocusScript(_ script: RunScript, in worktree: Worktree) {
+    /// `console` overrides the script's `alas-console` default for this run.
+    func runOrFocusScript(_ script: RunScript, in worktree: Worktree, console: RunScriptConsole? = nil) {
+        if let existing = scriptTab(for: script, in: worktree), existing.isHiddenRunTab,
+           runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true {
+            // An idle background console was never shown; rerun instead of
+            // popping it open.
+            restartScript(script, in: worktree, console: console)
+            return
+        }
         if let existing = runningScriptTab(for: script, in: worktree) {
+            // Activation reveals a hidden tab: clicking a running script means "show me".
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
             return
         }
-        launchScript(script, in: worktree)
+        launchScript(script, in: worktree, console: console)
     }
 
+    /// Restart repeats the run the way it was shown: without an explicit
+    /// `console`, an existing tab's visibility wins over the script default.
     @discardableResult
-    func restartScript(_ script: RunScript, in worktree: Worktree, presentsLaunchFailure: Bool = true) -> RunScriptLaunchStart {
+    func restartScript(
+        _ script: RunScript,
+        in worktree: Worktree,
+        presentsLaunchFailure: Bool = true,
+        console: RunScriptConsole? = nil
+    ) -> RunScriptLaunchStart {
         let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         if pendingScriptLaunches[launchKey] != nil {
             stopScript(script, in: worktree)
-            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
+            return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: console)
         }
+        var resolvedConsole = console
         if let existing = scriptTab(for: script, in: worktree) {
+            resolvedConsole = resolvedConsole ?? (existing.isHiddenRunTab ? .hidden : .shown)
             let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
             let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
             archiveFinalizedRun(finalized, capture: capture)
             closeTab(worktreeId: worktree.id, tabId: existing.id)
         }
-        return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
+        return launchScript(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: resolvedConsole)
+    }
+
+    /// Restart from a run record, which only knows the script key. Resolves
+    /// the script with the same scan the ▶ menu uses.
+    func restartScript(scriptKey: String, in worktree: Worktree) {
+        guard let script = RunScriptStore.scripts(worktreeRoot: worktree.path).first(where: { $0.key == scriptKey }) else {
+            showFileActionError(title: "Run Script Failed", message: "This script no longer exists.")
+            return
+        }
+        restartScript(script, in: worktree)
+    }
+
+    func stopScript(_ script: RunScript, in worktree: Worktree) {
+        stopScript(scriptKey: script.key, in: worktree)
     }
 
     /// Stop an in-flight run by closing the terminal that hosts it. The record
     /// is marked stopped *before* the close so the monitor-cancellation path
     /// can't relabel a deliberate stop as a lost process.
-    func stopScript(_ script: RunScript, in worktree: Worktree) {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
+    func stopScript(scriptKey: String, in worktree: Worktree) {
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: scriptKey)
         if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
-            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
             archiveFinalizedRun(finalized, capture: .unavailable)
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
             return
         }
-        guard let existing = scriptTab(for: script, in: worktree) else {
+        guard let existing = scriptTab(scriptKey: scriptKey, worktreeID: worktree.id) else {
             // Nothing left to stop: whatever we thought was running is gone,
             // and we never saw it exit.
-            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
             archiveFinalizedRun(finalized, capture: .unavailable)
             return
         }
-        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
-        let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: scriptKey)
+        let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: scriptKey, at: Date())
         archiveFinalizedRun(finalized, capture: capture)
         closeTab(worktreeId: worktree.id, tabId: existing.id)
     }
 
+    func focusScriptTerminal(_ script: RunScript, in worktree: Worktree) {
+        focusScriptTerminal(scriptKey: script.key, in: worktree)
+    }
+
     /// Reveal the terminal a run is (or was) hosted in. Scoped to `worktree`
     /// so a same-named script in another worktree is never focused.
-    func focusScriptTerminal(_ script: RunScript, in worktree: Worktree) {
-        guard let existing = runningScriptTab(for: script, in: worktree) else { return }
+    /// Activation also un-hides a background run's tab.
+    func focusScriptTerminal(scriptKey: String, in worktree: Worktree) {
+        guard let existing = runningScriptTab(scriptKey: scriptKey, worktreeID: worktree.id) else { return }
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
     }
 
@@ -407,8 +452,13 @@ extension AppState {
 
     /// `presentsLaunchFailure` false hands a refusal back to the caller instead of alerting the user.
     @discardableResult
-    func launchScript(_ script: RunScript, in worktree: Worktree, presentsLaunchFailure: Bool = true) -> RunScriptLaunchStart {
-        let result = startScriptLaunch(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure)
+    func launchScript(
+        _ script: RunScript,
+        in worktree: Worktree,
+        presentsLaunchFailure: Bool = true,
+        console: RunScriptConsole? = nil
+    ) -> RunScriptLaunchStart {
+        let result = startScriptLaunch(script, in: worktree, presentsLaunchFailure: presentsLaunchFailure, console: console)
         if presentsLaunchFailure, case let .refused(title, message) = result {
             showFileActionError(title: title, message: message)
         }
@@ -428,7 +478,8 @@ extension AppState {
     func startScriptLaunch(
         _ script: RunScript,
         in worktree: Worktree,
-        presentsLaunchFailure: Bool = true
+        presentsLaunchFailure: Bool = true,
+        console: RunScriptConsole? = nil
     ) -> RunScriptLaunchStart {
         // The tab that would satisfy `runningScriptTab` isn't registered
         // until this launch's async Task finishes, so two invocations before
@@ -488,6 +539,7 @@ extension AppState {
             portConflict: conflict
         ))
 
+        let isHidden = (console ?? script.console) == .hidden
         let launchID = UUID()
         pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
             id: launchID,
@@ -518,7 +570,8 @@ extension AppState {
                         startupScriptSuffix: suffix,
                         includeUserStartupScript: true,
                         titleOverride: script.displayName,
-                        runScriptKey: script.key
+                        runScriptKey: script.key,
+                        isHidden: isHidden
                     )
                     if Task.isCancelled {
                         closeTab(worktreeId: worktree.id, tabId: tab.id)
