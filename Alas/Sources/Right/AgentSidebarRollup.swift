@@ -178,7 +178,10 @@ struct AgentSidebarRollupBuilder {
                 title: session.title,
                 model: nil,
                 state: session.isActive ? peerState(session.status) : .detached,
-                activityAt: Date(timeIntervalSince1970: TimeInterval(session.updatedAt)),
+                // Open rows caption their creation time, which peers don't send.
+                activityAt: session.isActive
+                    ? .distantPast
+                    : Date(timeIntervalSince1970: TimeInterval(session.updatedAt)),
                 isLive: session.isActive
             )
         }

@@ -729,10 +729,13 @@ final class NativePeerSessions {
     }
 
     private func receive(_ message: RemoteServerMessage) {
-        // Tab actions answer for any session, not just the selected one.
+        // Tab actions answer for any session, not just the selected one. A
+        // reply to a request the user has since moved on from is dropped.
         if case .sessionTabActionFailed(let sessionId, let text) = message {
-            if pendingSessionId == sessionId { pendingSessionId = nil }
-            sessionTabError = text
+            if pendingSessionId == sessionId {
+                pendingSessionId = nil
+                sessionTabError = text
+            }
             return
         }
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
