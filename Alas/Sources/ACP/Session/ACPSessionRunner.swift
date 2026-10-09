@@ -4321,6 +4321,9 @@ extension ACPSessionRunner {
                 let interruptedTurnContinuation = queuedItemId.flatMap { qid in
                     self.session.queue.first(where: { $0.id == qid })?.interruptedTurnContinuation
                 } ?? false
+                if interruptedTurnContinuation {
+                    self.session.expectInterruptedTurnContinuationEcho()
+                }
                 if shouldRecord, interruptedTurnContinuation, let qid = queuedItemId,
                    let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
                     let before = self.session.transcript.messages.count

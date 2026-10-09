@@ -61,6 +61,11 @@ enum ACPMessage: Equatable {
         Self.stableId(for: stableIdentityKey)
     }
 
+    /// The notice recorded in place of a restart continuation's user row.
+    var isInterruptedTurnContinuationNotice: Bool {
+        if case .systemNotice(_, QueuedPrompt.interruptedTurnContinueNotice) = self { true } else { false }
+    }
+
     /// Mirrors `ACPMessageWire.isAgentSideProgress`.
     var isAgentSideProgress: Bool {
         switch self {

@@ -427,6 +427,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// agent may stream the echo in fragments, none equal to the full text.
     private var expectedContinuationEcho: Substring?
 
+    /// Expect the agent to echo a restart continuation until the turn ends.
+    /// Armed on every dispatch: a resend has no notice to record again.
+    func expectInterruptedTurnContinuationEcho() {
+        expectedContinuationEcho = Substring(QueuedPrompt.interruptedTurnContinueText)
+    }
+
     /// Whether `text` is (the next fragment of) a restart continuation's echo,
     /// consuming it from the expectation.
     private func consumeContinuationEcho(_ text: String) -> Bool {
@@ -2213,11 +2219,12 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Records the continuation Alas sends for a restart-interrupted turn.
     /// The user never typed it, so it shows as a notice instead of a user
-    /// bubble, but it still opens a new turn like `recordUserPrompt`.
+    /// bubble, but it still opens a new turn like `recordUserPrompt`: the
+    /// legacy output locators stop at it as they stop at a user row.
     func recordInterruptedTurnContinuation() {
         appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
         transcript.completedOutputBoundaryMessageIds.removeAll()
-        expectedContinuationEcho = Substring(QueuedPrompt.interruptedTurnContinueText)
+        expectInterruptedTurnContinuationEcho()
     }
 
     func appendSystemNotice(_ text: String) {
@@ -3799,6 +3806,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // prompt gets appended to the previous turn's trailing
             // agent message, breaking the conversation order.
             if case .user = transcript.messages[i] { return nil }
+            if transcript.messages[i].isInterruptedTurnContinuationNotice { return nil }
             if case .agent = transcript.messages[i] { return i }
             if case .toolCall = transcript.messages[i] { return nil }
             if case .fileEdit = transcript.messages[i] { return nil }
@@ -3809,6 +3817,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func lastThought() -> Int? {
         for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
             if case .user = transcript.messages[i] { return nil }
+            if transcript.messages[i].isInterruptedTurnContinuationNotice { return nil }
             if case .thought = transcript.messages[i] { return i }
             if case .agent = transcript.messages[i] { return nil }
             if case .toolCall = transcript.messages[i] { return nil }

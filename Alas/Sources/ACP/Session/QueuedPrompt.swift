@@ -287,7 +287,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     ) -> Set<UUID> {
         deliveredRecordedPromptIDs(in: queue, newestFirst: liveTranscript.reversed().lazy.map {
             if $0.isAgentSideProgress { return .progress }
-            if case .systemNotice(_, text: Self.interruptedTurnContinueNotice) = $0 { return .interruptedTurnContinuation }
+            if $0.isInterruptedTurnContinuationNotice { return .interruptedTurnContinuation }
             guard case .user(_, _, let text, let attachments, _, _) = $0 else { return .other }
             return .user(text: text, attachments: attachments)
         })

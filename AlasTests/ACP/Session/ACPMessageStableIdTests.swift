@@ -449,6 +449,22 @@ struct ACPMessageStableIdTests {
         #expect(s.transcript.messages.count == 2)
     }
 
+    @Test("output after a restart continuation starts a new row instead of extending the interrupted turn's",
+          arguments: [true, false])
+    func continuationNoticeBoundsLegacyOutput(thought: Bool) {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        func chunk(_ text: String) -> ACPSessionUpdate {
+            thought ? .agentThoughtChunk(.text(text)) : .agentMessageChunk(.text(text))
+        }
+        s.recordUserPrompt(text: "migrate", attachments: [])
+        s.apply(chunk("before"))
+        s.recordInterruptedTurnContinuation()
+
+        s.apply(chunk("after"))
+
+        #expect(s.transcript.messages.count == 4)
+    }
+
     @Test("echoed expansions are expected for the whole turn, steers included, and only an exact resource matches")
     func echoedSymbolExpansionsAreScopedToTheTurn() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
