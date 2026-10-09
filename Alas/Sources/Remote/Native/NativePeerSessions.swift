@@ -102,7 +102,10 @@ final class NativePeerSessions {
     /// session depends on, so the rest of `refresh()` is not needed.
     private func rebuildSnapshot() {
         guard downstream != nil else { return }
-        snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries, consoles: consoles?.consoles ?? [:])
+        snapshot = .build(
+            peers: peers(), rows: federation.peerSessionSummaries,
+            consoles: consoles?.consoles ?? [:], projects: federation.peerProjects
+        )
         let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
         closingSessionIds.formIntersection(openSessionIds)
         reconcileSelectedTab()

@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Show every project from an online peer in the sidebar, including projects with no sessions or consoles.
+
 ## [0.20.8] - 2026-10-09
 
 ### ✨ Features

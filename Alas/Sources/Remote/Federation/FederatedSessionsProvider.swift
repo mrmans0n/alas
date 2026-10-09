@@ -159,6 +159,8 @@ final class FederatedSessionsProvider {
     private var activePeers: [String: FederatedPeerInfo] = [:]
     /// Each active peer's last list, already loop-guarded, tagged and namespaced.
     private var peerRows: [String: [RemoteSessionSummary]] = [:]
+    /// The peer's complete project inventory, independent of session activity.
+    private(set) var peerProjects: [String: [RemoteProjectOption]] = [:]
     /// Namespaced session id → downstreams that asked for it.
     private var subscribers: [String: Set<UUID>] = [:]
     /// Active prompt requests received while at least one downstream was subscribed.
@@ -333,6 +335,10 @@ final class FederatedSessionsProvider {
                 guard peerRows[serverId] != tagged else { return }
                 peerRows[serverId] = tagged
                 notifySessionListChanged()
+            case .projectList(let projects):
+                guard peerProjects[serverId] != projects else { return }
+                peerProjects[serverId] = projects
+                notifySessionListChanged()
             case .sessionClosed(let sessionId):
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
                 pendingRequests[namespaced] = nil
@@ -389,6 +395,7 @@ final class FederatedSessionsProvider {
             // sessions is told it closed — the same thing the peer's own
             // gateway says when a session goes away.
             if peerRows.removeValue(forKey: serverId) != nil { listChanged = true }
+            if peerProjects.removeValue(forKey: serverId) != nil { listChanged = true }
             let prefix = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: "")
             for namespaced in subscribers.keys where namespaced.hasPrefix(prefix) {
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
@@ -422,6 +429,7 @@ final class FederatedSessionsProvider {
         }
         for serverId in current.keys where previous[serverId] == nil {
             links.sendToPeer(.listSessions, serverId: serverId)
+            links.sendToPeer(.listProjects, serverId: serverId)
         }
         // A rename reaches here as a changed `name` on the same id.
         for (serverId, peer) in current where previous[serverId] != nil && previous[serverId] != peer {
@@ -441,6 +449,7 @@ final class FederatedSessionsProvider {
         lastListRequestAt = at
         for serverId in activePeers.keys {
             links.sendToPeer(.listSessions, serverId: serverId)
+            links.sendToPeer(.listProjects, serverId: serverId)
         }
     }
 

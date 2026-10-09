@@ -56,7 +56,7 @@ struct FederatedSessionsProviderTests {
         let client = Client()
         provider.attach(client.downstream)
         links.goOnline("srv-b", name: "Mac B")
-        #expect(links.sent(to: "srv-b") == [.listSessions])
+        #expect(links.sent(to: "srv-b") == [.listSessions, .listProjects])
         links.receive(.sessionList(sessions: [row("s1"), row("s2")]), from: "srv-b")
         let rows = provider.peerSessionSummaries
         #expect(rows.map(\.id) == ["srv-b:s1", "srv-b:s2"])
@@ -83,7 +83,6 @@ struct FederatedSessionsProviderTests {
         links.receive(.sessionList(sessions: [row("s1")]), from: "srv-b")
         #expect(client.listRefreshes == 1)
     }
-
     @Test func listSessionsFromAClientIsForwardedToEveryPeerAndStillHandledLocally() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
@@ -93,8 +92,8 @@ struct FederatedSessionsProviderTests {
         links.goOnline("srv-c", name: "Mac C")
         links.sent.removeAll()
         #expect(provider.route(.listSessions, from: client.downstream) == false)
-        #expect(links.sent(to: "srv-b") == [.listSessions])
-        #expect(links.sent(to: "srv-c") == [.listSessions])
+        #expect(links.sent(to: "srv-b") == [.listSessions, .listProjects])
+        #expect(links.sent(to: "srv-c") == [.listSessions, .listProjects])
     }
 
     @Test func subscribeIsForwardedWithTheLocalIdAndRepliesComeBackNamespaced() {
@@ -132,7 +131,7 @@ struct FederatedSessionsProviderTests {
         #expect(provider.route(.subscribe(sessionId: "s1"), from: client.downstream) == false)
         #expect(provider.route(.subscribe(sessionId: "srv-z:s1"), from: client.downstream) == false)
         #expect(provider.route(.createSession(worktreeId: "w", agentId: "a"), from: client.downstream) == false)
-        #expect(links.sent(to: "srv-b") == [.listSessions])
+        #expect(links.sent(to: "srv-b") == [.listSessions, .listProjects])
     }
 
     @Test func driveVerbsAreForwardedVerbatimApartFromTheId() {
