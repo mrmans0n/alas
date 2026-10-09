@@ -539,14 +539,22 @@ struct ACPSessionQueueAPITests {
                       // A resend reuses the row: earlier output proves only the
                       // first dispatch, whether or not the retry advanced the attempt.
                       (answered: true, attempt: 1, dispatches: 1, delivered: false),
-                      (answered: true, attempt: 0, dispatches: 2, delivered: false)])
-    func deliveredRecordedPromptIDs(answered: Bool, attempt: Int, dispatches: Int, delivered: Bool) {
-        let item = QueuedPrompt(blocks: [.text("ship it")], transcriptRecorded: true,
-                                brokerOperationAttempt: attempt, dispatchCount: dispatches)
+                      (answered: true, attempt: 0, dispatches: 2, delivered: false)],
+          // A restart continuation is recorded as a notice, not a user row.
+          [false, true])
+    func deliveredRecordedPromptIDs(
+        _ c: (answered: Bool, attempt: Int, dispatches: Int, delivered: Bool), continuation: Bool
+    ) {
+        let (answered, delivered) = (c.answered, c.delivered)
+        let item = QueuedPrompt(blocks: [.text(continuation ? QueuedPrompt.interruptedTurnContinueText : "ship it")],
+                                transcriptRecorded: true, brokerOperationAttempt: c.attempt,
+                                dispatchCount: c.dispatches, interruptedTurnContinuation: continuation)
         var transcript: [ACPMessageWire] = [
             .user(messageId: nil, text: "earlier", attachments: [], delegatedSource: nil),
             .agent(messageId: nil, text: "ok", phase: nil, metadata: nil),
-            .user(messageId: nil, text: "ship it", attachments: [], delegatedSource: nil),
+            continuation
+                ? .systemNotice(text: QueuedPrompt.interruptedTurnContinueNotice)
+                : .user(messageId: nil, text: "ship it", attachments: [], delegatedSource: nil),
         ]
         if answered {
             transcript.append(.agent(messageId: nil, text: "shipping", phase: nil, metadata: nil))

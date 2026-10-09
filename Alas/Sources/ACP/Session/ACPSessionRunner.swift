@@ -3492,7 +3492,10 @@ extension ACPSessionRunner {
         let item = session.queue.remove(at: idx)
         let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
         let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
-        if session.canSteerRunningTurn {
+        // A restart continuation is sent as the queue head, never steered in,
+        // so `sendNow` records its notice rather than a user row.
+        let sendsAsQueueHead = item.backgroundTaskWake != nil || item.interruptedTurnContinuation
+        if session.canSteerRunningTurn, !item.interruptedTurnContinuation {
             steerRunningTurn(
                 blocks: item.blocks, delegatedSource: item.delegatedSource,
                 recordUserPrompt: !item.transcriptRecorded, normalUserTurn: normalUserTurn,
@@ -3501,7 +3504,7 @@ extension ACPSessionRunner {
                 onPromptFinished: nil, recoveryQueueItem: (item, idx))
             return
         }
-        if item.backgroundTaskWake != nil {
+        if sendsAsQueueHead {
             session.queue.insert(item, at: min(idx, session.queue.count))
         }
         persistQueue()
@@ -3514,7 +3517,7 @@ extension ACPSessionRunner {
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
-            recoveryQueueItemID: item.backgroundTaskWake == nil ? nil : item.id,
+            recoveryQueueItemID: sendsAsQueueHead ? item.id : nil,
             onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id)
         )
     }
@@ -3554,7 +3557,7 @@ extension ACPSessionRunner {
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
-        if session.canSteerRunningTurn {
+        if session.canSteerRunningTurn, recoveryQueueItemID == nil {
             steerRunningTurn(
                 blocks: blocks, delegatedSource: delegatedSource,
                 recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,
@@ -4318,6 +4321,28 @@ extension ACPSessionRunner {
                     }
                     return true
                 }()
+                let interruptedTurnContinuation = queuedItemId.flatMap { qid in
+                    self.session.queue.first(where: { $0.id == qid })?.interruptedTurnContinuation
+                } ?? false
+                if interruptedTurnContinuation {
+                    self.session.expectInterruptedTurnContinuationEcho()
+                }
+                if shouldRecord, interruptedTurnContinuation, let qid = queuedItemId,
+                   let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
+                    let before = self.session.transcript.messages.count
+                    if !self.session.followsTranscriptTail {
+                        self.session.followsTranscriptTail = true
+                        self.onResumeTranscriptTail?()
+                    }
+                    self.session.recordInterruptedTurnContinuation()
+                    self.persistFromIndex(before)
+                    self.session.queue[idx].transcriptRecorded = true
+                    self.session.queue[idx].turnStartedAt = self.activePromptStartedAt
+                    self.persistQueue()
+                    self.resetStreamingPersistBuffer()
+                    self.session.transcript.streamingState = .sending
+                    return (true, nil)
+                }
                 if shouldRecord {
                     let before = self.session.transcript.messages.count
                     let titleBefore = self.session.title
@@ -4888,7 +4913,7 @@ extension ACPSessionRunner {
             return
         }
         // The turn's updates have drained: its echoes have all arrived.
-        session.endSymbolExpansionEchoTurn()
+        session.endPromptEchoTurn()
         session.transcript.streamingState = .idle
         guard flushQueueWhenReady else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: queue flush deferred") }

@@ -136,6 +136,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     static let interruptedTurnContinueText =
         "Your previous turn was interrupted because Alas restarted. Continue where you left off."
 
+    /// Shown in the transcript in place of `interruptedTurnContinueText`: the
+    /// user never typed the continuation, so it is not rendered as theirs.
+    static let interruptedTurnContinueNotice = "Alas restarted mid-turn and asked the agent to continue."
+
     /// The continuation queued for a turn an app restart interrupted. It is an
     /// ordinary pending row, so launch recovery recognizes it by its flag.
     var isInterruptedTurnContinuation: Bool {
@@ -269,6 +273,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     ) -> Set<UUID> {
         deliveredRecordedPromptIDs(in: queue, newestFirst: transcript.reversed().lazy.map {
             if $0.isAgentSideProgress { return .progress }
+            if case .systemNotice(text: Self.interruptedTurnContinueNotice) = $0 { return .interruptedTurnContinuation }
             guard case .user(_, let text, let attachments, _, _) = $0 else { return .other }
             return .user(text: text, attachments: attachments)
         })
@@ -282,6 +287,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     ) -> Set<UUID> {
         deliveredRecordedPromptIDs(in: queue, newestFirst: liveTranscript.reversed().lazy.map {
             if $0.isAgentSideProgress { return .progress }
+            if $0.isInterruptedTurnContinuationNotice { return .interruptedTurnContinuation }
             guard case .user(_, _, let text, let attachments, _, _) = $0 else { return .other }
             return .user(text: text, attachments: attachments)
         })
@@ -290,6 +296,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     enum TranscriptEntry {
         case progress
         case user(text: String, attachments: [ACPMessage.Attachment])
+        /// The notice recorded for a continuation prompt, which stands in for
+        /// its user row.
+        case interruptedTurnContinuation
         case other
     }
 
@@ -304,6 +313,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
                 answered = true
             case .other:
                 continue
+            case .interruptedTurnContinuation:
+                guard answered else { return [] }
+                return Set(queue.lazy.filter {
+                    $0.interruptedTurnContinuation && $0.transcriptRecorded
+                        && $0.dispatchCount <= 1 && $0.brokerOperationAttempt == 0
+                }.map(\.id))
             case .user(let text, let attachments):
                 guard answered else { return [] }
                 return Set(queue.lazy.filter {

@@ -417,10 +417,49 @@ final class ACPSession: ObservableObject, Identifiable {
         expectedSymbolExpansionEchoes.append(contentsOf: blocks)
     }
 
-    /// The turn ended: a later user chunk is never an echo of its expansions.
-    func endSymbolExpansionEchoTurn() {
+    /// The turn ended: a later user chunk is never an echo of its prompt.
+    func endPromptEchoTurn() {
         expectedSymbolExpansionEchoes.removeAll()
+        expectedContinuationEcho = nil
     }
+
+    /// The part of a restart continuation's echo not seen yet this turn. An
+    /// agent may stream the echo in fragments, none equal to the full text.
+    private var expectedContinuationEcho: Substring?
+
+    /// Expect the agent to echo a restart continuation until the turn ends.
+    /// Armed on every dispatch: a resend has no notice to record again.
+    func expectInterruptedTurnContinuationEcho() {
+        expectedContinuationEcho = Substring(QueuedPrompt.interruptedTurnContinueText)
+    }
+
+    /// Whether `text` is (the next fragment of) a restart continuation's echo,
+    /// consuming it from the expectation. Whitespace between fragments is part
+    /// of the echo. A chunk that diverges ends the expectation, so a later
+    /// prompt's echo that happens to share a prefix is never swallowed.
+    private func consumeContinuationEcho(_ text: String) -> Bool {
+        text == QueuedPrompt.interruptedTurnContinueText || Self.consume(text, from: &expectedContinuationEcho)
+    }
+
+    /// Consumes `text` from the front of `expected`, ignoring whitespace
+    /// around fragments. A fully consumed `expected` stays empty rather than
+    /// nil, so trailing whitespace is still consumed; the first text that
+    /// diverges clears it.
+    private static func consume(_ text: String, from expected: inout Substring?) -> Bool {
+        guard let rest = expected?.drop(while: \.isWhitespace) else { return false }
+        let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if fragment.isEmpty { return true }
+        guard rest.hasPrefix(fragment) else {
+            expected = nil
+            return false
+        }
+        expected = rest.dropFirst(fragment.count)
+        return true
+    }
+
+    /// The rest of a replayed restart continuation echo, while the replay
+    /// cursor sits just past its notice.
+    private var replayedContinuationEcho: Substring?
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
@@ -650,6 +689,8 @@ final class ACPSession: ObservableObject, Identifiable {
         // of the user message instead of being dropped. The runner persists
         // from the pre-call message count, so the flushed rows are saved too.
         _ = flushPendingReplayCandidates()
+        // Echoes from here on belong to this prompt, not a restart continuation.
+        expectedContinuationEcho = nil
         let id = UUID()
         transcript.appendMessage(.user(
             id: id,
@@ -944,6 +985,8 @@ final class ACPSession: ObservableObject, Identifiable {
         case .userMessageChunk(let chunk):
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
+            // Recorded as a notice, not a user row: an echo has nothing to merge into.
+            guard !consumeContinuationEcho(txt) else { return [] }
             var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
@@ -1546,7 +1589,7 @@ final class ACPSession: ObservableObject, Identifiable {
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
-                ?? firstIdLessMatch(of: .user, atOrAfter: suppressedReplayInsertionCursor)
+                ?? replayedUserTurnMatch(chunk.content, atOrAfter: suppressedReplayInsertionCursor)
         case .plan:
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
@@ -1571,12 +1614,14 @@ final class ACPSession: ObservableObject, Identifiable {
     func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        replayedContinuationEcho = nil
         for run in subagents.values { run.beginReplayReconciliation() }
     }
 
     func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        replayedContinuationEcho = nil
         for run in subagents.values { run.endReplayReconciliation() }
     }
 
@@ -2189,6 +2234,16 @@ final class ACPSession: ObservableObject, Identifiable {
             self?.contextRecoveryStatus = nil
             self?.contextRecoveryExpiryTask = nil
         }
+    }
+
+    /// Records the continuation Alas sends for a restart-interrupted turn.
+    /// The user never typed it, so it shows as a notice instead of a user
+    /// bubble, but it still opens a new turn like `recordUserPrompt`: the
+    /// legacy output locators stop at it as they stop at a user row.
+    func recordInterruptedTurnContinuation() {
+        appendSystemNotice(QueuedPrompt.interruptedTurnContinueNotice)
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        expectInterruptedTurnContinuationEcho()
     }
 
     func appendSystemNotice(_ text: String) {
@@ -3770,6 +3825,7 @@ final class ACPSession: ObservableObject, Identifiable {
             // prompt gets appended to the previous turn's trailing
             // agent message, breaking the conversation order.
             if case .user = transcript.messages[i] { return nil }
+            if transcript.messages[i].isInterruptedTurnContinuationNotice { return nil }
             if case .agent = transcript.messages[i] { return i }
             if case .toolCall = transcript.messages[i] { return nil }
             if case .fileEdit = transcript.messages[i] { return nil }
@@ -3780,6 +3836,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func lastThought() -> Int? {
         for i in stride(from: transcript.messages.count - 1, through: 0, by: -1) {
             if case .user = transcript.messages[i] { return nil }
+            if transcript.messages[i].isInterruptedTurnContinuationNotice { return nil }
             if case .thought = transcript.messages[i] { return i }
             if case .agent = transcript.messages[i] { return nil }
             if case .toolCall = transcript.messages[i] { return nil }
@@ -3812,6 +3869,30 @@ final class ACPSession: ObservableObject, Identifiable {
             case (.thought, .thought(_, nil, _)): return i
             case (.user, .user(_, nil, _, _, _, _)): return i
             default: continue
+            }
+        }
+        return nil
+    }
+
+    /// `firstIdLessMatch(of: .user, …)`, except that a restart continuation's
+    /// echo resolves to its notice, which stands in for the user row. Agents
+    /// may replay that echo in fragments: each one that continues it resolves
+    /// to the notice the cursor just passed, so none claims a later user turn.
+    private func replayedUserTurnMatch(_ block: ACPContentBlock, atOrAfter cursor: Int) -> Int? {
+        let text: String? = if case .text(let text) = block { text } else { nil }
+        let start = min(cursor, transcript.messages.count)
+        if let text, start > 0, transcript.messages[start - 1].isInterruptedTurnContinuationNotice,
+           Self.consume(text, from: &replayedContinuationEcho) {
+            return start - 1
+        }
+        replayedContinuationEcho = nil
+        for i in start..<transcript.messages.count {
+            if case .user(_, nil, _, _, _, _) = transcript.messages[i] { return i }
+            guard let text, transcript.messages[i].isInterruptedTurnContinuationNotice else { continue }
+            var expected: Substring? = Substring(QueuedPrompt.interruptedTurnContinueText)
+            if Self.consume(text, from: &expected) {
+                replayedContinuationEcho = expected
+                return i
             }
         }
         return nil

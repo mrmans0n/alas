@@ -861,6 +861,43 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.lastError != nil)
     }
 
+    @Test("a force-sent restart continuation replaces the running turn and is recorded as a notice", arguments: [true, false])
+    func forceSentContinuationIsSentAsQueueHead(supportsSteering: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.supportsSteering = supportsSteering
+        let started = QueueTestGate()
+        let finish = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await started.open()
+            await finish.wait()
+            return Data("{}".utf8)
+        }
+        defer { runner.stop()
+        Task { await finish.open() } }
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await started.wait()
+        session.transcript.streamingState = .streaming
+        let continuation = QueuedPrompt(blocks: [.text(QueuedPrompt.interruptedTurnContinueText)],
+                                        interruptedTurnContinuation: true)
+        session.queue.insert(continuation, at: 0)
+        await runner.flushPersistence()
+
+        runner.forceSendQueuedItem(id: continuation.id)
+        // The redirect waits for the cancelled turn to settle.
+        try await waitUntil { mock.sent.contains { $0.method == "session/cancel" } }
+        await finish.open()
+        try await waitUntil { session.queue.isEmpty }
+
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 2)
+
+        let steered = mock.sent.contains { $0.method == "_session/steering" }
+        #expect(!steered)
+        #expect(session.transcript.messages.contains { $0.isInterruptedTurnContinuationNotice })
+        #expect(!session.transcript.messages.contains {
+            if case .user(_, _, QueuedPrompt.interruptedTurnContinueText, _, _, _) = $0 { true } else { false }
+        })
+    }
+
     @Test("force-sent native steering failures retain a retryable queued prompt", arguments: ["failed", "unknown", "promptRequired"])
     func forceSentSteeringFailureRetainsQueueItem(outcome: String) async throws {
         let (runner, mock, session, store) = try mkRunner()

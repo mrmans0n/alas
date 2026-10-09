@@ -1084,6 +1084,37 @@ struct ACPSubagentSessionTests {
         #expect(ACPSubagentRowDescriptor(toolCall: spawnRow)?.subagentSessionId == "child-1")
     }
 
+    @Test("a replayed restart continuation echo resolves to its notice, fragment by fragment, without claiming the next user turn",
+          arguments: [false, true])
+    func replayedContinuationEchoKeepsRecoveryPosition(promptReplayedBeforeSpawn: Bool) {
+        let session = makeSession()
+        session.transcript.appendMessage(.systemNotice(id: UUID(), text: QueuedPrompt.interruptedTurnContinueNotice))
+        // A real prompt whose text also occurs inside the continuation.
+        session.transcript.appendMessage(.user(id: UUID(), text: "Continue", attachments: []))
+        session.beginSuppressedReplaySideEffects()
+        let text = QueuedPrompt.interruptedTurnContinueText
+        let split = text.index(text.startIndex, offsetBy: 20)
+
+        for fragment in [String(text[..<split]), " ", String(text[split...]), "\n"] {
+            _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text(fragment)))
+        }
+        if promptReplayedBeforeSpawn {
+            _ = session.applySuppressedReplaySideEffects(.userMessageChunk(.text("Continue")))
+        }
+        _ = session.applySuppressedReplaySideEffects(
+            .subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+
+        let shape = session.transcript.messages.map { message -> String in
+            switch message {
+            case .systemNotice: "notice"
+            case .user: "user"
+            case .toolCall: "spawn"
+            default: "other"
+            }
+        }
+        #expect(shape == (promptReplayedBeforeSpawn ? ["notice", "user", "spawn"] : ["notice", "spawn", "user"]))
+    }
+
     // MARK: - Row projection
 
     @Test("a subagent row is never folded into a tool-call bundle")
