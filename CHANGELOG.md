@@ -6,13 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.9] - 2026-10-09
+
 ### ✨ Features
 
-- Plugin API 15: right-rail panels can show canvases and web pages, carry badges, and open from commands; web pages may show images from the plugin's declared hosts. A selected plugin panel now stays selected when the right pane remounts.
+- Summarize the Attention Inbox on-device into source-linked groups without exposing acknowledged, historical, informational, or peer items (#1875).
+- Show every project from an online peer in the sidebar, including projects with no sessions or consoles (#1877).
+- Add Plugin API 15 right-rail panels for native views, canvases, and sandboxed web pages, with badges, command opening, remembered selection, and allowlisted web images (#1878).
+- Remove the redundant background-task tray header when only one task is running, and simplify the multi-task header indicators (#1879).
+- Show live Active duration for ACP goals from their creation time, while keeping non-zero agent-reported work as a separate Working duration (#1880).
 
-### Fixes
+### 🐛 Fixes
 
-- Show every project from an online peer in the sidebar, including projects with no sessions or consoles.
+- Keep a failed ACP send marked as unsent when its transport handoff is reported after the failure (#1874).
 
 ## [0.20.8] - 2026-10-09
 
