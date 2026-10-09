@@ -412,7 +412,7 @@ struct WorktreeRowView: View {
                 onTap()
             }
         }
-        .nativeContextMenu {
+        .nativeContextMenu(mountsWhileHovered: true) {
             contextMenuContent
         }
         .task(id: activeCommitQuery) {

@@ -157,13 +157,37 @@ private final class PointerTransparentMenuButton: NSButton {
 }
 
 extension View {
+    /// - Parameter mountsWhileHovered: Mount the AppKit host only while the
+    ///   pointer is over the view, or while VoiceOver runs (the host is its
+    ///   "Show Menu" element). For long lists: every mounted host is an
+    ///   AppKit hit-test target that SwiftUI re-checks on each scroll frame.
     func nativeContextMenu<MenuItems: View>(
+        mountsWhileHovered: Bool = false,
         @ViewBuilder menuItems: () -> MenuItems
     ) -> some View {
-        overlay {
-            NativeContextMenuHost(menuItems: menuItems())
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        modifier(NativeContextMenuModifier(mountsWhileHovered: mountsWhileHovered, menuItems: menuItems()))
+    }
+}
+
+private struct NativeContextMenuModifier<MenuItems: View>: ViewModifier {
+    let mountsWhileHovered: Bool
+    let menuItems: MenuItems
+    @State private var hovering = false
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    func body(content: Content) -> some View {
+        if mountsWhileHovered {
+            content
+                .onHover { hovering = $0 }
+                .overlay { if hovering || voiceOverEnabled { host } }
+        } else {
+            content.overlay { host }
         }
+    }
+
+    private var host: some View {
+        NativeContextMenuHost(menuItems: menuItems)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

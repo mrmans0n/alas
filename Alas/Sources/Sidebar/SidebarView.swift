@@ -544,10 +544,17 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
     @State private var position = ScrollPosition(idType: String.self)
     @State private var viewportHeight: CGFloat = 0
     @State private var parked = false
+    @State private var dropTargets = SidebarWorktreeDropTargets()
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             content()
+                .environment(\.sidebarWorktreeDropTargets, dropTargets)
+                .coordinateSpace(.named(SidebarWorktreeDropTargets.coordinateSpace))
+                .dropDestination(for: String.self) { ids, location in
+                    guard let draggedId = ids.first else { return false }
+                    return dropTargets.drop(draggedId, at: location)
+                }
                 // Lay the tree out at its ideal height, as the bare ScrollView
                 // did, and only then pad it. A min-height frame alone proposes
                 // that height to the content, and flexible views inside it

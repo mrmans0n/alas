@@ -118,3 +118,20 @@ struct RepoGroupViewLayoutTests {
         return try #require(minX)
     }
 }
+
+@MainActor
+struct SidebarWorktreeDropTargetsTests {
+    @Test func dropsOnTheMountedRowUnderThePointer() {
+        let targets = SidebarWorktreeDropTargets()
+        var drops: [String] = []
+        targets.register("a", frame: CGRect(x: 0, y: 0, width: 100, height: 40)) { drops.append("\($0)->a") }
+        targets.register("b", frame: CGRect(x: 0, y: 41, width: 100, height: 40)) { drops.append("\($0)->b") }
+
+        #expect(targets.drop("a", at: CGPoint(x: 10, y: 60)))
+        #expect(!targets.drop("b", at: CGPoint(x: 10, y: 60)), "onto itself")
+        #expect(!targets.drop("a", at: CGPoint(x: 10, y: 40.5)), "between rows")
+        targets.unregister("b")
+        #expect(!targets.drop("a", at: CGPoint(x: 10, y: 60)), "unmounted row")
+        #expect(drops == ["a->b"])
+    }
+}

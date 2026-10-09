@@ -8,6 +8,42 @@ struct ProjectDragId: Codable, Transferable {
     }
 }
 
+/// Worktree rows the sidebar's single drop target can reorder onto. One
+/// target for the whole list replaces a `.dropDestination` per row: each of
+/// those is an AppKit view that SwiftUI hit-tests on every scroll frame.
+/// Mounted rows register their frames in the list's coordinate space.
+@MainActor
+final class SidebarWorktreeDropTargets {
+    static let coordinateSpace = "sidebarWorktreeDropTargets"
+
+    private struct Target {
+        var frame: CGRect
+        let drop: (_ draggedId: String) -> Void
+    }
+
+    private var targets: [String: Target] = [:]
+
+    func register(_ id: String, frame: CGRect, drop: @escaping (_ draggedId: String) -> Void) {
+        targets[id] = Target(frame: frame, drop: drop)
+    }
+
+    func unregister(_ id: String) {
+        targets[id] = nil
+    }
+
+    /// Drops `draggedId` on the row at `location`; false when none is there.
+    func drop(_ draggedId: String, at location: CGPoint) -> Bool {
+        guard let (id, target) = targets.first(where: { $0.value.frame.contains(location) }),
+              id != draggedId else { return false }
+        target.drop(draggedId)
+        return true
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var sidebarWorktreeDropTargets: SidebarWorktreeDropTargets? = nil
+}
+
 struct RepoGroupView: View {
     /// Leading inset that nests worktree rows under their repo header.
     static let worktreeIndent: CGFloat = 26
@@ -75,6 +111,7 @@ struct RepoGroupView: View {
     var isFiltering = false
     var highlightedWorktreeId: String? = nil
     @Environment(\.theme) var theme
+    @Environment(\.sidebarWorktreeDropTargets) private var dropTargets
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
 
@@ -157,7 +194,7 @@ struct RepoGroupView: View {
         }
         .padding(.top, 3)
         .contentShape(Rectangle())
-        .nativeContextMenu {
+        .nativeContextMenu(mountsWhileHovered: true) {
             Button("Edit Project…", action: onEditProject)
             if let onOpenGGInbox {
                 Button("gg Inbox", action: onOpenGGInbox)
@@ -239,11 +276,9 @@ struct RepoGroupView: View {
             isHighlighted: wt.id == highlightedWorktreeId
         )
         .draggable(wt.id)
-        .dropDestination(for: String.self) { ids, _ in
-            guard let draggedId = ids.first, draggedId != wt.id else { return false }
+        .modifier(WorktreeRowDropTarget(id: wt.id, targets: dropTargets) { draggedId in
             onDropWorktree(draggedId, wt.id)
-            return true
-        }
+        })
     }
 
     private var headerAccessory: some View {
@@ -295,5 +330,31 @@ struct RepoGroupView: View {
         if limitedCount > 0 { parts.append("\(limitedCount) limited") }
         let head = parts.joined(separator: ", ")
         return kindList.isEmpty ? head : "\(head) (\(kindList))"
+    }
+}
+
+/// Registers the row with the list's shared drop target, or, outside a
+/// sidebar list, accepts drops itself.
+private struct WorktreeRowDropTarget: ViewModifier {
+    let id: String
+    let targets: SidebarWorktreeDropTargets?
+    let drop: (_ draggedId: String) -> Void
+
+    func body(content: Content) -> some View {
+        if let targets {
+            content
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(SidebarWorktreeDropTargets.coordinateSpace))
+                } action: { frame in
+                    targets.register(id, frame: frame, drop: drop)
+                }
+                .onDisappear { targets.unregister(id) }
+        } else {
+            content.dropDestination(for: String.self) { ids, _ in
+                guard let draggedId = ids.first, draggedId != id else { return false }
+                drop(draggedId)
+                return true
+            }
+        }
     }
 }
