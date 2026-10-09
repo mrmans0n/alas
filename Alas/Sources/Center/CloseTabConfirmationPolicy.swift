@@ -12,12 +12,14 @@ enum CloseTabConfirmationPolicy {
             }
         }
 
-        var message: String {
+        /// Names the paired Mac when the tab being closed lives there.
+        func message(onPeer peer: String? = nil) -> String {
+            let place = peer.map { " on \($0)" } ?? ""
             switch self {
             case .terminal:
-                return "This will stop the terminal session and any running process in it."
+                return "This will stop the terminal session\(place) and any running process in it."
             case .chat:
-                return "This will stop the chat session. The transcript remains available only if it has already been persisted."
+                return "This will stop the chat session\(place). The transcript remains available only if it has already been persisted."
             }
         }
 

@@ -336,6 +336,11 @@ struct RootView: View {
                         onRevealSidebar: {
                             state.config.sidebarVisible = true
                             state.saveConfig()
+                        },
+                        onCloseConsole: { consoleId, peerName in
+                            state.requestTerminatePeerConsole(
+                                serverId: selection.serverId, consoleId: consoleId, peerName: peerName
+                            )
                         }
                     )
                 }

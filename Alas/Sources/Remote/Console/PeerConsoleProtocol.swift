@@ -8,6 +8,9 @@ import Foundation
 enum PeerConsoleCapability {
     /// Advertised in `hello` by hosts that serve peer consoles.
     static let v1 = "peerConsole.v1"
+    /// Advertised by hosts that serve `PeerConsoleRequest.terminate`. Older
+    /// hosts drop unknown console requests, so clients gate the control on it.
+    static let terminateV1 = "peerConsoleTerminate.v1"
 }
 
 struct PeerConsoleSummary: Codable, Equatable, Sendable {
@@ -72,6 +75,8 @@ enum PeerConsoleDetachReason: String, Codable, Sendable {
     case limitReached
     case protocolError
     case localOverflow
+    /// A peer closed the console's tab, ending its process.
+    case terminated
     case unknown
 
     init(from decoder: Decoder) throws {
@@ -91,6 +96,9 @@ enum PeerConsoleRequest: Codable, Equatable, Sendable {
     /// Sent after a sequence gap: the host replaces the stream with a snapshot.
     case resync(attachmentId: String)
     case detach(attachmentId: String)
+    /// Closes the console on the host as a local tab close would. Needs no
+    /// attachment or lease. On success the host replies with a fresh `list`.
+    case terminate(consoleId: String)
 }
 
 /// Host → peer.
