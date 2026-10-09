@@ -802,7 +802,6 @@ struct StatusDot: View {
     let color: Color
     let pulses: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animating = false
 
     var body: some View {
         Circle()
@@ -810,18 +809,85 @@ struct StatusDot: View {
             .frame(width: 6, height: 6)
             .overlay {
                 if pulses && !reduceMotion {
-                    Circle()
-                        .stroke(color, lineWidth: 2)
-                        .scaleEffect(animating ? 2.2 : 1)
-                        .opacity(animating ? 0 : 0.5)
-                        .animation(
-                            .easeInOut(duration: 1.9).repeatForever(autoreverses: false),
-                            value: animating
-                        )
+                    StatusDotPulse(color: NSColor.drawingColor(color))
+                        .allowsHitTesting(false)
                 }
             }
-            .onAppear { animating = true }
             .accessibilityHidden(true)
+    }
+}
+
+/// The pulse ring, run by Core Animation in the render server. A SwiftUI
+/// `repeatForever` animation updated the view graph every frame, and each
+/// update re-rendered the whole sidebar's display list, so one running agent
+/// cost a full sidebar render per frame.
+private struct StatusDotPulse: NSViewRepresentable {
+    let color: NSColor
+
+    func makeNSView(context: Context) -> StatusDotPulseView {
+        StatusDotPulseView()
+    }
+
+    func updateNSView(_ view: StatusDotPulseView, context: Context) {
+        view.color = color
+    }
+}
+
+private final class StatusDotPulseView: NSView {
+    private let ring = CAShapeLayer()
+
+    var color: NSColor = .clear {
+        didSet { updateColor() }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        // The ring scales to 2.2x, past the dot's 6pt frame.
+        clipsToBounds = false
+        ring.fillColor = nil
+        ring.lineWidth = 2
+        layer?.addSublayer(ring)
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 1
+        scale.toValue = 2.2
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.5
+        fade.toValue = 0
+        let pulse = CAAnimationGroup()
+        pulse.animations = [scale, fade]
+        pulse.duration = 1.9
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        pulse.repeatCount = .infinity
+        pulse.isRemovedOnCompletion = false
+        ring.opacity = 0
+        ring.add(pulse, forKey: "pulse")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.frame = bounds
+        // Stroked on the dot's edge, like the `Circle().stroke` it replaces.
+        ring.path = CGPath(ellipseIn: bounds, transform: nil)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColor()
+    }
+
+    private func updateColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            ring.strokeColor = color.cgColor
+        }
     }
 }
 
