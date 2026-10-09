@@ -38,7 +38,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 15), .unsupportedAPI(15)),
+        (manifest(api: 16), .unsupportedAPI(16)),
         (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
         (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
          .invalidPanel(#"at most one panel with location "configure""#)),
@@ -150,7 +150,17 @@ struct PluginManifestTests {
         (manifest(api: 11, webTab + #","web":"ui.js""#), PluginManifestError?.some(.needsNewerAPI(#""web""#, api: 12))),
         (manifest(api: 11, webTab), .needsNewerAPI(#"tab "w" kind "web""#, api: 12)),
         (manifest(api: 12, webTab), .invalidWeb(#"tab "w" has kind "web", so the manifest needs "web""#)),
-        (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab with kind "web""#)),
+        (manifest(api: 12, #","web":"ui.js""#), .invalidWeb(#""web" needs a tab or panel with kind "web""#)),
+        (manifest(api: 14, panels(#"{"id":"p","title":"P","kind":"web"}"#)), .needsNewerAPI(#"panel "p" kind "web""#, api: 15)),
+        (manifest(api: 15, panels(#"{"id":"p","title":"P","kind":"chart"}"#)), .invalidPanel(#"panel "p" has unknown kind "chart""#)),
+        (manifest(api: 15, panels(#"{"id":"p","title":"P","location":"changes.section","kind":"canvas"}"#)),
+         .invalidPanel(#"panel "p" at changes.section can only have kind "view""#)),
+        (manifest(api: 15, panels(#"{"id":"p","title":"P","kind":"web"}"#)),
+         .invalidWeb(#"panel "p" has kind "web", so the manifest needs "web""#)),
+        (manifest(api: 14, #","contributes":{"panels":[{"id":"p","title":"P"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"p"}]}"#),
+         .invalidCommand(#"command "a" opens "p", which is not a declared tab"#)),
+        (manifest(api: 15, #","contributes":{"panels":[{"id":"p","title":"P","location":"configure"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"p"}]}"#),
+         .invalidCommand(#"command "a" opens "p", which is not a declared tab or right panel"#)),
         (manifest(api: 12, webTab + #","web":"../ui.js""#), .invalidWeb(#""../ui.js" must be a relative path inside the plugin folder"#)),
         (manifest(api: 12, webTab + #","web":"./p.js""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
         (manifest(api: 12, webTab + #","web":"P.JS""#), .invalidWeb(#""web" and "entry" must be different files, neither inside the other"#)),
@@ -227,6 +237,13 @@ struct PluginManifestTests {
         #expect(parsed.panels.count == 2)
     }
 
+    @Test func api15PanelsKeepTheirKindAndCommandsMayOpenThem() throws {
+        let parsed = try PluginManifest.parse(Data(manifest(api: 15,
+            #","web":"ui.js","contributes":{"panels":[{"id":"w","title":"W","kind":"web"},{"id":"c","title":"C","kind":"canvas"},{"id":"v","title":"V"}],"commands":[{"id":"a","title":"A","slots":["palette"],"opens":"w"}]}"#).utf8))
+        #expect(parsed.panels.map(\.kind) == [.web, .canvas, .view])
+        #expect(parsed.commands.first?.opens == "w")
+    }
+
     @Test func processesKeepTheirArgvAndFlags() throws {
         let parsed = try PluginManifest.parse(Data(manifest(api: 6, processes(
             #"{"id":"install","command":["pnpm","install"]},{"id":"dev","command":["pnpm","dev"],"appendArgs":true,"longRunning":true}"#)).utf8))
@@ -249,8 +266,8 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 14"),
-        (15, "requires plugin API 15; this Alas supports up to 14"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 15"),
+        (16, "requires plugin API 16; this Alas supports up to 15"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)
