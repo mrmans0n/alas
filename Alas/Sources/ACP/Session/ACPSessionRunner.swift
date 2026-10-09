@@ -148,9 +148,12 @@ final class ACPSessionRunner {
     private var sentStreamStarts: [Int: Int] = [:]
     /// Prompts sent to the agent whose usage is not reported yet, by prompt id.
     private var unreportedPrompts: [Int: (startedAt: Int64, sentAt: Int64, streamStart: Int, model: String?, recovery: Bool)] = [:]
-    /// Prompts whose request the transport took, so the agent may have them. Marked from the transport's callback, so
-    /// a restart that runs before any main-actor hop still sees it.
-    private let handedOffPromptIDs = OSAllocatedUnfairLock(initialState: Set<Int>())
+    /// Whether the transport took each prompt's request (true), so the agent may have it, or failed to send it (false,
+    /// which a late handoff callback does not undo). Marked from the transport's callback and the failure path, so a
+    /// restart that runs before any main-actor hop still sees it.
+    /// ponytail: a handoff landing while a restart reads these is missed (one usage row); serializing it with the
+    /// ownership move would mean holding the transport.
+    private let promptHandoffs = OSAllocatedUnfairLock(initialState: [Int: Bool]())
     /// Updates `updatesTask` took off the stream; compared with the client's `yieldedUpdateCount`.
     private var dequeuedUpdateCount = 0
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
@@ -2009,18 +2012,22 @@ final class ACPSessionRunner {
         sentStreamStarts[promptID] = streamStart
         // Only prompts still waiting for a report are read back.
         let waiting = Set(unreportedPrompts.keys)
-        handedOffPromptIDs.withLock { $0.formIntersection(waiting) }
+        promptHandoffs.withLock { $0 = $0.filter { waiting.contains($0.key) } }
         // ponytail: only the newest bound anything, the few prompts still waiting being older than them.
         if sentStreamStarts.count > 16, let oldest = sentStreamStarts.keys.min() { sentStreamStarts[oldest] = nil }
     }
 
     /// Only an error the agent answered with shows it got the prompt. Any other failure is a prompt that never left
     /// (a closed transport) or a turn lost with the connection, and is not recorded.
-    /// A transport reports a handoff even for a request it failed to send, so a failed prompt is unmarked first thing,
-    /// before a restart could read the marker, unless the agent answered it.
-    nonisolated private func unmarkHandoffUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
+    nonisolated private func markHandedOff(_ promptID: Int) {
+        promptHandoffs.withLock { if $0[promptID] == nil { $0[promptID] = true } }
+    }
+
+    /// A transport reports a handoff even for a request it failed to send, before or after the failure, so a failed
+    /// prompt is marked unsent first thing, before a restart could read it, unless the agent answered it.
+    nonisolated private func markUnsentUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
         if case ACPClientError.jsonrpc = error { return }
-        handedOffPromptIDs.withLock { _ = $0.remove(promptID) }
+        promptHandoffs.withLock { $0[promptID] = false }
     }
 
     private func forgetUsageUnlessAgentAnswered(_ promptID: Int, _ error: any Error) {
@@ -2042,8 +2049,8 @@ final class ACPSessionRunner {
     /// and still waiting for one is reported now, cancelled, while this runner still owns the session. Without tokens
     /// or cost: its last `usage_update` may still be on the stream, and the next turn's cost covers the growth.
     func reportInterruptedTurnUsage() {
-        let handedOff = handedOffPromptIDs.withLock { $0 }
-        for promptID in unreportedPrompts.keys.sorted() where handedOff.contains(promptID) {
+        let handoffs = promptHandoffs.withLock { $0 }
+        for promptID in unreportedPrompts.keys.sorted() where handoffs[promptID] == true {
             reportSupersededTurnUsage(promptID, quota: nil, costKnown: false)
         }
     }
@@ -4384,8 +4391,8 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
-                    onTransportHandoff: { [weak self, handedOffPromptIDs = self.handedOffPromptIDs] in
-                        handedOffPromptIDs.withLock { _ = $0.insert(promptID) }
+                    onTransportHandoff: { [weak self] in
+                        self?.markHandedOff(promptID)
                         Task { @MainActor in
                             guard let self, !self.stopped, self.isConnectionCurrent(),
                                   self.activePromptID == promptID,
@@ -4506,7 +4513,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
-                self.unmarkHandoffUnlessAgentAnswered(promptID, error)
+                self.markUnsentUnlessAgentAnswered(promptID, error)
                 await self.waitForPromptUpdateDelivery(promptID: promptID)
                 await MainActor.run {
                     guard self.isConnectionCurrent() else { return }
@@ -4653,9 +4660,7 @@ extension ACPSessionRunner {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 let promptOutcome = try await self.connection.prompt(
                     sessionId: remoteId, blocks: [.text(prompt)],
-                    onTransportHandoff: { [handedOffPromptIDs = self.handedOffPromptIDs] in
-                        handedOffPromptIDs.withLock { _ = $0.insert(promptID) }
-                    })
+                    onTransportHandoff: { [weak self] in self?.markHandedOff(promptID) })
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
@@ -4685,7 +4690,7 @@ extension ACPSessionRunner {
 #endif
                 }
             } catch {
-                self.unmarkHandoffUnlessAgentAnswered(promptID, error)
+                self.markUnsentUnlessAgentAnswered(promptID, error)
                 await MainActor.run {
                     guard connectionIsCurrent() else { return }
                     self.forgetUsageUnlessAgentAnswered(promptID, error)
