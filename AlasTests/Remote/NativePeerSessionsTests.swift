@@ -820,6 +820,95 @@ struct NativePeerSessionsTests {
         #expect(client.deliveryError != nil)
     }
 
+    private func drivenClient(canDrive: Bool) -> (FakeLinks, NativePeerSessions) {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: canDrive,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        return (links, client)
+    }
+
+    @Test func chipChangeWhileNotWriterTakesOverFirst() {
+        let (links, client) = drivenClient(canDrive: false)
+        let spec = ChipSpec(source: .configOption(id: "effort"), options: [], currentId: "low")
+        client.selectChip(spec, itemId: "high")
+        let drive = links.sent(to: "B").filter {
+            switch $0 { case .takeOver, .setConfigOption: true; default: false }
+        }
+        #expect(drive == [.takeOver(sessionId: "s"),
+                          .setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))])
+    }
+
+    @Test func chipSourcesDispatchTheirVerb() {
+        let (links, client) = drivenClient(canDrive: true)
+        client.selectChip(ChipSpec(source: .model, options: [], currentId: nil), itemId: "opus")
+        client.selectChip(ChipSpec(source: .mode, options: [], currentId: nil), itemId: "plan")
+        #expect(links.sent(to: "B").contains(.setModel(sessionId: "s", modelId: "opus")))
+        #expect(links.sent(to: "B").contains(.setMode(sessionId: "s", modeId: "plan")))
+        #expect(!links.sent(to: "B").contains(.takeOver(sessionId: "s")))
+    }
+
+    @Test func configBackedModelChipDispatchesSetConfigOption() {
+        let (links, client) = drivenClient(canDrive: true)
+        client.selectChip(ChipSpec(source: .configOption(id: "model"), options: [], currentId: nil), itemId: "gpt")
+        #expect(links.sent(to: "B").contains(.setConfigOption(sessionId: "s", configId: "model", value: .string("gpt"))))
+        #expect(!links.sent(to: "B").contains(.setModel(sessionId: "s", modelId: "gpt")))
+    }
+
+    @Test func olderHostConfigFallsBackToLegacyModelAndModeChips() {
+        let config = RemoteSessionConfig(sessionId: "s", models: [.init(id: "opus", name: "Opus")],
+                                         modes: [.init(id: "plan", name: "Plan")], currentModel: "opus",
+                                         currentMode: "plan", autoRunEnabled: false, acceptsImages: false)
+        let state = NativePeerComposerState.chipState(from: config)
+        #expect(state.models?.source == .model)
+        #expect(state.models?.currentId == "opus")
+        #expect(state.mode?.source == .mode)
+        #expect(state.thinking == nil)
+    }
+
+    @Test func unknownChipSourceIsHiddenAndUnknownPresentationIsStandard() {
+        var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], currentModel: nil,
+                                         currentMode: nil, autoRunEnabled: false, acceptsImages: false)
+        let future = RemoteChip(source: "telepathy", configId: nil, options: [], currentId: nil)
+        let known = RemoteChip(source: "config", configId: "ctx",
+                               options: [.init(id: "1m", name: "1M", description: nil, kind: nil)], currentId: "1m")
+        config.chips = RemoteChipState(model: future, thinking: nil, mode: nil,
+                                       parameters: [.init(id: "ctx", label: "Context", presentation: "hologram", chip: known)],
+                                       booleans: [], autoRun: "supported")
+        let state = NativePeerComposerState.chipState(from: config)
+        #expect(state.models == nil)
+        #expect(state.parameters.map(\.presentation) == [.standard])
+    }
+
+    @Test func queuedSendIsConfirmedByQueueState() {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true, upserts: [],
+                                       epoch: 1, revision: 1), from: "B")
+        client.draft = "next"
+        client.sendPrompt()
+        links.receive(.queueState(sessionId: "s", items: [
+            RemoteQueuedPrompt(id: UUID().uuidString, text: "next", imageCount: 0, resourceCount: 0,
+                               status: "pending", lastError: nil, scheduledAt: nil)
+        ]), from: "B")
+        #expect(client.draft.isEmpty)
+        client.draft = "after"
+        client.sendPrompt()
+        #expect(links.sent(to: "B").contains(.sendPrompt(sessionId: "s", text: "after", attachments: [], intent: "auto")))
+    }
+
+    @Test func queueEditRestoredFillsTheDraft() {
+        let (links, client) = drivenClient(canDrive: true)
+        links.receive(.queueEditRestored(sessionId: "s", itemId: "i", text: "fix this"), from: "B")
+        #expect(client.draft == "fix this")
+    }
+
     @Test func selectedSessionResubscribesWhenPeerReturns() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

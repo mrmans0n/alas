@@ -46,9 +46,9 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
     let sessionId: String
     let models: [RemoteModelInfo]
     let modes: [RemoteModelInfo]
-    let currentModel: String?
-    let currentMode: String?
-    let autoRunEnabled: Bool
+    var currentModel: String?
+    var currentMode: String?
+    var autoRunEnabled: Bool
     let acceptsImages: Bool
     var chips: RemoteChipState? = nil
     var supportsSteering: Bool? = nil

@@ -393,21 +393,19 @@ final class NativePeerSessions {
         fileTreeRequestInFlight = false
     }
 
-    func sendPrompt() {
-        guard pendingPrompt == nil,
-              let selectedSessionId, let downstream, selectedPeer?.state.carriesSessions == true,
-              transcript?.canDrive == true else { return }
+    func sendPrompt(intent: ACPSubmitIntent = .auto) {
+        guard pendingPrompt == nil else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         pendingPrompt = text
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
-        if federation.route(.sendPrompt(sessionId: selectedSessionId, text: text,
-                                        attachments: [], intent: "auto"), from: downstream) {
+        let wireIntent = intent == .steer ? "steer" : "auto"
+        if drive({ .sendPrompt(sessionId: $0, text: text, attachments: [], intent: wireIntent) }) {
             deliveryError = nil
         } else {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
-            deliveryError = "Peer is unavailable. Your draft was kept."
+            deliveryError = Self.peerUnavailableMessage
         }
     }
 
@@ -429,6 +427,46 @@ final class NativePeerSessions {
             tabCloseError = Self.peerUnavailableMessage
         }
     }
+
+    func selectChip(_ spec: ChipSpec, itemId: String) {
+        let sent = drive { id in
+            switch spec.source {
+            case .model: .setModel(sessionId: id, modelId: itemId)
+            case .mode: .setMode(sessionId: id, modeId: itemId)
+            case .configOption(let configId):
+                .setConfigOption(sessionId: id, configId: configId, value: .string(itemId))
+            }
+        }
+        if sent {
+            transcript?.applyOptimistic(spec, itemId: itemId)
+        } else {
+            deliveryError = Self.peerUnavailableMessage
+        }
+    }
+
+    func setConfigValue(configId: String, value: ACPConfigValue) {
+        let sent = drive { .setConfigOption(sessionId: $0, configId: configId, value: value) }
+        if sent {
+            if case .boolean(let flag) = value { transcript?.applyOptimistic(configId: configId, value: flag) }
+        } else {
+            deliveryError = Self.peerUnavailableMessage
+        }
+    }
+
+    func toggleAutoRun() {
+        let enabled = !(transcript?.config?.autoRunEnabled ?? false)
+        if drive({ .setAutoRun(sessionId: $0, enabled: enabled) }) {
+            transcript?.applyOptimisticAutoRun(enabled)
+        } else {
+            deliveryError = Self.peerUnavailableMessage
+        }
+    }
+
+    func queueForceSend(_ itemId: String) { drive { .queueForceSend(sessionId: $0, itemId: itemId) } }
+    func queueRemove(_ itemId: String) { drive { .queueRemove(sessionId: $0, itemId: itemId) } }
+    func queueRetry(_ itemId: String) { drive { .queueRetry(sessionId: $0, itemId: itemId) } }
+    func queueEdit(_ itemId: String) { drive { .queueEdit(sessionId: $0, itemId: itemId) } }
+    func queueClear() { drive { .queueClear(sessionId: $0) } }
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
@@ -757,6 +795,16 @@ final class NativePeerSessions {
                                            action: action, content: content) }
     }
 
+    /// Drives the selected session, taking the writer lease first when this
+    /// Mac doesn't hold it. Both frames ride the same ordered connection, so
+    /// the host handles `takeOver` before the verb.
+    @discardableResult
+    private func drive(_ makeMessage: (String) -> RemoteClientMessage) -> Bool {
+        guard let transcript, transcript.epoch != nil, !transcript.isClosed else { return false }
+        if !transcript.canDrive, !routeWhileOnline({ .takeOver(sessionId: $0) }) { return false }
+        return routeWhileOnline(makeMessage)
+    }
+
     private func routeDrive(_ makeMessage: (String) -> RemoteClientMessage) {
         guard transcript?.canDrive == true else { return }
         routeWhileOnline(makeMessage)
@@ -804,6 +852,10 @@ final class NativePeerSessions {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
             deliveryError = "Prompt was not delivered. Your draft was kept."
+            return
+        }
+        if case .queueEditRestored(_, _, let text) = message {
+            draft = text
             return
         }
         let isChangesReply: Bool = switch message {
@@ -860,6 +912,13 @@ final class NativePeerSessions {
             promptConfirmationRows = upserts
         default:
             promptConfirmationRows = []
+        }
+        if case .queueState(_, let items) = message, let pendingPrompt,
+           items.contains(where: { $0.text == pendingPrompt }) {
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingPrompt { draft = "" }
+            self.pendingPrompt = nil
+            pendingPromptExpectedIndex = nil
+            return
         }
         if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
            promptConfirmationRows.contains(where: {
