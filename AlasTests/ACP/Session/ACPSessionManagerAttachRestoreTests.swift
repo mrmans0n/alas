@@ -415,12 +415,13 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = manager.createSession(agentId: "claude")
         await manager.attach(to: session.id, freshlyCreated: true)
         await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
-        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+        // Marked on the main actor along with the handoff that makes the turn one the agent may have received.
+        try await waitUntil { session.transcript.streamingState == .streaming }
 
         await manager.restartConnection(to: session.id)
 
         #expect(usage.map(\.result) == [.cancelled])
-        #expect(usage.first?.sessionId == session.id && usage.first?.quota == nil)
+        #expect(usage.first?.sessionId == session.id && usage.first?.quota == nil && usage.first?.cost == nil)
         release.finish()
     }
 
@@ -1221,10 +1222,12 @@ struct ACPSessionManagerAttachRestoreTests {
         let store = try ACPSessionStore(path: tmpStorePath())
         let sharedService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
         let isolatedService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
+        var usage: [ACPTurnCompletion] = []
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            onTurnUsage: { usage.append($0) },
             setupEvaluator: { _ in .ready },
             brokerServiceFactory: { sharedService },
             isolatedBrokerServiceFactory: { isolatedService },
@@ -1283,6 +1286,8 @@ struct ACPSessionManagerAttachRestoreTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(await sharedService.sent.filter { $0.method == "session/prompt" }.isEmpty)
         #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+        // The old runner never handed the prompt off, so the restart records no interrupted turn for it.
+        #expect(!usage.contains { $0.result == .cancelled })
     }
 
     @Test("detaching before queued prompt handoff keeps the prompt eligible")
