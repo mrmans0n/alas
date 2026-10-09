@@ -37,6 +37,9 @@ final class NativePeerSessions {
     @ObservationIgnored private var pendingSessionId: String?
     /// Why the peer refused to open or close a tab.
     private(set) var sessionTabError: String?
+    /// Open requests awaiting the peer's reply, per session. Replies arrive
+    /// in request order, so only the last one answers the current attempt.
+    @ObservationIgnored private var tabOpensInFlight: [String: Int] = [:]
     private(set) var workspace = NativePeerWorkspace()
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
@@ -203,7 +206,10 @@ final class NativePeerSessions {
             return
         }
         pendingSessionId = sessionId
+        // Counted first: a peer without the capability is refused inside `route`.
+        tabOpensInFlight[sessionId, default: 0] += 1
         if !federation.route(.openSessionTab(sessionId: sessionId), from: downstream) {
+            tabOpensInFlight[sessionId, default: 1] -= 1
             pendingSessionId = nil
             sessionTabError = Self.peerUnavailableMessage
         }
@@ -254,6 +260,7 @@ final class NativePeerSessions {
         isFetchingOlderMessages = false
         deliveryError = nil
         sessionTabError = nil
+        tabOpensInFlight = [:]
         newSession = nil
         pendingSessionId = nil
         workspace = NativePeerWorkspace()
@@ -730,13 +737,19 @@ final class NativePeerSessions {
 
     private func receive(_ message: RemoteServerMessage) {
         // Tab actions answer for any session, not just the selected one. A
-        // reply to a request the user has since moved on from is dropped.
-        if case .sessionTabActionFailed(let sessionId, let text) = message {
-            if pendingSessionId == sessionId {
+        // reply to a request the user has since moved on from, or retried,
+        // is dropped.
+        switch message {
+        case .sessionTabActionSucceeded(let sessionId), .sessionTabActionFailed(let sessionId, _):
+            let remaining = (tabOpensInFlight[sessionId] ?? 1) - 1
+            tabOpensInFlight[sessionId] = remaining > 0 ? remaining : nil
+            if case .sessionTabActionFailed(_, let text) = message, remaining <= 0, pendingSessionId == sessionId {
                 pendingSessionId = nil
                 sessionTabError = text
             }
             return
+        default:
+            break
         }
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
         switch message {

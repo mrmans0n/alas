@@ -336,14 +336,14 @@ struct NativePeerSessionsTests {
         #expect(client.sessionTabError == "Session is archived.")
         #expect(client.selectedSessionId == "B:s")
 
-        // A late failure for a request the user moved on from stays silent.
+        // The user moves away and retries; the first attempt's late failure
+        // must not cancel the retry.
         client.openSession("B:h")
         client.clearSelection()
         client.select("B:s")
+        client.openSession("B:h")
         links.receive(.sessionTabActionFailed(sessionId: "h", message: "Late."), from: "B")
         #expect(client.sessionTabError == nil)
-
-        client.openSession("B:h")
         // Still history: not selected yet.
         links.receive(.sessionList(sessions: [session("s", open: true), session("h", open: false)]), from: "B")
         #expect(client.selectedSessionId == "B:s")
