@@ -189,7 +189,22 @@ struct ACPGoalControl: View {
         guard seconds > 0 else { return "0s" }
         if seconds >= Double(Int.max) { return String(format: "%.0fs", seconds) }
         let total = Int(seconds.rounded())
-        return total >= 60 ? "\(total / 60)m \(total % 60)s" : "\(total)s"
+        switch total {
+        case ..<60: return "\(total)s"
+        case ..<3_600: return "\(total / 60)m \(total % 60)s"
+        case ..<86_400: return "\(total / 3_600)h \(total % 3_600 / 60)m"
+        default: return "\(total / 86_400)d \(total % 86_400 / 3_600)h"
+        }
+    }
+
+    /// Wall-clock time since the goal was set. A running goal counts up to
+    /// `now`; any other goal stops at its last update, and without one the
+    /// span is unknown. Agents may not report working time, so this is the
+    /// duration every goal with a `createdAt` can show.
+    nonisolated static func activeDuration(_ goal: ACPGoalState, now: Date) -> Double? {
+        guard let createdAt = goal.createdAt else { return nil }
+        let end = ACPGoalPill.phase(of: goal) == .running ? now : goal.updatedAt
+        return end.map { max(0, $0.timeIntervalSince(createdAt)) }
     }
 }
 
@@ -347,7 +362,7 @@ private struct ACPGoalPopover: View {
             }
         }
 
-        TimelineView(.periodic(from: .now, by: 15)) { context in
+        TimelineView(.periodic(from: .now, by: running ? 1 : 15)) { context in
             let stats = stats(for: goal, now: context.date)
             if !stats.isEmpty {
                 HStack(alignment: .top, spacing: 16) {
@@ -404,8 +419,13 @@ private struct ACPGoalPopover: View {
 
     private func stats(for goal: ACPGoalState, now: Date) -> [Stat] {
         var stats: [Stat] = []
-        if let seconds = goal.timeUsedSeconds {
-            stats.append(Stat(label: "Elapsed", value: ACPGoalControl.formattedDuration(seconds)))
+        if let seconds = ACPGoalControl.activeDuration(goal, now: now) {
+            stats.append(Stat(label: "Active", value: ACPGoalControl.formattedDuration(seconds)))
+        }
+        // Codex reports agent working time, which trails wall-clock time;
+        // a zero is a value the agent has not accrued yet, not a measurement.
+        if let seconds = goal.timeUsedSeconds, seconds > 0 {
+            stats.append(Stat(label: "Working", value: ACPGoalControl.formattedDuration(seconds)))
         }
         if let iterations = goal.iterations {
             stats.append(Stat(label: "Iterations", value: "\(iterations)"))

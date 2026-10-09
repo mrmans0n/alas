@@ -41,9 +41,46 @@ struct ACPGoalPillTests {
         #expect(ACPGoalPill.actions(for: goal, capability: capability) == [.set, .clear])
     }
 
-    @Test("duration formatting handles values larger than Int")
-    func durationFormattingHandlesOversizedValues() {
-        #expect(ACPGoalControl.formattedDuration(1e20) == "100000000000000000000s")
+    @Test(
+        "duration formatting keeps the two most significant units",
+        arguments: [
+            (-5.0, "0s"),
+            (42.4, "42s"),
+            (59.6, "1m 0s"),
+            (754, "12m 34s"),
+            (3_600, "1h 0m"),
+            (11_045, "3h 4m"),
+            (183_600, "2d 3h"),
+            (.infinity, "—"),
+            (1e20, "100000000000000000000s"),
+        ]
+    )
+    func durationFormatting(seconds: Double, expected: String) {
+        #expect(ACPGoalControl.formattedDuration(seconds) == expected)
+    }
+
+    @Test(
+        "active duration counts to now while running and stops at the last update otherwise",
+        arguments: [
+            // (status, updatedAt offset, now offset, expected)
+            ("active", Optional(100.0), 1_000.0, Optional(1_000.0)),
+            ("paused", 100, 1_000, 100),
+            ("complete", 400, 1_000, 400),
+            ("complete", nil, 1_000, nil),
+            ("active", nil, -5, 0),
+        ] as [(String, Double?, Double, Double?)]
+    )
+    func activeDuration(status: String, updatedOffset: Double?, nowOffset: Double, expected: Double?) {
+        let createdAt = Date(timeIntervalSince1970: 1_000_000)
+        let goal = ACPGoalState(
+            objective: "Ship it",
+            status: status,
+            tokenBudget: nil,
+            createdAt: createdAt,
+            updatedAt: updatedOffset.map { createdAt.addingTimeInterval($0) }
+        )
+
+        #expect(ACPGoalControl.activeDuration(goal, now: createdAt.addingTimeInterval(nowOffset)) == expected)
     }
 
     @Test(
