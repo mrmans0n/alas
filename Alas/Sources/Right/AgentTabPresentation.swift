@@ -292,7 +292,8 @@ struct AgentSidebarRowView: View {
             .padding(.vertical, 2)
             .background(theme.color("seg-pill-bg"), in: Capsule())
             .padding(.top, 1)
-        } else if case .child(_, let parentTitle, false) = row.delegation {
+        }
+        if case .child(_, let parentTitle, false) = row.delegation {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 8, weight: .semibold))
