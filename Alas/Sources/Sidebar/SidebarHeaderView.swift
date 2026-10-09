@@ -17,6 +17,7 @@ struct SidebarHeaderView: View {
     var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
     var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
     var onOpenPeerSession: (RemoteSessionSummary) -> Void = { _ in }
+    var attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil
     init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
          onSearch: @escaping () -> Void,
@@ -32,7 +33,8 @@ struct SidebarHeaderView: View {
          attentionNavigationErrors: [UUID: String] = [:],
          onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
          onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in },
-         onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in }) {
+         onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in },
+         attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil) {
         self.onSettings = onSettings
         self.onAddProject = onAddProject
         self.onSearch = onSearch
@@ -49,6 +51,7 @@ struct SidebarHeaderView: View {
         self.onDismissAttentionItem = onDismissAttentionItem
         self.onOpenAttentionItem = onOpenAttentionItem
         self.onOpenPeerSession = onOpenPeerSession
+        self.attentionRollUpSummarizer = attentionRollUpSummarizer
     }
     @Environment(\.theme) private var theme
     @State private var addMenuHovered = false
@@ -83,7 +86,8 @@ struct SidebarHeaderView: View {
                 navigationErrors: attentionNavigationErrors,
                 onDismiss: onDismissAttentionItem,
                 onOpen: onOpenAttentionItem,
-                onOpenPeer: onOpenPeerSession
+                onOpenPeer: onOpenPeerSession,
+                rollUpSummarizer: attentionRollUpSummarizer
             )
         }
     }

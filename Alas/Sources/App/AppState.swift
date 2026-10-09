@@ -1878,6 +1878,20 @@ final class AppState {
         )
     }
 
+    /// Inbox roll-ups are user-initiated, like change summaries.
+    func makeAttentionRollUpSummarizer() -> AttentionRollUpSummarizer {
+        AttentionRollUpSummarizer(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { LocalTextAppleIntelligence.isAvailable },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.localTextModelAvailable ?? false
+            }
+        )
+    }
+
     /// Nil when no on-device model can run, so the caller shows only the observed excerpt.
     func makeRunFailureBriefGenerator() -> RunFailureBriefCoordinator.Generate? {
         let router = LocalTextAppleFirstRouter(

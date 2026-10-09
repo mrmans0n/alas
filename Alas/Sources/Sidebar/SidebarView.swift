@@ -497,7 +497,8 @@ private struct SidebarAttentionHeader: View {
             onOpenPeerSession: { row in
                 state.nativePeerSessions?.select(row.id)
                 state.isAttentionInboxOpen = false
-            }
+            },
+            attentionRollUpSummarizer: state.makeAttentionRollUpSummarizer()
         )
     }
 }
