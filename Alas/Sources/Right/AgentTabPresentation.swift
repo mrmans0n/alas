@@ -75,6 +75,9 @@ struct AgentSidebarDelegationConnector: View {
     private static let railX: CGFloat = 7
 
     let continuesBelow: Bool
+    /// False draws only the rail, carrying an outer connector past cards
+    /// nested one level deeper.
+    var hasElbow = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -85,8 +88,10 @@ struct AgentSidebarDelegationConnector: View {
                     x: Self.railX,
                     y: continuesBelow ? proxy.size.height + Self.stackSpacing : Self.elbowY
                 ))
-                path.move(to: CGPoint(x: Self.railX, y: Self.elbowY))
-                path.addLine(to: CGPoint(x: Self.gutter - 3, y: Self.elbowY))
+                if hasElbow {
+                    path.move(to: CGPoint(x: Self.railX, y: Self.elbowY))
+                    path.addLine(to: CGPoint(x: Self.gutter - 3, y: Self.elbowY))
+                }
             }
             .stroke(
                 theme.color("line"),
@@ -127,10 +132,15 @@ struct AgentSidebarRowView: View {
                 HStack(alignment: .top, spacing: 10) {
                     logo
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(row.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(theme.color("fg"))
-                            .lineLimit(2)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(row.title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(theme.color("fg"))
+                                .lineLimit(2)
+                            if case .child = row.delegation {
+                                AgentSidebarKindTag(label: "DELEGATED", color: theme.color("fg-muted"))
+                            }
+                        }
                         metadata
                         delegationNote
                     }
@@ -268,13 +278,12 @@ struct AgentSidebarRowView: View {
     /// it — so only parents and orphaned children annotate themselves.
     @ViewBuilder
     private var delegationNote: some View {
-        switch row.delegation {
-        case .parent(let childCount):
+        if let childSummary {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 8, weight: .semibold))
                     .accessibilityHidden(true)
-                Text(childCount == 1 ? "1 delegated" : "\(childCount) delegated")
+                Text(childSummary)
                     .font(.system(size: 9.5, weight: .semibold))
                     .monospacedDigit()
             }
@@ -283,7 +292,7 @@ struct AgentSidebarRowView: View {
             .padding(.vertical, 2)
             .background(theme.color("seg-pill-bg"), in: Capsule())
             .padding(.top, 1)
-        case .child(_, let parentTitle, false):
+        } else if case .child(_, let parentTitle, false) = row.delegation {
             HStack(spacing: 4) {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 8, weight: .semibold))
@@ -294,9 +303,19 @@ struct AgentSidebarRowView: View {
             }
             .foregroundStyle(theme.color("fg-faint"))
             .padding(.top, 1)
-        case .child, .none:
-            EmptyView()
         }
+    }
+
+    /// "3 subagents · 1 delegated", omitting whichever kind is absent.
+    private var childSummary: String? {
+        var parts: [String] = []
+        if !row.subagents.isEmpty {
+            parts.append(row.subagents.count == 1 ? "1 subagent" : "\(row.subagents.count) subagents")
+        }
+        if case .parent(let childCount) = row.delegation {
+            parts.append(childCount == 1 ? "1 delegated" : "\(childCount) delegated")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func delegatedByLabel(_ parentTitle: String?) -> String {
@@ -432,6 +451,9 @@ struct AgentSidebarRowView: View {
         if let host = row.host {
             values.append("host \(AgentSidebarHostDisplay.shortName(for: host))")
         }
+        if !row.subagents.isEmpty {
+            values.append(row.subagents.count == 1 ? "1 subagent" : "\(row.subagents.count) subagents")
+        }
         switch row.delegation {
         case .parent(let childCount):
             values.append(childCount == 1 ? "1 delegated session" : "\(childCount) delegated sessions")
@@ -479,5 +501,127 @@ extension AgentSidebarState {
         case .detached: "History"
         case .unknown: "Unknown"
         }
+    }
+}
+
+/// Tells a session's own subagents apart from Alas-delegated sessions, which
+/// otherwise nest the same way.
+struct AgentSidebarKindTag: View {
+    let label: String
+    let color: Color
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 8.5, weight: .bold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+    }
+}
+
+/// A compact card for one of a session's own subagents. A subagent takes no
+/// prompts, so the only actions are focusing its parent and cancelling it.
+struct AgentSidebarSubagentRowView: View {
+    let subagent: AgentSidebarSubagent
+    let onFocus: () -> Void
+    let onCancel: (() -> Void)?
+    @State private var isHovering = false
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button(action: onFocus) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(stateColor)
+                        .frame(width: 24, height: 24)
+                        .background(stateColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Text(subagent.name)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(theme.color("fg"))
+                                .lineLimit(1)
+                            AgentSidebarKindTag(label: "SUBAGENT", color: theme.color("info"))
+                        }
+                        if let task = ACPSubagentRowPolicy.summary(task: subagent.task, messageCount: 0) {
+                            Text(task)
+                                .font(.system(size: 10).italic())
+                                .foregroundStyle(theme.color("fg-muted"))
+                                .lineLimit(2)
+                        }
+                        timing
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.color("fg-faint"))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    statusPill
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Subagent \(subagent.name), \(ACPSubagentRowPolicy.stateLabel(for: subagent.state))")
+            .help("Focus the session that started this subagent")
+
+            if let onCancel {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("Cancel", systemImage: "xmark", action: onCancel)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(theme.color("del"))
+                        .accessibilityLabel("Cancel subagent \(subagent.name)")
+                }
+            }
+        }
+        .padding(8)
+        .rightPaneCardChrome(accent: stateColor, isHovering: isHovering)
+        .opacity(isDimmed ? 0.6 : 1)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var timing: some View {
+        if let finishedAt = subagent.finishedAt {
+            Text("finished in \(Self.duration(from: subagent.startedAt, to: finishedAt))")
+        } else {
+            TimelineView(.periodic(from: subagent.startedAt, by: 1)) { context in
+                Text("running \(Self.duration(from: subagent.startedAt, to: context.date))")
+            }
+        }
+    }
+
+    private var statusPill: some View {
+        Text(ACPSubagentRowPolicy.stateLabel(for: subagent.state))
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(stateColor)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(stateColor.opacity(0.12), in: Capsule())
+            .fixedSize()
+    }
+
+    /// A failure stays at full strength so it is not mistaken for a clean finish.
+    private var isDimmed: Bool {
+        subagent.state.isTerminal && subagent.state != .failed
+    }
+
+    private var stateColor: Color {
+        switch subagent.state {
+        case .running, .other: theme.color("add")
+        case .failed: theme.color("del")
+        case .completed, .cancelled, .disconnected: theme.color("fg-faint")
+        }
+    }
+
+    private static func duration(from start: Date, to end: Date) -> String {
+        Duration.seconds(max(0, end.timeIntervalSince(start).rounded()))
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
     }
 }

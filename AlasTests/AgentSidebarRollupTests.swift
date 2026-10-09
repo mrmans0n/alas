@@ -265,6 +265,35 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func liveSessionCarriesItsOwnSubagentsInSpawnOrderUntilItEnds() {
+        let session = makeLiveSession(id: "parent", worktreeID: "worktree-a")
+        session.agentState = .ready
+        session.apply(.subagentSpawned(.init(
+            subagentSessionId: "sub-1", name: "Explore", task: "Find rows", capabilities: .cancellable)))
+        session.apply(.subagentSpawned(.init(subagentSessionId: "sub-2", name: "Plan", capabilities: .cancellable)))
+        session.applySubagentState(.init(subagentSessionId: "sub-2", state: .completed))
+
+        func build() -> AgentSidebarRollup {
+            AgentSidebarRollupBuilder.build(.init(
+                worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+                terminalTabs: [], harnessActivity: [:], remoteHost: nil
+            ))
+        }
+
+        let rollup = build()
+        // Subagents hang off their parent, so session counts stay unchanged.
+        #expect(rollup.active.count == 1)
+        let subagents = rollup.active[0].subagents
+        #expect(subagents.map(\.id) == ["sub-1", "sub-2"])
+        #expect(subagents.map(\.task) == ["Find rows", nil])
+        // A finished subagent can no longer be cancelled.
+        #expect(subagents.map(\.canCancel) == [true, false])
+
+        session.agentState = .disconnected
+        #expect(build().history.first?.subagents.isEmpty == true)
+    }
+
+    @Test @MainActor
     func terminalRowsAreNeverAnnotatedWithDelegation() {
         let rollup = AgentSidebarRollupBuilder.build(.init(
             worktreeID: "worktree-a", persistedACP: [], liveACP: [],
