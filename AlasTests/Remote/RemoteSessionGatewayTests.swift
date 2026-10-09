@@ -1536,6 +1536,20 @@ struct RemoteSessionGatewayTests {
         #expect(provider.autoRuns.map(\.enabled) == [true])
     }
 
+    @Test(arguments: [true, false])
+    func refusedConfigVerbResendsAuthoritativeConfig(isWriter: Bool) async {
+        let provider = FakeSessionsProvider()
+        let cfg = RemoteSessionConfig(sessionId: "s1", models: [.init(id: "sonnet", name: "Sonnet")], modes: [],
+                                      currentModel: "sonnet", currentMode: nil, autoRunEnabled: false,
+                                      acceptsImages: false)
+        provider.configs["s1"] = cfg
+        if isWriter { provider.writers.insert("s1") }   // fake setModel never changes the config
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
+        #expect(sent == [.sessionConfig(cfg)])
+    }
+
     @Test func renameSessionTrimsTitleDoesNotRequireWriterAndRefreshesList() async {
         let provider = FakeSessionsProvider()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "Renamed", agentId: "claude", status: "idle", canDrive: false)]
