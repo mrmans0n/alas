@@ -128,6 +128,13 @@ enum Tab: Codable, Equatable, Identifiable {
         return true
     }
 
+    /// A run-script terminal started in the background. The center leaves it
+    /// out until something activates it.
+    var isHiddenRunTab: Bool {
+        if case .terminal(let state) = self { return state.isHidden }
+        return false
+    }
+
     var supportsRevisionFollowActions: Bool {
         switch self {
         case .commit, .reviewSession:
@@ -813,6 +820,9 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     /// alongside `runScriptKey` in `TabsManager.removeLeaf` when this leaf
     /// goes away.
     var runScriptLeafId: String?
+    /// Started in the background: kept out of the center until activated.
+    /// Deliberately not in `CodingKeys`, so a restored tab comes back visible.
+    var isHidden = false
 
     init(id: TabID, title: String, root: PaneNode, focusedLeafId: String, runScriptKey: String? = nil, runScriptLeafId: String? = nil) {
         self.id = id

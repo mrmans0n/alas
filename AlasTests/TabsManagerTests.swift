@@ -378,6 +378,50 @@ struct TabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == tab.id)
     }
 
+    @Test func hiddenTerminalStaysInactiveUntilActivated() {
+        let mgr = TabsManager()
+        let visible = mgr.appendTerminal(worktreeId: "wt", title: "zsh", sessionId: "s1")
+        let hidden = mgr.appendTerminal(
+            worktreeId: "wt", title: "dev", sessionId: "s2", runScriptKey: "repo:dev.sh", isHidden: true
+        )
+        #expect(hidden.isHiddenRunTab)
+        #expect(mgr.activeTabId(forWorktree: "wt") == visible.id)
+
+        mgr.activate(worktreeId: "wt", tabId: hidden.id)
+
+        #expect(mgr.activeTabId(forWorktree: "wt") == hidden.id)
+        #expect(mgr.tabs(forWorktree: "wt").first { $0.id == hidden.id }?.isHiddenRunTab == false)
+    }
+
+    @Test func closingTheActiveTabNeverSelectsAHiddenTab() {
+        let mgr = TabsManager()
+        let left = mgr.appendTerminal(worktreeId: "wt", title: "a", sessionId: "a")
+        _ = mgr.appendTerminal(worktreeId: "wt", title: "dev", sessionId: "dev", runScriptKey: "repo:dev.sh", isHidden: true)
+        let closing = mgr.appendTerminal(worktreeId: "wt", title: "b", sessionId: "b")
+        mgr.close(worktreeId: "wt", tabId: closing.id)
+        #expect(mgr.activeTabId(forWorktree: "wt") == left.id)
+
+        _ = mgr.appendTerminal(worktreeId: "only-hidden", title: "dev", sessionId: "dev2", runScriptKey: "repo:dev.sh", isHidden: true)
+        let last = mgr.appendTerminal(worktreeId: "only-hidden", title: "c", sessionId: "c")
+        mgr.close(worktreeId: "only-hidden", tabId: last.id)
+        #expect(mgr.activeTabId(forWorktree: "only-hidden") == nil)
+        #expect(mgr.tabs(forWorktree: "only-hidden").count == 1)
+    }
+
+    @Test func hiddenFlagIsNotPersisted() throws {
+        var state = TerminalTabState(id: "t", title: "dev", sessionId: "s", runScriptKey: "repo:dev.sh")
+        state.isHidden = true
+
+        let decoded = try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(Tab.terminal(state)))
+
+        #expect(!decoded.isHiddenRunTab)
+        guard case .terminal(let restored) = decoded else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        #expect(restored.runScriptKey == "repo:dev.sh")
+    }
+
     @Test func closingActivatesNeighbour() {
         let worktreeId = "tabs-manager-closing-neighbour"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

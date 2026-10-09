@@ -14,11 +14,12 @@ struct CenterTabComposition {
         worktreeTabs: [Tab],
         activeWorktreeTabId: TabID?
     ) {
-        tabs = worktreeTabs
-        if worktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
+        let visible = worktreeTabs.filter { !$0.isHiddenRunTab }
+        tabs = visible
+        if visible.contains(where: { $0.id == activeWorktreeTabId }) {
             activeId = activeWorktreeTabId
         } else if activeWorktreeTabId != nil {
-            activeId = worktreeTabs.first?.id
+            activeId = visible.first?.id
         } else {
             activeId = nil
         }
@@ -33,7 +34,7 @@ struct CenterTabComposition {
         activeSharedTabId: TabID?,
         activeFocusedMemberTabId: TabID?
     ) {
-        let shared = sharedTabs.filter(\.isSharedSessionTab)
+        let shared = sharedTabs.filter { $0.isSharedSessionTab && !$0.isHiddenRunTab }
         let member = focusedMemberTabs.filter { tab in
             switch tab {
             case .terminal, .acpSession: false
