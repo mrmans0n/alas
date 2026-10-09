@@ -59,12 +59,15 @@ struct ACPMessageGutter<Content: View>: View {
     /// button is an AppKit view, and every platform view costs a layout pass
     /// when its row mounts mid-scroll. Once built they stay mounted (see below).
     @State private var hasRevealedActions = false
+    /// VoiceOver and keyboard users never hover, so for them the actions are
+    /// built with the row and stay reachable.
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.theme) private var theme
 
     var body: some View {
         content
             .overlay(alignment: .topTrailing) {
-                if hasRevealedActions {
+                if hasRevealedActions || voiceOverEnabled || NSApp.isFullKeyboardAccessEnabled {
                     actions
                         // Keep the menu label mounted at all times and toggle
                         // visibility via opacity/hit-testing rather than inserting

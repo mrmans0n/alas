@@ -157,12 +157,19 @@ private final class BenchWindow {
     }
 
     /// Lets hydration, first layout, and any deferred work finish so the
-    /// measured frames start from a steady state.
+    /// measured frames start from a steady state: the document has content
+    /// and its geometry has stopped changing.
     func settle() async throws {
-        for _ in 0..<20 {
+        var last: (height: CGFloat, offset: CGFloat)?
+        var stablePolls = 0
+        try await eventually("transcript layout to settle") {
             window.layoutIfNeeded()
             window.displayIfNeeded()
-            try await Task.sleep(for: .milliseconds(25))
+            let now = (height: scroller.contentHeight, offset: scroller.scrollY)
+            let unchanged = last.map { $0 == now } ?? false
+            stablePolls = unchanged && now.height > 0 ? stablePolls + 1 : 0
+            last = now
+            return stablePolls >= 10
         }
     }
 
