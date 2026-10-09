@@ -577,13 +577,18 @@ final class FederatedSessionsProvider {
         }
     }
 
-    /// Pops the oldest live asker for this item's edit.
+    /// The newest live asker for this item's edit. Older asks for the same
+    /// item were refused (the peer answers at most once, since a restore
+    /// removes the item), so they are dropped rather than left to steal a
+    /// later restore of the item.
     private func takeQueueEditRequester(itemId: String, for namespaced: String) -> FederatedDownstream? {
         pruneDeadDownstreams()
-        guard let index = queueEditRequesters.firstIndex(where: {
+        let matches: ((sessionId: String, itemId: String, downstreamId: UUID)) -> Bool = {
             $0.sessionId == namespaced && $0.itemId == itemId
-        }) else { return nil }
-        return downstreams[queueEditRequesters.remove(at: index).downstreamId]?.value
+        }
+        guard let newest = queueEditRequesters.last(where: matches) else { return nil }
+        queueEditRequesters.removeAll(where: matches)
+        return downstreams[newest.downstreamId]?.value
     }
 
     private func removePeerRequests(for downstreamId: UUID) {

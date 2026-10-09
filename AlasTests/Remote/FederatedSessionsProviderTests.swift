@@ -189,6 +189,22 @@ struct FederatedSessionsProviderTests {
         #expect(second.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
     }
 
+    @Test func aRestoredQueueEditReachesItsLatestUnsubscribedAsker() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let refused = Client()
+        let asker = Client()
+        provider.attach(refused.downstream)
+        provider.attach(asker.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        // The peer refused the first edit silently (the item was sending).
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: refused.downstream)
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: asker.downstream)
+        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i", text: "edit me"), from: "srv-b")
+        #expect(refused.received.isEmpty)
+        #expect(asker.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "edit me")])
+    }
+
     @Test func unansweredQueueEditsAreForgottenPastTheLimit() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
