@@ -6,19 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.8] - 2026-10-09
+
 ### ✨ Features
 
-- Show visual aids in the phone web client and let their questions be answered there (#1838).
+- Show visual aids in the phone web client and let their questions be answered there (#1841).
+- Forward mouse input while controlling a peer console, and surface peer consoles inside their worktree rows (#1845, #1857).
+- Streamline the new-worktree dialog and normalize branch names while typing in both local and peer flows (#1859, #1861).
 - Show each symbol's start line in the `@` picker and preview the highlighted symbol's code beside the picker, so overloads are easy to tell apart (#1860).
+- Render ACP background tasks as tool-call rows in the transcript (#1862).
+- Select peer worktrees and manage their console, session, and Agent tabs from a native tab strip (#1864, #1867, #1870, #1871, #1872, #1873).
 
-### Fixes
+### ⚡ Performance
 
-- Turn spaces into `-` and reject invalid characters while typing a branch name in the peer new-worktree sheet, matching the local dialog.
-- Keep agent logos at compact menu size in the peer session overflow menu instead of expanding rows to the assets' native dimensions.
+- Batch peer-console input from the local bridge to reduce per-message overhead during typing and large pastes (#1865).
+
+### 🐛 Fixes
+
+- Keep agent logos at compact menu size in peer session overflow menus (#1847).
+- Hide visual-aid answer prompts from the transcript after submission (#1858).
+- Close stored ACP message-sequence gaps before a runner writes, preventing later rows from being overwritten (#1868).
+- Record turns interrupted by connection restarts and persist session usage in send order (#1869).
 
 ### 🏗️ Internal
 
-- Keep CLI routing tests from reading or writing the developer's persisted projects.
+- Log why a completed turn is not offered an on-device next-prompt suggestion (#1846).
+- Isolate CLI routing tests from persisted developer projects and deflake visual-aid ordering and SQLite lock-wait coverage (#1856, #1866).
+- Update `tree-sitter-language` to 0.1.9 (#1863).
 
 ## [0.20.7] - 2026-10-08
 
