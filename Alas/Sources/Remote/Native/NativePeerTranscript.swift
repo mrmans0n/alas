@@ -22,6 +22,8 @@ struct NativePeerTranscript: Equatable {
     private(set) var pendingQuestion: RemoteQuestionPayload?
     private(set) var pendingPlan: RemotePlanPayload?
     private(set) var pendingElicitation: RemoteElicitationPayload?
+    private(set) var config: RemoteSessionConfig?
+    private(set) var queue: [RemoteQueuedPrompt] = []
     /// One counter per request kind, bumped when a request frame carries a
     /// request that is not the one already pending for that kind. Wire
     /// request ids can repeat back to back (string JSON-RPC ids all forward
@@ -129,11 +131,51 @@ struct NativePeerTranscript: Equatable {
             pendingElicitation = payload
         case .elicitationResolved(_, let requestId):
             if pendingElicitation?.requestId == requestId { pendingElicitation = nil }
+        case .sessionConfig(let incoming):
+            config = incoming
+        case .queueState(_, let items):
+            queue = items
         case .sessionClosed:
             markUnavailable()
         default: break
         }
         return false
+    }
+
+    /// Reflects a chip change locally until the host's next `sessionConfig`
+    /// frame overwrites it.
+    mutating func applyOptimistic(_ spec: ChipSpec, itemId: String) {
+        guard var config else { return }
+        switch spec.source {
+        case .model:
+            config.currentModel = itemId
+            config.chips?.model?.currentId = itemId
+        case .mode:
+            config.currentMode = itemId
+            config.chips?.mode?.currentId = itemId
+        case .configOption(let id):
+            if config.chips?.model?.configId == id { config.chips?.model?.currentId = itemId }
+            if config.chips?.thinking?.configId == id { config.chips?.thinking?.currentId = itemId }
+            if config.chips?.mode?.configId == id { config.chips?.mode?.currentId = itemId }
+            if let chips = config.chips {
+                for index in chips.parameters.indices where chips.parameters[index].chip.configId == id {
+                    config.chips?.parameters[index].chip.currentId = itemId
+                }
+            }
+        }
+        self.config = config
+    }
+
+    mutating func applyOptimistic(configId: String, value: Bool) {
+        guard var config, let chips = config.chips else { return }
+        for index in chips.booleans.indices where chips.booleans[index].id == configId {
+            config.chips?.booleans[index].value = value
+        }
+        self.config = config
+    }
+
+    mutating func applyOptimisticAutoRun(_ enabled: Bool) {
+        config?.autoRunEnabled = enabled
     }
 
     mutating func resetResubscribeRequest() {

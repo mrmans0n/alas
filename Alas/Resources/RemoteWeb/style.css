@@ -292,6 +292,7 @@ a:hover { color: var(--accent-hover); }
 #cfg-close { flex: 0 0 auto; }
 #cfg-model-section, #cfg-mode-section { margin-bottom: 14px; }
 #cfg-autorun-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 6px 0; border-radius: 10px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--line); color: var(--fg); font-size: 15px; cursor: pointer; }
+.cfg-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 6px 0; border-radius: 10px; background: var(--bg-2); box-shadow: inset 0 0 0 0.5px var(--line); color: var(--fg); font-size: 15px; cursor: pointer; }
 #cfg-autorun { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
 
 /* ---- Pair / error gate (full screen) ---- */

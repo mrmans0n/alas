@@ -48,6 +48,7 @@ protocol RemoteSessionsProvider: AnyObject {
     func setModel(for id: String, modelId: String) async
     func setMode(for id: String, modeId: String) async
     func setAutoRun(for id: String, enabled: Bool) async
+    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) async
     func renameSession(for id: String, title: String) -> Bool
     /// Queue mutation. All of these are writer-gated inside the manager (the
     /// gateway also pre-checks, mirroring `sendPrompt`) and delegate to the

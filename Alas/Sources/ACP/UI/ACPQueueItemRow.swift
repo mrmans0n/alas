@@ -19,6 +19,13 @@ struct ACPQueueItemRow: View {
     /// Queued before a usage limit stopped the session; the flusher holds it
     /// until the limit clears. See `QueuedPrompt.isHeld(by:)`.
     let isHeldByUsageLimit: Bool
+    /// False for mirrored queues, which the host owns and orders.
+    var allowsReordering = true
+    /// Host-reported removability; nil falls back to the local item's own rule.
+    var canRemove: Bool?
+    /// False when the host would refuse to edit the item (it holds images or
+    /// mentions that cannot round-trip through the composer).
+    var canEdit = true
     /// Reorder to the front of the queue without interrupting a running
     /// turn. Clears a previous send error.
     let onPromote: () -> Void
@@ -69,10 +76,12 @@ struct ACPQueueItemRow: View {
         .onDisappear { hover.reset() }
         .contextMenu { contextMenuItems }
         .modifier(PendingDraggableModifier(
-            enabled: item.status == .pending && item.scheduledAt == nil,
+            enabled: allowsReordering && item.status == .pending && item.scheduledAt == nil,
             payload: item.id.uuidString
         ))
     }
+
+    private var removable: Bool { canRemove ?? item.canRemoveFromQueue }
 
     // MARK: - Leading position marker
 
@@ -187,12 +196,14 @@ struct ACPQueueItemRow: View {
     private var toolbar: some View {
         HStack(spacing: 4) {
             if item.status == .pending {
-                actionButton(
-                    systemName: "arrow.up.to.line",
-                    foreground: theme.color("fg-muted"),
-                    help: "Move to front (won't interrupt a running turn)",
-                    action: onPromote
-                )
+                if allowsReordering {
+                    actionButton(
+                        systemName: "arrow.up.to.line",
+                        foreground: theme.color("fg-muted"),
+                        help: "Move to front (won't interrupt a running turn)",
+                        action: onPromote
+                    )
+                }
                 actionButton(
                     systemName: "paperplane.fill",
                     foreground: theme.color("accent"),
@@ -209,7 +220,7 @@ struct ACPQueueItemRow: View {
                 }
                 // Editing the resume item would pull it out of the queue and
                 // silently drop auto-resume.
-                if item.canRemoveFromQueue, item.usageLimit == nil {
+                if removable, canEdit, item.usageLimit == nil {
                     actionButton(
                         systemName: "pencil",
                         foreground: theme.color("fg-muted"),
@@ -217,7 +228,7 @@ struct ACPQueueItemRow: View {
                         action: onEdit
                     )
                 }
-                if item.canRemoveFromQueue {
+                if removable {
                     actionButton(
                         systemName: "xmark",
                         foreground: theme.color("fg-muted"),
@@ -258,19 +269,23 @@ struct ACPQueueItemRow: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         if item.status == .pending {
-            Button("Move to front", action: onPromote)
+            if allowsReordering {
+                Button("Move to front", action: onPromote)
+            }
             Button("Send now", action: onSendNow)
             Divider()
-            Button("Move up", action: onMoveUp).disabled(!canMoveUp)
-            Button("Move down", action: onMoveDown).disabled(!canMoveDown)
-            Divider()
+            if allowsReordering {
+                Button("Move up", action: onMoveUp).disabled(!canMoveUp)
+                Button("Move down", action: onMoveDown).disabled(!canMoveDown)
+                Divider()
+            }
             if item.lastError != nil {
                 Button("Retry", action: onRetry)
             }
-            if item.canRemoveFromQueue, item.usageLimit == nil {
+            if removable, canEdit, item.usageLimit == nil {
                 Button("Edit", action: onEdit)
             }
-            if item.canRemoveFromQueue {
+            if removable {
                 Button("Remove from queue", role: .destructive, action: onRemove)
             }
         }

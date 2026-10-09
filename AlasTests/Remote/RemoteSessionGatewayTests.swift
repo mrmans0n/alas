@@ -314,6 +314,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func setModel(for id: String, modelId: String) { models.append((id, modelId)) }
     func setMode(for id: String, modeId: String) { modes.append((id, modeId)) }
     func setAutoRun(for id: String, enabled: Bool) { autoRuns.append((id, enabled)) }
+    var configOptions: [(id: String, configId: String, value: ACPConfigValue)] = []
+    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) { configOptions.append((id, configId, value)) }
     func renameSession(for id: String, title: String) -> Bool {
         renamed.append((id, title))
         return renameSucceeds
@@ -1521,14 +1523,31 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { _ in }
         await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))   // not writer
         await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
-        #expect(provider.models.isEmpty && provider.autoRuns.isEmpty)
+        await gw.handle(.setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
+        #expect(provider.models.isEmpty && provider.autoRuns.isEmpty && provider.configOptions.isEmpty)
         provider.writers.insert("s1")
         await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
         await gw.handle(.setMode(sessionId: "s1", modeId: "ask"))
         await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
+        await gw.handle(.setConfigOption(sessionId: "s1", configId: "effort", value: .string("high")))
+        #expect(provider.configOptions.map(\.configId) == ["effort"])
         #expect(provider.models.map(\.model) == ["opus"])
         #expect(provider.modes.map(\.mode) == ["ask"])
         #expect(provider.autoRuns.map(\.enabled) == [true])
+    }
+
+    @Test(arguments: [true, false])
+    func refusedConfigVerbResendsAuthoritativeConfig(isWriter: Bool) async {
+        let provider = FakeSessionsProvider()
+        let cfg = RemoteSessionConfig(sessionId: "s1", models: [.init(id: "sonnet", name: "Sonnet")], modes: [],
+                                      currentModel: "sonnet", currentMode: nil, autoRunEnabled: false,
+                                      acceptsImages: false)
+        provider.configs["s1"] = cfg
+        if isWriter { provider.writers.insert("s1") }   // fake setModel never changes the config
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
+        #expect(sent == [.sessionConfig(cfg)])
     }
 
     @Test func renameSessionTrimsTitleDoesNotRequireWriterAndRefreshesList() async {

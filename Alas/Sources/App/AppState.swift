@@ -15862,6 +15862,13 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func setConfigOption(for id: String, configId: String, value: ACPConfigValue) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.setConfigOption(for: id, configId: configId, value: value)?.value
+            return
+        }
+    }
+
     func renameSession(for id: String, title: String) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -15882,14 +15889,7 @@ extension AppState: RemoteSessionsProvider {
     func sessionConfig(for id: String) -> RemoteSessionConfig? {
         for mgr in acpManagers.values {
             guard let s = mgr.liveSession(for: id) else { continue }
-            return RemoteSessionConfig(
-                sessionId: id,
-                models: s.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                modes: s.availableModes.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                currentModel: s.currentModel,
-                currentMode: s.currentMode,
-                autoRunEnabled: s.autoRunEnabled,
-                acceptsImages: s.promptCapabilities.image)
+            return RemoteSessionConfigProjection.config(sessionId: id, session: s)
         }
         return nil
     }

@@ -13,6 +13,8 @@ struct ACPComposerActionButton: View {
     let queueBadgeCount: Int
     var queueByDefault = true
     var nativeSteering = false
+    /// Peer composers cannot schedule on the host, so they hide the menu.
+    var showsSchedule = true
 
     @Environment(\.theme) private var theme
     @State private var customScheduleDate = Date()
@@ -47,21 +49,23 @@ struct ACPComposerActionButton: View {
             .buttonStyle(.plain)
             .help("Send (⏎)")
 
-            chevronHalf(help: "Schedule send") {
-                let now = Date()
-                ForEach(ACPSchedulePreset.allCases) { preset in
-                    if preset.date(after: now) != nil {
-                        Button(preset.title) {
-                            if let date = preset.date(after: Date()) { onSchedule(date) }
+            if showsSchedule {
+                chevronHalf(help: "Schedule send") {
+                    let now = Date()
+                    ForEach(ACPSchedulePreset.allCases) { preset in
+                        if preset.date(after: now) != nil {
+                            Button(preset.title) {
+                                if let date = preset.date(after: Date()) { onSchedule(date) }
+                            }
                         }
                     }
-                }
-                Divider()
-                Button("Custom date and time…") {
-                    let now = Date()
-                    customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
-                        ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
-                    showsCustomSchedule = true
+                    Divider()
+                    Button("Custom date and time…") {
+                        let now = Date()
+                        customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
+                            ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
+                        showsCustomSchedule = true
+                    }
                 }
             }
         }

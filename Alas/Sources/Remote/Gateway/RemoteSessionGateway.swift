@@ -238,14 +238,19 @@ final class RemoteSessionGateway {
             send(.stopPending(sessionId: id))
             await provider.stop(for: id)
         case .setModel(let id, let modelId):
-            guard provider.isWriter(for: id) else { return }
-            await provider.setModel(for: id, modelId: modelId)
+            if provider.isWriter(for: id) { await provider.setModel(for: id, modelId: modelId) }
+            resendConfig(id: id)
         case .setMode(let id, let modeId):
-            guard provider.isWriter(for: id) else { return }
-            await provider.setMode(for: id, modeId: modeId)
+            if provider.isWriter(for: id) { await provider.setMode(for: id, modeId: modeId) }
+            resendConfig(id: id)
         case .setAutoRun(let id, let enabled):
-            guard provider.isWriter(for: id) else { return }
-            await provider.setAutoRun(for: id, enabled: enabled)
+            if provider.isWriter(for: id) { await provider.setAutoRun(for: id, enabled: enabled) }
+            resendConfig(id: id)
+        case .setConfigOption(let id, let configId, let value):
+            if provider.isWriter(for: id) {
+                await provider.setConfigOption(for: id, configId: configId, value: value)
+            }
+            resendConfig(id: id)
         case .renameSession(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -707,19 +712,23 @@ final class RemoteSessionGateway {
                 if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {
                     await self.sendDelta(id: id, session: session)
                 }
-                let cfg = RemoteSessionConfig(
-                    sessionId: id,
-                    models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                    modes: session.availableModes.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                    currentModel: session.currentModel,
-                    currentMode: session.currentMode,
-                    autoRunEnabled: session.autoRunEnabled,
-                    acceptsImages: session.promptCapabilities.image)
+                let cfg = RemoteSessionConfigProjection.config(sessionId: id, session: session)
                 guard self.lastConfig[id] != cfg else { return }
                 self.lastConfig[id] = cfg
                 self.send(.sessionConfig(cfg))
             }
         }
+    }
+
+    /// Viewers update their config optimistically. When the host refuses or
+    /// ignores a config verb nothing changes, so the observation-driven
+    /// emission never fires; re-send the authoritative config so the viewer
+    /// reverts. Recording it in `lastConfig` keeps the coalesced emission from
+    /// sending a duplicate.
+    private func resendConfig(id: String) {
+        guard let cfg = provider.sessionConfig(for: id) else { return }
+        lastConfig[id] = cfg
+        send(.sessionConfig(cfg))
     }
 
     /// Emits an incremental delta: only messages the change log marked
