@@ -56,7 +56,10 @@ struct RunScriptPaletteModelTests {
         var ran: RunScript?
         var console: RunScriptConsole??
         let model = RunScriptPaletteModel()
-        let env = environment(scripts: [script("build")], onRun: { ran = $0; console = $1 })
+        let env = environment(scripts: [script("build")], onRun: { script, override in
+            ran = script
+            console = override
+        })
         model.load(environment: env)
         model.activateSelection(environment: env)
         #expect(ran == script("build"))
