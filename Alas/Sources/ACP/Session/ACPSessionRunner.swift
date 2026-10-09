@@ -3492,7 +3492,10 @@ extension ACPSessionRunner {
         let item = session.queue.remove(at: idx)
         let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
         let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
-        if session.canSteerRunningTurn {
+        // A restart continuation is sent as the queue head, never steered in,
+        // so `sendNow` records its notice rather than a user row.
+        let sendsAsQueueHead = item.backgroundTaskWake != nil || item.interruptedTurnContinuation
+        if session.canSteerRunningTurn, !item.interruptedTurnContinuation {
             steerRunningTurn(
                 blocks: item.blocks, delegatedSource: item.delegatedSource,
                 recordUserPrompt: !item.transcriptRecorded, normalUserTurn: normalUserTurn,
@@ -3501,7 +3504,7 @@ extension ACPSessionRunner {
                 onPromptFinished: nil, recoveryQueueItem: (item, idx))
             return
         }
-        if item.backgroundTaskWake != nil {
+        if sendsAsQueueHead {
             session.queue.insert(item, at: min(idx, session.queue.count))
         }
         persistQueue()
@@ -3514,7 +3517,7 @@ extension ACPSessionRunner {
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
-            recoveryQueueItemID: item.backgroundTaskWake == nil ? nil : item.id,
+            recoveryQueueItemID: sendsAsQueueHead ? item.id : nil,
             onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id)
         )
     }
@@ -3554,7 +3557,7 @@ extension ACPSessionRunner {
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
-        if session.canSteerRunningTurn {
+        if session.canSteerRunningTurn, recoveryQueueItemID == nil {
             steerRunningTurn(
                 blocks: blocks, delegatedSource: delegatedSource,
                 recordUserPrompt: recordUserPrompt, normalUserTurn: normalUserTurn,

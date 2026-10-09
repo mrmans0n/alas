@@ -438,18 +438,28 @@ final class ACPSession: ObservableObject, Identifiable {
     /// of the echo. A chunk that diverges ends the expectation, so a later
     /// prompt's echo that happens to share a prefix is never swallowed.
     private func consumeContinuationEcho(_ text: String) -> Bool {
-        if text == QueuedPrompt.interruptedTurnContinueText { return true }
-        guard let rest = expectedContinuationEcho?.drop(while: \.isWhitespace) else { return false }
+        text == QueuedPrompt.interruptedTurnContinueText || Self.consume(text, from: &expectedContinuationEcho)
+    }
+
+    /// Consumes `text` from the front of `expected`, ignoring whitespace
+    /// between fragments. Clears `expected` once it is fully consumed or when
+    /// `text` diverges from it.
+    private static func consume(_ text: String, from expected: inout Substring?) -> Bool {
+        guard let rest = expected?.drop(while: \.isWhitespace) else { return false }
         let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if fragment.isEmpty { return true }
         guard rest.hasPrefix(fragment) else {
-            expectedContinuationEcho = nil
+            expected = nil
             return false
         }
         let remaining = rest.dropFirst(fragment.count)
-        expectedContinuationEcho = remaining.allSatisfy(\.isWhitespace) ? nil : remaining
+        expected = remaining.allSatisfy(\.isWhitespace) ? nil : remaining
         return true
     }
+
+    /// The rest of a replayed restart continuation echo, while the replay
+    /// cursor sits just past its notice.
+    private var replayedContinuationEcho: Substring?
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
@@ -1604,12 +1614,14 @@ final class ACPSession: ObservableObject, Identifiable {
     func beginSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        replayedContinuationEcho = nil
         for run in subagents.values { run.beginReplayReconciliation() }
     }
 
     func endSuppressedReplaySideEffects() {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
+        replayedContinuationEcho = nil
         for run in subagents.values { run.endReplayReconciliation() }
     }
 
@@ -3864,21 +3876,24 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// `firstIdLessMatch(of: .user, …)`, except that a restart continuation's
     /// echo resolves to its notice, which stands in for the user row. Agents
-    /// may replay that echo in fragments: each one resolves to the notice the
-    /// cursor just passed, so none claims a later user turn.
+    /// may replay that echo in fragments: each one that continues it resolves
+    /// to the notice the cursor just passed, so none claims a later user turn.
     private func replayedUserTurnMatch(_ block: ACPContentBlock, atOrAfter cursor: Int) -> Int? {
-        let isContinuationEcho: Bool = {
-            guard case .text(let text) = block else { return false }
-            let fragment = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return fragment.isEmpty || QueuedPrompt.interruptedTurnContinueText.contains(fragment)
-        }()
+        let text: String? = if case .text(let text) = block { text } else { nil }
         let start = min(cursor, transcript.messages.count)
-        if isContinuationEcho, start > 0, transcript.messages[start - 1].isInterruptedTurnContinuationNotice {
+        if let text, start > 0, transcript.messages[start - 1].isInterruptedTurnContinuationNotice,
+           Self.consume(text, from: &replayedContinuationEcho) {
             return start - 1
         }
+        replayedContinuationEcho = nil
         for i in start..<transcript.messages.count {
             if case .user(_, nil, _, _, _, _) = transcript.messages[i] { return i }
-            if isContinuationEcho, transcript.messages[i].isInterruptedTurnContinuationNotice { return i }
+            guard let text, transcript.messages[i].isInterruptedTurnContinuationNotice else { continue }
+            var expected: Substring? = Substring(QueuedPrompt.interruptedTurnContinueText)
+            if Self.consume(text, from: &expected) {
+                replayedContinuationEcho = expected
+                return i
+            }
         }
         return nil
     }
