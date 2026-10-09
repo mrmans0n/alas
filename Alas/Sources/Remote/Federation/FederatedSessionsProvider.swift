@@ -49,9 +49,9 @@ final class FederatedSessionsProvider {
     static let listPollInterval: TimeInterval = 15
     /// Several phones polling at once must not turn into a burst upstream.
     static let listRequestThrottle: TimeInterval = 2
-    /// Unanswered queue edits remembered per session. The peer never answers
-    /// an edit it refuses, so the oldest are dropped past this.
-    static let queueEditRequesterLimit = 16
+    /// Unanswered queue edits remembered across all sessions. The peer never
+    /// answers an edit it refuses, so the oldest are dropped past this.
+    static let queueEditRequesterLimit = 32
 
     /// Fired whenever any peer's link state or advertised record may have
     /// changed, so the server can push a fresh `hello` (its `peers` list —
@@ -175,12 +175,12 @@ final class FederatedSessionsProvider {
     /// reply goes to the head; the asker need not be subscribed. A detached
     /// requester stays as nil so the next reply still lines up.
     private var tabActionRequesters: [String: [UUID?]] = [:]
-    /// Namespaced session id → (queue item id, downstream that asked to edit
-    /// it), oldest first. The restored text goes back to the asker even after
-    /// it unsubscribed, or the dequeued prompt would be lost. The peer stays
-    /// silent for an item it no longer has, so replies are matched by item:
-    /// an unanswered request can never misroute a later reply.
-    private var queueEditRequesters: [String: [(itemId: String, downstreamId: UUID)]] = [:]
+    /// Downstreams that asked to edit a queue item, oldest first. The
+    /// restored text goes back to the asker even after it unsubscribed, or
+    /// the dequeued prompt would be lost. The peer stays silent for an item
+    /// it no longer has, so replies are matched by session and item: an
+    /// unanswered request can never misroute a later reply.
+    private var queueEditRequesters: [(sessionId: String, itemId: String, downstreamId: UUID)] = []
     /// Comparison-sensitive replies do not carry a request id. Serialize
     /// equivalent requests and return each reply only to its requester.
     private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
@@ -231,10 +231,7 @@ final class FederatedSessionsProvider {
             tabActionRequesters[namespaced] = queue.map { $0 == id ? nil : $0 }
         }
         // Without its asker, a restore falls back to the session's subscribers.
-        for (namespaced, requests) in queueEditRequesters {
-            let remaining = requests.filter { $0.downstreamId != id }
-            queueEditRequesters[namespaced] = remaining.isEmpty ? nil : remaining
-        }
+        queueEditRequesters.removeAll { $0.downstreamId == id }
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -294,9 +291,10 @@ final class FederatedSessionsProvider {
                 }
                 tabActionRequesters[namespaced, default: []].append(downstream.id)
             case .queueEdit(_, let itemId):
-                var requests = queueEditRequesters[namespaced, default: []]
-                requests.append((itemId, downstream.id))
-                queueEditRequesters[namespaced] = Array(requests.suffix(Self.queueEditRequesterLimit))
+                queueEditRequesters.append((namespaced, itemId, downstream.id))
+                if queueEditRequesters.count > Self.queueEditRequesterLimit {
+                    queueEditRequesters.removeFirst()
+                }
             default:
                 break
             }
@@ -360,7 +358,7 @@ final class FederatedSessionsProvider {
             case .sessionClosed(let sessionId):
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
                 pendingRequests[namespaced] = nil
-                queueEditRequesters[namespaced] = nil
+                queueEditRequesters.removeAll { $0.sessionId == namespaced }
                 comparisonRequests = comparisonRequests.filter { $0.key.sessionId != namespaced }
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
@@ -428,7 +426,7 @@ final class FederatedSessionsProvider {
             for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
                 pendingRequests[namespaced] = nil
             }
-            queueEditRequesters = queueEditRequesters.filter { !$0.key.hasPrefix(prefix) }
+            queueEditRequesters.removeAll { $0.sessionId.hasPrefix(prefix) }
             for namespaced in Array(tabActionRequesters.keys) where namespaced.hasPrefix(prefix) {
                 let failure = RemoteServerMessage.sessionTabActionFailed(
                     sessionId: namespaced, message: Self.peerUnavailableMessage)
@@ -582,11 +580,10 @@ final class FederatedSessionsProvider {
     /// Pops the oldest live asker for this item's edit.
     private func takeQueueEditRequester(itemId: String, for namespaced: String) -> FederatedDownstream? {
         pruneDeadDownstreams()
-        guard var requests = queueEditRequesters[namespaced],
-              let index = requests.firstIndex(where: { $0.itemId == itemId }) else { return nil }
-        let id = requests.remove(at: index).downstreamId
-        queueEditRequesters[namespaced] = requests.isEmpty ? nil : requests
-        return downstreams[id]?.value
+        guard let index = queueEditRequesters.firstIndex(where: {
+            $0.sessionId == namespaced && $0.itemId == itemId
+        }) else { return nil }
+        return downstreams[queueEditRequesters.remove(at: index).downstreamId]?.value
     }
 
     private func removePeerRequests(for downstreamId: UUID) {

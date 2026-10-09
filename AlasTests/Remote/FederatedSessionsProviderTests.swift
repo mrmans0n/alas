@@ -196,12 +196,13 @@ struct FederatedSessionsProviderTests {
         provider.attach(client.downstream)
         links.goOnline("srv-b", name: "Mac B")
         // The peer never answers an edit it refuses, so these stay unanswered.
-        for item in 0...FederatedSessionsProvider.queueEditRequesterLimit {
-            _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i\(item)"), from: client.downstream)
+        // Spread over sessions: the bound must not be per session.
+        for n in 0...FederatedSessionsProvider.queueEditRequesterLimit {
+            _ = provider.route(.queueEdit(sessionId: "srv-b:s\(n)", itemId: "i"), from: client.downstream)
         }
-        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i0", text: "oldest"), from: "srv-b")
-        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i1", text: "kept"), from: "srv-b")
-        #expect(client.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i1", text: "kept")])
+        links.receive(.queueEditRestored(sessionId: "s0", itemId: "i", text: "oldest"), from: "srv-b")
+        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i", text: "kept"), from: "srv-b")
+        #expect(client.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "kept")])
     }
 
     @Test func tabActionsForAPeerWithoutTheCapabilityFailWithoutBeingSent() {
