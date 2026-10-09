@@ -858,6 +858,13 @@ struct RemoteProtocolTests {
         #expect(config.supportsSteering == nil)
     }
 
+    @Test func sessionConfigWithMalformedChipsStillDecodesWithoutChips() throws {
+        let json = #"{"type":"sessionConfig","sessionId":"s1","models":[],"modes":[],"autoRunEnabled":false,"acceptsImages":false,"chips":{"model":"nonsense"}}"#
+        guard case .sessionConfig(let config) = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
+        else { Issue.record("not a sessionConfig"); return }
+        #expect(config.chips == nil)
+    }
+
     @Test(arguments: [ACPConfigValue.string("high"), .boolean(true)])
     func setConfigOptionRoundTrips(_ value: ACPConfigValue) throws {
         let message = RemoteClientMessage.setConfigOption(sessionId: "s1", configId: "effort", value: value)

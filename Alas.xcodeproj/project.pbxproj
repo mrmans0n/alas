@@ -891,6 +891,7 @@
 		60F31F7C4A8A69EDE77363FB /* ReviewSessionModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB8CA584A5F9F1BDE903E8D2 /* ReviewSessionModelsTests.swift */; };
 		610486A9FA350E77D1BF594B /* ACPTerminalTailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBFD1CE53DE229626220B457 /* ACPTerminalTailView.swift */; };
 		6106AAB5856FD326FE5143A2 /* LocalTextSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAB8FE1AF6642EFC1A62E21F /* LocalTextSafety.swift */; };
+		610FA6553CD77D5F607E53B6 /* RemoteSessionConfigProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7212FFEBFBD8203FDA541126 /* RemoteSessionConfigProjection.swift */; };
 		61119C72453B00421BCB2BD3 /* RunSchedulePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEB6DAB8356CDB9F98438D2E /* RunSchedulePresentationTests.swift */; };
 		6117C4AD7519BCD82EA0CF56 /* RightPaneTransitionalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C165BAAF80F9B4A5949BD39 /* RightPaneTransitionalView.swift */; };
 		6140E9DE848A53A37DFB8890 /* CodexInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */; };
@@ -1014,6 +1015,7 @@
 		6FA1659F464BE9C03C90F787 /* GitService+CommitEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F4A17C42833BE6190A45AF3 /* GitService+CommitEditing.swift */; };
 		6FD850ED8F7C6490451BCFF2 /* RepoIconResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2546045A3891B15BE3E483F3 /* RepoIconResolverTests.swift */; };
 		6FDE6E6F5087E811451A6AD8 /* DiffInlineHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6561C6DA70F49EDBC69BA854 /* DiffInlineHighlighter.swift */; };
+		700F4D139F380F4FBB46A414 /* RemoteSessionConfigProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692C2002B413AE34B92EABC1 /* RemoteSessionConfigProjectionTests.swift */; };
 		7028C08DE3F176175CA1FC20 /* MergeConflictResolvedEmptyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0914F0E19514D1DF89C74B41 /* MergeConflictResolvedEmptyView.swift */; };
 		702EC5CB48F37FC8B6F27FA4 /* ACPSelectChipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A7F35818C95A567DDA586A /* ACPSelectChipTests.swift */; };
 		706C3DE9BE8C957EAF42B1F7 /* RemoteSessionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8043AB4F07A900CD58A5E332 /* RemoteSessionProtocol.swift */; };
@@ -3241,6 +3243,7 @@
 		68AC15742E7423AE2F3A203A /* ACPSessionInfoUpdateDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionInfoUpdateDecodeTests.swift; sourceTree = "<group>"; };
 		68B6937D50514C34A2C14BE1 /* TerminalServiceZmxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalServiceZmxTests.swift; sourceTree = "<group>"; };
 		69024633944E9FFF6DA76FAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		692C2002B413AE34B92EABC1 /* RemoteSessionConfigProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionConfigProjectionTests.swift; sourceTree = "<group>"; };
 		694DDEC8133EFBC33822BC26 /* ReviewLoopHandoffRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewLoopHandoffRoutingTests.swift; sourceTree = "<group>"; };
 		695BFA9AD82EA05F217D7B01 /* WorkspaceCheckoutPreflightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutPreflightTests.swift; sourceTree = "<group>"; };
 		695C887147631ACF1FA73C3F /* MergeView3Way.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeView3Way.swift; sourceTree = "<group>"; };
@@ -3339,6 +3342,7 @@
 		71E01A18A7215E3FEEB71B07 /* ACPBrokerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBrokerClientTests.swift; sourceTree = "<group>"; };
 		71EFA4A9A18BBF57AAA2B17A /* AttentionProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionProducer.swift; sourceTree = "<group>"; };
 		71F9CE2A0C76E75E95A641AE /* DraftAmendPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefill.swift; sourceTree = "<group>"; };
+		7212FFEBFBD8203FDA541126 /* RemoteSessionConfigProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionConfigProjection.swift; sourceTree = "<group>"; };
 		72185067BC1528FA7776DE53 /* RunHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunHistoryStore.swift; sourceTree = "<group>"; };
 		722CF4E79E6FB2DF576E0DE7 /* ACPSideQuestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSideQuestion.swift; sourceTree = "<group>"; };
 		723922E17A17CA9F7D382C48 /* WorkspaceCheckoutCreationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutCreationModel.swift; sourceTree = "<group>"; };
@@ -4721,6 +4725,7 @@
 				C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */,
 				98DE51A11B5F4C7A84D715B4 /* RemoteQueueProjectionTests.swift */,
 				A79A06E48E215BF7B9EC2408 /* RemoteServerIntegrationTests.swift */,
+				692C2002B413AE34B92EABC1 /* RemoteSessionConfigProjectionTests.swift */,
 				37011506F459800FFF6D12A9 /* RemoteSessionGatewayTests.swift */,
 				5AA5809066E33EB30E09E0D8 /* RemoteWebAssetTests.swift */,
 				4CBFA79128A3F134EA7C5BDD /* RemoteWorktreeFileAccessTests.swift */,
@@ -4893,6 +4898,7 @@
 			isa = PBXGroup;
 			children = (
 				C782D92A16724E99D824C8A7 /* RemoteQueueProjection.swift */,
+				7212FFEBFBD8203FDA541126 /* RemoteSessionConfigProjection.swift */,
 				CDE49D2437D7E6AC9D67F136 /* RemoteSessionGateway.swift */,
 				33EBE6A3E0CA30D8910E68F8 /* RemoteSessionsProvider.swift */,
 				88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */,
@@ -9527,6 +9533,7 @@
 				FB6FF6C91476DEE43E512E30 /* RemoteServer.swift in Sources */,
 				D9C26E07021DC6938013FBBE /* RemoteServerError.swift in Sources */,
 				C3E59948BD9108C1BD3243AD /* RemoteServerPane.swift in Sources */,
+				610FA6553CD77D5F607E53B6 /* RemoteSessionConfigProjection.swift in Sources */,
 				C7AD6F2DDAE9E11920277D41 /* RemoteSessionGateway.swift in Sources */,
 				706C3DE9BE8C957EAF42B1F7 /* RemoteSessionProtocol.swift in Sources */,
 				A770A357750B4713AF21C0E0 /* RemoteSessionsProvider.swift in Sources */,
@@ -10588,6 +10595,7 @@
 				87A20CF7F67C277344D97D45 /* RemoteQueueProjectionTests.swift in Sources */,
 				DDBEA2D41ECA8F0F28CF5DF6 /* RemoteRepoValidatorTests.swift in Sources */,
 				A962107126052DEF597CB7FA /* RemoteServerIntegrationTests.swift in Sources */,
+				700F4D139F380F4FBB46A414 /* RemoteSessionConfigProjectionTests.swift in Sources */,
 				0B6ADBF320E6130E5888CAA7 /* RemoteSessionGatewayTests.swift in Sources */,
 				8723FD954481CDFA5B2916DF /* RemoteStatusFingerprintTests.swift in Sources */,
 				0C7A044AC34BF225A4149556 /* RemoteTerminalLaunchTests.swift in Sources */,

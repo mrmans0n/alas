@@ -246,8 +246,9 @@ final class RemoteSessionGateway {
         case .setAutoRun(let id, let enabled):
             guard provider.isWriter(for: id) else { return }
             await provider.setAutoRun(for: id, enabled: enabled)
-        case .setConfigOption:
-            break
+        case .setConfigOption(let id, let configId, let value):
+            guard provider.isWriter(for: id) else { return }
+            await provider.setConfigOption(for: id, configId: configId, value: value)
         case .renameSession(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -709,14 +710,7 @@ final class RemoteSessionGateway {
                 if self.syncStates[id]?.sentBackgroundWorkCancellable != session.hasCancellableBackgroundWork {
                     await self.sendDelta(id: id, session: session)
                 }
-                let cfg = RemoteSessionConfig(
-                    sessionId: id,
-                    models: session.availableModels.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                    modes: session.availableModes.map { RemoteModelInfo(id: $0.id, name: $0.name) },
-                    currentModel: session.currentModel,
-                    currentMode: session.currentMode,
-                    autoRunEnabled: session.autoRunEnabled,
-                    acceptsImages: session.promptCapabilities.image)
+                let cfg = RemoteSessionConfigProjection.config(sessionId: id, session: session)
                 guard self.lastConfig[id] != cfg else { return }
                 self.lastConfig[id] = cfg
                 self.send(.sessionConfig(cfg))
