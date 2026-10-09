@@ -390,8 +390,9 @@ final class FederatedSessionsProvider {
                     requester.flatMap { downstreams[$0]?.value }?.send(routed)
                     return
                 case .queueEditRestored(_, let itemId, _):
-                    if let requester = takeQueueEditRequester(itemId: itemId, for: namespaced) {
-                        requester.send(routed)
+                    let askers = takeQueueEditRequesters(itemId: itemId, for: namespaced)
+                    if !askers.isEmpty {
+                        for asker in askers { asker.send(routed) }
                         return
                     }
                 default:
@@ -577,18 +578,19 @@ final class FederatedSessionsProvider {
         }
     }
 
-    /// The newest live asker for this item's edit. Older asks for the same
-    /// item were refused (the peer answers at most once, since a restore
-    /// removes the item), so they are dropped rather than left to steal a
-    /// later restore of the item.
-    private func takeQueueEditRequester(itemId: String, for namespaced: String) -> FederatedDownstream? {
+    /// Every live asker for this item's edit. The peer answers at most once
+    /// per item (a restore removes it) and silently refuses the others, and
+    /// the reply does not say which ask it answers, so all of them get the
+    /// text: a duplicated draft beats a lost prompt.
+    private func takeQueueEditRequesters(itemId: String, for namespaced: String) -> [FederatedDownstream] {
         pruneDeadDownstreams()
-        let matches: ((sessionId: String, itemId: String, downstreamId: UUID)) -> Bool = {
-            $0.sessionId == namespaced && $0.itemId == itemId
+        var askers: [UUID] = []
+        queueEditRequesters.removeAll { request in
+            guard request.sessionId == namespaced, request.itemId == itemId else { return false }
+            if !askers.contains(request.downstreamId) { askers.append(request.downstreamId) }
+            return true
         }
-        guard let newest = queueEditRequesters.last(where: matches) else { return nil }
-        queueEditRequesters.removeAll(where: matches)
-        return downstreams[newest.downstreamId]?.value
+        return askers.compactMap { downstreams[$0]?.value }
     }
 
     private func removePeerRequests(for downstreamId: UUID) {

@@ -189,20 +189,24 @@ struct FederatedSessionsProviderTests {
         #expect(second.received == [.sessionTabActionFailed(sessionId: "srv-b:s1", message: "gone")])
     }
 
-    @Test func aRestoredQueueEditReachesItsLatestUnsubscribedAsker() {
+    @Test func aRestoredQueueEditReachesEveryUnsubscribedAskerOnlyOnce() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)
-        let refused = Client()
-        let asker = Client()
-        provider.attach(refused.downstream)
-        provider.attach(asker.downstream)
+        let first = Client()
+        let second = Client()
+        provider.attach(first.downstream)
+        provider.attach(second.downstream)
         links.goOnline("srv-b", name: "Mac B")
-        // The peer refused the first edit silently (the item was sending).
-        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: refused.downstream)
-        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: asker.downstream)
-        links.receive(.queueEditRestored(sessionId: "s1", itemId: "i", text: "edit me"), from: "srv-b")
-        #expect(refused.received.isEmpty)
-        #expect(asker.received == [.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "edit me")])
+        // The peer answers one of these and silently refuses the other,
+        // without saying which.
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: first.downstream)
+        _ = provider.route(.queueEdit(sessionId: "srv-b:s1", itemId: "i"), from: second.downstream)
+        let restored = RemoteServerMessage.queueEditRestored(sessionId: "s1", itemId: "i", text: "edit me")
+        links.receive(restored, from: "srv-b")
+        links.receive(restored, from: "srv-b")
+        let routed = RemoteServerMessage.queueEditRestored(sessionId: "srv-b:s1", itemId: "i", text: "edit me")
+        #expect(first.received == [routed])
+        #expect(second.received == [routed])
     }
 
     @Test func unansweredQueueEditsAreForgottenPastTheLimit() {
