@@ -147,9 +147,9 @@ extension RemoteServerMessage {
         case .visualAidRejected(_, let visualId, let reason, let requestId):
             return .visualAidRejected(sessionId: new, visualId: visualId, reason: reason, requestId: requestId)
         case .sessionConfig(let cfg):
-            return .sessionConfig(RemoteSessionConfig(
-                sessionId: new, models: cfg.models, modes: cfg.modes, currentModel: cfg.currentModel,
-                currentMode: cfg.currentMode, autoRunEnabled: cfg.autoRunEnabled, acceptsImages: cfg.acceptsImages))
+            var rescoped = cfg
+            rescoped.sessionId = new
+            return .sessionConfig(rescoped)
         case .sessionRenamed(_, let title): return .sessionRenamed(sessionId: new, title: title)
         case .queueState(_, let items): return .queueState(sessionId: new, items: items)
         case .queueEditRestored(_, let itemId, let text):

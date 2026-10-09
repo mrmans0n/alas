@@ -846,20 +846,30 @@ struct NativePeerSessionsTests {
                           .setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))])
     }
 
-    @Test func chipSourcesDispatchTheirVerb() {
+    @Test(arguments: [
+        (ChipSpec.Source.model, "opus", RemoteClientMessage.setModel(sessionId: "s", modelId: "opus")),
+        (ChipSpec.Source.mode, "plan", RemoteClientMessage.setMode(sessionId: "s", modeId: "plan")),
+        (ChipSpec.Source.configOption(id: "model"), "gpt",
+         RemoteClientMessage.setConfigOption(sessionId: "s", configId: "model", value: .string("gpt"))),
+    ])
+    func chipSourcesDispatchTheirVerb(source: ChipSpec.Source, itemId: String, expected: RemoteClientMessage) {
         let (links, client) = drivenClient(canDrive: true)
-        client.selectChip(ChipSpec(source: .model, options: [], currentId: nil), itemId: "opus")
-        client.selectChip(ChipSpec(source: .mode, options: [], currentId: nil), itemId: "plan")
-        #expect(links.sent(to: "B").contains(.setModel(sessionId: "s", modelId: "opus")))
-        #expect(links.sent(to: "B").contains(.setMode(sessionId: "s", modeId: "plan")))
-        #expect(!links.sent(to: "B").contains(.takeOver(sessionId: "s")))
+        client.selectChip(ChipSpec(source: source, options: [], currentId: nil), itemId: itemId)
+        let verbs = links.sent(to: "B").filter {
+            switch $0 { case .setModel, .setMode, .setConfigOption, .takeOver: true; default: false }
+        }
+        #expect(verbs == [expected])
     }
 
-    @Test func configBackedModelChipDispatchesSetConfigOption() {
+    @Test func chipsAndSteeringSurviveFederationRescoping() {
         let (links, client) = drivenClient(canDrive: true)
-        client.selectChip(ChipSpec(source: .configOption(id: "model"), options: [], currentId: nil), itemId: "gpt")
-        #expect(links.sent(to: "B").contains(.setConfigOption(sessionId: "s", configId: "model", value: .string("gpt"))))
-        #expect(!links.sent(to: "B").contains(.setModel(sessionId: "s", modelId: "gpt")))
+        let chips = RemoteChipState(model: nil, thinking: nil, mode: nil, parameters: [], booleans: [],
+                                    autoRun: "supported")
+        links.receive(.sessionConfig(RemoteSessionConfig(
+            sessionId: "s", models: [], modes: [], currentModel: nil, currentMode: nil, autoRunEnabled: false,
+            acceptsImages: false, chips: chips, supportsSteering: true)), from: "B")
+        #expect(client.transcript?.config?.chips == chips)
+        #expect(client.transcript?.config?.supportsSteering == true)
     }
 
     @Test func olderHostConfigFallsBackToLegacyModelAndModeChips() {

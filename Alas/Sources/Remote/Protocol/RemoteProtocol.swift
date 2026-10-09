@@ -43,7 +43,7 @@ struct RemoteAttachment: Codable, Equatable, Sendable {
 }
 
 struct RemoteSessionConfig: Codable, Equatable, Sendable {
-    let sessionId: String
+    var sessionId: String
     let models: [RemoteModelInfo]
     let modes: [RemoteModelInfo]
     var currentModel: String?

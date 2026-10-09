@@ -14,7 +14,7 @@ struct RemoteMessageSessionScopeTests {
             .sendPrompt(sessionId: "a", text: "hi", attachments: [], intent: "auto"),
             .stop(sessionId: "a"),
             .setModel(sessionId: "a", modelId: "m"), .setMode(sessionId: "a", modeId: "m"),
-            .setAutoRun(sessionId: "a", enabled: true), 
+            .setAutoRun(sessionId: "a", enabled: true),
             .setConfigOption(sessionId: "a", configId: "effort", value: .string("high")),
             .renameSession(sessionId: "a", title: "t"),
             .fetchOlder(sessionId: "a", beforeIndex: 3, limit: 10),
@@ -49,7 +49,10 @@ struct RemoteMessageSessionScopeTests {
 
     @Test func everySessionScopedServerMessageExposesAndRewritesItsId() {
         let cfg = RemoteSessionConfig(sessionId: "a", models: [], modes: [], currentModel: nil,
-                                      currentMode: nil, autoRunEnabled: false, acceptsImages: false)
+                                      currentMode: nil, autoRunEnabled: false, acceptsImages: false,
+                                      chips: RemoteChipState(model: nil, thinking: nil, mode: nil, parameters: [],
+                                                             booleans: [], autoRun: "supported"),
+                                      supportsSteering: true)
         let scoped: [RemoteServerMessage] = [
             .transcriptSnapshot(sessionId: "a", streamingState: "idle", canDrive: false, messages: [],
                                 firstIndex: 0, totalCount: 0, epoch: 0, revision: 0),
