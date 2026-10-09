@@ -49,10 +49,31 @@ enum ACPBackgroundTaskPresentation {
         return CommandParts(head: head, arguments: rest.trimmingCharacters(in: .whitespaces))
     }
 
-    /// Whether the tray starts expanded when the user hasn't toggled it.
-    static func defaultExpanded(taskCount: Int) -> Bool { taskCount <= 3 }
+    /// A lone task needs no header: its row already names it and its stop
+    /// button covers "Stop all", so the tray is just that row.
+    static func showsHeader(taskCount: Int) -> Bool { taskCount > 1 }
 
-    static let headerHeight: CGFloat = 32
+    /// Whether the rows are visible. Without a header there is nothing to
+    /// collapse into, so a lone task is always shown.
+    static func isExpanded(taskCount: Int, override: Bool?) -> Bool {
+        guard showsHeader(taskCount: taskCount) else { return true }
+        return override ?? (taskCount <= 3)
+    }
+
+    /// What the header's leading slot shows. Expanded rows carry their own
+    /// activity glyphs, so the header only animates while it stands in for them.
+    enum HeaderIcon: Equatable {
+        case spinner, paused, list
+    }
+
+    static func headerIcon(expanded: Bool, allPaused: Bool) -> HeaderIcon {
+        if expanded { return .list }
+        return allPaused ? .paused : .spinner
+    }
+
+    /// Top plus bottom padding around the tray content.
+    static let verticalPadding: CGFloat = 10
+    static let headerHeight: CGFloat = 22
     static let rowHeight: CGFloat = 26
     /// A failed stop shows up to two lines of error under its row.
     static let rowErrorHeight: CGFloat = 32
@@ -68,8 +89,10 @@ enum ACPBackgroundTaskPresentation {
     /// spacer can keep the last line clear of it. Zero when there is no work.
     static func trayHeight(tasks: [ACPBackgroundTask], expandedOverride: Bool?) -> CGFloat {
         guard !tasks.isEmpty else { return 0 }
-        let expanded = expandedOverride ?? defaultExpanded(taskCount: tasks.count)
-        return headerHeight + (expanded ? min(rowsHeight(tasks), maxRowsHeight) : 0)
+        let header = showsHeader(taskCount: tasks.count) ? headerHeight : 0
+        let rows = isExpanded(taskCount: tasks.count, override: expandedOverride)
+            ? min(rowsHeight(tasks), maxRowsHeight) : 0
+        return verticalPadding + header + rows
     }
 
     static func elapsedText(_ interval: TimeInterval) -> String {
@@ -81,7 +104,7 @@ enum ACPBackgroundTaskPresentation {
     }
 
     static func headerTitle(total: Int, paused: Int) -> String {
-        let base = total == 1 ? "1 background task" : "\(total) background tasks"
+        let base = "\(total) background tasks"
         return paused > 0 ? "\(base) · \(paused) paused" : base
     }
 
@@ -116,7 +139,7 @@ struct ACPBackgroundTaskTray: View {
     @State private var hoveredId: String?
 
     private var isExpanded: Bool {
-        expandedOverride ?? ACPBackgroundTaskPresentation.defaultExpanded(taskCount: tasks.count)
+        ACPBackgroundTaskPresentation.isExpanded(taskCount: tasks.count, override: expandedOverride)
     }
 
     private var pausedCount: Int { tasks.filter { $0.state == "paused" }.count }
@@ -128,7 +151,9 @@ struct ACPBackgroundTaskTray: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            if ACPBackgroundTaskPresentation.showsHeader(taskCount: tasks.count) {
+                header
+            }
             if isExpanded {
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -141,8 +166,7 @@ struct ACPBackgroundTaskTray: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 5)
-        .padding(.bottom, 5)
+        .padding(.vertical, ACPBackgroundTaskPresentation.verticalPadding / 2)
         .background(shape.fill(theme.color("bg-1")))
         .overlay(shape.strokeBorder(theme.color("line"), lineWidth: 0.75))
         .accessibilityElement(children: .contain)
@@ -155,7 +179,7 @@ struct ACPBackgroundTaskTray: View {
                 expandedOverride = !isExpanded
             } label: {
                 HStack(spacing: 8) {
-                    Spinner(lineWidth: 1.2, duration: 0.7).frame(width: 11, height: 11)
+                    headerIcon
                     Text(ACPBackgroundTaskPresentation.headerTitle(total: tasks.count, paused: pausedCount))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(theme.color("fg-muted"))
@@ -179,7 +203,27 @@ struct ACPBackgroundTaskTray: View {
                 .accessibilityLabel("Stop all background tasks")
             }
         }
-        .frame(height: 22)
+        .frame(height: ACPBackgroundTaskPresentation.headerHeight)
+    }
+
+    @ViewBuilder
+    private var headerIcon: some View {
+        Group {
+            switch ACPBackgroundTaskPresentation.headerIcon(
+                expanded: isExpanded, allPaused: pausedCount == tasks.count) {
+            case .spinner:
+                Spinner(lineWidth: 1.2, duration: 0.7)
+            case .paused:
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.color("warn"))
+            case .list:
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+        }
+        .frame(width: 11, height: 11)
     }
 
     private func row(_ task: ACPBackgroundTask) -> some View {
@@ -195,7 +239,7 @@ struct ACPBackgroundTaskTray: View {
                 }
                 stopButton(task)
             }
-            .frame(height: 26)
+            .frame(height: ACPBackgroundTaskPresentation.rowHeight)
             if let error = task.stopError {
                 Text(error)
                     .font(.system(size: 10.5))
