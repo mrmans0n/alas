@@ -214,6 +214,21 @@ struct WorktreeRowView: View {
     @State private var hovering = false
     @State private var loadedCommitQuery: CommitQuery?
     @State private var branchCommits: GitService.BranchCommitCount?
+    /// Last count loaded for each query identity. Rows unmount as the lazy
+    /// sidebar scrolls them away; one coming back draws its count at once
+    /// and, while its revision is unchanged, skips git entirely.
+    @MainActor private static var loadedCommitCounts: [CommitQuery.Identity: LoadedCommitCount] = [:]
+
+    private struct LoadedCommitCount {
+        let query: CommitQuery
+        let commits: GitService.BranchCommitCount?
+    }
+
+    /// This row's loaded count, or the cached one before its own load runs.
+    private var loadedCommitCount: LoadedCommitCount? {
+        if let loadedCommitQuery { return LoadedCommitCount(query: loadedCommitQuery, commits: branchCommits) }
+        return activeCommitQuery.flatMap { Self.loadedCommitCounts[$0.identity] }
+    }
 
     struct CommitQuery: Hashable {
         let path: URL
@@ -293,14 +308,15 @@ struct WorktreeRowView: View {
 
     private var visibleBranchCommits: GitService.BranchCommitCount? {
         guard let activeCommitQuery,
-              loadedCommitQuery?.identity == activeCommitQuery.identity,
+              let loaded = loadedCommitCount,
+              loaded.query.identity == activeCommitQuery.identity,
               Self.showsCommitCount(
                 harnessState: harnessSummary?.state,
                 worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
                 isMain: isMain
               ),
-              Self.hasVisibleCommits(branchCommits) else { return nil }
-        return branchCommits
+              Self.hasVisibleCommits(loaded.commits) else { return nil }
+        return loaded.commits
     }
 
     nonisolated static func isPending(operationState: WorktreeOperationState?) -> Bool {
@@ -405,6 +421,11 @@ struct WorktreeRowView: View {
                 loadedCommitQuery = nil
                 return
             }
+            if let cached = Self.loadedCommitCounts[query.identity], cached.query == query {
+                loadedCommitQuery = query
+                branchCommits = cached.commits
+                return
+            }
             if loadedCommitQuery?.identity != query.identity {
                 branchCommits = nil
                 loadedCommitQuery = nil
@@ -419,6 +440,7 @@ struct WorktreeRowView: View {
             guard !Task.isCancelled else { return }
             loadedCommitQuery = query
             branchCommits = summary
+            Self.loadedCommitCounts[query.identity] = LoadedCommitCount(query: query, commits: summary)
         }
         .task(id: explanationEvidence) {
             guard let explanationEvidence else { return }
@@ -504,7 +526,7 @@ struct WorktreeRowView: View {
                 hasStatus: status != nil,
                 hasVisibleCommits: visibleBranchCommits != nil,
                 commitQueryResolved: activeCommitQuery == nil
-                    || loadedCommitQuery?.identity == activeCommitQuery?.identity,
+                    || loadedCommitCount?.query.identity == activeCommitQuery?.identity,
                 hasDiff: Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) != nil,
                 hasStackStatus: stackSummary != nil || ggMenuModel.showsStatusIndicator
               )

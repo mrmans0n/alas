@@ -80,156 +80,169 @@ struct RepoGroupView: View {
 
     private var isCollapsed: Bool { isFiltering ? worktrees.isEmpty : collapsed }
 
+    /// The header and each worktree row are separate elements of the
+    /// sidebar's lazy stack, so only rows on screen are mounted. Spacing that
+    /// a wrapping VStack used to supply is applied per element instead.
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Collapse toggle and the inline + are independent controls in the
-            // same row. Don't wrap the row in a parent Button — that nests the
-            // + inside another button's hit region and clicking the + can also
-            // fire the collapse action.
+        header
+            // Outer margin of the group, above the header's own top inset.
+            .padding(.top, Self.groupMargin)
+            .padding(.bottom, isCollapsed ? Self.groupMargin : 0)
+        if !isCollapsed {
+            ForEach(Array(worktrees.enumerated()), id: \.element.id) { index, wt in
+                row(wt)
+                    .padding(.top, index == 0 ? 0 : 1)
+                    .padding(.bottom, index == worktrees.count - 1 ? Self.groupMargin : 0)
+                    // Worktrees are nested under their repo by indentation alone.
+                    .padding(.leading, Self.worktreeIndent)
+                    .padding(.trailing, 6)
+                    // Scroll target for the sidebar filter's highlight.
+                    .id(wt.id)
+            }
+        }
+    }
+
+    /// Vertical margin around a repo group.
+    static let groupMargin: CGFloat = 3
+
+    private var header: some View {
+        // Collapse toggle and the inline + are independent controls in the
+        // same row. Don't wrap the row in a parent Button — that nests the
+        // + inside another button's hit region and clicking the + can also
+        // fire the collapse action.
+        HStack(spacing: 7) {
             HStack(spacing: 7) {
-                HStack(spacing: 7) {
-                    Icon(name: isCollapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
-                        .frame(width: 12, height: 14)
-                        .contentShape(Rectangle())
-                    ProjectIconView(icon: icon(project), fallbackName: project.name, size: .repoHeader)
-                        .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
-                    Text(project.name)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .tracking(-0.12)
-                        .foregroundColor(theme.color("fg"))
-                        .lineLimit(1)
-                    if let host = project.host {
-                        HStack(spacing: 3) {
-                            if hostStatus.isOffline(host) {
-                                Image(systemName: "bolt.horizontal.circle")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.orange)
-                            }
-                            Text(host)
+                Icon(name: isCollapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                    .frame(width: 12, height: 14)
+                    .contentShape(Rectangle())
+                ProjectIconView(icon: icon(project), fallbackName: project.name, size: .repoHeader)
+                    .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
+                Text(project.name)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .tracking(-0.12)
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                if let host = project.host {
+                    HStack(spacing: 3) {
+                        if hostStatus.isOffline(host) {
+                            Image(systemName: "bolt.horizontal.circle")
+                                .font(.system(size: 9))
+                                .foregroundColor(.orange)
                         }
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(theme.color("fg-dim"))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(theme.color("bg-4"))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .help(hostStatus.isOffline(host)
-                            ? "Host \(host) is unreachable"
-                            : "Remote project on \(host) (SSH)")
+                        Text(host)
                     }
-                    Spacer(minLength: 0)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(theme.color("bg-4"))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .help(hostStatus.isOffline(host)
+                        ? "Host \(host) is unreachable"
+                        : "Remote project on \(host) (SSH)")
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { if !isFiltering { collapsed.toggle() } }
-                headerAccessory
+                Spacer(minLength: 0)
             }
-            .padding(5)
-            // A project with no filter matches stays in place, dimmed.
-            .opacity(isFiltering && worktrees.isEmpty ? 0.45 : 1)
-            .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
-            }
-            .padding(.top, 3)
             .contentShape(Rectangle())
-            .nativeContextMenu {
-                Button("Edit Project…", action: onEditProject)
-                if let onOpenGGInbox {
-                    Button("gg Inbox", action: onOpenGGInbox)
-                }
-                Button("Reset Sort to Default", action: onResetSort)
-                    .disabled(!project.worktreeOrderIsManual)
-                Button("Clean Up Worktrees…", action: onCleanupWorktrees)
-                Menu("Spaces") {
-                    ForEach(spaces) { space in
-                        let isMember = isProjectInSpace(space.id)
-                        Button {
-                            onToggleSpaceMembership(space.id)
-                        } label: {
-                            HStack {
-                                Text("\(space.emoji) \(space.name)")
-                                if isMember { Text("✓") }
-                            }
+            .onTapGesture { if !isFiltering { collapsed.toggle() } }
+            headerAccessory
+        }
+        .padding(5)
+        // A project with no filter matches stays in place, dimmed.
+        .opacity(isFiltering && worktrees.isEmpty ? 0.45 : 1)
+        .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line").opacity(hovering ? 0.75 : 0), lineWidth: 0.75)
+        }
+        .padding(.top, 3)
+        .contentShape(Rectangle())
+        .nativeContextMenu {
+            Button("Edit Project…", action: onEditProject)
+            if let onOpenGGInbox {
+                Button("gg Inbox", action: onOpenGGInbox)
+            }
+            Button("Reset Sort to Default", action: onResetSort)
+                .disabled(!project.worktreeOrderIsManual)
+            Button("Clean Up Worktrees…", action: onCleanupWorktrees)
+            Menu("Spaces") {
+                ForEach(spaces) { space in
+                    let isMember = isProjectInSpace(space.id)
+                    Button {
+                        onToggleSpaceMembership(space.id)
+                    } label: {
+                        HStack {
+                            Text("\(space.emoji) \(space.name)")
+                            if isMember { Text("✓") }
                         }
-                        .disabled(isMember && !canRemoveFromSpace(space.id))
                     }
+                    .disabled(isMember && !canRemoveFromSpace(space.id))
                 }
-                let commands = pluginCommands(.repoMenu)
-                if !commands.isEmpty {
-                    Divider()
-                    PluginCommandButtons(items: commands) { onRunPluginCommand($0, .repoMenu, nil) }
-                }
+            }
+            let commands = pluginCommands(.repoMenu)
+            if !commands.isEmpty {
                 Divider()
-                Button("Remove Project…", role: .destructive, action: onRemoveProject)
+                PluginCommandButtons(items: commands) { onRunPluginCommand($0, .repoMenu, nil) }
             }
-            .onHover { hovering = $0 }
-            .draggable(ProjectDragId(id: project.id))
-            .dropDestination(for: ProjectDragId.self) { items, _ in
-                guard let draggedId = items.first?.id, draggedId != project.id else { return false }
-                onDropProject(draggedId, project.id)
-                return true
-            }
-            if !isCollapsed {
-                VStack(spacing: 1) {
-                    ForEach(worktrees) { wt in
-                        WorktreeRowView(
-                            worktree: wt,
-                            isSelected: wt.id == selectedWorktreeId,
-                            isMain: isMain(wt),
-                            upstreamStatus: upstreamStatus(wt),
-                            onPullUpstream: onPullUpstream.map { pull in { pull(wt) } },
-                            isPullUpstreamInFlight: isPullUpstreamInFlight?(wt) ?? false,
-                            operationState: operationState(wt),
-                            harnessSummary: harnessSummary(wt.id),
-                            ggMenuModel: ggMenuModel(wt),
-                            onTap: { onSelect(wt) },
-                            onOpenTerminal: { onOpenTerminal(wt) },
-                            onOpenIssue: onOpenIssue?(wt),
-                            onCopyPath: { onCopyPath(wt) },
-                            onCopyBranch: { onCopyBranch(wt) },
-                            onRevealInFinder: { onRevealInFinder(wt) },
-                            onArchive: { onArchive(wt) },
-                            onDelete: { onDelete(wt) },
-                            onDeleteKeepBranch: { onDeleteKeepBranch(wt) },
-                            showKeepBranchOption: showKeepBranchOption,
-                            onActivateHarness: { sessionId in onActivateHarness(wt, sessionId) },
-                            onCopyError: onCopyError,
-                            onRemoveFailed: { onRemoveFailed(wt) },
-                            onRetryCreate: { onRetryCreate(wt) },
-                            onRetryLaunch: { onRetryLaunch(wt) },
-                            onRetryDelete: { onRetryDelete(wt) },
-                            onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
-                            workspaceCheckout: workspaceCheckout(wt),
-                            onOpenWorkspaceCheckout: onOpenWorkspaceCheckout,
-                            commitQuery: commitQuery(wt),
-                            worktreeExplanation: worktreeExplanation(wt),
-                            worktreeExplainerEvidence: worktreeExplainerEvidence(wt),
-                            onPrepareWorktreeExplanation: { evidence in
-                                await onPrepareWorktreeExplanation(wt, evidence)
-                            },
-                            pluginCommands: pluginCommands(.worktreeMenu),
-                            onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
-                            pluginDecorations: pluginDecorations(wt),
-                            onRunPluginDecoration: onRunPluginDecoration,
-                            isHighlighted: wt.id == highlightedWorktreeId
-                        )
-                        // Scroll target for the sidebar filter's highlight.
-                        .id(wt.id)
-                        .draggable(wt.id)
-                        .dropDestination(for: String.self) { ids, _ in
-                            guard let draggedId = ids.first, draggedId != wt.id else { return false }
-                            onDropWorktree(draggedId, wt.id)
-                            return true
-                        }
-                    }
-                }
-                // Worktrees are nested under their repo by indentation alone.
-                // This was previously split either side of a tree-guide rail;
-                // the rail is gone but the total inset is unchanged.
-                .padding(.leading, Self.worktreeIndent)
-                .padding(.trailing, 6)
-            }
+            Divider()
+            Button("Remove Project…", role: .destructive, action: onRemoveProject)
+        }
+        .onHover { hovering = $0 }
+        .draggable(ProjectDragId(id: project.id))
+        .dropDestination(for: ProjectDragId.self) { items, _ in
+            guard let draggedId = items.first?.id, draggedId != project.id else { return false }
+            onDropProject(draggedId, project.id)
+            return true
+        }
+    }
+
+    private func row(_ wt: Worktree) -> some View {
+        WorktreeRowView(
+            worktree: wt,
+            isSelected: wt.id == selectedWorktreeId,
+            isMain: isMain(wt),
+            upstreamStatus: upstreamStatus(wt),
+            onPullUpstream: onPullUpstream.map { pull in { pull(wt) } },
+            isPullUpstreamInFlight: isPullUpstreamInFlight?(wt) ?? false,
+            operationState: operationState(wt),
+            harnessSummary: harnessSummary(wt.id),
+            ggMenuModel: ggMenuModel(wt),
+            onTap: { onSelect(wt) },
+            onOpenTerminal: { onOpenTerminal(wt) },
+            onOpenIssue: onOpenIssue?(wt),
+            onCopyPath: { onCopyPath(wt) },
+            onCopyBranch: { onCopyBranch(wt) },
+            onRevealInFinder: { onRevealInFinder(wt) },
+            onArchive: { onArchive(wt) },
+            onDelete: { onDelete(wt) },
+            onDeleteKeepBranch: { onDeleteKeepBranch(wt) },
+            showKeepBranchOption: showKeepBranchOption,
+            onActivateHarness: { sessionId in onActivateHarness(wt, sessionId) },
+            onCopyError: onCopyError,
+            onRemoveFailed: { onRemoveFailed(wt) },
+            onRetryCreate: { onRetryCreate(wt) },
+            onRetryLaunch: { onRetryLaunch(wt) },
+            onRetryDelete: { onRetryDelete(wt) },
+            onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
+            workspaceCheckout: workspaceCheckout(wt),
+            onOpenWorkspaceCheckout: onOpenWorkspaceCheckout,
+            commitQuery: commitQuery(wt),
+            worktreeExplanation: worktreeExplanation(wt),
+            worktreeExplainerEvidence: worktreeExplainerEvidence(wt),
+            onPrepareWorktreeExplanation: { evidence in
+                await onPrepareWorktreeExplanation(wt, evidence)
+            },
+            pluginCommands: pluginCommands(.worktreeMenu),
+            onRunPluginCommand: { onRunPluginCommand($0, .worktreeMenu, wt) },
+            pluginDecorations: pluginDecorations(wt),
+            onRunPluginDecoration: onRunPluginDecoration,
+            isHighlighted: wt.id == highlightedWorktreeId
+        )
+        .draggable(wt.id)
+        .dropDestination(for: String.self) { ids, _ in
+            guard let draggedId = ids.first, draggedId != wt.id else { return false }
+            onDropWorktree(draggedId, wt.id)
+            return true
         }
     }
 
