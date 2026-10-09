@@ -2,19 +2,26 @@ import Foundation
 import Testing
 @testable import Alas
 
-private actor SQLiteWriteLock {
+private final class SQLiteWriteLock: Sendable {
     let path: String
+    private let released = DispatchSemaphore(value: 0)
 
     init(path: String) {
         self.path = path
     }
 
-    func hold(for seconds: TimeInterval, didLock: @Sendable () -> Void) throws {
+    /// Holds the write lock until `release()` or the timeout, and reports whether it timed out.
+    func hold(timeout: TimeInterval, didLock: @Sendable () -> Void) throws -> Bool {
         let database = try SQLiteDatabase(path: path)
         try database.exec("BEGIN IMMEDIATE")
         didLock()
-        Thread.sleep(forTimeInterval: seconds)
+        let timedOut = released.wait(timeout: .now() + timeout) == .timedOut
         try database.exec("ROLLBACK")
+        return timedOut
+    }
+
+    func release() {
+        released.signal()
     }
 }
 
@@ -29,8 +36,9 @@ struct ACPSessionPersistenceTests {
 
         let lock = SQLiteWriteLock(path: url.path)
         let (locked, continuation) = AsyncStream<Void>.makeStream()
-        let lockTask = Task {
-            try await lock.hold(for: 0.4) {
+        // Shorter than the store's busy timeout, so a write blocking the main actor outlasts it.
+        let lockTask = Task.detached {
+            try lock.hold(timeout: 10) {
                 continuation.yield()
                 continuation.finish()
             }
@@ -38,17 +46,17 @@ struct ACPSessionPersistenceTests {
         var iterator = locked.makeAsyncIterator()
         _ = await iterator.next()
 
-        let persistence = ACPSessionPersistence(path: url.path)
-        let startedAt = Date()
+        let persistence = ACPSessionPersistence(path: url.path, busyTimeoutMilliseconds: 30_000)
         let writeTask = Task {
             try await persistence.upsertSession(row(id: "waiter"))
         }
 
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(Date().timeIntervalSince(startedAt) < 0.2)
+        // If the write's lock wait ran on the main actor, this would only resume after the lock timed out.
+        await Task.yield()
+        lock.release()
+        #expect(try await lockTask.value == false)
 
         try await writeTask.value
-        try await lockTask.value
         #expect(try await persistence.loadSession(id: "waiter") != nil)
     }
 

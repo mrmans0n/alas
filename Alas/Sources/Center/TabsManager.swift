@@ -932,9 +932,10 @@ final class TabsManager {
     }
 
     @discardableResult
-    func append(acpSession state: ACPSessionTabState, to worktreeId: String) -> Tab {
+    /// `activate: false` adds the tab behind whatever the user is looking at.
+    func append(acpSession state: ACPSessionTabState, to worktreeId: String, activate: Bool = true) -> Tab {
         let tab = Tab.acpSession(state)
-        append(tab, to: worktreeId)
+        append(tab, to: worktreeId, activate: activate)
         return tab
     }
 
@@ -2299,10 +2300,10 @@ final class TabsManager {
         return closed
     }
 
-    private func append(_ tab: Tab, to worktreeId: String) {
+    private func append(_ tab: Tab, to worktreeId: String, activate: Bool = true) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.tabs.append(tab)
-        file.activeTabId = tab.id
+        if activate { file.activeTabId = tab.id }
         byWorktree[worktreeId] = file
         persist(worktreeId)
     }

@@ -703,6 +703,8 @@ final class AppState {
     /// Built on first peer console request; see `AppState+PeerConsoles`.
     /// Observable so a pane drawn before it existed still shows peer control.
     var _peerConsoleHost: PeerConsoleHost?
+    /// Last queued remote tab action per session id; see `serializedSessionTabAction`.
+    @ObservationIgnored var remoteSessionTabActionTails: [String: (token: UUID, done: Task<Void, Never>)] = [:]
     @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
@@ -8101,19 +8103,46 @@ final class AppState {
         if case .tabRemoved = outcome {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
-            let closedLeafId = outcome.closedLeafId
-            let authExitHandler = takeACPAuthTerminalExitHandler(
-                terminalId: closedLeafId,
-                owner: .worktree(worktreeId)
-            )
-            scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
-            closeTerminalSession(
-                id: closedLeafId,
-                worktreeId: worktreeId,
-                projectPath: projectPath(forWorktreeId: worktreeId)
-            )
-            authExitHandler?()
+            closeRemovedTerminalLeaf(outcome.closedLeafId, worktreeId: worktreeId)
         }
+    }
+
+    /// A peer terminating console `leafId`: closes its pane as a local close
+    /// does, and its tab, with reopen history, when it was the last pane. No
+    /// confirmation here: the requesting Mac already asked its user.
+    func closeTerminalPaneWithoutConfirmation(leafId: String) {
+        guard let owner = terminal.registry.session(for: leafId)?.owner else { return }
+        let owningTab = tabs.tabs(for: owner).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.root.find(leafId: leafId) != nil
+        }
+        if case .worktree(let worktreeId) = owner, let owningTab {
+            switch tabs.removeLeaf(worktreeId: worktreeId, tabId: owningTab.id, leafId: leafId) {
+            case .tabRemoved:
+                closeTabRecordingHistory(worktreeId: worktreeId, projectId: nil, tab: owningTab)
+            case .leafRemoved:
+                closeRemovedTerminalLeaf(leafId, worktreeId: worktreeId)
+            case nil:
+                break
+            }
+        } else if owningTab != nil {
+            closePaneForProcessExit(owner: owner, leafId: leafId)
+        }
+        // A console outside any tab has no pane; end its session directly.
+        if terminal.registry.session(for: leafId) != nil {
+            acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
+            harness.detector.unregister(sessionId: leafId)
+            harness.forgetSession(leafId)
+            terminal.closeSession(id: leafId, owner: owner)
+        }
+    }
+
+    /// Tears down a pane already removed from its split tab.
+    private func closeRemovedTerminalLeaf(_ leafId: String, worktreeId: String) {
+        let authExitHandler = takeACPAuthTerminalExitHandler(terminalId: leafId, owner: .worktree(worktreeId))
+        scheduleRunScriptCompletionCancellation(sessionID: leafId)
+        closeTerminalSession(id: leafId, worktreeId: worktreeId, projectPath: projectPath(forWorktreeId: worktreeId))
+        authExitHandler?()
     }
 
     /// "Terminate All Terminal Sessions" menu action. Confirms with the user,
@@ -9274,24 +9303,49 @@ final class AppState {
            !confirmCloseTab(prompt) {
             return
         }
+        closeTabRecordingHistory(worktreeId: worktreeId, projectId: projectId, tab: tab)
+    }
+
+    /// Closes a session tab on the paired Mac that hosts it, after the same
+    /// confirmation a local chat tab gets.
+    func requestClosePeerSessionTab(_ sessionId: String) {
+        guard let client = nativePeerSessions,
+              let peer = client.snapshot.groups.first(where: { group in
+                  group.sessions.contains { $0.id == sessionId }
+              }),
+              client.canCloseSessionTabs(on: peer.serverId) else { return }
+        if config.harness.confirmCloseChatTabs, !confirmCloseTab(.chat, onPeer: peer.name) { return }
+        client.closeSessionTab(sessionId)
+    }
+
+    /// Closes `tab` and records it so the user can reopen it.
+    private func closeTabRecordingHistory(worktreeId: String, projectId: String?, tab: Tab) {
         closedTabHistory.record(ClosedTabEntry(
             snapshot: .worktree(
                 worktreeID: worktreeId,
                 projectID: projectId ?? worktree(withId: worktreeId)?.projectId,
                 tab: tab
             ),
-            placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
+            placement: .init(tabID: tab.id, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
         ))
-        closeTab(worktreeId: worktreeId, tabId: tabId)
+        closeTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
-    private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
+    /// Closing a peer console tab always asks, whatever
+    /// `confirmCloseTabs` says: it ends a process on another Mac.
+    func requestTerminatePeerConsole(serverId: String, consoleId: String, peerName: String) {
+        guard let consoles = nativePeerSessions?.consoles, consoles.canTerminate(serverId: serverId),
+              confirmCloseTab(.terminal, onPeer: peerName) else { return }
+        consoles.terminate(serverId: serverId, consoleId: consoleId)
+    }
+
+    private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt, onPeer peer: String? = nil) -> Bool {
         if let closeTabConfirmer {
             return closeTabConfirmer(prompt)
         }
         let alert = NSAlert()
         alert.messageText = prompt.title
-        alert.informativeText = prompt.message
+        alert.informativeText = prompt.message(onPeer: peer)
         alert.alertStyle = .warning
         alert.addButton(withTitle: prompt.confirmButtonTitle)
         alert.addButton(withTitle: "Cancel")
@@ -14281,7 +14335,13 @@ final class AppState {
     }
 
     /// Pins the owner before suspension, including when sidebar focus reopens history.
-    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
+    /// `activate: false` (peer requests) neither focuses an existing tab nor
+    /// activates a new one, so the host's visible tab never changes.
+    /// `storedTitle` is a title the caller just read from SQLite, preferred
+    /// over the manager's possibly stale cached row.
+    func openExistingACPSession(
+        sessionId: ACPSession.ID, worktree: Worktree, activate: Bool = true, storedTitle: String? = nil
+    ) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -14293,7 +14353,7 @@ final class AppState {
             return nil
         }.first
         if let id = tabIdToFocus {
-            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id)
+            if activate { activateWorktreeCenterTab(worktreeId: worktree.id, tabId: id) }
             return
         }
 
@@ -14302,6 +14362,8 @@ final class AppState {
         let title: String
         if let liveTitle = mgr.liveSession(for: sessionId)?.title {
             title = liveTitle
+        } else if let storedTitle {
+            title = storedTitle
         } else if let row = await mgr.persistedSessionRow(id: sessionId) {
             title = row.title
         } else {
@@ -14313,8 +14375,13 @@ final class AppState {
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else { return }
+        // Another open may have added the tab, or the worktree may have been
+        // removed or its manager torn down (Close All), while this one was suspended.
+        guard self.worktree(withId: worktree.id) != nil,
+              acpManagers[.worktree(worktree.id)] === mgr,
+              openACPSessionTabIndex(worktreeId: worktree.id, sessionId: sessionId) == nil else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
-        tabs.append(acpSession: state, to: worktree.id)
+        tabs.append(acpSession: state, to: worktree.id, activate: activate)
     }
 
     /// Reopen a persisted ACP session inside a typed session-owner bucket.
@@ -15553,6 +15620,109 @@ extension AppState: RemoteSessionsProvider {
             await mgr.takeOver(sessionId: id)
             return
         }
+    }
+
+    func openSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        await serializedSessionTabAction(for: id) { await self.openSessionTabNow(for: id) }
+    }
+
+    func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
+        await serializedSessionTabAction(for: id) { self.closeSessionTabNow(for: id) }
+    }
+
+    /// Runs remote tab actions for one session one at a time across every
+    /// connection, so two opens cannot both append a tab and a close cannot
+    /// report success while an earlier open is still about to add one.
+    private func serializedSessionTabAction(
+        for id: String,
+        _ action: @escaping @MainActor () async -> RemoteSessionTabActionResult
+    ) async -> RemoteSessionTabActionResult {
+        let previous = remoteSessionTabActionTails[id]?.done
+        let token = UUID()
+        let run = Task { @MainActor in
+            await previous?.value
+            return await action()
+        }
+        remoteSessionTabActionTails[id] = (token, Task { _ = await run.value })
+        let result = await run.value
+        if remoteSessionTabActionTails[id]?.token == token { remoteSessionTabActionTails[id] = nil }
+        return result
+    }
+
+    private func openSessionTabNow(for id: String) async -> RemoteSessionTabActionResult {
+        let worktree: Worktree
+        switch remoteSessionTabWorktree(for: id) {
+        case .found(let found): worktree = found
+        case .failed(let message): return .failure(message)
+        }
+        // Already open is success, and must not focus the tab on the host.
+        if openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil { return .success }
+        guard let manager = acpManager(for: worktree) else {
+            return .failure("Could not open this session.")
+        }
+        // `sessionRows` can predate an archive or delete made by another Alas
+        // process, so only a fresh, unarchived stored row may be opened.
+        // Queued writes (e.g. a new session's upsert) must land before the read.
+        await manager.flushPersistence()
+        let stored: ACPSessionRow?
+        do {
+            stored = try await manager.persistence.loadSession(id: id)
+        } catch {
+            return .failure("Could not read this session.")
+        }
+        guard let stored else { return .failure("This session is no longer available.") }
+        if stored.archived { return .failure("This session is archived.") }
+        // A peer's request must not switch the tab the host user is looking at.
+        await openExistingACPSession(sessionId: id, worktree: worktree, activate: false, storedTitle: stored.title)
+        guard openACPSessionTabIndex(worktreeId: worktree.id, sessionId: id) != nil else {
+            return .failure("Could not open this session.")
+        }
+        // Opening hydrated the transcript, but a tab in a worktree the host is
+        // not showing has no view to retain it. Balance that here so an idle
+        // session is evicted; the tab re-hydrates when it is shown.
+        manager.retainSession(id: id)
+        manager.releaseSession(id: id)
+        return .success
+    }
+
+    private func closeSessionTabNow(for id: String) -> RemoteSessionTabActionResult {
+        let worktree: Worktree
+        switch remoteSessionTabWorktree(for: id) {
+        case .found(let found): worktree = found
+        case .failed(let message): return .failure(message)
+        }
+        let open = tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .acpSession(let state) = tab { return state.sessionId == id }
+            return false
+        }
+        guard let open else { return .success }
+        // No confirmation here: the requesting Mac already asked its user.
+        closeTabRecordingHistory(worktreeId: worktree.id, projectId: worktree.projectId, tab: open)
+        return .success
+    }
+
+    private enum RemoteSessionTabWorktree {
+        case found(Worktree)
+        case failed(String)
+    }
+
+    /// The worktree whose manager owns `id` as a live or unarchived recent session.
+    /// Peer tab actions only reach worktree tabs; checkout-owned sessions have
+    /// no worktree target, so they fail explicitly.
+    private func remoteSessionTabWorktree(for id: String) -> RemoteSessionTabWorktree {
+        for (owner, mgr) in acpManagers {
+            let row = mgr.sessionRows.first { $0.id == id }
+            guard row != nil || mgr.liveSession(for: id) != nil else { continue }
+            if row?.archived == true { return .failed("This session is archived.") }
+            guard let worktreeId = owner.worktreeID else {
+                return .failed("Tabs for workspace checkout sessions can only be changed on their own Mac.")
+            }
+            guard let worktree = worktree(withId: worktreeId) else {
+                return .failed("This session's worktree is no longer available.")
+            }
+            return .found(worktree)
+        }
+        return .failed("This session is no longer available.")
     }
 
     /// `onResult` fires once (false when no manager owns the id, the manager

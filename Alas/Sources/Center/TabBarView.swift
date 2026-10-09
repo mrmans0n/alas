@@ -61,8 +61,6 @@ struct TabBarView: View {
     /// Per tab: a session a shared workspace checkout owns gets none, since it is not the project's.
     var sessionPluginCommands: (TabID) -> [PluginCommandItem] = { _ in [] }
     var onRunSessionPluginCommand: (PluginCommandItem, String) -> Void = { _, _ in }
-    @State private var tabStripWidth: CGFloat = 0
-    @Environment(\.theme) var theme
 
     private var isTerminalActive: Bool {
         guard let activeId, let active = tabs.first(where: { $0.id == activeId }) else { return false }
@@ -71,92 +69,62 @@ struct TabBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if sidebarHidden {
-                // Fade in with the sidebar's collapse animation rather than
-                // popping in when the layout transaction lands.
-                TrafficLights()
-                    .padding(.leading, 12)
-                    .padding(.trailing, 10)
-                    .transition(.opacity)
-                ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
-                    .padding(.trailing, 8)
-                    .transition(.opacity)
+        TabStrip(
+            activeId: activeId,
+            isEmpty: tabs.isEmpty,
+            sidebarHidden: sidebarHidden,
+            onRevealSidebar: onRevealSidebar
+        ) {
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
+                tabButton(for: idx, tab: tab)
             }
-            GeometryReader { geometry in
-                ScrollViewReader { scrollProxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 0) {
-                            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
-                                tabButton(for: idx, tab: tab)
-                            }
-                        }
-                        .onGeometryChange(for: CGFloat.self) { proxy in
-                            proxy.size.width
-                        } action: {
-                            tabStripWidth = $0
-                        }
-                    }
-                    .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
-                    .onAppear {
-                        scrollActiveTab(using: scrollProxy, animated: false)
-                    }
-                    .onChange(of: activeId) { _, _ in
-                        scrollActiveTab(using: scrollProxy, animated: true)
-                    }
-                }
-                .overlay(alignment: .trailing) {
-                    if tabs.isEmpty || tabStripWidth > 0 {
-                        WindowDragHandle()
-                            .frame(width: max(0, geometry.size.width - tabStripWidth))
-                    }
-                }
+        } trailing: {
+            trailingControls
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControls: some View {
+        if isTerminalActive {
+            ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
+                NotificationCenter.default.post(name: .alasSplitRight, object: nil)
             }
-            .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
-            if isTerminalActive {
-                ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
-                    NotificationCenter.default.post(name: .alasSplitRight, object: nil)
-                }
-                ToolbarIconButton(iconName: "split-down", tooltip: "Split Down (⇧⌘D)") {
-                    NotificationCenter.default.post(name: .alasSplitDown, object: nil)
-                }
-            }
-            ToolbarIconButton(iconName: "plus", tooltip: "New terminal", action: onNewTerminal)
-                .padding(.leading, 8)
-                .padding(.trailing, 2)
-            AgentSparkleMenu(
-                availability: agentAvailability,
-                agents: enabledAgents,
-                acpAgents: acpAgents,
-                onRetryAvailability: onRetryAgentAvailability,
-                onLaunchAgent: onLaunchAgent,
-                onLaunchACPSession: onLaunchACPSession
-            )
-            .padding(.trailing, 2)
-            RunScriptMenu(
-                loadScripts: loadRunScripts,
-                isRunning: isScriptRunning,
-                onRun: onRunScript,
-                onRestart: onRestartScript,
-                onNew: onNewRunScript,
-                onEdit: onEditScripts
-            )
-            .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? 2 : 8)
-            if !pluginCommands.isEmpty {
-                ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
-                    PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
-                }
-                .padding(.trailing, rightSidebarHidden ? 2 : 8)
-            }
-            if rightSidebarHidden {
-                ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
-                    .padding(.trailing, 8)
-                    .transition(.opacity)
+            ToolbarIconButton(iconName: "split-down", tooltip: "Split Down (⇧⌘D)") {
+                NotificationCenter.default.post(name: .alasSplitDown, object: nil)
             }
         }
-        .frame(height: 34)
-        .background(theme.color("bg-2"))
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
+        ToolbarIconButton(iconName: "plus", tooltip: "New terminal", action: onNewTerminal)
+            .padding(.leading, 8)
+            .padding(.trailing, 2)
+        AgentSparkleMenu(
+            availability: agentAvailability,
+            agents: enabledAgents,
+            acpAgents: acpAgents,
+            onRetryAvailability: onRetryAgentAvailability,
+            onLaunchAgent: onLaunchAgent,
+            onLaunchACPSession: onLaunchACPSession
+        )
+        .padding(.trailing, 2)
+        RunScriptMenu(
+            loadScripts: loadRunScripts,
+            isRunning: isScriptRunning,
+            onRun: onRunScript,
+            onRestart: onRestartScript,
+            onNew: onNewRunScript,
+            onEdit: onEditScripts
+        )
+        .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? 2 : 8)
+        if !pluginCommands.isEmpty {
+            ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
+                PluginCommandButtons(items: pluginCommands, run: onRunPluginCommand)
+            }
+            .padding(.trailing, rightSidebarHidden ? 2 : 8)
+        }
+        if rightSidebarHidden {
+            ToolbarIconButton(iconName: "sidebar.right", tooltip: "Show right sidebar", action: onRevealRightSidebar)
+                .padding(.trailing, 8)
+                .transition(.opacity)
+        }
     }
 
     private func tabButton(for idx: Int, tab: Tab) -> some View {
@@ -244,17 +212,6 @@ struct TabBarView: View {
             }
         }
     }
-
-    private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool) {
-        guard let activeId else { return }
-        if animated {
-            withAnimation(.easeOut(duration: 0.12)) {
-                proxy.scrollTo(activeId, anchor: .center)
-            }
-        } else {
-            proxy.scrollTo(activeId, anchor: .center)
-        }
-    }
 }
 
 struct RevisionFollowCapability: Equatable {
@@ -278,6 +235,99 @@ struct RevisionFollowCapability: Equatable {
     }
 }
 
+/// The tab bar's chrome: traffic lights while the sidebar is hidden, a
+/// leading slot, the scrolling tab row with the window drag area after it,
+/// and trailing toolbar controls. Local and peer worktrees fill it with their
+/// own tabs, which must carry `.id(activeId)`'s type so the active one
+/// scrolls into view.
+struct TabStrip<ActiveID: Hashable, Leading: View, Tabs: View, Trailing: View>: View {
+    let activeId: ActiveID?
+    let isEmpty: Bool
+    let sidebarHidden: Bool
+    let onRevealSidebar: () -> Void
+    @ViewBuilder let leading: Leading
+    @ViewBuilder let tabs: Tabs
+    @ViewBuilder let trailing: Trailing
+    @State private var tabStripWidth: CGFloat = 0
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if sidebarHidden {
+                // Fade in with the sidebar's collapse animation rather than
+                // popping in when the layout transaction lands.
+                TrafficLights()
+                    .padding(.leading, 12)
+                    .padding(.trailing, 10)
+                    .transition(.opacity)
+                ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
+                    .padding(.trailing, 8)
+                    .transition(.opacity)
+            }
+            leading
+            GeometryReader { geometry in
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            tabs
+                        }
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.width
+                        } action: {
+                            tabStripWidth = $0
+                        }
+                    }
+                    .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
+                    .onAppear {
+                        scrollActiveTab(using: scrollProxy, animated: false)
+                    }
+                    .onChange(of: activeId) { _, _ in
+                        scrollActiveTab(using: scrollProxy, animated: true)
+                    }
+                }
+                .overlay(alignment: .trailing) {
+                    if isEmpty || tabStripWidth > 0 {
+                        WindowDragHandle()
+                            .frame(width: max(0, geometry.size.width - tabStripWidth))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
+            trailing
+        }
+        .frame(height: 34)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool) {
+        guard let activeId else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.12)) {
+                proxy.scrollTo(activeId, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(activeId, anchor: .center)
+        }
+    }
+}
+
+extension TabStrip where Leading == EmptyView {
+    init(
+        activeId: ActiveID?,
+        isEmpty: Bool,
+        sidebarHidden: Bool,
+        onRevealSidebar: @escaping () -> Void,
+        @ViewBuilder tabs: () -> Tabs,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.init(
+            activeId: activeId, isEmpty: isEmpty, sidebarHidden: sidebarHidden,
+            onRevealSidebar: onRevealSidebar, leading: { EmptyView() }, tabs: tabs, trailing: trailing
+        )
+    }
+}
+
 private struct AccessibilityMarkerView: NSViewRepresentable {
     let identifier: String
 
@@ -292,51 +342,46 @@ private struct AccessibilityMarkerView: NSViewRepresentable {
     }
 }
 
-struct TabButton: View {
-    private static let maxTitleWidth: CGFloat = 220
+/// What a tab item draws, independent of what the tab holds.
+struct TabItem {
+    let title: String
+    let iconName: String
+    /// Tints and pulses the icon the way a running or waiting agent does.
+    var activityState: ActivityState? = nil
+    /// Logo drawn beside the icon of an agent session tab.
+    var agent: AgentDefinition? = nil
+}
 
-    let titleLookup: (TabID) -> String?
-    let tab: Tab
+/// One tab in a `TabStrip`. `trailing` holds per-kind extras such as the
+/// close button.
+struct TabItemView<Trailing: View>: View {
+    private static var maxTitleWidth: CGFloat { 220 }
+
+    let item: TabItem
     let active: Bool
-    let showClose: Bool
-    let harnessInfo: (agent: AgentKind, state: ActivityState)?
-    let dirtyLookup: () -> Bool
-    let transcript: ACPTranscript?
-    let acpAgent: AgentDefinition?
     let onActivate: () -> Void
-    let onClose: () -> Void
-    @Environment(\.theme) var theme
+    @ViewBuilder let trailing: Trailing
+    @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: 6) {
             HStack(spacing: 3) {
-                Icon(name: tab.iconName, size: 11,
+                Icon(name: item.iconName, size: 11,
                      color: iconColor)
-                    .modifier(TabActivityPulse(activityState: harnessInfo?.state))
+                    .modifier(TabActivityPulse(activityState: item.activityState))
                     .frame(width: 12, height: 12)
-                if case .acpSession = tab, let acpAgent {
-                    AgentLogoView(agent: acpAgent, size: 12)
+                if let agent = item.agent {
+                    AgentLogoView(agent: agent, size: 12)
                         .frame(width: 12, height: 12)
                 }
             }
-            let displayTitle = titleLookup(tab.id) ?? tab.title
-            Text(displayTitle)
+            Text(item.title)
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
-            if case .editor(let state) = tab, state.isExternal, !state.isExternalEditable {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(theme.color("fg-faint"))
-            }
-            if let transcript {
-                TabPlanProgressChip(transcript: transcript)
-            }
-            if showClose {
-                TabCloseButton(dirtyLookup: dirtyLookup, onClose: onClose)
-            }
+            trailing
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
@@ -352,8 +397,8 @@ struct TabButton: View {
     }
 
     private var iconColor: Color {
-        if let info = harnessInfo {
-            return stateColor(info.state)
+        if let state = item.activityState {
+            return stateColor(state)
         }
         return active ? theme.color("accent") : theme.color("fg-faint")
     }
@@ -366,6 +411,47 @@ struct TabButton: View {
         case .limited:       return theme.color("warn")
         case .failed:        return theme.color("del")
         case .idle:          return theme.color("fg-faint")
+        }
+    }
+}
+
+struct TabButton: View {
+    let titleLookup: (TabID) -> String?
+    let tab: Tab
+    let active: Bool
+    let showClose: Bool
+    let harnessInfo: (agent: AgentKind, state: ActivityState)?
+    let dirtyLookup: () -> Bool
+    let transcript: ACPTranscript?
+    let acpAgent: AgentDefinition?
+    let onActivate: () -> Void
+    let onClose: () -> Void
+    @Environment(\.theme) var theme
+
+    private var item: TabItem {
+        var agent: AgentDefinition?
+        if case .acpSession = tab { agent = acpAgent }
+        return TabItem(
+            title: titleLookup(tab.id) ?? tab.title,
+            iconName: tab.iconName,
+            activityState: harnessInfo?.state,
+            agent: agent
+        )
+    }
+
+    var body: some View {
+        TabItemView(item: item, active: active, onActivate: onActivate) {
+            if case .editor(let state) = tab, state.isExternal, !state.isExternalEditable {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+            if let transcript {
+                TabPlanProgressChip(transcript: transcript)
+            }
+            if showClose {
+                TabCloseButton(dirtyLookup: dirtyLookup, onClose: onClose)
+            }
         }
     }
 }
@@ -406,7 +492,7 @@ struct TabCloseButton: View {
     }
 }
 
-private struct ToolbarIconButton: View {
+struct ToolbarIconButton: View {
     let iconName: String
     let tooltip: String
     let action: () -> Void

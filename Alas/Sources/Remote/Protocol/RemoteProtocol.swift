@@ -84,6 +84,10 @@ enum RemoteClientMessage: Equatable, Sendable {
         content: [String: ACPElicitationValue]?
     )
     case takeOver(sessionId: String)
+    /// Opens a stored session as a tab on the host; see `PeerSessionTabsCapability`.
+    case openSessionTab(sessionId: String)
+    /// Closes the host's tab for a session, keeping it in recent history.
+    case closeSessionTab(sessionId: String)
     case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment], intent: String)
     case stop(sessionId: String)
     case setModel(sessionId: String, modelId: String)
@@ -192,6 +196,10 @@ extension RemoteClientMessage: Codable {
             )
         case "takeOver":
             self = .takeOver(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "openSessionTab":
+            self = .openSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "closeSessionTab":
+            self = .closeSessionTab(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sendPrompt":
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -347,6 +355,12 @@ extension RemoteClientMessage: Codable {
             try c.encodeIfPresent(content, forKey: .content)
         case .takeOver(let s):
             try c.encode("takeOver", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .openSessionTab(let s):
+            try c.encode("openSessionTab", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .closeSessionTab(let s):
+            try c.encode("closeSessionTab", forKey: .type)
             try c.encode(s, forKey: .sessionId)
         case .sendPrompt(let s, let t, let a, let intent):
             try c.encode("sendPrompt", forKey: .type)
@@ -556,6 +570,13 @@ enum RemoteServerMessage: Equatable, Sendable {
     /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
     /// `requestId` echoes the response's token when it carried one.
     case visualAidRejected(sessionId: String, visualId: String, reason: String, requestId: String? = nil)
+    /// The host opened or closed the tab for `sessionId`. Every tab action
+    /// gets exactly one of these two replies, in request order; the session
+    /// list refresh that follows a success carries the new `isActive`.
+    case sessionTabActionSucceeded(sessionId: String)
+    /// The host could not open or close the tab for `sessionId` (unknown id,
+    /// archived row, worktree gone, or a peer that does not serve tab actions).
+    case sessionTabActionFailed(sessionId: String, message: String)
     case sessionConfig(RemoteSessionConfig)
     case sessionRenamed(sessionId: String, title: String)
     case queueState(sessionId: String, items: [RemoteQueuedPrompt])
@@ -720,6 +741,12 @@ extension RemoteServerMessage: Codable {
                 reason: try c.decode(String.self, forKey: .reason),
                 requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
         case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "sessionTabActionSucceeded":
+            self = .sessionTabActionSucceeded(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "sessionTabActionFailed":
+            self = .sessionTabActionFailed(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                message: try c.decode(String.self, forKey: .message))
         case "sessionConfig":
             self = .sessionConfig(RemoteSessionConfig(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -954,6 +981,13 @@ extension RemoteServerMessage: Codable {
             try c.encode(v, forKey: .visualId)
             try c.encode(r, forKey: .reason)
             try c.encodeIfPresent(requestId, forKey: .requestId)
+        case .sessionTabActionSucceeded(let s):
+            try c.encode("sessionTabActionSucceeded", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+        case .sessionTabActionFailed(let s, let message):
+            try c.encode("sessionTabActionFailed", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(message, forKey: .message)
         case .sessionConfig(let cfg):
             try c.encode("sessionConfig", forKey: .type)
             try c.encode(cfg.sessionId, forKey: .sessionId)
@@ -1075,6 +1109,13 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [PeerConsoleCapability.v1])
+            capabilities: [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1])
     }
+}
+
+/// Opening and closing host tabs from a peer. Older hosts drop unknown client
+/// messages silently, so clients gate the controls on this capability.
+enum PeerSessionTabsCapability {
+    /// Advertised in `hello` by hosts that serve `openSessionTab` and `closeSessionTab`.
+    static let v1 = "peerSessionTabs.v1"
 }

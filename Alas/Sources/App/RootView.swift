@@ -91,6 +91,16 @@ struct RootView: View {
                     )
                 )
             }
+            // Here rather than in the peers sidebar, so the peer tab strip's
+            // "+" still opens it while the sidebar is hidden.
+            .sheet(item: Binding(
+                get: { state.nativePeerSessions?.newSession },
+                set: { if $0 == nil { state.nativePeerSessions?.cancelNewSession() } }
+            )) { _ in
+                if let client = state.nativePeerSessions {
+                    NativePeerNewSessionSheet(client: client)
+                }
+            }
             .sheet(item: $editingWorkspace) { workspace in
                 EditWorkspaceDialog(
                     state: state,
@@ -114,6 +124,18 @@ struct RootView: View {
                 }
             } message: { error in
                 Text(error.message)
+            }
+            .alert(
+                "Could not close tab",
+                isPresented: Binding(
+                    get: { state.nativePeerSessions?.tabCloseError != nil },
+                    set: { if !$0 { state.nativePeerSessions?.tabCloseError = nil } }
+                ),
+                presenting: state.nativePeerSessions?.tabCloseError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
             }
             .task {
                 state.startHarness()
@@ -297,11 +319,12 @@ struct RootView: View {
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
-            peerSessionId: state.nativePeerSessions?.selectedSessionId,
-            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil,
-            peerSelectedWithoutSession: state.nativePeerSessions.map {
-                $0.selectedSessionId == nil && ($0.selectedWorktree != nil || $0.consoles?.viewer != nil)
-            } ?? false
+            peerSelected: state.nativePeerSessions.map {
+                $0.selectedSessionId != nil || $0.selectedWorktree != nil || $0.consoles?.viewer != nil
+            } ?? false,
+            peerWorktree: state.nativePeerSessions.flatMap {
+                $0.selectedWorktreeGroup?.worktree == nil ? nil : $0.selectedWorktree
+            }
         ).resolve()
     }
 
@@ -315,7 +338,41 @@ struct RootView: View {
         hasRightPaneRail: Bool,
         rightPaneStartupSuppressed: Bool
     ) -> some View {
-        if let client = state.nativePeerSessions, client.selectedSessionId != nil {
+        if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+            VStack(spacing: 0) {
+                if let selection = client.selectedWorktree {
+                    NativePeerTabBar(
+                        client: client,
+                        selection: selection,
+                        agentLookup: { state.agent(id: $0) },
+                        sidebarHidden: !state.config.sidebarVisible,
+                        onRevealSidebar: {
+                            state.config.sidebarVisible = true
+                            state.saveConfig()
+                        },
+                        onCloseSession: { state.requestClosePeerSessionTab($0) },
+                        onCloseConsole: { consoleId, peerName in
+                            state.requestTerminatePeerConsole(
+                                serverId: selection.serverId, consoleId: consoleId, peerName: peerName
+                            )
+                        }
+                    )
+                }
+                peerCenterContent(client)
+            }
+        } else {
+            worktreeCenterContent(
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
+            )
+        }
+    }
+
+    /// The selected peer tab's content. A peer document opens over it.
+    @ViewBuilder
+    private func peerCenterContent(_ client: NativePeerSessions) -> some View {
+        if client.selectedSessionId != nil {
             if let document = client.workspace.document {
                 NativePeerDocumentView(
                     document: document,
@@ -328,7 +385,6 @@ struct RootView: View {
             } else {
                 NativePeerSessionView(
                     client: client,
-                    agentLookup: { state.agent(id: $0) },
                     typography: ACPChatTypography(
                         fontFamily: state.config.agents.chatFontFamily,
                         fontSize: state.config.agents.chatFontSize
@@ -337,27 +393,19 @@ struct RootView: View {
                 )
                 .id(client.selectedSessionId)
             }
-        } else if let consoles = state.nativePeerSessions?.consoles, let viewer = consoles.viewer {
+        } else if let consoles = client.consoles, let viewer = consoles.viewer {
             NativePeerConsoleView(
                 viewer: viewer,
-                peerName: state.nativePeerSessions?.snapshot.groups.first { $0.serverId == viewer.serverId }?.name
-                    ?? "a paired Mac",
                 onReconnect: { consoles.reconnect() }
             )
             .id(viewer.attachmentId)
-        } else if state.nativePeerSessions?.selectedWorktree != nil {
+        } else {
             ContentUnavailableView(
                 "No Open Tabs",
                 systemImage: "rectangle.stack",
                 description: Text("This worktree has no agent or console tabs open on the peer.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            worktreeCenterContent(
-                effectiveRightPaneVisible: effectiveRightPaneVisible,
-                hasRightPaneRail: hasRightPaneRail,
-                rightPaneStartupSuppressed: rightPaneStartupSuppressed
-            )
         }
     }
 
@@ -1061,6 +1109,22 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+                // A peer worktree covers the center pane while the local
+                // selection stays set underneath; never close a hidden tab.
+                if let client = state.nativePeerSessions, client.selectedWorktree != nil || client.selectedTab != nil {
+                    switch client.selectedTab {
+                    case .session(let id):
+                        state.requestClosePeerSessionTab(id)
+                    case .console(let id):
+                        if let serverId = client.selectedWorktree?.serverId,
+                           let peer = client.snapshot.groups.first(where: { $0.serverId == serverId }) {
+                            state.requestTerminatePeerConsole(serverId: serverId, consoleId: id, peerName: peer.name)
+                        }
+                    case nil:
+                        break
+                    }
+                    return
+                }
                 let closingWorktree = selectedWorktree()
                 state.handleCloseCenterShortcut(
                     worktreeId: closingWorktree?.id,

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The right pane for a selected peer session: the peer worktree's changes
-/// and files, read-only. Tabs that only make sense on this Mac (agent, run,
+/// The right pane for a selected peer worktree: its changes and files,
+/// read-only, and its sessions. Tabs that only make sense on this Mac (run,
 /// schedules) are not offered.
 struct NativePeerRightPaneView: View {
     @Bindable var state: AppState
@@ -56,7 +56,7 @@ struct NativePeerRightPaneView: View {
             else { return }
             handle(RightPaneRailAction.resolve(tapped: tab, active: activeTab, collapsed: collapsed))
         }
-        .onChange(of: client.selectedSessionId) { _, _ in openPaths = [] }
+        .onChange(of: client.selectedWorktree) { _, _ in openPaths = [] }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
         }
@@ -65,7 +65,7 @@ struct NativePeerRightPaneView: View {
     private var toolbar: some View {
         HStack(spacing: 6) {
             Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
-            Text([client.selectedPeer?.name, client.selectedRow?.worktree?.branch]
+            Text([client.selectedWorktreePeer?.name, client.selectedWorktreeGroup?.worktree?.branch]
                 .compactMap { $0 }
                 .joined(separator: " · "))
                 .font(.system(size: 10.5, design: .monospaced))
@@ -88,7 +88,12 @@ struct NativePeerRightPaneView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        if activeTab == .files {
+        if activeTab == .agent {
+            agentTab
+        } else if client.selectedSessionId == nil {
+            // Changes and files are served per session.
+            NativePeerRailMessage(text: "Select a session to see this worktree's changes and files.")
+        } else if activeTab == .files {
             filesTab
         } else {
             NativePeerChangesView(
@@ -99,6 +104,36 @@ struct NativePeerRightPaneView: View {
                 onOpen: { client.open($0) }
             )
             .id(client.selectedSessionId)
+        }
+    }
+
+    private var agentTab: some View {
+        let canOpen = client.selectedWorktree.map { client.canOpenSessionTabs(serverId: $0.serverId) } ?? false
+        return VStack(spacing: 0) {
+            if let error = client.sessionTabError {
+                NativePeerRailMessage(text: error)
+            }
+            AgentTabView(
+                rollup: AgentSidebarRollupBuilder.peer(client.selectedWorktreeGroup?.sessions ?? []),
+                agentLookup: { agentID in
+                    state.agent(id: agentID == AgentKind.cursor.rawValue ? "cursor-agent" : agentID)
+                },
+                actions: AgentSidebarActions(
+                    onFocus: { rowID in
+                        if case .acp(let sessionID) = rowID { client.openSession(sessionID) }
+                    },
+                    onInterrupt: { _ in },
+                    onFollowUp: { _, _ in },
+                    onDelegate: nil
+                ),
+                followUps: .constant([:]),
+                disabledReason: { row in
+                    row.state == .detached && !canOpen
+                        ? "\(client.selectedWorktreePeer?.name ?? "This Mac") needs a newer Alas to open past sessions."
+                        : nil
+                }
+            )
+            .id(client.selectedWorktree)
         }
     }
 
@@ -140,7 +175,7 @@ struct NativePeerRightPaneView: View {
 
     private var changesCount: Int {
         if case .loaded(let changes) = client.workspace.changes { return changes.branchFiles.count }
-        return client.selectedRow?.worktree?.changedFileCount ?? 0
+        return client.selectedWorktreeGroup?.worktree?.changedFileCount ?? 0
     }
 
     private func handle(_ action: RightPaneRailAction) {

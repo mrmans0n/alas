@@ -30,4 +30,6 @@ protocol FederatedPeerLinks: AnyObject {
     /// currently carries sessions: the gate is enforced here, on every send,
     /// not only when a route was first chosen.
     func sendToPeer(_ message: RemoteClientMessage, serverId: String)
+    /// Whether `serverId`'s last `hello` advertised `capability`.
+    func peerSupports(_ capability: String, serverId: String) -> Bool
 }

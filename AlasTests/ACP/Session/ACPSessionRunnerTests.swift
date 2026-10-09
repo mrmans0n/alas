@@ -498,6 +498,53 @@ struct ACPSessionRunnerTests {
         await never.open()
     }
 
+    /// A stopped turn whose result comes only after the next turn finished is still recorded first, so the next turn's
+    /// cost is measured from it: the next turn's usage waits for it, until its result comes or the wait is over.
+    @Test(arguments: [true, false])
+    func aStoppedTurnIsRecordedBeforeTheTurnAfterIt(settles: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let waited = AsyncGate()
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) },
+            usageWaitSleep: { _ in await waited.wait() })
+        runner.start()
+        defer { runner.stop() }
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            await (call == 1 ? first : second).wait()
+            return Data("{}".utf8)
+        }
+        func cost(_ amount: Double) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: amount, currency: "USD"))))
+        }
+        runner.send(text: "A", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 1 })
+        mock.emit(cost(0.5))
+        await runner.userCancel()
+        runner.send(text: "B", attachments: []) { _ in }
+        #expect(await awaitCondition { entered == 2 })
+        mock.emit(cost(0.8))
+        await second.open()
+        #expect(await awaitCondition { completions.count == 2 })
+        #expect(usage.isEmpty)
+        await (settles ? first : waited).open()
+        #expect(await awaitCondition { usage.count == 2 })
+        #expect(usage.map(\.result) == [.cancelled, .completed])
+        #expect(await usage.first?.cost?.resolve()?.amount == 0.5)
+        #expect(await usage.last?.cost?.resolve()?.amount == 0.8)
+        // B ended when it finished, not when A let its usage go.
+        #expect(try #require(usage.last?.endedAt) <= #require(usage.first?.endedAt))
+        await first.open()
+        await waited.open()
+    }
+
     /// A stopped turn keeps its own cost however many the next turn sends before its result arrives.
     @Test func aStoppedTurnKeepsItsCostThroughManyOfTheNextTurns() async throws {
         var usage: [ACPTurnCompletion] = []
@@ -556,6 +603,18 @@ struct ACPSessionRunnerTests {
         #expect(await awaitCondition { usage.count == 1 })
         #expect(usage.first?.result == .cancelled && usage.first?.quota == nil)
         await never.open()
+    }
+
+    /// A transport reports a handoff even for a request it failed to send, before or after the failure resumes: a
+    /// failed send stays unsent either way, so a retired runner never records it.
+    @Test func aFailedSendStaysUnsentWhicheverOrderItsHandoffIsReported() {
+        let handoffs = PromptHandoffs()
+        handoffs.markUnsent(1)
+        handoffs.mark(1)
+        handoffs.mark(2)
+        handoffs.markUnsent(2)
+        handoffs.mark(3)
+        #expect(!handoffs.contains(1) && !handoffs.contains(2) && handoffs.contains(3))
     }
 
     @Test("send attaches its checkpoint before dispatch", arguments: [false, true])
@@ -4749,6 +4808,68 @@ struct ACPSessionRunnerTests {
         #expect(posts >= 1)
         #expect(activityFired >= 1)
         #expect(observedStoredMessage)
+    }
+
+    /// Row 1's write fails while row 2's lands, leaving a gap at seq 1. A
+    /// runner over a transcript reloaded from that store must not let its
+    /// next append overwrite row 2; one over the original transcript, which
+    /// still holds row 1, must not move stored rows under it.
+    @Test("a sequence gap left by a failed row write never makes a later append overwrite a stored row",
+          arguments: [true, false])
+    func sequenceGapDoesNotOverwriteStoredRows(reloadedFromStore: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-seq-gap-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        func makeRunner(_ session: ACPSession) -> ACPSessionRunner {
+            ACPSessionRunner(
+                session: session,
+                connection: ACPConnection(client: ACPMockClient()),
+                store: store,
+                sessionId: "s",
+                worktreePath: FileManager.default.temporaryDirectory.path,
+                persistedMessageCount: session.transcript.messages.count
+            )
+        }
+
+        let original = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let first = makeRunner(original)
+        try store.db.exec("""
+        CREATE TRIGGER reject_seq_1 BEFORE INSERT ON messages WHEN NEW.seq = 1
+        BEGIN SELECT RAISE(ABORT, 'rejected'); END
+        """)
+        for text in ["zero", "one", "two"] { first.appendAndPersistSystemNotice(text) }
+        await first.flushPersistence()
+        try store.db.exec("DROP TRIGGER reject_seq_1")
+        #expect(try store.loadMessages(sessionId: "s").map(\.seq) == [0, 2])
+        // A submitted draft recorded after "two" must still name that row.
+        try store.upsertComposerDraft(sessionId: "s", draft: .empty, updatedAt: 0,
+                                      submittedRecovery: true, submittedAfterSeq: 2)
+
+        let session: ACPSession
+        if reloadedFromStore {
+            session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+            session.replaceTranscriptMessages(try store.loadMessages(sessionId: "s").map {
+                try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+            })
+        } else {
+            session = original
+        }
+        let next = makeRunner(session)
+        next.appendAndPersistSystemNotice("three")
+        await next.flushPersistence()
+
+        let stored = try store.loadMessages(sessionId: "s").map { row -> String in
+            guard case .systemNotice(_, let text) = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+            else { return "" }
+            return "\(row.seq):\(text)"
+        }
+        #expect(stored == (reloadedFromStore
+            ? ["0:zero", "1:two", "2:three"]
+            : ["0:zero", "2:two", "3:three"]))
+        #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedAfterSeq == (reloadedFromStore ? 1 : 2))
     }
 
     @Test("onChipsObserved fires when a live availableModelsUpdate names new models")

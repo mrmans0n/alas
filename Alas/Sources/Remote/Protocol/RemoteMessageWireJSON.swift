@@ -232,6 +232,11 @@ enum RemoteCreateSessionResult: Equatable, Sendable {
     case failure(String)
 }
 
+enum RemoteSessionTabActionResult: Equatable, Sendable {
+    case success
+    case failure(String)
+}
+
 struct RemoteSessionSummary: Equatable, Sendable {
     let id: String
     let title: String
