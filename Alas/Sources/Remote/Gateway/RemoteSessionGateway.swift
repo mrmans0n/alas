@@ -681,8 +681,10 @@ final class RemoteSessionGateway {
         subscriptions[id]?.cancel()
         coalesce[id]?.cancel()
         // ACPTranscript is an ObservableObject; objectWillChange fires on any
-        // @Published mutation (new message, streaming chunk, pending permission).
-        subscriptions[id] = session.transcript.objectWillChange.sink { [weak self, weak session] _ in
+        // @Published mutation (new message, pending permission). Streaming
+        // chunks that grow an existing row publish only `streamingTicks`.
+        let changes = session.transcript.objectWillChange.merge(with: session.transcript.streamingTicks)
+        subscriptions[id] = changes.sink { [weak self, weak session] _ in
             guard let self, let session else { return }
             // Coalesce bursts of streaming chunks into one delta.
             self.coalesce[id]?.cancel()

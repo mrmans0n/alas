@@ -1761,6 +1761,32 @@ struct RemoteSessionGatewayTests {
         #expect(provider.fullToolCallContentCallCount == 0)
     }
 
+    /// Chunks that grow an existing row do not republish the transcript, so
+    /// peers must hear about them through `streamingTicks` or their copy
+    /// freezes mid-answer.
+    @Test func streamedChunksIntoAnExistingRowReachThePeer() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("Hello")
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .agent(_, _, let buffer) = s.transcript.messages[0] else {
+            Issue.record("expected an agent row")
+            return
+        }
+
+        buffer.append(" streamed world")
+        s.transcript.noteStreamingChange(at: 0)
+
+        try await eventually("a delta carrying the streamed text") {
+            sent.contains { frame in
+                guard case .transcriptDelta(_, _, _, let upserts, _, _, _) = frame else { return false }
+                return String(describing: upserts).contains("streamed world")
+            }
+        }
+    }
+
     @Test func answeringAVisualUpdatesTheSameRowThroughADelta() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("hi")
