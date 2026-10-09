@@ -46,4 +46,18 @@ struct CenterTabCompositionTests {
         #expect(composition.activeId == terminal.id)
         #expect(composition.tabs.map(\.id) == [terminal.id, nextMemberEditor.id])
     }
+
+    @Test func hiddenRunTabsAreLeftOutOfTheCenter() {
+        let visible = Tab.terminal(.init(id: "visible", title: "zsh", sessionId: "s1"))
+        var hiddenState = TerminalTabState(id: "hidden", title: "dev", sessionId: "s2", runScriptKey: "repo:dev.sh")
+        hiddenState.isHidden = true
+
+        let composition = CenterTabComposition(
+            worktreeTabs: [visible, .terminal(hiddenState)],
+            activeWorktreeTabId: visible.id
+        )
+
+        #expect(composition.tabs.map(\.id) == ["visible"])
+        #expect(composition.activeId == "visible")
+    }
 }

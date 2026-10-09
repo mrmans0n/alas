@@ -5,7 +5,8 @@ import Foundation
 struct RunScriptPaletteEnvironment {
     var scripts: () -> [RunScript]
     var isRunning: (RunScript) -> Bool
-    var run: (RunScript) -> Void
+    /// `nil` console runs with the script's `alas-console` default.
+    var run: (RunScript, RunScriptConsole?) -> Void
     var restart: (RunScript) -> Void
     var edit: (RunScript) -> Void
     var newScript: (RunScriptScope) -> Void

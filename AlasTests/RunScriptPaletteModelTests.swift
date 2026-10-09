@@ -14,7 +14,7 @@ struct RunScriptPaletteModelTests {
 
     private func environment(
         scripts: [RunScript],
-        onRun: @escaping (RunScript) -> Void = { _ in },
+        onRun: @escaping (RunScript, RunScriptConsole?) -> Void = { _, _ in },
         onRestart: @escaping (RunScript) -> Void = { _ in },
         onEdit: @escaping (RunScript) -> Void = { _ in },
         onNew: @escaping (RunScriptScope) -> Void = { _ in }
@@ -52,13 +52,18 @@ struct RunScriptPaletteModelTests {
         #expect(model.rows()[model.selectedIndex] == .script(script("build")))
     }
 
-    @Test func enterRunsSelectedScript() {
+    @Test func enterRunsSelectedScriptWithItsDefaultConsole() {
         var ran: RunScript?
+        var console: RunScriptConsole??
         let model = RunScriptPaletteModel()
-        let env = environment(scripts: [script("build")], onRun: { ran = $0 })
+        let env = environment(scripts: [script("build")], onRun: { script, override in
+            ran = script
+            console = override
+        })
         model.load(environment: env)
         model.activateSelection(environment: env)
         #expect(ran == script("build"))
+        #expect(console == .some(nil))
     }
 
     @Test func enterEditsSelectedScriptInEditMode() {
@@ -67,7 +72,7 @@ struct RunScriptPaletteModelTests {
         let model = RunScriptPaletteModel()
         let env = environment(
             scripts: [script("build")],
-            onRun: { ran = $0 },
+            onRun: { script, _ in ran = script },
             onEdit: { edited = $0 }
         )
         model.prepareForOpen(mode: .edit)

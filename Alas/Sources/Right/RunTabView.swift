@@ -237,13 +237,15 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             state.stopScript(staleScript, in: worktree)
         case .restart:
             let stoppedRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
+            // Stopping closes the tab, so read how the run was shown first.
+            let console = state.currentRunConsole(scriptKey: staleScript.key, worktreeID: worktree.id)
             state.stopScript(staleScript, in: worktree)
             guard let script = await freshScript(matching: staleScript) else { return }
             if let stoppedRunID,
                state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id != stoppedRunID {
                 return
             }
-            state.restartScript(script, in: worktree)
+            state.restartScript(script, in: worktree, console: console)
         case .openTerminal:
             state.focusScriptTerminal(staleScript, in: worktree)
         case .openEndpoint:

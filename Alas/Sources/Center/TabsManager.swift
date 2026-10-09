@@ -267,6 +267,7 @@ final class TabsManager {
         for id in worktreeIds {
             if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
                 Self.virtualizeLegacyPaths(&file, worktreeId: id)
+                Self.keepHiddenRuns(of: byWorktree[id], in: &file)
                 if !restoringActiveTabs {
                     file.activeTabId = nil
                 }
@@ -279,10 +280,25 @@ final class TabsManager {
         hasLoaded = true
     }
 
+    /// The hidden flag is never on disk, so a reload of a bucket that is already
+    /// in memory would otherwise expose its live background runs.
+    private static func keepHiddenRuns(of live: TabsFile?, in loaded: inout TabsFile) {
+        guard let live else { return }
+        let hiddenIDs = Set(live.tabs.filter(\.isHiddenRunTab).map(\.id))
+        guard !hiddenIDs.isEmpty else { return }
+        for index in loaded.tabs.indices {
+            guard hiddenIDs.contains(loaded.tabs[index].id),
+                  case .terminal(var state) = loaded.tabs[index] else { continue }
+            state.isHidden = true
+            loaded.tabs[index] = .terminal(state)
+        }
+    }
+
     func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
         let key = owner.storageKey
         if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
             Self.virtualizeLegacyPaths(&file, worktreeId: key)
+            Self.keepHiddenRuns(of: byWorktree[key], in: &file)
             if !restoringActiveTabs {
                 file.activeTabId = nil
             }
@@ -345,10 +361,17 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendTerminal(worktreeId: String, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
-        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
+    func appendTerminal(
+        worktreeId: String,
+        title: String,
+        sessionId: String,
+        runScriptKey: String? = nil,
+        isHidden: Bool = false
+    ) -> Tab {
+        var state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
+        state.isHidden = isHidden
         let tab = Tab.terminal(state)
-        append(tab, to: worktreeId)
+        append(tab, to: worktreeId, activate: !isHidden)
         return tab
     }
 
@@ -2114,6 +2137,12 @@ final class TabsManager {
 
     func activate(worktreeId: String, tabId: TabID) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
+        // The active tab is never hidden: activating a background run's tab reveals it.
+        if let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+           case .terminal(var state) = file.tabs[idx], state.isHidden {
+            state.isHidden = false
+            file.tabs[idx] = .terminal(state)
+        }
         file.activeTabId = tabId
         byWorktree[worktreeId] = file
         persist(worktreeId)
@@ -2194,12 +2223,7 @@ final class TabsManager {
         }
         clearWebPreviewBrowsers(for: [tab])
         if wasActive {
-            if file.tabs.isEmpty {
-                file.activeTabId = nil
-            } else {
-                let neighbourIdx = max(0, idx - 1)
-                file.activeTabId = file.tabs[neighbourIdx].id
-            }
+            file.activeTabId = Self.activeTabAfterClosing(at: idx, in: file.tabs)
         }
         byWorktree[worktreeId] = file
         persist(worktreeId)
@@ -2306,6 +2330,13 @@ final class TabsManager {
         if activate { file.activeTabId = tab.id }
         byWorktree[worktreeId] = file
         persist(worktreeId)
+    }
+
+    /// The nearest tab to a closed position, left first, that may become
+    /// active. Hidden run tabs never qualify: the active tab is never hidden.
+    private static func activeTabAfterClosing(at index: Int, in tabs: [Tab]) -> TabID? {
+        let left = tabs[..<index].last { !$0.isHiddenRunTab }
+        return (left ?? tabs[index...].first { !$0.isHiddenRunTab })?.id
     }
 
     private func persist(_ worktreeId: String) {

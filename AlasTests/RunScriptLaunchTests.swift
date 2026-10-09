@@ -950,6 +950,118 @@ struct RunScriptLaunchTests {
         #expect(state.runningScriptTab(for: runScript, in: worktree) == nil)
     }
 
+    private static let consoleCases: [(RunScriptConsole, RunScriptConsole?, Bool)] = [
+        (.hidden, nil, true),
+        (.shown, .hidden, true),
+        (.hidden, .shown, false),
+    ]
+
+    @MainActor
+    @Test(arguments: consoleCases)
+    func launchConsoleDecidesWhetherTheRunTabTakesFocus(
+        scriptDefault: RunScriptConsole,
+        override: RunScriptConsole?,
+        startsHidden: Bool
+    ) async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        let other = fixture.state.tabs.appendTerminal(worktreeId: fixture.worktree.id, title: "Other", sessionId: "other")
+        var script = fixture.script
+        script.console = scriptDefault
+
+        fixture.state.runOrFocusScript(script, in: fixture.worktree, console: override)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
+        #expect(runTab.isHiddenRunTab == startsHidden)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == (startsHidden ? other.id : runTab.id))
+    }
+
+    @MainActor
+    @Test func runningAFinishedHiddenScriptRerunsItInTheBackground() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        let other = fixture.state.tabs.appendTerminal(worktreeId: fixture.worktree.id, title: "Other", sessionId: "other")
+        var script = fixture.script
+        script.console = .hidden
+        fixture.state.runOrFocusScript(script, in: fixture.worktree)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+        let firstRunID = try #require(fixture.state.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.id)
+
+        fixture.state.runOrFocusScript(script, in: fixture.worktree)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let record = try #require(fixture.state.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
+        #expect(record.id != firstRunID)
+        let runTabs = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).filter { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.runScriptKey == script.key
+        }
+        #expect(runTabs.count == 1)
+        #expect(runTabs.first?.isHiddenRunTab == true)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == other.id)
+    }
+
+    @MainActor
+    @Test func restartKeepsTheCurrentTabVisibility() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        var script = fixture.script
+        script.console = .hidden
+        fixture.state.runOrFocusScript(script, in: fixture.worktree, console: .shown)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        fixture.state.restartScript(script, in: fixture.worktree)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
+        #expect(!runTab.isHiddenRunTab)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == runTab.id)
+    }
+
+    @Test func restartRequestedBeforeDiscoveryIsDroppedWhenTheRunWasStoppedMeanwhile() {
+        func record(id: String, _ status: RunStatus) -> RunRecord {
+            RunRecord(
+                id: id, scriptKey: "repo:dev.sh", scriptName: "Dev", worktreeID: "wt", branch: "main",
+                target: RunExecutionTarget(host: nil, workingDirectory: "/wt"),
+                status: status, startedAt: Date(timeIntervalSinceReferenceDate: 0)
+            )
+        }
+        let running = record(id: "a", .running)
+        #expect(AppState.restartStillWanted(before: running, now: running))
+        #expect(AppState.restartStillWanted(before: running, now: record(id: "a", .finished(.succeeded))))
+        #expect(AppState.restartStillWanted(before: record(id: "a", .finished(.failed(exitCode: 1))), now: record(id: "a", .finished(.failed(exitCode: 1)))))
+        #expect(!AppState.restartStillWanted(before: running, now: record(id: "a", .finished(.stopped))))
+        #expect(!AppState.restartStillWanted(before: running, now: record(id: "b", .starting)))
+    }
+
+    @MainActor
+    @Test func restartWhileStartingKeepsTheRequestedConsole() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        var script = fixture.script
+        script.console = .hidden
+        fixture.state.runOrFocusScript(script, in: fixture.worktree, console: .shown)
+
+        // The first launch has not opened its terminal yet.
+        fixture.state.restartScript(script, in: fixture.worktree)
+        await finishPendingLaunches(fixture.state)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let runTab = try #require(fixture.state.scriptTab(for: script, in: fixture.worktree))
+        #expect(!runTab.isHiddenRunTab)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == runTab.id)
+    }
+
     @MainActor
     private func makeAppStateFixture(
         waiter: @escaping AppState.RunScriptCompletionWaiter,

@@ -78,6 +78,7 @@ struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
     let scriptKey: String
+    var isHidden = false
 }
 
 struct PendingRunScriptLaunchKey: Hashable {
@@ -7680,7 +7681,8 @@ final class AppState {
         environmentOverrides: [String: String] = [:],
         environmentRemovals: Set<String> = [],
         titleOverride: String? = nil,
-        runScriptKey: String? = nil
+        runScriptKey: String? = nil,
+        isHidden: Bool = false
     ) async throws -> Tab {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
@@ -7712,7 +7714,8 @@ final class AppState {
             environmentOverrides: environmentOverrides,
             environmentRemovals: environmentRemovals,
             titleOverride: titleOverride,
-            runScriptKey: runScriptKey
+            runScriptKey: runScriptKey,
+            isHidden: isHidden
         )
     }
 
@@ -7769,7 +7772,8 @@ final class AppState {
         environmentOverrides: [String: String] = [:],
         environmentRemovals: Set<String> = [],
         titleOverride: String? = nil,
-        runScriptKey: String? = nil
+        runScriptKey: String? = nil,
+        isHidden: Bool = false
     ) throws -> Tab {
         guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
@@ -7828,7 +7832,10 @@ final class AppState {
         // above that equals `leafId` (we passed it in). The injected
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
-        let tab = tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
+        let tab = tabs.appendTerminal(
+            worktreeId: worktree.id, title: title, sessionId: opened.id,
+            runScriptKey: runScriptKey, isHidden: isHidden
+        )
         return tab
     }
 

@@ -147,7 +147,7 @@ struct AppStateOverlayTests {
         state.runScriptPalette.load(environment: RunScriptPaletteEnvironment(
             scripts: { [script] },
             isRunning: { _ in false },
-            run: { _ in },
+            run: { _, _ in },
             restart: { _ in },
             edit: { _ in },
             newScript: { _ in }

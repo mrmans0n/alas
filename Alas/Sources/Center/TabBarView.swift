@@ -43,10 +43,13 @@ struct TabBarView: View {
     let acpAgents: [AgentDefinition]
     let loadRunScripts: () -> [RunScript]
     let isScriptRunning: (RunScript) -> Bool
-    let onRunScript: (RunScript) -> Void
+    /// `nil` console runs with the script's `alas-console` default.
+    let onRunScript: (RunScript, RunScriptConsole?) -> Void
     let onRestartScript: (RunScript) -> Void
     let onNewRunScript: (RunScriptScope) -> Void
     let onEditScripts: () -> Void
+    var runActivity = RunActivityInput()
+    var runActivityActions = RunActivityActions()
     let onRevealRightSidebar: () -> Void
     let rightSidebarHidden: Bool
     let onRevealSidebar: () -> Void
@@ -105,14 +108,17 @@ struct TabBarView: View {
             onLaunchACPSession: onLaunchACPSession
         )
         .padding(.trailing, 2)
-        RunScriptMenu(
-            loadScripts: loadRunScripts,
-            isRunning: isScriptRunning,
-            onRun: onRunScript,
-            onRestart: onRestartScript,
-            onNew: onNewRunScript,
-            onEdit: onEditScripts
-        )
+        HStack(spacing: 4) {
+            RunScriptMenu(
+                loadScripts: loadRunScripts,
+                isRunning: isScriptRunning,
+                onRun: onRunScript,
+                onRestart: onRestartScript,
+                onNew: onNewRunScript,
+                onEdit: onEditScripts
+            )
+            RunActivityPill(input: runActivity, actions: runActivityActions)
+        }
         .padding(.trailing, rightSidebarHidden && pluginCommands.isEmpty ? 2 : 8)
         if !pluginCommands.isEmpty {
             ToolbarMenuButton(iconName: "puzzlepiece.extension", help: "Plugin commands") {
@@ -579,7 +585,7 @@ private struct AgentSparkleMenu: View {
 private struct RunScriptMenu: View {
     let loadScripts: () -> [RunScript]
     let isRunning: (RunScript) -> Bool
-    let onRun: (RunScript) -> Void
+    let onRun: (RunScript, RunScriptConsole?) -> Void
     let onRestart: (RunScript) -> Void
     let onNew: (RunScriptScope) -> Void
     let onEdit: () -> Void
@@ -595,13 +601,16 @@ private struct RunScriptMenu: View {
                         ForEach(scoped) { script in
                             let running = isRunning(script)
                             Button {
-                                onRun(script)
+                                onRun(script, nil)
                             } label: {
                                 if running {
                                     Label(script.displayName, systemImage: "circle.fill")
                                 } else {
                                     Text(script.displayName)
                                 }
+                            }
+                            .modifierKeyAlternate(.option) {
+                                Button(script.flippedConsoleRunTitle) { onRun(script, script.console.flipped) }
                             }
                             if running {
                                 Button("Restart \(script.displayName)") { onRestart(script) }

@@ -233,6 +233,7 @@ struct RunScriptDialog: View {
             } else {
                 label("↵ run / focus")
                 label("⌘↵ restart")
+                label(appState.runScriptPalette.selectedScript()?.console == .hidden ? "⌥↵ with console" : "⌥↵ in background")
                 label("⌘E edit")
             }
             label("esc close")
@@ -270,7 +271,7 @@ struct RunScriptDialog: View {
             } else if press.modifiers.contains(.command) {
                 restart()
             } else {
-                activate()
+                activate(flipsConsole: press.modifiers.contains(.option))
             }
             return .handled
         default:
@@ -282,9 +283,9 @@ struct RunScriptDialog: View {
         }
     }
 
-    private func activate() {
+    private func activate(flipsConsole: Bool = false) {
         guard let environment else { return }
-        appState.runScriptPalette.activateSelection(environment: environment)
+        appState.runScriptPalette.activateSelection(environment: environment, flipsConsole: flipsConsole)
         close()
     }
 

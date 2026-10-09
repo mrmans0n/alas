@@ -14,11 +14,12 @@ struct CenterTabComposition {
         worktreeTabs: [Tab],
         activeWorktreeTabId: TabID?
     ) {
-        tabs = worktreeTabs
-        if worktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
+        let visible = worktreeTabs.filter { !$0.isHiddenRunTab }
+        tabs = visible
+        if visible.contains(where: { $0.id == activeWorktreeTabId }) {
             activeId = activeWorktreeTabId
         } else if activeWorktreeTabId != nil {
-            activeId = worktreeTabs.first?.id
+            activeId = visible.first?.id
         } else {
             activeId = nil
         }
@@ -33,7 +34,7 @@ struct CenterTabComposition {
         activeSharedTabId: TabID?,
         activeFocusedMemberTabId: TabID?
     ) {
-        let shared = sharedTabs.filter(\.isSharedSessionTab)
+        let shared = sharedTabs.filter { $0.isSharedSessionTab && !$0.isHiddenRunTab }
         let member = focusedMemberTabs.filter { tab in
             switch tab {
             case .terminal, .acpSession: false
@@ -354,10 +355,18 @@ struct CenterPaneView: View {
                 acpAgents: RepositoryAgentMenuPolicy.acpAgents(from: availableAgents),
                 loadRunScripts: { RunScriptStore.scripts(worktreeRoot: worktree.path) },
                 isScriptRunning: { script in state.runningScriptTab(for: script, in: worktree) != nil },
-                onRunScript: { script in state.runOrFocusScript(script, in: worktree) },
+                onRunScript: { script, console in state.runOrFocusScript(script, in: worktree, console: console) },
                 onRestartScript: { script in state.restartScript(script, in: worktree) },
                 onNewRunScript: { scope in state.newRunScript(scope: scope, in: worktree) },
                 onEditScripts: { state.openRunScriptPaletteOverlay(mode: .edit) },
+                runActivity: runActivityInput(for: worktree),
+                runActivityActions: RunActivityActions(
+                    stop: { state.stopScript(scriptKey: $0, in: worktree) },
+                    restart: { state.restartScript(scriptKey: $0, in: worktree) },
+                    showOutput: { state.focusScriptTerminal(scriptKey: $0, in: worktree) },
+                    showReport: { state.openRunReport(worktreeID: worktree.id, runID: $0) },
+                    dismissFailure: { state.dismissRunScriptFailure(id: $0, worktreeID: worktree.id) }
+                ),
                 onRevealRightSidebar: {
                     state.config.rightPaneVisible = true
                     state.saveConfig()
@@ -942,6 +951,18 @@ struct CenterPaneView: View {
             for: worktree,
             baseBranch: state.config.worktrees.baseBranch,
             comparisonMode: state.config.changes.comparisonMode
+        )
+    }
+
+    private func runActivityInput(for worktree: Worktree) -> RunActivityInput {
+        let records = state.runRecords.records(worktreeID: worktree.id)
+        return RunActivityInput(
+            records: records,
+            failures: state.runScriptFailures(in: worktree.id),
+            liveTerminalKeys: Set(records.filter(\.status.isActive).map(\.scriptKey).filter {
+                state.runningScriptTab(scriptKey: $0, worktreeID: worktree.id) != nil
+            }),
+            reportRunIDs: Set(records.map(\.id).filter { state.hasRunReport(worktreeID: worktree.id, runID: $0) })
         )
     }
 

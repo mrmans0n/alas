@@ -172,7 +172,8 @@ enum RunScriptStore {
             onExit: meta.onExit,
             cwd: meta.cwd,
             isExecutable: isExecutable,
-            endpoint: meta.endpoint
+            endpoint: meta.endpoint,
+            console: meta.console
         )
     }
 }

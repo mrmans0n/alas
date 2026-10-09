@@ -18,6 +18,15 @@ enum RunScriptOnExit: String, Sendable, Hashable {
     case close
 }
 
+/// Whether a run's terminal tab is shown when the run starts.
+enum RunScriptConsole: String, Sendable, Hashable {
+    case shown
+    /// The tab stays out of the tab strip until something activates it.
+    case hidden
+
+    var flipped: RunScriptConsole { self == .shown ? .hidden : .shown }
+}
+
 /// A user-provided runnable script discovered on disk. Identity is
 /// `(scope, fileName)`; `key` is the persisted form used to link a
 /// terminal tab back to the script that launched it.
@@ -33,9 +42,16 @@ struct RunScript: Equatable, Identifiable, Sendable {
     /// Declared service endpoint (`# alas-url:`), when the script serves one.
     /// Optional by design — build/test/lint commands stay useful without it.
     var endpoint: URL?
+    /// Declared as `# alas-console:`. ⌥ flips it for one launch.
+    var console: RunScriptConsole = .shown
 
     var key: String { "\(scope.rawValue):\(fileName)" }
     var id: String { key }
+
+    /// Menu title for running once against the console default.
+    var flippedConsoleRunTitle: String {
+        console == .shown ? "Run \(displayName) in Background" : "Run \(displayName) with Console"
+    }
 }
 
 /// Parses the `# alas-…:` comment header from the first lines of a script.
@@ -47,16 +63,17 @@ enum RunScriptMetadata {
     /// is immutable, and `firstMatch(of:)` below does not mutate it — `Regex`
     /// simply isn't `Sendable` yet. Do not rebuild this per call: `parse` runs
     /// once per script file discovered on disk.
-    nonisolated(unsafe) private static let pattern = /^#\s*alas-(name|on-exit|cwd|url):\s*(.+?)\s*$/
+    nonisolated(unsafe) private static let pattern = /^#\s*alas-(name|on-exit|cwd|url|console):\s*(.+?)\s*$/
 
     static func parse(
         fileName: String,
         contents: String
-    ) -> (displayName: String, onExit: RunScriptOnExit, cwd: String?, endpoint: URL?) {
+    ) -> (displayName: String, onExit: RunScriptOnExit, cwd: String?, endpoint: URL?, console: RunScriptConsole) {
         var name: String?
         var onExit = RunScriptOnExit.keep
         var cwd: String?
         var endpoint: URL?
+        var console = RunScriptConsole.shown
         for line in contents.split(separator: "\n", omittingEmptySubsequences: false).prefix(headerLineLimit) {
             guard let match = line.firstMatch(of: pattern) else { continue }
             let value = String(match.2)
@@ -65,10 +82,11 @@ enum RunScriptMetadata {
             case "on-exit": onExit = RunScriptOnExit(rawValue: value) ?? .keep
             case "cwd":     cwd = value
             case "url":     endpoint = RunEndpointPolicy.endpoint(from: value)
+            case "console": console = RunScriptConsole(rawValue: value) ?? .shown
             default:        break
             }
         }
         let fallback = (fileName as NSString).deletingPathExtension
-        return (name ?? (fallback.isEmpty ? fileName : fallback), onExit, cwd, endpoint)
+        return (name ?? (fallback.isEmpty ? fileName : fallback), onExit, cwd, endpoint, console)
     }
 }
