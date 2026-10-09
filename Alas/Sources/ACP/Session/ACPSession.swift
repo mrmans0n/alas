@@ -2445,7 +2445,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 ?? ACPSubagentRun(
                     subagentSessionId: descriptor.subagentSessionId,
                     startedAt: toolCall.executionStartedAt ?? Date())
-            run.adopt(descriptor, startedAt: toolCall.executionStartedAt)
+            run.adopt(descriptor, startedAt: toolCall.executionStartedAt, finishedAt: toolCall.executionFinishedAt)
             if let rows = restored[descriptor.subagentSessionId] {
                 run.restore(
                     messages: rows.map(\.message),

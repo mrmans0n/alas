@@ -35,6 +35,19 @@ enum AgentSidebarDelegation: Equatable {
     }
 }
 
+/// One of a live session's own (native) subagents. These hang off their
+/// parent row rather than being rows themselves, so counts and plugin
+/// snapshots built from `AgentSidebarRollup.rows` keep meaning sessions.
+struct AgentSidebarSubagent: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let task: String?
+    let state: ACPSubagentState
+    let canCancel: Bool
+    let startedAt: Date
+    let finishedAt: Date?
+}
+
 struct AgentSidebarRow: Identifiable, Equatable {
     enum ID: Hashable {
         case acp(ACPSession.ID)
@@ -61,6 +74,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
     let activityAt: Date
     let isLiveACP: Bool
     var delegation: AgentSidebarDelegation?
+    var subagents: [AgentSidebarSubagent] = []
 
     static func acp(
         id: ACPSession.ID,
@@ -287,7 +301,7 @@ struct AgentSidebarRollupBuilder {
         } else {
             activityAt = session.createdAt
         }
-        return .acp(
+        var row = AgentSidebarRow.acp(
             id: session.id,
             agentID: session.agentId,
             title: session.title,
@@ -301,6 +315,21 @@ struct AgentSidebarRollupBuilder {
             activityAt: activityAt,
             isLive: true
         )
+        // A session in History has ended, and so has everything it spawned.
+        if resolvedState != .detached {
+            row.subagents = session.orderedSubagents.map { run in
+                AgentSidebarSubagent(
+                    id: run.subagentSessionId,
+                    name: run.displayName,
+                    task: run.task,
+                    state: run.state,
+                    canCancel: ACPSubagentRowPolicy.showsCancel(state: run.state, capabilities: run.capabilities),
+                    startedAt: run.startedAt,
+                    finishedAt: run.finishedAt
+                )
+            }
+        }
+        return row
     }
 
     private static func persistedRow(_ row: ACPSessionRow, remoteHost: String?) -> AgentSidebarRow {

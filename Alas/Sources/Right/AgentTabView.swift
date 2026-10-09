@@ -6,6 +6,8 @@ struct AgentSidebarActions {
     let onInterrupt: (ACPSession.ID) -> Void
     let onFollowUp: (ACPSession.ID, String) -> Void
     let onDelegate: ((ACPSession.ID) -> Void)?
+    /// Parent session id, subagent session id. Nil where the rail cannot cancel.
+    var onCancelSubagent: ((ACPSession.ID, String) -> Void)? = nil
 }
 
 enum AgentSidebarFollowUpDelivery: Equatable {
@@ -50,7 +52,10 @@ struct AgentWorktreeTabView: View {
                 onFollowUp: { sessionID, text in
                     state.sendAgentSidebarFollowUp(for: sessionID, worktreeID: worktree.id, text: text)
                 },
-                onDelegate: nil
+                onDelegate: nil,
+                onCancelSubagent: { sessionID, subagentSessionId in
+                    Task { await manager.cancelSubagent(for: sessionID, subagentSessionId: subagentSessionId) }
+                }
             ),
             controllableSessionIDs: Set(manager.sessions.keys.filter { manager.isWriter(for: $0) }),
             followUps: followUps
@@ -127,8 +132,42 @@ struct AgentTabView: View {
                         )
                     }
                 }
+                subagentRows(of: row, isNested: isNested, siblingBelow: hasSiblingBelow(rows, after: index))
             }
         }
+    }
+
+    /// A row's own subagents sit one level under it. Under a nested child that
+    /// is a second level, so the child's rail is carried past them to the
+    /// next nested sibling.
+    private func subagentRows(of row: AgentSidebarRow, isNested: Bool, siblingBelow: Bool) -> some View {
+        ForEach(Array(row.subagents.enumerated()), id: \.element.id) { index, subagent in
+            let isLast = index + 1 == row.subagents.count
+            AgentSidebarSubagentRowView(
+                subagent: subagent,
+                onFocus: { actions.onFocus(row.id) },
+                onCancel: cancelAction(row: row, subagent: subagent)
+            )
+            .padding(.leading, AgentSidebarDelegationConnector.gutter)
+            .background(alignment: .topLeading) {
+                AgentSidebarDelegationConnector(continuesBelow: !isLast || (!isNested && siblingBelow))
+            }
+            .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
+            .background(alignment: .topLeading) {
+                if isNested && siblingBelow {
+                    AgentSidebarDelegationConnector(continuesBelow: true, hasElbow: false)
+                }
+            }
+        }
+    }
+
+    private func cancelAction(row: AgentSidebarRow, subagent: AgentSidebarSubagent) -> (() -> Void)? {
+        guard subagent.canCancel,
+              let sessionID = row.sessionID,
+              controllableSessionIDs.contains(sessionID),
+              let onCancelSubagent = actions.onCancelSubagent
+        else { return nil }
+        return { onCancelSubagent(sessionID, subagent.id) }
     }
 
     /// The builder emits a parent's nested children consecutively, so the rail
