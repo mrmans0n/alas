@@ -59,7 +59,7 @@ struct PluginPanelView: View {
                     switch kind {
                     case .view: PluginViewTabView(host: host, panel: panel)
                     case .canvas: PluginCanvasView(host: host, surface: .panel(panel))
-                    case .web: EmptyView()  // Task 3
+                    case .web: PluginWebTabView(host: host, surface: .panel(panel), script: manager?.plugin(id: item.ref.pluginID)?.web ?? Data())
                     }
                 }
             case .stopped(let reason):

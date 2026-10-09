@@ -86,8 +86,10 @@ struct PluginPanelVisibleParams: Codable, Equatable, Sendable {
     let visible: Bool
 }
 
-struct PluginTabParams: Decodable, Sendable {
-    let tab: Int
+/// A message's target: one of `tab` and, from API 15, `panel`.
+struct PluginSurfaceParams: Decodable, Sendable {
+    let tab: Int?
+    let panel: String?
 }
 
 struct PluginTabVisibleParams: Codable, Equatable, Sendable {

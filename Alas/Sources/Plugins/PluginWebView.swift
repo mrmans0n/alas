@@ -113,14 +113,16 @@ enum PluginWebPolicy {
 
     /// `alas.context` as JSON text: in the page script for a new document, and as the detail of `themeEvent` when the
     /// theme changes, passed as data.
-    static func context(tab: Int, theme: Theme) -> String {
+    static func context(surface: PluginSurface, theme: Theme) -> String {
         struct Context: Encodable {
-            let tab: Int
+            let tab: Int?
+            let panel: String?
             let theme: String
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let data = (try? encoder.encode(Context(tab: tab, theme: theme.darkMode ? "dark" : "light"))) ?? Data("null".utf8)
+        let context = Context(tab: surface.tab, panel: surface.panel, theme: theme.darkMode ? "dark" : "light")
+        let data = (try? encoder.encode(context)) ?? Data("null".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -290,7 +292,7 @@ final class PluginWebPageSlots {
     }
 }
 
-/// One web tab's page: a WKWebView with its own non-persistent data store, served only by the scheme handler, and a
+/// One web tab's or panel's page: a WKWebView with its own non-persistent data store, served only by the scheme handler, and a
 /// bridge that carries messages between the page and its own plugin instance.
 @MainActor
 final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
@@ -299,7 +301,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
 
     let webView: WKWebView
     private let host: PluginHost
-    private let tab: Int
+    private let surface: PluginSurface
     private let pluginID: String
     private let inEvent = "alas-in-" + UUID().uuidString
     private let outEvent = "alas-out-" + UUID().uuidString
@@ -317,16 +319,16 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
 
     /// Nil when the plugin's pages already fill every slot.
     static func open(
-        host: PluginHost, tab: Int, script: Data, theme: Theme, slots: PluginWebPageSlots = .shared
+        host: PluginHost, surface: PluginSurface, script: Data, theme: Theme, slots: PluginWebPageSlots = .shared
     ) -> PluginWebPage? {
         guard slots.take(host.manifest.id) else { return nil }
-        return PluginWebPage(host: host, tab: tab, script: script, theme: theme, slots: slots)
+        return PluginWebPage(host: host, surface: surface, script: script, theme: theme, slots: slots)
     }
 
-    private init(host: PluginHost, tab: Int, script: Data, theme: Theme, slots: PluginWebPageSlots) {
+    private init(host: PluginHost, surface: PluginSurface, script: Data, theme: Theme, slots: PluginWebPageSlots) {
         self.host = host
         self.slots = slots
-        self.tab = tab
+        self.surface = surface
         pluginID = host.manifest.id
         schemeHandler = PluginWebSchemeHandler(
             pluginID: pluginID, shell: PluginWebPolicy.shell(pluginID: pluginID, variables: PluginWebPolicy.cssVariables(theme)),
@@ -377,7 +379,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func close() {
         guard !isClosed else { return }
         isClosed = true
-        if let token { host.detachWebPage(tab: tab, token) }
+        if let token { host.detachWebPage(surface: surface, token) }
         slots.release(pluginID)
         webView.stopLoading()
         webView.navigationDelegate = nil
@@ -398,18 +400,18 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value);
             document.dispatchEvent(new CustomEvent(name, { detail: context }));
             """,
-            arguments: ["variables": variables, "name": themeEvent, "context": PluginWebPolicy.context(tab: tab, theme: theme)],
+            arguments: ["variables": variables, "name": themeEvent, "context": PluginWebPolicy.context(surface: surface, theme: theme)],
             in: nil, in: Self.bridgeWorld, completionHandler: nil)
     }
 
     private func installScripts(_ theme: Theme) {
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
-        let limit = host.webMessageLimit(tab: tab)
+        let limit = host.webMessageLimit(surface: surface)
         controller.addUserScript(WKUserScript(
             source: PluginWebPolicy.pageScript(
                 outEvent: outEvent, inEvent: inEvent, themeEvent: themeEvent, maxBytes: limit,
-                context: PluginWebPolicy.context(tab: tab, theme: theme)),
+                context: PluginWebPolicy.context(surface: surface, theme: theme)),
             injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
         controller.addUserScript(WKUserScript(
             source: PluginWebPolicy.relayScript(outEvent: outEvent, maxBytes: limit, queue: PluginHost.maxWebQueue),
@@ -444,7 +446,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             // A page that posts is running: only crashes in a row count towards giving up.
             crashes = 0
             // Queued synchronously, so posts reach the plugin in the order the page made them.
-            host.webMessage(tab: tab, page: token, json: json) { replyHandler(nil, $0) }
+            host.webMessage(surface: surface, page: token, json: json) { replyHandler(nil, $0) }
         } else {
             replyHandler(nil, "refused")
         }
@@ -472,7 +474,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     /// it starts over too, and late replies or posts for the previous document go to a token that is gone. The post
     /// budget is the view's, so a page reloading itself gets no more through than one that doesn't.
     private func attach() {
-        token = host.attachWebPage(tab: tab, replacing: token) { [weak self] json in self?.receive(json) }
+        token = host.attachWebPage(surface: surface, replacing: token) { [weak self] json in self?.receive(json) }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -514,7 +516,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     private func report(_ text: String) {
         guard !isClosed, problems < PluginWebPolicy.maxProblemsPerPage else { return }
         problems += 1
-        host.webPageProblem(tab: tab, text)
+        host.webPageProblem(surface: surface, text)
         onProblem(text)
     }
 
@@ -539,10 +541,10 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     // JavaScript alert, confirm and prompt are left unimplemented, so they return at once.
 }
 
-/// A web tab: the page while the tab is on screen, or a placeholder when the plugin has too many open.
+/// A web tab or panel: the page while it is on screen, or a placeholder when the plugin has too many open.
 struct PluginWebTabView: View {
     let host: PluginHost
-    let tabIndex: Int
+    let surface: PluginSurface
     let script: Data
     @Environment(\.theme) private var theme
     @State private var page: PluginWebPage?
@@ -568,7 +570,7 @@ struct PluginWebTabView: View {
                         }
                     }
             } else if refused {
-                Text("\(host.manifest.name) already shows \(PluginWebPolicy.maxLivePagesPerPlugin) web tabs. Close one to show this one.")
+                Text("\(host.manifest.name) already shows \(PluginWebPolicy.maxLivePagesPerPlugin) web pages. Close one to show this one.")
                     .foregroundColor(theme.color("fg-dim")).multilineTextAlignment(.center).padding(24)
             }
         }
@@ -586,7 +588,7 @@ struct PluginWebTabView: View {
     }
 
     private func open() {
-        page = PluginWebPage.open(host: host, tab: tabIndex, script: script, theme: theme)
+        page = PluginWebPage.open(host: host, surface: surface, script: script, theme: theme)
         page?.onProblem = { problem = $0 }
         refused = page == nil
     }

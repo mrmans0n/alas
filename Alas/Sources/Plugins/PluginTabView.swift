@@ -69,7 +69,7 @@ struct PluginTabView: View {
                 if let host, let tabIndex {
                     switch kind {
                     case .view: PluginViewTabView(host: host, tabIndex: tabIndex)
-                    case .web: PluginWebTabView(host: host, tabIndex: tabIndex, script: plugin?.web ?? Data())
+                    case .web: PluginWebTabView(host: host, surface: .tab(tabIndex), script: plugin?.web ?? Data())
                     default: PluginCanvasView(host: host, surface: .tab(tabIndex))
                     }
                 }

@@ -1494,10 +1494,10 @@ final class PluginHost {
         }
     }
 
-    // MARK: - Web tabs (API 12)
+    // MARK: - Web tabs (API 12) and panels (API 15)
 
-    /// Live pages of each web tab, by index: one tab may show in several worktrees of the project.
-    @ObservationIgnored private var webPages: [Int: [UUID: (String) -> Void]] = [:]
+    /// Live pages of each web tab or panel: one may show in several worktrees of the project.
+    @ObservationIgnored private var webPages: [PluginSurface: [UUID: (String) -> Void]] = [:]
     /// Messages from each page that the plugin has not yet handled, by the page's token. Per page, as the page's
     /// bridge counts them, so a page under its own cap is never refused here because of another page.
     @ObservationIgnored private var webQueued: [UUID: Int] = [:]
@@ -1506,49 +1506,64 @@ final class PluginHost {
     /// Bytes each page may still post, and when that was worked out; refilled at `maxWebBytesPerSecond`.
     @ObservationIgnored private var webBudget: [UUID: (bytes: Double, at: ContinuousClock.Instant)] = [:]
 
-    /// A page of web tab `tab` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
-    /// to detach with, or nil for a tab that is not a web tab. `replacing` is the same view's previous document:
+    /// A page of web tab or panel `surface` came up; `receive` gets each `web/post` message, as JSON text. Returns the token
+    /// to detach with, or nil for a surface that is not web. `replacing` is the same view's previous document:
     /// it is detached, and its post budget carries over, so reloading does not refill it.
-    func attachWebPage(tab: Int, replacing previous: UUID? = nil, receive: @escaping (String) -> Void) -> UUID? {
+    func attachWebPage(surface: PluginSurface, replacing previous: UUID? = nil, receive: @escaping (String) -> Void) -> UUID? {
         let budget = previous.flatMap { webBudget[$0] }
-        if let previous { detachWebPage(tab: tab, previous) }
-        guard surfaceIs(.tab(tab), .web) else { return nil }
+        if let previous { detachWebPage(surface: surface, previous) }
+        guard surfaceIs(surface, .web) else { return nil }
         let token = UUID()
-        webPages[tab, default: [:]][token] = receive
+        webPages[surface, default: [:]][token] = receive
         webBudget[token] = budget
         return token
     }
 
-    func detachWebPage(tab: Int, _ token: UUID) {
-        webPages[tab]?[token] = nil
+    func detachWebPage(surface: PluginSurface, _ token: UUID) {
+        webPages[surface]?[token] = nil
         webQueued[token] = nil
         webTails[token] = nil
         webBudget[token] = nil
     }
 
-    /// The largest JSON text a page of `tab` may post: the `web/message` it becomes must fit in one message.
-    func webMessageLimit(tab: Int) -> Int {
-        limits.maxMessageBytes - Self.webMessage(tab: tab, json: "").count
+    /// The largest JSON text a page of `surface` may post: the `web/message` it becomes must fit in one message.
+    func webMessageLimit(surface: PluginSurface) -> Int {
+        limits.maxMessageBytes - Self.webMessage(surface: surface, json: "").count
     }
 
-    /// Something kept a page of web tab `tab` from working (a script error, a failed load): logged as an error, so
-    /// it shows in Settings → Plugins instead of only as a blank tab.
-    func webPageProblem(tab: Int, _ text: String) {
-        let title = tab < manifest.tabs.count ? manifest.tabs[tab].title : "web tab"
+    /// Something kept a page of a web tab or panel from working (a script error, a failed load): logged as an error,
+    /// so it shows in Settings → Plugins instead of only as a blank page.
+    func webPageProblem(surface: PluginSurface, _ text: String) {
+        let title = switch surface {
+        case .tab(let tab): tab < manifest.tabs.count ? manifest.tabs[tab].title : "web tab"
+        case .panel(let id): manifest.panels.first { $0.id == id }?.title ?? "web panel"
+        }
         appendLog("error", "\(title) page: \(text)")
     }
 
-    /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured.
-    static func webMessage(tab: Int, json: String) -> Data {
-        Data(#"{"jsonrpc":"2.0","method":"web/message","params":{"tab":\#(tab),"message":\#(json)}}"#.utf8)
+    /// `web/message`, with the page's JSON text spliced in as it is, so its size is exactly what the page measured. Panel
+    /// ids are manifest-validated (`[a-z0-9.-]`), so they need no escaping.
+    static func webMessage(surface: PluginSurface, json: String) -> Data {
+        let target = switch surface {
+        case .tab(let tab): #""tab":\#(tab)"#
+        case .panel(let id): #""panel":"\#(id)""#
+        }
+        return Data(#"{"jsonrpc":"2.0","method":"web/message","params":{\#(target),"message":\#(json)}}"#.utf8)
     }
 
-    /// The page `page` of web tab `tab` called `alas.post`. The bridge already checked the size and the page's queue,
+    private func notWeb(_ surface: PluginSurface) -> String {
+        switch surface {
+        case .tab(let tab): "tab \(tab) is not a web tab"
+        case .panel(let id): "panel \"\(id)\" is not a web panel"
+        }
+    }
+
+    /// The page `page` of a web tab or panel called `alas.post`. The bridge already checked the size and the page's queue,
     /// and threw for the page if either was exceeded; they are checked again here, since nothing the page's process
     /// sends is trusted. Checked and queued at once, in call order, then delivered after the page's earlier messages;
     /// `done` gets nil once the plugin has handled it, or why it was dropped.
-    func webMessage(tab: Int, page: UUID, json: String, done: @escaping @MainActor (String?) -> Void) {
-        if let refusal = webMessageRefusal(tab: tab, page: page, json: json) {
+    func webMessage(surface: PluginSurface, page: UUID, json: String, done: @escaping @MainActor (String?) -> Void) {
+        if let refusal = webMessageRefusal(surface: surface, page: page, json: json) {
             done(refusal)
             return
         }
@@ -1559,24 +1574,24 @@ final class PluginHost {
             guard let self else { return done("the plugin is not running") }
             defer { if self.webQueued[page] != nil { self.webQueued[page, default: 1] -= 1 } }
             // The page may have gone, or the plugin stopped, while earlier messages were delivered.
-            guard self.webPages[tab]?[page] != nil else { return done("the page is closed") }
+            guard self.webPages[surface]?[page] != nil else { return done("the page is closed") }
             guard self.state == .active else { return done("the plugin is not running") }
-            await self.deliver(Self.webMessage(tab: tab, json: json))
+            await self.deliver(Self.webMessage(surface: surface, json: json))
             done(nil)
         }
     }
 
-    func webMessage(tab: Int, page: UUID, json: String) async -> String? {
+    func webMessage(surface: PluginSurface, page: UUID, json: String) async -> String? {
         await withCheckedContinuation { continuation in
-            webMessage(tab: tab, page: page, json: json) { continuation.resume(returning: $0) }
+            webMessage(surface: surface, page: page, json: json) { continuation.resume(returning: $0) }
         }
     }
 
-    private func webMessageRefusal(tab: Int, page: UUID, json: String) -> String? {
+    private func webMessageRefusal(surface: PluginSurface, page: UUID, json: String) -> String? {
         guard state == .active else { return "the plugin is not running" }
-        guard surfaceIs(.tab(tab), .web) else { return "tab \(tab) is not a web tab" }
-        guard webPages[tab]?[page] != nil else { return "the page is closed" }
-        guard json.utf8.count <= webMessageLimit(tab: tab) else { return "message too large" }
+        guard surfaceIs(surface, .web) else { return notWeb(surface) }
+        guard webPages[surface]?[page] != nil else { return "the page is closed" }
+        guard json.utf8.count <= webMessageLimit(surface: surface) else { return "message too large" }
         guard webQueued[page, default: 0] < Self.maxWebQueue, spendWebBudget(page, bytes: json.utf8.count) else {
             return "busy"
         }
@@ -1597,19 +1612,20 @@ final class PluginHost {
         return left >= cost
     }
 
-    /// `web/post {tab, message}`: hands `message` to every live page of the tab, as JSON text. Without one it is
-    /// dropped; the page posts its own "ready" when it loads. Returns why the params are invalid, or nil.
+    /// `web/post {tab | panel, message}`: hands `message` to every live page of the tab or panel, as JSON text. Without
+    /// one it is dropped; the page posts its own "ready" when it loads. Returns why the params are invalid, or nil.
     private func postToPage(_ data: Data) -> String? {
-        // The tab through the decoder, which takes only a whole number; the message as any JSON value.
-        guard let tab = (try? JSONDecoder().decode(PluginParams<PluginTabParams>.self, from: data))?.params.tab,
+        // The target through the decoder, which takes only a whole-number tab; the message as any JSON value.
+        guard let target = (try? JSONDecoder().decode(PluginParams<PluginSurfaceParams>.self, from: data))?.params,
+              let surface = PluginSurface(tab: target.tab, panel: target.panel),
               let params = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["params"] as? [String: Any],
               let message = params["message"]
-        else { return "needs tab and message" }
-        guard surfaceIs(.tab(tab), .web) else { return "tab \(tab) is not a web tab" }
+        else { return "needs one of tab and panel, and message" }
+        guard surfaceIs(surface, .web) else { return notWeb(surface) }
         guard let json = try? JSONSerialization.data(withJSONObject: message, options: [.fragmentsAllowed, .withoutEscapingSlashes])
         else { return "message is not JSON" }
         let text = String(decoding: json, as: UTF8.self)
-        for receive in (webPages[tab] ?? [:]).values { receive(text) }
+        for receive in (webPages[surface] ?? [:]).values { receive(text) }
         return nil
     }
 

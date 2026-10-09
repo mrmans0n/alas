@@ -45,9 +45,9 @@ struct PluginWebTests {
     }
 
     /// What `alas.context` holds, sent as data to a running page when the theme changes.
-    @Test func theContextNamesTheTabAndWhetherTheThemeIsDark() {
-        #expect(PluginWebPolicy.context(tab: 2, theme: Theme(id: "light", name: "Light", tokens: [:])) == #"{"tab":2,"theme":"light"}"#)
-        #expect(PluginWebPolicy.context(tab: 0, theme: .fallback) == #"{"tab":0,"theme":"dark"}"#)
+    @Test func theContextNamesTheTabOrPanelAndWhetherTheThemeIsDark() {
+        #expect(PluginWebPolicy.context(surface: .tab(2), theme: Theme(id: "light", name: "Light", tokens: [:])) == #"{"tab":2,"theme":"light"}"#)
+        #expect(PluginWebPolicy.context(surface: .panel("usage"), theme: .fallback) == #"{"panel":"usage","theme":"dark"}"#)
     }
 
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
@@ -115,12 +115,12 @@ struct PluginWebTests {
         var page: PluginWebPage?
         let done = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             var resumed = false
-            _ = host.attachWebPage(tab: 0) { json in
+            _ = host.attachWebPage(surface: .tab(0)) { json in
                 guard !resumed, json.contains(#""done":true"#) else { return }
                 resumed = true
                 continuation.resume(returning: json)
             }
-            page = PluginWebPage.open(host: host, tab: 0, script: Data(Self.hostilePage(origin: origin).utf8), theme: .fallback)
+            page = PluginWebPage.open(host: host, surface: .tab(0), script: Data(Self.hostilePage(origin: origin).utf8), theme: .fallback)
             page?.openExternal = { opened.append($0) }
         }
         defer { page?.close() }
@@ -139,7 +139,7 @@ struct PluginWebTests {
     @Test(.timeLimit(.minutes(1)))
     func aFailingPageReportsWhyInThePluginLog() async throws {
         let host = try await Self.webHost(source: Self.plugin(ping: ""))
-        let page = try #require(PluginWebPage.open(host: host, tab: 0, script: Data(#"throw new Error("boom");"#.utf8), theme: .fallback))
+        let page = try #require(PluginWebPage.open(host: host, surface: .tab(0), script: Data(#"throw new Error("boom");"#.utf8), theme: .fallback))
         defer { page.close() }
         var shown: [String] = []
         page.onProblem = { shown.append($0) }

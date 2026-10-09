@@ -1908,6 +1908,36 @@ struct PluginHostTests {
         .send(#"{"jsonrpc":"2.0",\#(id.map { #""id":\#($0),"# } ?? "")"method":"web/post","params":{"tab":\#(tab),"message":\#(message)}}"#)
     }
 
+    @Test func aWebPanelsPagesTalkToThePluginByPanel() async throws {
+        let post = #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"w","message":{"n":1}}}"#
+        let host = try makeHost([[.send(activateOK)], [.send(post)]], manifest: Self.panelsManifest)
+        await host.activate()
+        #expect(host.attachWebPage(surface: .panel("v")) { _ in } == nil)
+        var received: [String] = []
+        let page = try #require(host.attachWebPage(surface: .panel("w")) { received.append($0) })
+        #expect(await host.webMessage(surface: .panel("w"), page: page, json: #"{"ready":true}"#) == nil)
+        #expect(host.trace.contains { $0.direction == .toPlugin && $0.text.contains(#""panel":"w","message":{"ready":true}"#) })
+        #expect(received == [#"{"n":1}"#])
+        #expect(await host.webMessage(surface: .panel("v"), page: page, json: "1") == #"panel "v" is not a web panel"#)
+    }
+
+    /// A `web/post` to a panel that is not a web panel stops the plugin, from API 15 and below it.
+    @Test(arguments: [
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"v","message":1}}"#, #"panel "v" is not a web panel"#),
+        (PluginHostTests.panelsManifest, #"{"jsonrpc":"2.0","method":"web/post","params":{"tab":0,"panel":"w","message":1}}"#, "needs one of tab and panel"),
+        (#"{"id":"io.test.plugin","name":"Test","version":"1","api":12,"entry":"p.js","web":"ui.js","contributes":{"tabs":[{"id":"t","title":"T","kind":"web"}],"panels":[{"id":"w","title":"W"}]}}"#,
+         #"{"jsonrpc":"2.0","method":"web/post","params":{"panel":"w","message":1}}"#, #"panel "w" is not a web panel"#),
+    ])
+    func misdirectedWebPostsStopThePlugin(manifest: String, message: String, fragment: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains(fragment))
+    }
+
     /// `web/post`, as a notification or a request, reaches every live page of the tab as JSON text; one to a tab
     /// that is not a web tab stops the plugin.
     @Test func webPostReachesTheTabsPagesAndOnlyWebTabs() async throws {
@@ -1916,10 +1946,10 @@ struct PluginHostTests {
             manifest: Self.webManifest)
         await host.activate()
         var first: [String] = [], second: [String] = []
-        #expect(host.attachWebPage(tab: 1) { _ in } == nil)
-        let page = try #require(host.attachWebPage(tab: 0) { first.append($0) })
-        let detached = try #require(host.attachWebPage(tab: 0) { second.append($0) })
-        #expect(await host.webMessage(tab: 0, page: page, json: #"{"ready":true}"#) == nil)
+        #expect(host.attachWebPage(surface: .tab(1)) { _ in } == nil)
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { first.append($0) })
+        let detached = try #require(host.attachWebPage(surface: .tab(0)) { second.append($0) })
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: #"{"ready":true}"#) == nil)
         #expect(first == [#"{"n":1}"#, #""two""#] && second == first)
         // Decoded, not matched as text: the encoder does not promise a key order.
         #expect(host.trace.contains { entry in
@@ -1929,9 +1959,9 @@ struct PluginHostTests {
             return reply["id"] as? Int == 7 && (reply["result"] as? [String: Any])?.isEmpty == true
         })
 
-        host.detachWebPage(tab: 0, detached)
-        #expect(await host.webMessage(tab: 0, page: detached, json: "0") == "the page is closed")
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == nil)
+        host.detachWebPage(surface: .tab(0), detached)
+        #expect(await host.webMessage(surface: .tab(0), page: detached, json: "0") == "the page is closed")
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == nil)
         #expect(host.state == .failed("plugin sent a malformed web/post: tab 1 is not a web tab"))
         #expect(second.count == 2)
     }
@@ -1940,14 +1970,14 @@ struct PluginHostTests {
     @Test func webMessagesAreBoundedByTheirEnvelopeAndMustBeJSON() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
-        let limit = host.webMessageLimit(tab: 0)
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let limit = host.webMessageLimit(surface: .tab(0))
         let fits = "\"" + String(repeating: "a", count: limit - 2) + "\""
-        #expect(PluginHost.webMessage(tab: 0, json: fits).count == Self.limits.maxMessageBytes)
-        #expect(await host.webMessage(tab: 0, page: page, json: fits) == nil)
-        #expect(await host.webMessage(tab: 0, page: page, json: fits + " ") == "message too large")
-        #expect(await host.webMessage(tab: 0, page: page, json: "{") == "message is not JSON")
-        #expect(await host.webMessage(tab: 1, page: page, json: "1") == "tab 1 is not a web tab")
+        #expect(PluginHost.webMessage(surface: .tab(0), json: fits).count == Self.limits.maxMessageBytes)
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: fits) == nil)
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: fits + " ") == "message too large")
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "{") == "message is not JSON")
+        #expect(await host.webMessage(surface: .tab(1), page: page, json: "1") == "tab 1 is not a web tab")
     }
 
     /// Messages a page posts while the plugin is still handling earlier ones queue up to `maxWebQueue` per page, the
@@ -1955,17 +1985,17 @@ struct PluginHostTests {
     @Test func aPageCanQueueOnlySoManyMessages() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let busy = try #require(host.attachWebPage(tab: 0) { _ in })
-        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let busy = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let other = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         // Every task starts on the main actor before the first delivery returns to it.
-        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: busy, json: "\(index)") } }
-        let fromOther = Task { await host.webMessage(tab: 0, page: other, json: "0") }
+        let posts = (0...PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: busy, json: "\(index)") } }
+        let fromOther = Task { await host.webMessage(surface: .tab(0), page: other, json: "0") }
         var results: [String?] = []
         for post in posts { results.append(await post.value) }
         #expect(results.filter { $0 == nil }.count == PluginHost.maxWebQueue)
         #expect(results.last == "busy")
         #expect(await fromOther.value == nil)
-        #expect(await host.webMessage(tab: 0, page: busy, json: "0") == nil)
+        #expect(await host.webMessage(surface: .tab(0), page: busy, json: "0") == nil)
     }
 
     /// A page may post twice `maxWebBytesPerSecond` at once, then that rate as time passes, so a page posting in a
@@ -1976,18 +2006,18 @@ struct PluginHostTests {
         limits.maxMessageBytes = 1 << 20
         let host = try makeHost([[.send(activateOK)]], limits: limits, manifest: Self.webManifest, now: { time })
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
-        let other = try #require(host.attachWebPage(tab: 0) { _ in })
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let other = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         let eighth = "\"" + String(repeating: "a", count: PluginHost.maxWebBytesPerSecond / 8 - 2) + "\""
-        for _ in 0..<16 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
-        #expect(await host.webMessage(tab: 0, page: other, json: "0") == nil)
+        for _ in 0..<16 { #expect(await host.webMessage(surface: .tab(0), page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == "busy")
+        #expect(await host.webMessage(surface: .tab(0), page: other, json: "0") == nil)
         time += .milliseconds(500)
-        for _ in 0..<4 { #expect(await host.webMessage(tab: 0, page: page, json: eighth) == nil) }
-        #expect(await host.webMessage(tab: 0, page: page, json: "0") == "busy")
+        for _ in 0..<4 { #expect(await host.webMessage(surface: .tab(0), page: page, json: eighth) == nil) }
+        #expect(await host.webMessage(surface: .tab(0), page: page, json: "0") == "busy")
         // Reloading does not refill it.
-        let reloaded = try #require(host.attachWebPage(tab: 0, replacing: page) { _ in })
-        #expect(await host.webMessage(tab: 0, page: reloaded, json: "0") == "busy")
+        let reloaded = try #require(host.attachWebPage(surface: .tab(0), replacing: page) { _ in })
+        #expect(await host.webMessage(surface: .tab(0), page: reloaded, json: "0") == "busy")
     }
 
     /// A reloaded document is a new page: its queue starts empty, as its bridge's does, and the old document's
@@ -1995,16 +2025,16 @@ struct PluginHostTests {
     @Test func aReloadedPageGetsAFreshQueueAndTheOldOneIsClosed() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let old = try #require(host.attachWebPage(tab: 0) { _ in })
-        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: old, json: "\(index)") } }
+        let old = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
+        let oldPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: old, json: "\(index)") } }
         // Runs after every old post took its place in the queue, before any delivery returns to the main actor.
         let renewed = Task {
-            host.detachWebPage(tab: 0, old)
-            return host.attachWebPage(tab: 0) { _ in }
+            host.detachWebPage(surface: .tab(0), old)
+            return host.attachWebPage(surface: .tab(0)) { _ in }
         }
         let page = try #require(await renewed.value)
-        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(tab: 0, page: page, json: "\(index)") } }
-        #expect(await host.webMessage(tab: 0, page: old, json: "0") == "the page is closed")
+        let newPosts = (0..<PluginHost.maxWebQueue).map { index in Task { await host.webMessage(surface: .tab(0), page: page, json: "\(index)") } }
+        #expect(await host.webMessage(surface: .tab(0), page: old, json: "0") == "the page is closed")
         for post in newPosts { #expect(await post.value == nil) }
         // The old document's messages still waiting behind the one being delivered are stale, so they are dropped.
         for post in oldPosts { #expect([nil, "the page is closed"].contains(await post.value)) }
@@ -2014,12 +2044,12 @@ struct PluginHostTests {
     @Test func aPagesPostsReachThePluginInOrder() async throws {
         let host = try makeHost([[.send(activateOK)]], manifest: Self.webManifest)
         await host.activate()
-        let page = try #require(host.attachWebPage(tab: 0) { _ in })
+        let page = try #require(host.attachWebPage(surface: .tab(0)) { _ in })
         let count = 8
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             var left = count
             for index in 0..<count {
-                host.webMessage(tab: 0, page: page, json: "\(index)") { failure in
+                host.webMessage(surface: .tab(0), page: page, json: "\(index)") { failure in
                     #expect(failure == nil)
                     left -= 1
                     if left == 0 { continuation.resume() }
