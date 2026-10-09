@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import WebKit
 
@@ -70,6 +71,14 @@ enum PluginWebPolicy {
         #"{"trigger": {"url-filter": "^data:", "resource-type": ["image", "font"]}, "action": {"type": "ignore-previous-rules"}}"#,
         #"{"trigger": {"url-filter": "^blob:", "resource-type": ["image"]}, "action": {"type": "ignore-previous-rules"}}"#,
     ]
+
+    /// The rule list's name, which WebKit uses as a file name, so it is a digest of the hosts rather than the hosts
+    /// themselves (a long list fails to compile). Pages without image hosts share one list.
+    static func ruleListIdentifier(imageHosts: [String]) -> String {
+        guard !imageHosts.isEmpty else { return "alas-plugin-web-v1" }
+        let digest = SHA256.hash(data: Data(imageHosts.joined(separator: ",").utf8))
+        return "alas-plugin-web-v1-" + digest.map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Blocks every load outside `alas-plugin:`, besides the `data:` and `blob:` resources the CSP allows and, from API 15,
     /// `https` images from `imageHosts`. Hosts are validated lowercase names (letters, digits, `-`, `.`), so escaping the
@@ -382,7 +391,7 @@ final class PluginWebPage: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
 
     private static func contentRuleList(imageHosts: [String]) async -> WKContentRuleList? {
-        let identifier = (["alas-plugin-web-v1"] + imageHosts).joined(separator: ",")
+        let identifier = PluginWebPolicy.ruleListIdentifier(imageHosts: imageHosts)
         if let compiled = compiledRules[identifier], let rules = await compiled.value { return rules }
         let task = Task { @MainActor in
             try? await WKContentRuleListStore.default().compileContentRuleList(

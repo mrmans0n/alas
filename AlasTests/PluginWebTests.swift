@@ -77,6 +77,17 @@ struct PluginWebTests {
         #expect(list != nil)
     }
 
+    /// WebKit uses the list's name as a file name, so a plugin with many long hosts still gets its page.
+    @MainActor
+    @Test func aLongHostListStillCompiles() async throws {
+        let hosts = (1...12).map { "service-number-\($0).example-host.com" }
+        let identifier = PluginWebPolicy.ruleListIdentifier(imageHosts: hosts)
+        defer { Task { try? await WKContentRuleListStore.default().removeContentRuleList(forIdentifier: identifier) } }
+        let list = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: identifier, encodedContentRuleList: PluginWebPolicy.contentRules(imageHosts: hosts))
+        #expect(list != nil)
+    }
+
     @Test func theCSPAllowsOnlyThePageScriptAndInlineData() {
         #expect(PluginWebPolicy.contentSecurityPolicy(pluginID: Self.id) == "default-src 'none'; "
             + "script-src alas-plugin://io.x.p/ui.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
