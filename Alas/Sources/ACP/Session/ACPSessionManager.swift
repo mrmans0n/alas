@@ -7564,8 +7564,16 @@ extension ACPSessionManager {
                 }
             }
             let pendingModeToRestore = pendingMode.removeValue(forKey: sessionId)
+            // A config-option mode chip (Claude, Codex) is restored with the
+            // other config options. `currentMode` only tracks the legacy
+            // `current_mode_update` and can be stale, so replaying it here
+            // would clobber the loaded mode before that restore runs.
+            let modeIsConfigBacked: Bool = {
+                guard case .configOption = session.chipState.mode?.source else { return false }
+                return true
+            }()
             let modeToRestore = pendingModeToRestore
-                ?? persistedMode.flatMap { persisted in
+                ?? (modeIsConfigBacked ? nil : persistedMode).flatMap { persisted in
                     persisted != loadedMode
                         && result.availableModes.contains(where: { $0.id == persisted })
                         ? persisted

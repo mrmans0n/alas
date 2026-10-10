@@ -3128,6 +3128,48 @@ struct ACPSessionManagerAttachRestoreTests {
             ACPConfigOption.currentValues(in: session.availableConfigOptions))
     }
 
+    @Test("reopened session keeps a config-option mode instead of replaying the stale legacy mode")
+    func reopenedSessionKeepsConfigOptionMode() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            currentMode: "default",
+            configOptionValues: ["mode": .string("auto")]
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "auto", name: "Auto"),
+                ],
+                currentModel: nil,
+                currentMode: "auto",
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "mode",
+                    name: "Mode",
+                    category: "mode",
+                    currentValue: "auto",
+                    options: [
+                        .init(id: "default", name: "Default"),
+                        .init(id: "auto", name: "Auto"),
+                    ])]
+            ))
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.availableConfigOptions.first?.currentStringValue == "auto")
+    }
+
     @Test("reopened session preserves config edits made while load is pending")
     func reopenedSessionPreservesConfigEditsMadeWhileLoadIsPending() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
