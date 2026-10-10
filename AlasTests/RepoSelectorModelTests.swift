@@ -49,6 +49,20 @@ struct RepoSelectorModelTests {
         )
     }
 
+    @Test func folderProjectListsItsRowWithoutANewWorktreeAction() {
+        let model = RepoSelectorModel()
+        var folder = project("f1")
+        folder.kind = .folder
+        let row = ProjectsManager.folderWorktree(for: folder)
+        let e = env(projects: [folder], worktrees: ["f1": [row]])
+        #expect(model.rows(environment: e) == [
+            .projectHeader(projectId: "f1"),
+            .worktree(row, indices: [], isCurrent: false),
+            .actionsHeader,
+            .action(.newProject)
+        ])
+    }
+
     // MARK: - Empty-projects state
 
     @Test func emptyProjectsShowsNoProjectsHint() {

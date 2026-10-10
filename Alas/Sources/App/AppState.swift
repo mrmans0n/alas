@@ -5847,6 +5847,9 @@ final class AppState {
         projectGitWatchers[projectId] = watcher
     }
 
+    /// Projects that can have worktrees: everything but folder projects.
+    var worktreeProjects: [ProjectConfig] { projects.filter { !$0.isFolder } }
+
     /// Resolved through the owning project: a git project and a folder project
     /// may register the same path.
     func isFolderWorktree(_ worktree: Worktree) -> Bool {
