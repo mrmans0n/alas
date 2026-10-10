@@ -142,6 +142,8 @@ enum NativePeerComposerState {
         return targets
     }
 
+    static let attachmentTooLarge = "Attachments can total at most 10 MB."
+
     /// Why an image can't join the staged attachments, or nil when it can.
     /// Mirrors the host's checks so a send is never refused for them.
     static func attachmentRefusal(_ data: Data, staged: [Data]) -> String? {
@@ -150,7 +152,7 @@ enum NativePeerComposerState {
             return "A message can carry at most \(RemoteSessionGateway.maxAttachmentCount) images."
         }
         guard staged.reduce(data.count, { $0 + $1.count }) <= RemoteSessionGateway.maxAttachmentsBytes else {
-            return "Attachments can total at most 10 MB."
+            return attachmentTooLarge
         }
         return nil
     }
