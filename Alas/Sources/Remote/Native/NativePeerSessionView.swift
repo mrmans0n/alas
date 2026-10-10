@@ -610,10 +610,12 @@ private struct NativePeerComposer: View {
     private func attachImages(at urls: [URL]) {
         var refusal: String?
         for url in urls where url.isFileURL {
-            // Size first: a file past the batch cap is refused without being read.
+            // Sizes first: a file the remaining count or byte budget can't
+            // take is refused without being read.
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            guard size <= RemoteSessionGateway.maxAttachmentsBytes else {
-                refusal = NativePeerComposerState.attachmentTooLarge
+            if let tooBig = NativePeerComposerState.attachmentSizeRefusal(
+                size, stagedSizes: client.attachments.map(\.data.count)) {
+                refusal = tooBig
                 continue
             }
             guard let data = try? Data(contentsOf: url) else { continue }

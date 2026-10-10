@@ -1009,6 +1009,14 @@ struct NativePeerSessionsTests {
     }
 
     @Test(arguments: [
+        (1, [], true), (10_000_000, [], true), (10_000_001, [], false), (1, [9_999_999], true),
+        (2, [9_999_999], false), (1, Array(repeating: 1, count: 10), false),
+    ] as [(Int, [Int], Bool)])
+    func fileSizeIsJudgedAgainstTheRemainingBatchBudgetBeforeReading(size: Int, staged: [Int], fits: Bool) {
+        #expect((NativePeerComposerState.attachmentSizeRefusal(size, stagedSizes: staged) == nil) == fits)
+    }
+
+    @Test(arguments: [
         ("/re", 0, 3, "/review ", 8),
         ("please /re now", 7, 10, "please /review  now", 15),
         ("🙂 /", 3, 4, "🙂 /review ", 11),

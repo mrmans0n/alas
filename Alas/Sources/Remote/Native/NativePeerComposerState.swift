@@ -144,17 +144,23 @@ enum NativePeerComposerState {
 
     static let attachmentTooLarge = "Attachments can total at most 10 MB."
 
+    /// Why a file of `size` bytes can't join the staged attachments, judged
+    /// from sizes alone so it can be checked before the file is read.
+    static func attachmentSizeRefusal(_ size: Int, stagedSizes: [Int]) -> String? {
+        guard stagedSizes.count < RemoteSessionGateway.maxAttachmentCount else {
+            return "A message can carry at most \(RemoteSessionGateway.maxAttachmentCount) images."
+        }
+        guard stagedSizes.reduce(size, +) <= RemoteSessionGateway.maxAttachmentsBytes else {
+            return attachmentTooLarge
+        }
+        return nil
+    }
+
     /// Why an image can't join the staged attachments, or nil when it can.
     /// Mirrors the host's checks so a send is never refused for them.
     static func attachmentRefusal(_ data: Data, staged: [Data]) -> String? {
         guard ACPImageStaging.sniffMIME(data) != nil else { return "Only PNG, JPEG, GIF and WebP images can be attached." }
-        guard staged.count < RemoteSessionGateway.maxAttachmentCount else {
-            return "A message can carry at most \(RemoteSessionGateway.maxAttachmentCount) images."
-        }
-        guard staged.reduce(data.count, { $0 + $1.count }) <= RemoteSessionGateway.maxAttachmentsBytes else {
-            return attachmentTooLarge
-        }
-        return nil
+        return attachmentSizeRefusal(data.count, stagedSizes: staged.map(\.count))
     }
 
     private static func spec(_ chip: RemoteChip) -> ChipSpec? {
