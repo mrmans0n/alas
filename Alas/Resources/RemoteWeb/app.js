@@ -4405,12 +4405,15 @@ function renderMention() {
     box.appendChild(row);
   });
   box.classList.remove("hidden");
+  box.classList.toggle("is-stale", mentionState.itemsQuery !== mentionState.query);
   const selected = box.children[mentionState.selected];
   if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: "nearest" });
 }
 
+// Rows answering an older query stay up, dimmed, until the host answers
+// this one, and can't be picked meanwhile.
 function pickMention(m) {
-  if (!mentionState) return;
+  if (!mentionState || mentionState.itemsQuery !== mentionState.query) return;
   const ta = $("prompt");
   const caret = ta.selectionStart;
   const replacement = "@" + m.name + " ";
@@ -4438,8 +4441,7 @@ function handleMentionKey(e) {
   else if (e.key === "ArrowDown") mentionState.selected = (mentionState.selected + 1) % n;
   else if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
     e.preventDefault();
-    // Rows for an older query wait for the host's answer to this one.
-    if (mentionState.itemsQuery === mentionState.query) pickMention(mentionState.items[mentionState.selected]);
+    pickMention(mentionState.items[mentionState.selected]);
     return true;
   } else if (e.key === "Escape") {
     e.preventDefault();

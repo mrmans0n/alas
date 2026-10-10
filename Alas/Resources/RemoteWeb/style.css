@@ -276,6 +276,7 @@ a:hover { color: var(--accent-hover); }
 .slash-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: none; color: var(--fg); text-align: left; cursor: pointer; }
 .slash-row.is-selected { background: color-mix(in oklab, var(--accent) 25%, transparent); }
 .slash-command { flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+#mention.is-stale { opacity: 0.55; }
 .mention-icon { flex: 0 0 auto; width: 20px; color: var(--fg-muted); font-size: 12px; text-align: center; }
 .slash-hint, .slash-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-faint); font-size: 13px; }
 .action-btn { flex-shrink: 0; width: 46px; height: 46px; padding: 0; border: none; border-radius: 14px; display: grid; place-items: center; cursor: pointer; transition: transform .08s; position: relative; overflow: visible; }

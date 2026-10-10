@@ -661,6 +661,7 @@ private struct NativePeerComposer: View {
             }
             .onChange(of: mentionHighlight) { _, index in proxy.scrollTo(index) }
         }
+        .opacity(mentionRowsAreCurrent ? 1 : 0.55)
         .frame(height: min(CGFloat(client.mentionCandidates.count) * 26 + 8, 220))
         .padding(4)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -715,15 +716,17 @@ private struct NativePeerComposer: View {
         default:
             // Cmd+Return sends and Shift+Return adds a line, even with the picker open.
             guard press.modifiers.isDisjoint(with: [.command, .shift]) else { return .ignored }
-            // Rows for an older query wait for the host's answer to this one.
-            guard client.mentionCandidatesQuery == mentionQuery else { return .handled }
             pickMention(candidates[min(mentionHighlight, candidates.count - 1)])
         }
         return .handled
     }
 
+    /// Rows answering an older query stay up, dimmed, until the host
+    /// answers this one, and can't be picked meanwhile.
+    private var mentionRowsAreCurrent: Bool { client.mentionCandidatesQuery == mentionQuery }
+
     private func pickMention(_ mention: RemoteMention) {
-        guard let start = mentionTokenStart, let caret else { return }
+        guard mentionRowsAreCurrent, let start = mentionTokenStart, let caret else { return }
         let completed = NativePeerComposerState.completingToken(
             "@" + mention.name, in: client.draft, tokenStart: start, caret: caret)
         closeMentionPicker()
