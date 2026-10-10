@@ -13,7 +13,7 @@ import Foundation
 /// Soundness rests on two invariants, both enforced below:
 ///
 /// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
-///    `_listenActive`, `_linkedKeys` and the three handlers are private and are only read or
+///    `_listenActive` and the four handlers are private and are only read or
 ///    written inside `lock`. Nothing else in the class is mutable:
 ///    `clientTasks` does its own locking, everything else is `let` or
 ///    `static`.
@@ -31,6 +31,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
     typealias EventHandler = (AgentHookEvent) -> Void
     typealias CLIRequestHandler = (AlasCLIRequest) async -> AlasCLIResponse
     typealias MCPHelloHandler = (MCPHelloEvent) -> Void
+    typealias RebindHandler = () -> Void
 
     /// Guards every mutable field below. See the invariants on the type.
     private let lock = NSLock()
@@ -45,8 +46,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// including the test bodies themselves.
     private let listenQueue = DispatchQueue(label: "io.nlopez.alas.agent-hook-listen", qos: .utility)
     private var _listenActive = false
-    /// Keys of live `linkSession` links, recreated when the socket is rebound.
-    private var _linkedKeys = Set<String>()
+    private var _onRebind: RebindHandler?
     private var _onEvent: EventHandler?
     private var _onCLIRequest: CLIRequestHandler?
     private var _onMCPHello: MCPHelloHandler?
@@ -75,14 +75,26 @@ final class AgentHookSocketServer: @unchecked Sendable {
         set { lock.withLock { _onMCPHello = newValue } }
     }
 
+    /// Called on the main queue after a deleted socket was rebound, so the
+    /// owner can recreate the session links it still owns.
+    var onRebind: RebindHandler? {
+        get { lock.withLock { _onRebind } }
+        set { lock.withLock { _onRebind = newValue } }
+    }
+
     /// Large enough for `visual_show` requests: up to 512 KiB of HTML, which
     /// JSON-escaping can inflate several times over on the wire.
     static let maxPayloadSize = 4 * 1024 * 1024
     private static let maxConcurrentClientTasks = 16
     private static let clientIOTimeout = timeval(tv_sec: 5, tv_usec: 0)
 
-    init(socketPath: String) {
+    /// The isolated profile's runtime directory the socket directory nests
+    /// in, if any. A rebind recreates and revalidates it.
+    private let runtimeRoot: String?
+
+    init(socketPath: String, runtimeRoot: String? = nil) {
         sessionLinkDirectory = (socketPath as NSString).deletingLastPathComponent
+        self.runtimeRoot = runtimeRoot
         unlink(socketPath)
         guard startListening(path: socketPath) else { return }
         // The listening socket is bound to the same path callers use, so
@@ -106,7 +118,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
         }
         Self.sweepStaleSockets(in: directory)
         let path = "\(directory)/pid-\(pid)"
-        self.init(socketPath: path)
+        self.init(socketPath: path, runtimeRoot: profile.runtimeDirectory?.path)
     }
 
     /// `/tmp/alas-<uid>` for the standard profile, which is also where the
@@ -144,16 +156,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// one), so a client connecting while it is repointed never finds it
     /// missing.
     func linkSession(leafId: String) -> String? {
-        guard let bindPath = lock.withLock({ _bindPath }),
-              let linkPath = Self.link(leafId, to: bindPath, in: sessionLinkDirectory)
-        else { return nil }
-        lock.withLock { _ = _linkedKeys.insert(leafId) }
-        return linkPath
-    }
-
-    private static func link(_ leafId: String, to bindPath: String, in directory: String) -> String? {
-        let linkPath = "\(directory)/sock-\(leafId)"
-        let stagingPath = "\(directory)/.sock-\(leafId).\(UUID().uuidString.prefix(8))"
+        guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
+        let linkPath = "\(sessionLinkDirectory)/sock-\(leafId)"
+        let stagingPath = "\(sessionLinkDirectory)/.sock-\(leafId).\(UUID().uuidString.prefix(8))"
         guard symlink(bindPath, stagingPath) == 0 else { return nil }
         guard rename(stagingPath, linkPath) == 0 else {
             unlink(stagingPath)
@@ -172,7 +177,6 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// `TerminalService` explicitly closes a pane so we don't leave
     /// orphan symlinks in the socket directory.
     func unlinkSession(leafId: String) {
-        lock.withLock { _ = _linkedKeys.remove(leafId) }
         unlink("\(sessionLinkDirectory)/sock-\(leafId)")
     }
 
@@ -269,6 +273,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
                     if idlePolls % 25 == 0, let rebound = self?.rebindIfUnlinked() {
                         close(socketFD)
                         socketFD = rebound
+                        DispatchQueue.main.async { [weak self] in self?.deliverRebind() }
                     }
                     continue
                 }
@@ -282,9 +287,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// runs (e.g. `rm -rf /tmp/alas-*`). The old fd keeps listening on an
     /// inode nobody can reach, and every client, including `alas mcp`, fails
     /// with "could not reach Alas" until the path exists again. Rebinding the
-    /// same path, and recreating the session links that went with it, heals
-    /// every client without a relaunch. Returns the new fd, or nil when the
-    /// path is intact or cannot be restored yet.
+    /// same path heals every client without a relaunch; `onRebind` lets the
+    /// owner recreate the session links that went with it. Returns the new
+    /// fd, or nil when the path is intact or cannot be restored yet.
     ///
     /// Runs entirely under `lock` so `shutdown()` lands either before it (no
     /// rebind) or after it (and unlinks the new path), never in between.
@@ -293,20 +298,14 @@ final class AgentHookSocketServer: @unchecked Sendable {
             guard _listenActive, let bindPath = _bindPath else { return nil }
             var st = Darwin.stat()
             guard Darwin.lstat(bindPath, &st) != 0 else { return nil }
-            // An isolated profile nests the directory in its runtime root
-            // (`/tmp/alas-<uid>-<hash>/hooks`), which the same `rm` removes.
-            // Only a missing parent is recreated: `/tmp` itself is never ours.
-            let parent = (sessionLinkDirectory as NSString).deletingLastPathComponent
-            if Darwin.lstat(parent, &st) != 0 {
-                guard Self.prepareSocketDirectory(parent, ownerUid: getuid()) else { return nil }
+            // The same `rm` removes an isolated profile's runtime root
+            // (`/tmp/alas-<uid>-<hash>`), and another user could recreate it.
+            if let runtimeRoot {
+                guard Self.prepareSocketDirectory(runtimeRoot, ownerUid: getuid()) else { return nil }
             }
             guard Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid()) else { return nil }
             let socketFD = Self.createSocket(path: bindPath)
-            guard socketFD >= 0 else { return nil }
-            for key in _linkedKeys {
-                _ = Self.link(key, to: bindPath, in: sessionLinkDirectory)
-            }
-            return socketFD
+            return socketFD >= 0 ? socketFD : nil
         }
     }
 
@@ -375,6 +374,13 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private func deliverEvent(_ event: AgentHookEvent) {
         let handler = lock.withLock { _onEvent }
         handler?(event)
+    }
+
+    /// Invoked only from `DispatchQueue.main.async`. Snapshots the handler
+    /// under the lock, then calls it with the lock released.
+    private func deliverRebind() {
+        let handler = lock.withLock { _onRebind }
+        handler?()
     }
 
     /// Invoked only from `DispatchQueue.main.async`. Snapshots the handler

@@ -333,17 +333,20 @@ struct AgentHookSocketServerTests {
 
     /// Deleting the socket directory under a running instance (e.g.
     /// `rm -rf /tmp/alas-*`) must not strand its clients until a relaunch:
-    /// the bind path and its session links come back on their own. An
-    /// isolated profile's `hooks` directory loses its runtime root with it.
-    @Test(arguments: ["", "/hooks"])
-    func deletedSocketDirectoryIsRestored(subdirectory: String) async throws {
+    /// the bind path comes back on its own and `onRebind` lets the owner
+    /// relink its sessions. An isolated profile's `hooks` directory loses its
+    /// runtime root with it.
+    @Test(arguments: [false, true])
+    func deletedSocketDirectoryIsRestored(isolated: Bool) async throws {
         let (root, cleanup) = tmpSocketDir()
         defer { cleanup() }
-        let dir = root + subdirectory
+        let dir = isolated ? "\(root)/hooks" : root
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let server = AgentHookSocketServer(socketPath: "\(dir)/pid-1")
+        let server = AgentHookSocketServer(socketPath: "\(dir)/pid-1", runtimeRoot: isolated ? root : nil)
         defer { server.shutdown() }
-        let link = try #require(server.linkSession(leafId: AgentHookSocketServer.acpSessionLinkKey("s")))
+        let key = AgentHookSocketServer.acpSessionLinkKey("s")
+        let link = try #require(server.linkSession(leafId: key))
+        server.onRebind = { [weak server] in _ = server?.linkSession(leafId: key) }
 
         try FileManager.default.removeItem(atPath: root)
 

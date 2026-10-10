@@ -6956,6 +6956,18 @@ final class AppState {
             self.noteBuiltInMCPRequest(sessionId: request.sessionId)
             return await self.handleCLIRequest(request)
         }
+        // Dispatched on the main queue, like `onMCPHello`. Session links died
+        // with the deleted socket directory; relink only what this instance
+        // still owns, so a session whose lease moved elsewhere is left alone.
+        harness.socketServer.onRebind = { [weak self] in
+            guard let self else { return }
+            self.refreshPersistedHookSymlinks()
+            for manager in self.acpManagers.values {
+                for sessionId in manager.runners.keys {
+                    _ = self.acpSessionSocketPath(sessionId: sessionId)
+                }
+            }
+        }
         // The socket server dispatches this on the main queue, so the closure
         // is already main-actor context.
         harness.socketServer.onMCPHello = { [weak self] hello in
