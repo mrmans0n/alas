@@ -8,7 +8,6 @@ AlasTests/WebPreviewAutomationBrowserTests	subprocess	Real WKWebView against a l
 AlasTests/AlasGhosttySmokeTests	quarantine	Ghostty runtime smoke is manual; hosted test runners do not provide a stable display runtime.	#1270
 AlasTests/ACPGeminiE2ETests	quarantine	Requires a locally installed and authenticated Gemini CLI; run explicitly outside PR CI.	#1270
 AlasTests/LiveLanguageServerVerificationTests	quarantine	Opt-in evidence collector requiring a locally installed language server; see docs/plans/2026-09-13-code-editor-lsp-verification.md.	#1270
-AlasTests/ACPDraftCleanupTests/evaluateHeldOutDraft()	quarantine	Opt-in on-device quality evaluation requires an eligible Mac with ready Apple Intelligence and manual intent review; run explicitly with TEST_RUNNER_ALAS_DRAFT_CLEANUP_EVALUATION=1. Hosted CI rejects its expected runtime skip. Evidence: ordinary-9-1 in run 38087338826.	#1439
 AlasTests/ACPTranscriptFrameRateBenchmark	quarantine	Opt-in frame-rate benchmark that needs a visible window and an awake display; run explicitly with TEST_RUNNER_ALAS_TRANSCRIPT_BENCH=1 on an optimized build.	#1270
 AlasTests/RemoteDiscoveryIntegrationTests	quarantine	Requires real multicast DNS; hosted macOS runners did not discover their local advertisement in runs 35711949987 and 35733349340. Run explicitly on a Bonjour-capable host.	#1270
 AlasTests/SSHIntegrationTests	quarantine	Requires a key-authenticated SSH localhost fixture; run explicitly with ALAS_SSH_INTEGRATION=1.	#1270

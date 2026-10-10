@@ -83,13 +83,6 @@ Their regressions failed before the fixes; the final focused native run passed
 Unicode fixtures were refreshed to still fail without byte comparison after the
 punctuation policy became stricter. Full formatting lint passed.
 
-CI run 38087338826 executed the deterministic cleanup tests successfully, but
-its runtime-skip audit failed because the opt-in held-out evaluation was skipped.
-The execution policy now explicitly excludes only `evaluateHeldOutDraft()` from
-hosted CI. The actual compiled enumeration confirms the other six cleanup test
-definitions remain scheduled; the inventory harness's 44 tests passed. This
-exclusion does not waive the live-model or manual acceptance gates below.
-
 ## Live evaluation and release gates
 
 `ACPDraftCleanupTests.evaluateHeldOutDraft` contains 16 held-out typed/dictated
