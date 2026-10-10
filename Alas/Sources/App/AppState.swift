@@ -6954,7 +6954,7 @@ final class AppState {
         harness.socketServer.onCLIRequest = { [weak self] request in
             guard let self else { return .error("Alas is not available.") }
             self.noteBuiltInMCPRequest(
-                sessionId: request.sessionId, fromServer: request.mcpServerTransport != nil)
+                sessionId: request.sessionId, serverTransport: request.mcpServerTransport)
             return await self.handleCLIRequest(request)
         }
         // The socket server dispatches this on the main queue, so the closure
@@ -7004,26 +7004,30 @@ final class AppState {
     }
 
     /// A request carrying an ACP session's id. One the built-in `alas mcp`
-    /// tagged as its own (`fromServer`) proves a server is up even if its
-    /// hello was lost; an untagged one may be the agent's shell running
-    /// `alas`. See `MCPRegistrationDecision`. Neither writes the hello
-    /// registry, which only a hello may advance.
+    /// tagged with its transport (`serverTransport`) proves a server is up
+    /// even if its hello was lost; an untagged one may be the agent's shell
+    /// running `alas`. See `MCPRegistrationDecision`. Neither writes the
+    /// hello registry, which only a hello may advance.
     @MainActor
-    private func noteBuiltInMCPRequest(sessionId: String?, fromServer: Bool) {
+    private func noteBuiltInMCPRequest(sessionId: String?, serverTransport: MCPTransportKind?) {
         guard let sessionId else { return }
         for manager in acpManagers.values {
             guard let session = manager.liveSession(for: sessionId) else { continue }
             let previous = session.builtInMCPRegistration
+            let attachedTransport = session.mcpAttachmentSummary?.statuses
+                .first { $0.id == BuiltInAlasMCP.statusId }?.transport
+            let evidence = MCPRegistrationDecision.requestEvidence(
+                serverTransport: serverTransport, attachedTransport: attachedTransport)
             if previous != .registered,
                MCPRegistrationDecision.resolve(
-                   evidence: fromServer ? .serverRequest : .request,
+                   evidence: evidence,
                    graceElapsed: false,
                    reattachedToRunningServer: session.builtInMCPReattachedToRunningServer,
                    requiresFreshHello: session.builtInMCPRequiresFreshHello
                ) == .registered {
                 session.builtInMCPRegistration = .registered
                 mcpRegistrationLogger.notice(
-                    "\(fromServer ? "server request" : "request", privacy: .public) session=\(sessionId, privacy: .public) previous=\("\(previous)", privacy: .public)"
+                    "\("\(evidence)", privacy: .public) session=\(sessionId, privacy: .public) transport=\(serverTransport?.rawValue ?? "untagged", privacy: .public) previous=\("\(previous)", privacy: .public)"
                 )
             }
             return

@@ -68,6 +68,19 @@ enum MCPRegistrationDecision {
         }
     }
 
+    /// What a `cli` request shows. A request tagged with the transport the
+    /// current attach configured comes from a built-in server. A tag for
+    /// another transport comes from a server an earlier attach left running
+    /// (e.g. stdio after switching to HTTP), so it proves nothing about this
+    /// one. An untagged request may be the agent's shell.
+    static func requestEvidence(
+        serverTransport: MCPTransportKind?,
+        attachedTransport: MCPTransportKind?
+    ) -> MCPRegistrationEvidence {
+        guard let serverTransport else { return .request }
+        return serverTransport == attachedTransport ? .serverRequest : .none
+    }
+
     /// Whether the recorded hello counts for this attach: any hello does,
     /// except the one a superseded server sent before the attach started.
     static func isCurrentHello(_ sequence: Int?, staleSequence: Int?) -> Bool {

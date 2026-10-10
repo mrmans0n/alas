@@ -102,6 +102,21 @@ struct MCPRegistrationDecisionTests {
         #expect(MCPRegistrationDecision.isCurrentHello(c.sequence, staleSequence: c.stale) == expected)
     }
 
+    @Test(arguments: [
+        (MCPTransportKind?.none, MCPTransportKind?.some(.stdio), MCPRegistrationEvidence.request),
+        (.stdio, .stdio, .serverRequest),
+        (.http, .http, .serverRequest),
+        // A stdio server left running after switching this attach to HTTP.
+        (.stdio, .http, MCPRegistrationEvidence.none),
+        (.http, nil, MCPRegistrationEvidence.none),
+    ])
+    func requestEvidence(
+        server: MCPTransportKind?, attached: MCPTransportKind?, expected: MCPRegistrationEvidence
+    ) {
+        #expect(MCPRegistrationDecision.requestEvidence(
+            serverTransport: server, attachedTransport: attached) == expected)
+    }
+
     struct HelloCase: Sendable {
         let sequence: Int?
         let stale: Int?
