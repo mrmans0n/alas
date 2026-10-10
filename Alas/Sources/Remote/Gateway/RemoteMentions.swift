@@ -48,19 +48,20 @@ enum RemoteMentions {
     }
 
     /// The attachment for one mention, or nil when it names nothing inside
-    /// the session's project: a file outside the worktree, the session
+    /// the session's project: a path `isContainedFile` rejects, the session
     /// itself, a session `isProjectSession` doesn't confirm, or a malformed
     /// symbol link.
     @MainActor
     static func attachment(
         for mention: RemoteMention, worktreeRoot: URL, sessionId: String,
+        isContainedFile: (_ relativePath: String) async -> Bool,
         isProjectSession: (String) async -> Bool
     ) async -> ACPMessage.Attachment? {
         let name = String(mention.name.prefix(maxNameLength))
         switch mention.kind {
         case RemoteMention.file:
             guard let path = RemoteWorktreeFileAccess.normalizedRelativePath(mention.value),
-                  RemoteWorktreeFileAccess.resolve(path: path, in: worktreeRoot) != nil
+                  await isContainedFile(path)
             else { return nil }
             let url = worktreeRoot.appendingPathComponent(path, isDirectory: mention.value.hasSuffix("/"))
             return .init(uri: url.absoluteString, name: name, mimeType: nil)

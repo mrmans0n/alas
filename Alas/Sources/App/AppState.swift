@@ -16532,10 +16532,21 @@ extension AppState: RemoteSessionsProvider {
     func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
         guard !mentions.isEmpty else { return [] }
         guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
+        let root = worktree.path
         var attachments: [ACPMessage.Attachment] = []
         for mention in mentions {
             guard let attachment = await RemoteMentions.attachment(
-                for: mention, worktreeRoot: worktree.path, sessionId: sessionId,
+                for: mention, worktreeRoot: root, sessionId: sessionId,
+                isContainedFile: { path in
+                    // Symlinks of an SSH worktree only resolve on its host,
+                    // as for the remote file reads.
+                    guard root.isRemoteAlasPath else {
+                        return RemoteWorktreeFileAccess.resolve(path: path, in: root) != nil
+                    }
+                    guard let host = RemoteHostRegistry.shared.host(forPath: root.path) else { return false }
+                    return (try? await RemotePathContainment.verifyRemoteContainment(
+                        host: host, path: root.appendingPathComponent(path).path, worktreeRoot: root.path)) != nil
+                },
                 isProjectSession: { [weak self] id in
                     await self?.acpSessionMentionCandidate(sessionId: id)?.projectId == worktree.projectId
                 })

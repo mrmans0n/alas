@@ -21,6 +21,7 @@ struct RemoteMentionsTests {
     func mentionsResolveOnlyInsideTheSessionsProject(kind: String, value: String, uri: String?) async {
         let attachment = await RemoteMentions.attachment(
             for: RemoteMention(kind: kind, value: value, name: "n"), worktreeRoot: root, sessionId: "self",
+            isContainedFile: { RemoteWorktreeFileAccess.resolve(path: $0, in: root) != nil },
             isProjectSession: { $0 != "foreign" })
         #expect(attachment?.uri == uri)
     }
@@ -31,7 +32,7 @@ struct RemoteMentionsTests {
         let uri = ACPSymbolReference.uri(for: target) + "&extra=1"
         let attachment = try #require(await RemoteMentions.attachment(
             for: RemoteMention(kind: RemoteMention.symbol, value: uri, name: "App.run()"), worktreeRoot: root,
-            sessionId: "self", isProjectSession: { _ in true }))
+            sessionId: "self", isContainedFile: { _ in true }, isProjectSession: { _ in true }))
         #expect(attachment.uri == ACPSymbolReference.uri(for: target))
     }
 
