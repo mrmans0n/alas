@@ -83,6 +83,11 @@ pub struct Request {
     /// stay for wire compatibility with the original six commands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+    /// Set only by `alas mcp`: the transport of the built-in MCP server that
+    /// sent the request. A shell `alas` never sets it, so the app can count
+    /// any tagged request as proof the server is up, like its hello.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_transport: Option<&'static str>,
 }
 
 impl Request {
@@ -102,6 +107,7 @@ impl Request {
             keep_branch: None,
             paths: None,
             params: None,
+            mcp_transport: None,
         }
     }
 }

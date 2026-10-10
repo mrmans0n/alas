@@ -6536,6 +6536,12 @@ extension ACPSessionManager {
             // attach of this session can never write the current row.
             let mcpRegistrationEpoch = (mcpRegistrationAttachEpoch[sessionId] ?? 0) + 1
             mcpRegistrationAttachEpoch[sessionId] = mcpRegistrationEpoch
+            let mcpAttachStartedAt = ContinuousClock.now
+            if shouldTrackBuiltInRegistration {
+                mcpRegistrationLogger.notice(
+                    "attach session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) transport=\(builtInMCP?.status.transport.rawValue ?? "none", privacy: .public) reattached=\(reattachedToRunningServer) helloBeforeAttach=\(helloBeforeAttach?.transport.rawValue ?? "none", privacy: .public)"
+                )
+            }
             // A hello recorded earlier in this app run by the same surviving
             // server is still valid evidence, so only a fresh process re-proves.
             if shouldTrackBuiltInRegistration && !reattachedToRunningServer {
@@ -7320,6 +7326,9 @@ extension ACPSessionManager {
             }
             if shouldTrackBuiltInRegistration {
                 let reattachedToRunningServer = reattachedToRunningServer
+                mcpRegistrationLogger.notice(
+                    "grace armed session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) afterAttach=\(ContinuousClock.now - mcpAttachStartedAt, privacy: .public) state=\("\(session.builtInMCPRegistration)", privacy: .public) freshRemoteSession=\(createdFreshRemoteSession)"
+                )
                 Task { @MainActor [weak self, weak session] in
                     try? await Task.sleep(for: MCPRegistrationDecision.helloGrace)
                     guard let self, let session,
@@ -7327,13 +7336,17 @@ extension ACPSessionManager {
                     else { return }
                     // Don't downgrade a row that already registered.
                     if session.builtInMCPRegistration == .registered { return }
+                    let record = self.builtInMCPHello?(sessionId)
                     let helloSeen = MCPRegistrationDecision.isCurrentHello(
-                        self.builtInMCPHello?(sessionId)?.sequence,
+                        record?.sequence,
                         staleSequence: staleHelloSequence)
                     session.builtInMCPRegistration = MCPRegistrationDecision.resolve(
                         evidence: helloSeen ? .hello : .none,
                         graceElapsed: true,
                         reattachedToRunningServer: reattachedToRunningServer)
+                    mcpRegistrationLogger.notice(
+                        "grace elapsed session=\(sessionId, privacy: .public) epoch=\(mcpRegistrationEpoch) afterAttach=\(ContinuousClock.now - mcpAttachStartedAt, privacy: .public) resolved=\("\(session.builtInMCPRegistration)", privacy: .public) recordedHello=\(record.map { "\($0.transport.rawValue)#\($0.sequence)" } ?? "none", privacy: .public) staleSequence=\(staleHelloSequence.map(String.init) ?? "none", privacy: .public)"
+                    )
                 }
             }
             // Sessions that start from loaded context (native fork, imported

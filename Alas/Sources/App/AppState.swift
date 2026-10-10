@@ -6953,24 +6953,19 @@ final class AppState {
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
             guard let self else { return .error("Alas is not available.") }
-            self.noteBuiltInMCPRequest(sessionId: request.sessionId)
+            if let transport = request.mcpServerTransport, let sessionId = request.sessionId {
+                // Sent by the built-in server itself, so it proves registration
+                // exactly like the hello, even if that hello was lost.
+                self.noteBuiltInMCPHello(sessionId: sessionId, transport: transport, source: "request")
+            } else {
+                self.noteBuiltInMCPRequest(sessionId: request.sessionId)
+            }
             return await self.handleCLIRequest(request)
         }
         // The socket server dispatches this on the main queue, so the closure
         // is already main-actor context.
         harness.socketServer.onMCPHello = { [weak self] hello in
-            guard let self else { return }
-            self.mcpRegistrationRegistry.recordHello(
-                sessionId: hello.sessionId, transport: hello.transport
-            )
-            // Heal immediately if a slow/lazy harness registered after the
-            // grace check already flipped the row to notRegistered.
-            for manager in self.acpManagers.values {
-                if let session = manager.liveSession(for: hello.sessionId) {
-                    session.builtInMCPRegistration = .registered
-                    break
-                }
-            }
+            self?.noteBuiltInMCPHello(sessionId: hello.sessionId, transport: hello.transport, source: "hello")
         }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
@@ -6993,9 +6988,34 @@ final class AppState {
         syncRemoteServer()
     }
 
-    /// A request carrying an ACP session's id shows its stdio `alas mcp` is
-    /// alive. That counts only for a session re-attached to a server that
-    /// already said its one hello (see `MCPRegistrationDecision`).
+    /// Records proof that a session's built-in MCP server is up: its hello,
+    /// or any request it dispatched. `source` is only for the log.
+    @MainActor
+    private func noteBuiltInMCPHello(sessionId: String, transport: MCPTransportKind, source: StaticString) {
+        // Only the first proof per attach is worth a log line; tool calls repeat.
+        let firstProof = mcpRegistrationRegistry.record(sessionId: sessionId) == nil
+        mcpRegistrationRegistry.recordHello(sessionId: sessionId, transport: transport)
+        // Heal immediately if a slow/lazy harness registered after the
+        // grace check already flipped the row to notRegistered.
+        var previous: MCPServerRegistration?
+        for manager in acpManagers.values {
+            if let session = manager.liveSession(for: sessionId) {
+                previous = session.builtInMCPRegistration
+                session.builtInMCPRegistration = .registered
+                break
+            }
+        }
+        if firstProof || previous == .notRegistered {
+            mcpRegistrationLogger.notice(
+                "\(source, privacy: .public) from built-in MCP session=\(sessionId, privacy: .public) transport=\(transport.rawValue, privacy: .public) previous=\(previous.map { "\($0)" } ?? "no live session", privacy: .public)"
+            )
+        }
+    }
+
+    /// An untagged request carrying an ACP session's id may come from its
+    /// `alas mcp` or from the agent's shell. That counts only for a session
+    /// re-attached to a server that already said its one hello (see
+    /// `MCPRegistrationDecision`).
     @MainActor
     private func noteBuiltInMCPRequest(sessionId: String?) {
         guard let sessionId else { return }

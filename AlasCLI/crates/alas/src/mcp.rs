@@ -22,6 +22,8 @@ pub struct McpEnv {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub workspace_only: bool,
+    /// "stdio" or "http"; tags every request this server dispatches.
+    pub transport: &'static str,
 }
 
 impl Clone for McpEnv {
@@ -32,6 +34,7 @@ impl Clone for McpEnv {
             session_id: self.session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
             workspace_only: self.workspace_only,
+            transport: self.transport,
         }
     }
 }
@@ -79,6 +82,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         workspace_only: get("ALAS_MCP_WORKSPACE_ONLY")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        transport: "stdio",
     })
 }
 
@@ -1395,11 +1399,12 @@ fn optional_object_string(
 /// Send one command to the owning app instance, addressed by worktree
 /// directory (never session id — the MCP server has no terminal session).
 pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportError> {
-    let req = alas_client::build_request(
+    let mut req = alas_client::build_request(
         command,
         Some(env.session_id.clone()),
         Some(env.worktree_dir.clone()),
     );
+    req.mcp_transport = Some(env.transport);
     alas_client::send(&env.socket, &req)
 }
 
@@ -3078,6 +3083,7 @@ mod tests {
             session_id: "s1".into(),
             parent_session_id: None,
             workspace_only: false,
+            transport: "stdio",
         };
         let req = HttpRequest {
             method: "POST".into(),
@@ -3807,6 +3813,7 @@ mod tests {
             session_id: "acp-1".into(),
             parent_session_id: None,
             workspace_only: false,
+            transport: "stdio",
         };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();
         assert!(resp.ok);
@@ -3819,6 +3826,7 @@ mod tests {
         assert_eq!(seen["subcommand"], json!("list"));
         assert_eq!(seen["cwd"], json!("/wt"));
         assert_eq!(seen["session_id"], json!("acp-1"));
+        assert_eq!(seen["mcp_transport"], json!("stdio"));
 
         let _ = handle.join();
         let _ = std::fs::remove_dir_all(&dir);

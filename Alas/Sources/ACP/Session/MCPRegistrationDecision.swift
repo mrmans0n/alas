@@ -1,3 +1,9 @@
+import OSLog
+
+/// Built-in MCP registration timeline: attach, grace armed, proof received,
+/// grace resolved. Filter with `log stream --predicate 'category == "mcp-registration"'`.
+let mcpRegistrationLogger = Logger(subsystem: "io.nlopez.alas", category: "mcp-registration")
+
 enum MCPServerRegistration: Equatable {
     case unknown
     case registered

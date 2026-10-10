@@ -61,6 +61,19 @@ struct AlasCLIRequestTests {
         #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
     }
 
+    @Test(arguments: [
+        (#","mcp_transport":"stdio""#, MCPTransportKind?.some(.stdio)),
+        (#","mcp_transport":"http""#, .http),
+        (#","mcp_transport":"sse""#, nil),
+        (#","mcp_transport":"bogus""#, nil),
+        ("", nil),
+    ])
+    func decodesBuiltInMCPServerTransportTag(field: String, expected: MCPTransportKind?) throws {
+        let json = #"{"v":1,"kind":"cli","command":"wt","subcommand":"list","session_id":"s1"\#(field)}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.mcpServerTransport == expected)
+    }
+
     @Test func decodesWorktreeSwitchRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"wt","subcommand":"switch","session_id":"s1","target":"feature/review"}"#
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))

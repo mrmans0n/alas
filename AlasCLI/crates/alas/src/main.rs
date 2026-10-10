@@ -93,13 +93,16 @@ fn mcp_mode(args: &[String]) -> Option<McpMode> {
 }
 
 fn run_mcp(mode: McpMode) -> ExitCode {
-    let env = match mcp::env_from(|key| std::env::var(key).ok()) {
+    let mut env = match mcp::env_from(|key| std::env::var(key).ok()) {
         Ok(env) => env,
         Err(message) => {
             eprintln!("alas: {message}");
             return ExitCode::from(2);
         }
     };
+    if matches!(mode, McpMode::Http) {
+        env.transport = "http";
+    }
     let result = match mode {
         McpMode::Stdio => mcp::serve(&env),
         McpMode::Http => mcp::serve_http(&env),
