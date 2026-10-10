@@ -346,6 +346,7 @@ extension AppState {
         rendered: String,
         project: ProjectConfig
     ) async -> Result<(branch: String, destination: URL, base: String), WorktreeCreationFailure> {
+        guard !project.isFolder else { return .failure(.init(message: AppState.folderWorktreeCreationMessage)) }
         let repoPath = URL(fileURLWithPath: project.path)
         let git = GitService()
         // Local branches only: `WorktreeService.add` decides whether to reuse

@@ -6,8 +6,9 @@ import os
 enum RightPaneTab: String {
     case changes, files, agent, run, schedules
 
-    static func available() -> [Self] {
-        [.changes, .files, .agent, .run, .schedules]
+    /// Folder projects have no git, so no Changes tab.
+    static func available(isFolder: Bool = false) -> [Self] {
+        isFolder ? [.files, .agent, .run, .schedules] : [.changes, .files, .agent, .run, .schedules]
     }
 
     /// A peer worktree exposes read-only changes and files, and its sessions;
@@ -82,6 +83,10 @@ final class RightPaneState: GGSplitCommitServicing {
     nonisolated static let remoteUntrackedContentFingerprintCommand = "git ls-files --others --exclude-standard -z | xargs -0 sh -c '[ \"$#\" -gt 0 ] || exit 0; git hash-object -- \"$@\"' sh 2>/dev/null"
 
     let worktree: Worktree
+    /// Folder projects have no git: only the Files tree refreshes, from the
+    /// filesystem, and every git probe is skipped.
+    let isFolder: Bool
+    var defaultTab: RightPaneTab { isFolder ? .files : .changes }
     let reviewLoop: ReviewLoopState
     @ObservationIgnored
     var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
@@ -607,17 +612,20 @@ final class RightPaneState: GGSplitCommitServicing {
     init(
         worktree: Worktree,
         baseBranch: String,
+        isFolder: Bool = false,
         ggLandingStore: GGLandingStore = .shared,
         checkpointService: any WorktreeCheckpointServicing = WorktreeCheckpointService()
     ) {
         self.worktree = worktree
+        self.isFolder = isFolder
         self.checkpointService = checkpointService
         self.ggLandingStore = ggLandingStore
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
         self.reviewLoop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
         self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
-        self.watcher = WorktreeWatcher(path: worktree.path)
+        self.watcher = WorktreeWatcher(path: worktree.path, watchesGitDir: !isFolder)
+        activeTab = defaultTab
         watcher.onChange = { [weak self] in
             Task { @MainActor in
                 self?.worktreeDidChange?()
@@ -687,6 +695,15 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func start() {
+        if isFolder {
+            if worktree.path.isRemoteAlasPath {
+                startRemoteHelperWatching()
+            } else {
+                watcher.start()
+            }
+            Task { @MainActor in await self.refresh() }
+            return
+        }
         if !worktree.path.isRemoteAlasPath {
             watcher.start()
         } else {
@@ -770,7 +787,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointSummaries = []
             checkpointStorageUsage = 0
             nonterminalCheckpointJournals = []
-            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
+            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath || isFolder
             checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
             return
         }
@@ -811,7 +828,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return true }
         guard let target = checkpointTarget else {
             nonterminalCheckpointJournals = []
-            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
+            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath || isFolder
             checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
             return checkpointMutationsDisabled
         }
@@ -1096,12 +1113,15 @@ final class RightPaneState: GGSplitCommitServicing {
         let session = RemoteHelperWatchSession(
             host: host,
             root: worktree.path.path,
-            kinds: [.files, .git]
+            kinds: isFolder ? [.files] : [.files, .git]
         )
         session.onEvent = { [weak self] _ in
             self?.remoteEventDebouncer.poke()
         }
+        // ponytail: a remote folder refreshes only on helper events; its
+        // polling fallback is git status, so there is none without the helper.
         session.onAvailabilityChanged = { [weak self] _ in
+            guard self?.isFolder == false else { return }
             self?.startRemotePolling()
         }
         remoteHelperSession = session
@@ -1432,8 +1452,54 @@ final class RightPaneState: GGSplitCommitServicing {
         return refreshed
     }
 
+    private func publishRefreshedFileTree(_ tree: [FileTreeNode]) {
+        let previousFileTree = self.fileTree
+        let preservedLazyPaths = Self.preservedLazyChildPaths(fresh: tree, previous: previousFileTree)
+        let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
+        if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
+        bookmarkReconciliationPaths = Set(preservedLazyPaths)
+        let refreshedTreeBookkeeping = Self.bookkeepingAfterPublishingRefreshedTree(
+            loaded: loadedFileTreeChildPaths,
+            loading: loadingFileTreeChildPaths
+        )
+        loadedFileTreeChildPaths = refreshedTreeBookkeeping.loaded
+        loadingFileTreeChildPaths = refreshedTreeBookkeeping.loading
+        fileTreeChildLoadTokens = Self.loadTokensAfterPublishingRefreshedTree(
+            tokens: fileTreeChildLoadTokens,
+            loading: loadingFileTreeChildPaths
+        )
+        fileTreeRefreshRevision &+= 1
+    }
+
+    /// A folder has no git to ask: refresh only the Files tree.
+    @MainActor
+    private func performFolderRefresh() async -> Bool {
+        let snapshotGeneration = snapshotInvalidationGeneration
+        loading = true
+        defer { loading = false }
+        invalidateFileTreeChildLoadsForRefresh()
+        do {
+            let tree = try await git.plainDirectoryChildren(worktreePath: worktree.path, path: "")
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return false }
+            publishRefreshedFileTree(tree)
+            sidebarError = nil
+            checkpointJournalDiscoverySucceeded = true
+            hasLoadedSnapshot = true
+            latestSnapshotRefreshSucceeded = true
+            return true
+        } catch {
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return false }
+            sidebarError = error.localizedDescription
+            hasLoadedSnapshot = true
+            latestSnapshotRefreshSucceeded = false
+            logger.error("folder refresh failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     @MainActor
     private func performRefresh(forceReviewLoopRemote: Bool) async -> Bool {
+        if isFolder { return await performFolderRefresh() }
         refreshGeneration += 1
         let currentRefreshGeneration = refreshGeneration
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
@@ -1547,22 +1613,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 self.changesGeneration += 1
             }
             if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
-            let previousFileTree = self.fileTree
-            let preservedLazyPaths = Self.preservedLazyChildPaths(fresh: tree, previous: previousFileTree)
-            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: previousFileTree)
-            if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
-            bookmarkReconciliationPaths = Set(preservedLazyPaths)
-            let refreshedTreeBookkeeping = Self.bookkeepingAfterPublishingRefreshedTree(
-                loaded: loadedFileTreeChildPaths,
-                loading: loadingFileTreeChildPaths
-            )
-            loadedFileTreeChildPaths = refreshedTreeBookkeeping.loaded
-            loadingFileTreeChildPaths = refreshedTreeBookkeeping.loading
-            fileTreeChildLoadTokens = Self.loadTokensAfterPublishingRefreshedTree(
-                tokens: fileTreeChildLoadTokens,
-                loading: loadingFileTreeChildPaths
-            )
-            fileTreeRefreshRevision &+= 1
+            publishRefreshedFileTree(tree)
             if self.commits != commits { self.commits = commits }
             let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
             let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
@@ -3480,11 +3531,13 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
             }
             do {
-                let children = try await git.fileTreeChildren(
-                    worktreePath: worktree.path,
-                    path: path,
-                    badges: Self.fileTreeBadges(from: self.changes)
-                )
+                let children = isFolder
+                    ? try await git.plainDirectoryChildren(worktreePath: worktree.path, path: path)
+                    : try await git.fileTreeChildren(
+                        worktreePath: worktree.path,
+                        path: path,
+                        badges: Self.fileTreeBadges(from: self.changes)
+                    )
                 guard self.fileTreeGeneration == generation else { return }
                 guard Self.shouldPublishFileTreeChildLoad(
                     startedAtRefreshRevision: refreshRevision,
@@ -4178,6 +4231,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// last successful probe (or stay hidden if none has succeeded yet).
     @MainActor
     func refreshSyncStatus(force: Bool = false) async {
+        guard !isFolder else { return }
         await refreshBehindBase(force: force)
         await refreshBehindUpstream(force: force)
     }

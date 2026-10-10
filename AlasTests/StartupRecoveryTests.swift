@@ -279,6 +279,43 @@ struct StartupRecoveryTests {
         #expect(watchedPaths == ["/local"])
     }
 
+    /// A folder has no git dir: launch must not watch, scan, or fetch it, and
+    /// having no checkpoint lineage must not refuse agent sessions.
+    @Test func folderProjectRunsNoGitServicesAndAdmitsAgents() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("alas-folder-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let folder = ProjectConfig(
+            id: "folder", name: "Folder", path: dir.path, color: "#5fb7c4", addedAt: Date(), kind: .folder)
+        var watchedPaths: [String] = []
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [folder])),
+            projectGitWatcherFactory: { path in
+                watchedPaths.append(path.path)
+                return ProjectGitWatcher(
+                    repoPath: path,
+                    resolvedGitDir: URL(fileURLWithPath: "/git"),
+                    resolvedWorktreeRoot: path,
+                    headDebounceInterval: 0.01,
+                    headDebounceMaxWait: 0.02,
+                    topologyDebounceInterval: 0.01,
+                    topologyDebounceMaxWait: 0.02,
+                    startStreamOverride: { _, _ in }
+                )
+            }
+        )
+        defer { state.stopAllProjectGitWatchers() }
+
+        await state.refreshAllProjectTopologies()
+        state.startAllProjectGitWatchers()
+
+        let row = try #require(state.projectsManager.worktrees(projectId: folder.id).first)
+        #expect(watchedPaths.isEmpty)
+        #expect(state.localWorktreeStatusPaths().isEmpty)
+        #expect(state.checkpointTarget(for: row) == nil)
+        #expect(await state.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: row.id) == false)
+    }
+
     @Test func recoveryLaunchPopulatesConfiguredProjectWorktrees() {
         let root = RemotePath.virtual(host: "devbox", realPath: "/srv/alas-recovery-\(UUID().uuidString)")
         let linked = RemotePath.virtual(host: "devbox", realPath: "/srv/alas-linked-\(UUID().uuidString)")

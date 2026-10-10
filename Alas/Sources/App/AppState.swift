@@ -2310,7 +2310,7 @@ final class AppState {
             ggSidebarRefresh.refresh(projects: [])
             return
         }
-        let paths = projects.filter { $0.host == nil }.map(\.path)
+        let paths = projects.filter { $0.host == nil && !$0.isFolder }.map(\.path)
         ggSidebarPreparationTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             let snapshots = await GGConfigReader.sidebarSnapshots(repoPaths: paths)
@@ -2367,7 +2367,9 @@ final class AppState {
 
     private func rescanWorktreeStatus(worktreeId: String) {
         refreshGGSidebar()
-        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
+              !resolved.project.isFolder
+        else { return }
         if resolved.project.host != nil {
             enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
         } else {
@@ -2384,7 +2386,7 @@ final class AppState {
     func localWorktreeStatusPaths(projectId: String? = nil) -> [URL] {
         projectsManager.projects
             .filter { project in
-                project.host == nil && (projectId == nil || project.id == projectId)
+                project.host == nil && !project.isFolder && (projectId == nil || project.id == projectId)
             }
             .flatMap { projectsManager.visibleWorktrees(projectId: $0.id) }
             .map(\.path)
@@ -2426,14 +2428,15 @@ final class AppState {
 
     private func rescanLocalWorktreeStatus(worktreeId: String) {
         guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
-              resolved.project.host == nil
+              resolved.project.host == nil,
+              !resolved.project.isFolder
         else { return }
         scanLocalWorktreeStatus(paths: [resolved.worktree.path])
     }
 
     private func rescanRemoteWorktreeStatuses(projectId: String? = nil) {
         let remoteProjects = projectsManager.projects.filter { project in
-            project.host != nil && (projectId == nil || project.id == projectId)
+            project.host != nil && !project.isFolder && (projectId == nil || project.id == projectId)
         }
         guard !remoteProjects.isEmpty else { return }
         for project in remoteProjects {
@@ -2442,7 +2445,7 @@ final class AppState {
     }
 
     private func rescanRemoteWorktreeStatuses(host: String) {
-        let remoteProjects = projectsManager.projects.filter { $0.host == host }
+        let remoteProjects = projectsManager.projects.filter { $0.host == host && !$0.isFolder }
         guard !remoteProjects.isEmpty else { return }
         for project in remoteProjects {
             enqueueRemoteWorktreeStatusRescan(project: project)
@@ -3228,12 +3231,13 @@ final class AppState {
             self.refreshGGSidebar()
             guard let resolved = self.projectAndWorktree(withWorktreeId: id) else { return }
             if resolved.project.host == nil {
+                guard !resolved.project.isFolder else { return }
                 // Once a scan starts, let it finish. Canceling a later selection
                 // must not terminate Git processes belonging to that scan.
                 let scan = self.worktreeStatusScan
                 await Task { await scan([resolved.worktree.path]) }.value
             } else {
-                if includeRemoteStatus {
+                if includeRemoteStatus, !resolved.project.isFolder {
                     self.enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
                 }
                 await self.prepareRemoteAccelerationIfNeeded(for: resolved.project)
@@ -4700,7 +4704,7 @@ final class AppState {
         issueAttachment: IssueAttachment? = nil,
         destinationAlreadyPrepared: Bool = false
     ) async -> String {
-        guard let project = projects.first(where: { $0.id == projectId }) else {
+        guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
@@ -4912,10 +4916,13 @@ final class AppState {
     }
 
     @MainActor
+    static let folderWorktreeCreationMessage = "Folder projects are not git repositories and cannot create worktrees."
+
     func cliCreateWorktree(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
         guard let project = projects.first(where: { $0.id == origin.projectId }) else {
             return .error("The current worktree's project is no longer available.")
         }
+        guard !project.isFolder else { return .error(Self.folderWorktreeCreationMessage) }
         switch GitNameValidator.validateBranchName(branch) {
         case .valid:
             break
@@ -5008,6 +5015,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(.init(message: "The project is no longer available."))
         }
+        guard !project.isFolder else { return .failure(.init(message: Self.folderWorktreeCreationMessage)) }
         switch GitNameValidator.validateBranchName(branch) {
         case .valid:
             break
@@ -5585,6 +5593,7 @@ final class AppState {
         displayName: String,
         icon: ProjectIcon,
         host: String? = nil,
+        kind: ProjectKind = .git,
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
@@ -5600,6 +5609,7 @@ final class AppState {
             displayName: displayName,
             icon: icon,
             host: host,
+            kind: kind,
             id: id,
             startupScripts: startupScripts,
             mcpServers: mcpServers,
@@ -5786,6 +5796,8 @@ final class AppState {
     /// stops any existing watcher for the same project id first.
     func startProjectGitWatcher(for project: ProjectConfig) {
         stopProjectGitWatcher(projectId: project.id)
+        // A folder has no git dir to watch and a fixed one-row topology.
+        if project.isFolder { return }
         if project.host != nil {
             let watcher = RemoteProjectGitWatcher(projectPath: URL(fileURLWithPath: project.path))
             watcher.onHeadChanged = { [weak self] updates in
@@ -5830,6 +5842,15 @@ final class AppState {
         }
         watcher.start()
         projectGitWatchers[projectId] = watcher
+    }
+
+    /// True when `path` is the single row of a folder project, for call sites
+    /// that only know a worktree path and must not run git against it.
+    func isFolderPath(_ path: URL) -> Bool {
+        let id = Worktree.makeId(path: path)
+        return projectsManager.projects.contains {
+            $0.isFolder && Worktree.makeId(path: URL(fileURLWithPath: $0.path)) == id
+        }
     }
 
     func stopProjectGitWatcher(projectId: String) {
@@ -6496,7 +6517,9 @@ final class AppState {
         allowFetch: Bool = false,
         minFetchInterval: TimeInterval = WorktreeUpstreamStatusStore.defaultFetchInterval
     ) async {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectId }) else { return }
+        guard let project = projectsManager.projects.first(where: { $0.id == projectId }),
+              !project.isFolder
+        else { return }
         let mainWorktrees = projectsManager.worktrees(projectId: projectId).filter {
             projectsManager.isMain($0, in: project)
         }
@@ -10256,9 +10279,10 @@ final class AppState {
                             out.append(SearchWorktree(
                                 id: wt.id,
                                 projectId: project.id,
-                                displayName: wt.branch,
+                                displayName: project.isFolder ? wt.title : wt.branch,
                                 absolutePath: wt.path,
-                                executionLocation: project.host.map(ExecutionLocation.ssh)
+                                executionLocation: project.host.map(ExecutionLocation.ssh),
+                                isFolder: project.isFolder
                             ))
                         }
                     }
@@ -10269,7 +10293,7 @@ final class AppState {
                 try await fileIndex.entries(for: wt)
             },
             statuses: { [statusCache] wt in
-                try await statusCache.statuses(for: wt)
+                wt.isFolder ? [:] : try await statusCache.statuses(for: wt)
             },
             workspaceCheckoutWorktrees: { [weak self] in
                 MainActor.assumeIsolated {
@@ -10308,11 +10332,12 @@ final class AppState {
     func refreshSymbolIndexIfLoaded(worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId), !worktree.path.isRemoteAlasPath else { return }
         let root = worktree.path
+        let isFolder = isFolderPath(root)
         Task { [fileIndex, symbolIndex] in
             await symbolIndex.refreshIfLoaded(root: root) {
                 await fileIndex.invalidate(forWorktreePath: root)
                 // `try?` without a fallback: a failed enumeration leaves the index alone.
-                return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+                return (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder))?.map(\.relativePath)
             }
         }
     }
@@ -11122,7 +11147,7 @@ final class AppState {
     /// Builds a cleanup model wired to live git, code-host, and session state.
     /// Returns nil when the project no longer exists.
     func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
-        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        guard let project = projects.first(where: { $0.id == projectId }), !project.isFolder else { return nil }
         let initialWorktrees = projectsManager.visibleWorktrees(projectId: projectId)
         let idleThresholdDays = config.worktrees.cleanupIdleDays
         let repoPath = URL(fileURLWithPath: project.path)
@@ -12713,6 +12738,7 @@ final class AppState {
 
     func checkpointTarget(for worktree: Worktree) -> CheckpointWorktreeTarget? {
         guard !worktree.path.isRemoteAlasPath,
+              !isFolderPath(worktree.path),
               let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         else { return nil }
         let project = projects.first(where: { $0.id == worktree.projectId })
@@ -13390,6 +13416,9 @@ final class AppState {
             }
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
+        if isFolderPath(worktree.path) {
+            mgr.upstreamReferences.environment = .noRemotes
+        }
         acpManagers[owner] = mgr
         observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
@@ -13793,6 +13822,7 @@ final class AppState {
     /// `RightPaneState.ignore(path:isDirectory:destination:)`. Best-effort:
     /// failures are silently ignored (worst case `.pi/` shows as untracked).
     private func excludePiDirectoryFromGit(worktreeURL: URL) async {
+        guard !isFolderPath(worktreeURL) else { return }
         do {
             let infoExcludeURL = try await resolveGitInfoExcludeURL(worktreeURL: worktreeURL)
             _ = try GitIgnoreService.appendIgnore(
@@ -14745,7 +14775,7 @@ final class AppState {
         return Self.resolveGGInboxAvailable(
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
-            isRemoteProject: project.host != nil,
+            isRemoteProject: project.host != nil || project.isFolder,
             projectMode: project.ggMode,
             repoHasGGConfig: ggSidebarSnapshots[project.path]?.hasConfig ?? false,
             worktreeOverrides: Array(project.ggWorktreeModes.values)
@@ -14774,7 +14804,8 @@ final class AppState {
     ) -> GGWorktreeContext {
         guard config.changes.stackedDiffsEnabled else { return .inactive(reason: .masterDisabled) }
         guard ggInstalled else { return .inactive(reason: .cliMissing) }
-        guard project.host == nil else { return .inactive(reason: .remoteProject) }
+        // Folders have no git, so gg is unavailable exactly as for remote projects.
+        guard project.host == nil, !project.isFolder else { return .inactive(reason: .remoteProject) }
         return Self.resolveGGWorktreeContext(
             masterEnabled: config.changes.stackedDiffsEnabled,
             ggInstalled: ggInstalled,
@@ -14883,7 +14914,7 @@ final class AppState {
         GGWorktreeContextResolver.resolve(
             masterEnabled: masterEnabled,
             ggInstalled: ggInstalled,
-            isRemoteProject: project.host != nil,
+            isRemoteProject: project.host != nil || project.isFolder,
             projectMode: project.ggMode,
             worktreeOverride: worktreeOverride,
             isMainWorktree: isMainWorktree,
