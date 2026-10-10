@@ -325,6 +325,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// stdio built-in server started before this attach, so it won't send a
     /// new hello. See `MCPRegistrationDecision`.
     var builtInMCPReattachedToRunningServer = false
+    /// Whether only a fresh hello proves the current attach: an adopted agent
+    /// fell back to `session/new`, so its earlier server may still be sending
+    /// requests. See `MCPRegistrationDecision.resolve`.
+    var builtInMCPRequiresFreshHello = false
     /// Whether the attached adapter advertised HTTP MCP support on `initialize`.
     /// Learned on each attach. Gates the "switch to HTTP transport" action: an
     /// adapter without HTTP MCP falls back to stdio, so offering the switch

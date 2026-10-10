@@ -7,9 +7,11 @@ struct MCPRegistrationDecisionTests {
         let evidence: MCPRegistrationEvidence
         let graceElapsed: Bool
         let reattached: Bool
+        var requiresFreshHello = false
         let expected: MCPServerRegistration
         var testDescription: String {
             "\(reattached ? "reattach" : "fresh"), \(evidence), grace \(graceElapsed ? "elapsed" : "pending")"
+                + (requiresFreshHello ? ", fresh hello required" : "")
         }
     }
 
@@ -20,6 +22,14 @@ struct MCPRegistrationDecisionTests {
         Case(evidence: .none, graceElapsed: false, reattached: false, expected: .unknown),
         Case(evidence: .none, graceElapsed: true, reattached: false, expected: .notRegistered),
         Case(evidence: .request, graceElapsed: true, reattached: false, expected: .notRegistered),
+        // A request the built-in server tagged as its own proves it at once,
+        // unless an adopted agent's fallback `session/new` may have left the
+        // previous server running: then only the new server's hello counts.
+        Case(evidence: .serverRequest, graceElapsed: false, reattached: false, expected: .registered),
+        Case(evidence: .serverRequest, graceElapsed: true, reattached: false, requiresFreshHello: true,
+             expected: .notRegistered),
+        Case(evidence: .hello, graceElapsed: true, reattached: false, requiresFreshHello: true,
+             expected: .registered),
         // Re-attached to a running server that already said its one hello:
         // never warn without evidence, and its first request proves it.
         Case(evidence: .none, graceElapsed: true, reattached: true, expected: .unknown),
@@ -30,7 +40,8 @@ struct MCPRegistrationDecisionTests {
         #expect(MCPRegistrationDecision.resolve(
             evidence: c.evidence,
             graceElapsed: c.graceElapsed,
-            reattachedToRunningServer: c.reattached
+            reattachedToRunningServer: c.reattached,
+            requiresFreshHello: c.requiresFreshHello
         ) == c.expected)
     }
 

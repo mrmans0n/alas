@@ -6532,6 +6532,7 @@ extension ACPSessionManager {
                     previousAttachFoundNoServer: session.builtInMCPRegistration == .notRegistered
                 )
             session.builtInMCPReattachedToRunningServer = reattachedToRunningServer
+            session.builtInMCPRequiresFreshHello = false
             // Bump the attach epoch so a grace timer left over from a previous
             // attach of this session can never write the current row.
             let mcpRegistrationEpoch = (mcpRegistrationAttachEpoch[sessionId] ?? 0) + 1
@@ -7312,6 +7313,7 @@ extension ACPSessionManager {
             if reattachedToRunningServer && createdFreshRemoteSession {
                 reattachedToRunningServer = false
                 session.builtInMCPReattachedToRunningServer = false
+                session.builtInMCPRequiresFreshHello = true
                 staleHelloSequence = helloBeforeAttach?.sequence
                 // A request or the old hello may have marked the row while the
                 // load was still in flight; only the new server's hello counts.

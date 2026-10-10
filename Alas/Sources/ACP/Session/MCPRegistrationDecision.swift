@@ -17,6 +17,11 @@ enum MCPRegistrationEvidence: Equatable {
     /// the MCP server's requests from the agent's shell running `alas`, so
     /// this proves the server only when no fresh hello can be expected.
     case request
+    /// A `cli` socket request the built-in server tagged as its own. It
+    /// proves some server for this session is running, but not which one: an
+    /// adopted agent that fell back to `session/new` may still run the server
+    /// from its earlier session.
+    case serverRequest
     /// The server's one-shot `mcp_hello`, sent when it starts.
     case hello
 }
@@ -75,17 +80,24 @@ enum MCPRegistrationDecision {
     ///   survived an app restart in its broker). That server said hello to the
     ///   previous attach, so no hello will come; without evidence the state
     ///   stays `.unknown` rather than claiming the server never started.
+    /// - Parameter requiresFreshHello: an adopted agent fell back to
+    ///   `session/new`, so only the new server's hello proves this attach;
+    ///   its previous server's requests are indistinguishable from the new
+    ///   one's.
     static func resolve(
         evidence: MCPRegistrationEvidence,
         graceElapsed: Bool,
-        reattachedToRunningServer: Bool
+        reattachedToRunningServer: Bool,
+        requiresFreshHello: Bool = false
     ) -> MCPServerRegistration {
         switch evidence {
         case .hello:
             return .registered
+        case .serverRequest where !requiresFreshHello:
+            return .registered
         case .request where reattachedToRunningServer:
             return .registered
-        case .none, .request:
+        case .none, .request, .serverRequest:
             if reattachedToRunningServer { return .unknown }
             return graceElapsed ? .notRegistered : .unknown
         }
