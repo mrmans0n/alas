@@ -48,6 +48,8 @@ struct RunActivityPill: View {
         .padding(.trailing, 3)
         .frame(height: 20)
         .frame(maxWidth: 160)
+        // Hug the content; the max-width frame alone fills the offered width.
+        .fixedSize()
         .background(Capsule().fill(tint(presentation.pill).opacity(0.14)))
         .background(Capsule().fill(theme.color("bg-2")))
         .popover(isPresented: $showsRuns, arrowEdge: .bottom) {
