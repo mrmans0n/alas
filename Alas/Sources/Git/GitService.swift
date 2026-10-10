@@ -1091,6 +1091,27 @@ extension GitService {
         return findFileTreeNode(path: path, in: built)?.children ?? []
     }
 
+    /// Files-tab listing for folder projects, which have no git: one directory
+    /// level from the filesystem, every subdirectory loaded lazily on expand.
+    func plainDirectoryChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+        let directory = path.isEmpty ? worktreePath : worktreePath.appendingPathComponent(path)
+        let entries: [(name: String, isDirectory: Bool)]
+        if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            entries = try await RemoteFileStats.directoryEntries(
+                host: host, worktreeRoot: worktreePath.path, path: directory.path)
+        } else {
+            entries = try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: []
+            ).map { ($0.lastPathComponent, (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true) }
+        }
+        let prefix = path.isEmpty ? "" : path + "/"
+        let paths = entries.map { prefix + $0.name }
+        let directories = Set(entries.filter(\.isDirectory).map { prefix + $0.name })
+        let built = FileTreeBuilder.build(
+            paths: paths, badges: [:], directories: directories, lazyDirectories: directories)
+        return path.isEmpty ? built : findFileTreeNode(path: path, in: built)?.children ?? []
+    }
+
     private func findFileTreeNode(path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
         for node in nodes {
             if node.path == path {

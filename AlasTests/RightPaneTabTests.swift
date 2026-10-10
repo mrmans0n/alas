@@ -2,11 +2,11 @@ import Testing
 @testable import Alas
 
 struct RightPaneTabTests {
-    @Test func fiveTabsAreAlwaysAvailable() {
-        #expect(RightPaneTab.available() == [.changes, .files, .agent, .run, .schedules])
-    }
-
-    @Test func runTabIsAvailable() {
-        #expect(RightPaneTab.available().contains(.run))
+    @Test(arguments: [
+        (false, [RightPaneTab.changes, .files, .agent, .run, .schedules]),
+        (true, [RightPaneTab.files, .agent, .run, .schedules]),
+    ])
+    func availableTabsDropChangesOnlyForFolders(isFolder: Bool, expected: [RightPaneTab]) {
+        #expect(RightPaneTab.available(isFolder: isFolder) == expected)
     }
 }

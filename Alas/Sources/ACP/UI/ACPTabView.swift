@@ -786,7 +786,8 @@ private struct ACPSessionView: View {
             actions: composerActions,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
-                async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
+                async let entries = try? state.fileIndex.entries(
+                    forWorktreePath: worktree.path, isFolder: state.isFolderPath(worktree.path))
                 guard let entries = await entries else { return [] }
                 let root = worktree.path
                 var result: [URL] = []
@@ -982,6 +983,7 @@ private struct ACPSessionView: View {
         let root = worktree.path
         let fileIndex = state.fileIndex
         let symbolIndex = state.symbolIndex
+        let isFolder = state.isFolderPath(root)
         var index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?
         if !root.isRemoteAlasPath {
             index = {
@@ -989,7 +991,7 @@ private struct ACPSessionView: View {
                 // nil on a failed enumeration: the index replays its cache.
                 await symbolIndex.updates(root: root) {
                     await fileIndex.invalidate(forWorktreePath: root)
-                    return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+                    return (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder))?.map(\.relativePath)
                 }
             }
         }
@@ -1000,7 +1002,7 @@ private struct ACPSessionView: View {
                 // drops remote entries, and drill-down is remote's only route.
                 // Each step can be slow (enumeration, a remote read, parsing),
                 // and a newer keystroke or the closed picker cancels this one.
-                let entries = (try? await fileIndex.entries(forWorktreePath: root)) ?? []
+                let entries = (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []
                 guard !Task.isCancelled else { return [] }
                 let urls = entries.map { root.appendingPathComponent($0.relativePath) }
                 guard let best = MentionFuzzy.rank(files: urls, query: fileQuery, limit: 1, relativeTo: root).first,

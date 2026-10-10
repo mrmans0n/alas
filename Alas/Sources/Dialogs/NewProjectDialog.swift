@@ -96,6 +96,8 @@ private struct ProjectDialog: View {
         }
     }
     @State private var location: ProjectLocation = .local
+    /// Register a plain directory instead of a git repository (local or SSH).
+    @State private var addsFolder = false
     @State private var sshHost: String = ""
     @State private var showHostPicker = false
     @State private var sshHosts: [SSHConfigHost] = []
@@ -315,6 +317,11 @@ private struct ProjectDialog: View {
             DialogField(label: "Location") {
                 Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
             }
+            if !location.clonesRepository {
+                DialogField(label: "Kind") {
+                    Seg(value: $addsFolder, options: [(false, "Git repository"), (true, "Plain folder")])
+                }
+            }
         }
         DialogField(label: locationFieldLabel) {
             switch mode {
@@ -325,17 +332,19 @@ private struct ProjectDialog: View {
         DialogField(label: "Display name") {
             AlasField(text: $name, placeholder: "repo-folder")
         }
-        DialogField(label: "Worktree branch template") {
-            AlasField(
-                text: $worktreeBranchTemplate,
-                placeholder: WorktreeBranchName.normalizedTemplate(state.config.worktrees.branchTemplate)
-                    ?? state.config.worktrees.branchPrefix + "{name}",
-                monospaced: true,
-                disablesAutomaticTextSubstitutions: true
-            )
-            Text("Variables: {name}, {date}, {time}. Leave blank to use the global default. Applies to regular Git branches.")
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
+        if !isFolderProject {
+            DialogField(label: "Worktree branch template") {
+                AlasField(
+                    text: $worktreeBranchTemplate,
+                    placeholder: WorktreeBranchName.normalizedTemplate(state.config.worktrees.branchTemplate)
+                        ?? state.config.worktrees.branchPrefix + "{name}",
+                    monospaced: true,
+                    disablesAutomaticTextSubstitutions: true
+                )
+                Text("Variables: {name}, {date}, {time}. Leave blank to use the global default. Applies to regular Git branches.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
         }
         DialogField(label: "Icon") {
             projectIconSection
@@ -360,8 +369,15 @@ private struct ProjectDialog: View {
 
     private var subtitle: String {
         switch mode {
-        case .add: "Register a git repository as an Alas project."
+        case .add: "Register a git repository or a plain folder as an Alas project."
         case .edit: "Update this project's settings."
+        }
+    }
+
+    private var isFolderProject: Bool {
+        switch mode {
+        case .edit(let project): project.isFolder
+        case .add: addsFolder && !location.clonesRepository
         }
     }
 
@@ -395,9 +411,11 @@ private struct ProjectDialog: View {
 
     private var locationFieldLabel: String {
         switch mode {
-        case .edit: "Repository path"
+        case .edit: isFolderProject ? "Folder path" : "Repository path"
         case .add:
             switch location {
+            case .local where addsFolder: "Folder path"
+            case .remoteSSH where addsFolder: "Remote folder path"
             case .local: "Repository path"
             case .github, .gitlab: "Repository"
             case .gitURL: "Git remote"
@@ -1126,6 +1144,10 @@ private struct ProjectDialog: View {
     private func suggestName(for newPath: String) async {
         guard !newPath.isEmpty else { return }
         let url = URL(fileURLWithPath: newPath)
+        if addsFolder {
+            if name.isEmpty { name = url.lastPathComponent }
+            return
+        }
         let svc = GitService()
         if (try? await svc.isGitRepository(url)) == true {
             if let suggested = try? await svc.suggestProjectName(url), name.isEmpty {
@@ -1235,9 +1257,10 @@ private struct ProjectDialog: View {
     private func currentAvatarPresetRepoURL() -> URL? {
         switch mode {
         case .add:
-            guard !path.isEmpty else { return nil }
+            guard !path.isEmpty, !isFolderProject else { return nil }
             return URL(fileURLWithPath: path)
         case .edit(let project):
+            guard !project.isFolder else { return nil }
             return URL(fileURLWithPath: project.path)
         }
     }
@@ -1439,6 +1462,7 @@ private struct ProjectDialog: View {
                 host: location == .remoteSSH
                     ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
                     : nil,
+                kind: isFolderProject ? .folder : .git,
                 id: pendingProjectId,
                 startupScripts: draftStartupScripts,
                 mcpServers: mcpServers,
@@ -1458,7 +1482,7 @@ private struct ProjectDialog: View {
                 if afterInteractiveSetup {
                     sshSetupStatus = .incompatible(issue.message)
                 }
-            case .notARepository:
+            case .notARepository, .notADirectory:
                 sshConnectionIssue = nil
                 errorMessage = validationError.localizedDescription
                 sshSetupPresented = false

@@ -149,7 +149,7 @@ struct RightPaneView: View {
                         set: { rps.openPaths = $0 }
                     ),
                     onSelectFile: onSelectTreeFile,
-                    onFileHistory: { node in
+                    onFileHistory: rps.isFolder ? nil : { node in
                         state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
                     },
                     onCreateFile: { path in
@@ -252,6 +252,7 @@ struct RightPaneView: View {
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
                 activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
+                tabs: RightPaneTab.available(isFolder: rps.isFolder),
                 panels: panels,
                 activePanel: panel?.ref,
                 onPanel: { handlePanel($0, active: panel?.ref, rps: rps) },
@@ -261,7 +262,7 @@ struct RightPaneView: View {
         // A panel that stops being offered is forgotten, so it cannot take over the pane when it comes back.
         .onChange(of: panels.map(\.ref), initial: true) { _, refs in
             if let selected = rps.activePluginPanel, !refs.contains(selected) {
-                rps.activeTab = .changes // its didSet clears the panel
+                rps.activeTab = rps.defaultTab // its didSet clears the panel
             }
         }
     }
@@ -300,7 +301,8 @@ struct RightPaneView: View {
     private func handleTabShortcut(_ notification: Notification, rps: RightPaneState) {
         guard let raw = notification.object as? String,
               let tab = RightPaneTab(rawValue: raw),
-              state.acceptsRightPaneTabShortcut(tab)
+              state.acceptsRightPaneTabShortcut(tab),
+              RightPaneTab.available(isFolder: rps.isFolder).contains(tab)
         else { return }
         let panelShown = PluginPanelItem.selected(rps.activePluginPanel, in: pluginPanels) != nil
         handle(
