@@ -563,10 +563,18 @@ final class NativePeerSessions {
         }
     }
 
-    func addMention(_ mention: RemoteMention) {
-        if !mentions.contains(where: { $0.kind == mention.kind && $0.value == mention.value }) {
-            mentions.append(mention)
+    /// Stages a picked mention. Returns why it was refused, or nil once
+    /// it is staged.
+    @discardableResult
+    func addMention(_ mention: RemoteMention) -> String? {
+        guard !mentions.contains(where: { $0.kind == mention.kind && $0.value == mention.value }) else { return nil }
+        // The host refuses a prompt over its cap; say so before the send.
+        mentions = NativePeerComposerState.liveMentions(mentions, in: draft)
+        guard mentions.count < RemoteSessionGateway.maxMentionCount else {
+            return NativePeerComposerState.tooManyMentions
         }
+        mentions.append(mention)
+        return nil
     }
 
     private func resetMentions() {

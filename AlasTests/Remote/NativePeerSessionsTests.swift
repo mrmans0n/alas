@@ -1060,7 +1060,18 @@ struct NativePeerSessionsTests {
         #expect(client.mentionCandidates == [file])
         #expect(client.mentionCandidatesQuery == "app")
 
+        // Past the host's cap a pick is refused up front.
+        let many = (0..<RemoteSessionGateway.maxMentionCount).map {
+            RemoteMention(kind: RemoteMention.file, value: "f\($0)", name: "f\($0)")
+        }
+        client.draft = many.map { "@" + $0.name }.joined(separator: " ")
+        #expect(many.allSatisfy { client.addMention($0) == nil })
+        #expect(client.addMention(file) == NativePeerComposerState.tooManyMentions)
+
+        // Picks land in the draft as they're made; the session's marker is then deleted.
+        client.draft = "fix @App.swift"
         client.addMention(file)
+        client.draft = "fix @App.swift @Refactor"
         client.addMention(session)
         client.draft = "fix @App.swift"
         client.sendPrompt()

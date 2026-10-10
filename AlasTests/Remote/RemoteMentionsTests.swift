@@ -15,13 +15,16 @@ struct RemoteMentionsTests {
         (RemoteMention.session, "self", nil),
         (RemoteMention.session, "foreign", nil),
         (RemoteMention.symbol, "alas-symbol://symbol?path=../x.swift&name=f&kind=function&start=0&end=1", nil),
+        // `escape/` stands for a symlink out of the worktree.
+        (RemoteMention.file, "escape/x.swift", nil),
+        (RemoteMention.symbol, "alas-symbol://symbol?path=escape/x.swift&name=f&kind=function&start=0&end=1", nil),
         ("terminal", "anything", nil),
     ] as [(String, String, String?)])
     @MainActor
     func mentionsResolveOnlyInsideTheSessionsProject(kind: String, value: String, uri: String?) async {
         let attachment = await RemoteMentions.attachment(
             for: RemoteMention(kind: kind, value: value, name: "n"), worktreeRoot: root, sessionId: "self",
-            isContainedFile: { RemoteWorktreeFileAccess.resolve(path: $0, in: root) != nil },
+            isContainedFile: { !$0.hasPrefix("escape/") && RemoteWorktreeFileAccess.resolve(path: $0, in: root) != nil },
             isProjectSession: { $0 != "foreign" })
         #expect(attachment?.uri == uri)
     }

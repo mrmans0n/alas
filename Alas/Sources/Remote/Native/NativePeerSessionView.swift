@@ -730,7 +730,7 @@ private struct NativePeerComposer: View {
         let completed = NativePeerComposerState.completingToken(
             "@" + mention.name, in: client.draft, tokenStart: start, caret: caret)
         closeMentionPicker()
-        client.addMention(mention)
+        if let refusal = client.addMention(mention) { return showNotice(refusal) }
         client.draft = completed.text
         selection = TextSelection(insertionPoint: String.Index(utf16Offset: completed.caret, in: completed.text))
     }

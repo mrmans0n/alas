@@ -246,6 +246,7 @@ enum NativePeerComposerState {
     }
 
     static let attachmentTooLarge = "Attachments can total at most 10 MB."
+    static let tooManyMentions = "A message can mention at most \(RemoteSessionGateway.maxMentionCount) items."
 
     /// Why a file of `size` bytes can't join the staged attachments, judged
     /// from sizes alone so it can be checked before the file is read.

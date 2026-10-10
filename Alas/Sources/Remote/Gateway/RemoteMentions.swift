@@ -73,8 +73,13 @@ enum RemoteMentions {
             guard mention.value != sessionId, await isProjectSession(mention.value) else { return nil }
             return .init(uri: ACPSessionReference.uri(sessionId: mention.value), name: name, mimeType: nil)
         case RemoteMention.symbol:
-            // Re-encoded, so only the fields the parser accepted reach the runner.
-            guard let target = ACPSymbolReference.target(fromURI: mention.value) else { return nil }
+            // Re-encoded, so only the fields the parser accepted reach the
+            // runner. The path gets the file check too: a symbol badge opens
+            // its file.
+            guard let target = ACPSymbolReference.target(fromURI: mention.value),
+                  let path = RemoteWorktreeFileAccess.normalizedRelativePath(target.path),
+                  await isContainedFile(path)
+            else { return nil }
             return .init(uri: ACPSymbolReference.uri(for: target), name: name, mimeType: nil)
         default:
             return nil

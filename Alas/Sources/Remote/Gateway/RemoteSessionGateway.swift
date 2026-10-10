@@ -428,8 +428,10 @@ final class RemoteSessionGateway {
         case .searchMentions(let id, let query):
             // Ungated by the writer lease, like the file reads: seeing a
             // session is enough to read its project.
-            let candidates = await provider.remoteMentionCandidates(
-                sessionId: id, query: String(query.prefix(Self.maxMentionQueryLength)))
+            // An overlong query gets no rows rather than rows for a prefix
+            // the viewer would take as the answer to the whole query.
+            let candidates = query.count > Self.maxMentionQueryLength
+                ? [] : await provider.remoteMentionCandidates(sessionId: id, query: query)
             send(.mentionCandidates(sessionId: id, query: query, candidates: candidates))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"

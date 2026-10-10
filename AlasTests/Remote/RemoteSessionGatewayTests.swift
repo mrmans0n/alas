@@ -303,6 +303,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         }
     }
 
+    var mentionCandidates: [RemoteMention] = []
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { mentionCandidates }
+
     /// What `remoteMentionAttachments` answers for a non-empty list.
     var mentionAttachments: [ACPMessage.Attachment]? = []
     func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
@@ -1521,6 +1524,18 @@ struct RemoteSessionGatewayTests {
                                     mentions: [mention]))
         #expect(provider.lastAttachments.map(\.mimeType) == ["image/png", nil])
         #expect(provider.lastAttachments.last == linked)
+    }
+
+    @Test func overlongMentionQueriesGetNoRows() async {
+        let provider = FakeSessionsProvider()
+        provider.mentionCandidates = [RemoteMention(kind: RemoteMention.file, value: "a", name: "a")]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let long = String(repeating: "a", count: RemoteSessionGateway.maxMentionQueryLength + 1)
+        await gw.handle(.searchMentions(sessionId: "s1", query: long))
+        await gw.handle(.searchMentions(sessionId: "s1", query: "a"))
+        #expect(sent == [.mentionCandidates(sessionId: "s1", query: long, candidates: []),
+                         .mentionCandidates(sessionId: "s1", query: "a", candidates: provider.mentionCandidates)])
     }
 
     @Test func droppedSendPromptEmitsRejection() async {

@@ -79,6 +79,7 @@ let changesState = { comparisonRef: null, metricsAvailable: true, files: [], sta
 // this simple.
 let fileTreeTruncatedPaths = new Set();
 let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
+const MENTION_CAP = 50;                 // matches the server's maxMentionCount
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 const AGENT_LOGO_PATHS = Object.freeze({
@@ -4415,12 +4416,19 @@ function renderMention() {
 function pickMention(m) {
   if (!mentionState || mentionState.itemsQuery !== mentionState.query) return;
   const ta = $("prompt");
+  const isNew = !pendingMentions.some(p => p.kind === m.kind && p.value === m.value);
+  // The host refuses a prompt over its cap; say so before the send.
+  if (isNew && liveMentions(ta.value).length >= MENTION_CAP) {
+    closeMention();
+    alert("A message can mention at most " + MENTION_CAP + " items.");
+    return;
+  }
   const caret = ta.selectionStart;
   const replacement = "@" + m.name + " ";
   ta.value = ta.value.slice(0, mentionState.start) + replacement + ta.value.slice(caret);
   const next = mentionState.start + replacement.length;
   ta.setSelectionRange(next, next);
-  if (!pendingMentions.some(p => p.kind === m.kind && p.value === m.value)) pendingMentions.push(m);
+  if (isNew) pendingMentions.push(m);
   closeMention();
   ta.focus();
   autoGrowPrompt();
