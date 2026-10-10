@@ -1,6 +1,6 @@
 #!/bin/zsh
 # alas-name: Build
-# alas-on-exit: close
+# alas-on-exit: hidden
 
 set -euo pipefail
 
