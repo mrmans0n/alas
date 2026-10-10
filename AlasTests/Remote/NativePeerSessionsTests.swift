@@ -1055,8 +1055,10 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").contains(.searchMentions(sessionId: "s", query: "app")))
         links.receive(.mentionCandidates(sessionId: "s", query: "ap", candidates: [session]), from: "B")
         #expect(client.mentionCandidates.isEmpty)
+        #expect(client.mentionCandidatesQuery == nil)
         links.receive(.mentionCandidates(sessionId: "s", query: "app", candidates: [file]), from: "B")
         #expect(client.mentionCandidates == [file])
+        #expect(client.mentionCandidatesQuery == "app")
 
         client.addMention(file)
         client.addMention(session)

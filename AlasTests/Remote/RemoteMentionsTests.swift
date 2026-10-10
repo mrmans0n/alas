@@ -43,8 +43,8 @@ struct RemoteMentionsTests {
                                  relativePath: "Alas/App.swift", nameRange: NSRange(location: 0, length: 3),
                                  lineRange: 4...8)
         let plain = RemoteMentions.candidates(
-            query: "app", root: root, filePaths: ["Alas/App.swift", "README.md"], sessions: [session],
-            fileSymbols: [symbol])
+            query: "app", root: root, filePaths: ["Alas/App.swift", "Deleted/App.swift", "README.md"],
+            sessions: [session], fileSymbols: [symbol], fileExists: { !$0.path.contains("Deleted") })
         #expect(plain.map(\.kind) == [RemoteMention.session, RemoteMention.file])
         #expect(plain.last == RemoteMention(kind: RemoteMention.file, value: "Alas/App.swift", name: "App.swift",
                                             detail: "Alas"))

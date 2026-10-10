@@ -12,9 +12,11 @@ enum RemoteMentions {
     /// Sessions above files for a plain query. A `File.swift#name` query
     /// drills into that file's symbols alone, which the caller looks up and
     /// passes as `fileSymbols`.
+    /// `fileExists` drops listed files missing from the working tree, such
+    /// as tracked files deleted since the last commit.
     static func candidates(
         query: String, root: URL, filePaths: [String], sessions: [ACPSessionMentionCandidate],
-        fileSymbols: [SymbolEntry]
+        fileSymbols: [SymbolEntry], fileExists: (URL) -> Bool = { _ in true }
     ) -> [RemoteMention] {
         let query = query.trimmingCharacters(in: .whitespaces)
         if case .file(_, let symbol) = MentionSymbolQuery.parse(query) {
@@ -27,7 +29,9 @@ enum RemoteMentions {
         let files = filePaths.map { root.appendingPathComponent($0) }
         let directories = MentionFuzzy.pickerDirectories(
             forEntries: filePaths.map { ($0, $0.hasSuffix("/")) }, root: root)
-        let fileRows = MentionFuzzy.rank(files: files + directories, query: query, limit: fileLimit, relativeTo: root)
+        // Ranked past the limit so missing files don't leave the list short.
+        let ranked = MentionFuzzy.rank(files: files + directories, query: query, limit: fileLimit * 3, relativeTo: root)
+        let fileRows = ranked.filter(fileExists).prefix(fileLimit)
             .compactMap { url -> RemoteMention? in
                 guard url.path.count > root.path.count else { return nil }
                 let path = String(url.path.dropFirst(root.path.count + 1))

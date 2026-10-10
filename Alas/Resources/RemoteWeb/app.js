@@ -4359,8 +4359,10 @@ function updateMention() {
     ? mentionToken(ta.value, ta.selectionStart) : null;
   if (!token) { closeMention(); return; }
   if (mentionState && mentionState.start === token.start && mentionState.query === token.query) return;
-  const items = mentionState && mentionState.start === token.start ? mentionState.items : [];
-  mentionState = { start: token.start, query: token.query, items, selected: 0 };
+  // Older rows stay up to avoid flicker; `itemsQuery` says which query they answer.
+  const keep = mentionState && mentionState.start === token.start;
+  mentionState = { start: token.start, query: token.query, items: keep ? mentionState.items : [],
+                   itemsQuery: keep ? mentionState.itemsQuery : null, selected: 0 };
   clearTimeout(mentionTimer);
   mentionTimer = setTimeout(() => {
     if (mentionState && currentSession) send({ type: "searchMentions", sessionId: currentSession, query: mentionState.query });
@@ -4371,6 +4373,7 @@ function updateMention() {
 function applyMentionCandidates(msg) {
   if (msg.sessionId !== currentSession || !mentionState || msg.query !== mentionState.query) return;
   mentionState.items = msg.candidates || [];
+  mentionState.itemsQuery = msg.query;
   mentionState.selected = 0;
   renderMention();
 }
@@ -4435,7 +4438,8 @@ function handleMentionKey(e) {
   else if (e.key === "ArrowDown") mentionState.selected = (mentionState.selected + 1) % n;
   else if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
     e.preventDefault();
-    pickMention(mentionState.items[mentionState.selected]);
+    // Rows for an older query wait for the host's answer to this one.
+    if (mentionState.itemsQuery === mentionState.query) pickMention(mentionState.items[mentionState.selected]);
     return true;
   } else if (e.key === "Escape") {
     e.preventDefault();

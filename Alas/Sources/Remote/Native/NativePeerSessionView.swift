@@ -715,6 +715,8 @@ private struct NativePeerComposer: View {
         default:
             // Cmd+Return sends and Shift+Return adds a line, even with the picker open.
             guard press.modifiers.isDisjoint(with: [.command, .shift]) else { return .ignored }
+            // Rows for an older query wait for the host's answer to this one.
+            guard client.mentionCandidatesQuery == mentionQuery else { return .handled }
             pickMention(candidates[min(mentionHighlight, candidates.count - 1)])
         }
         return .handled

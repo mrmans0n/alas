@@ -65,6 +65,9 @@ final class NativePeerSessions {
     private(set) var mentions: [RemoteMention] = []
     /// The host's answer to the latest `searchMentions`.
     private(set) var mentionCandidates: [RemoteMention] = []
+    /// The query `mentionCandidates` answers. It trails the typed query
+    /// until the host replies, and a pick must wait for it to catch up.
+    private(set) var mentionCandidatesQuery: String?
     /// The query whose answer `mentionCandidates` waits for; older answers
     /// are dropped.
     @ObservationIgnored private var mentionQuery: String?
@@ -554,7 +557,10 @@ final class NativePeerSessions {
             transcript?.config?.supportsMentions == true
                 && routeWhileOnline { .searchMentions(sessionId: $0, query: query) }
         } ?? false
-        if !asked { mentionCandidates = [] }
+        if !asked {
+            mentionCandidates = []
+            mentionCandidatesQuery = nil
+        }
     }
 
     func addMention(_ mention: RemoteMention) {
@@ -566,6 +572,7 @@ final class NativePeerSessions {
     private func resetMentions() {
         mentions = []
         mentionCandidates = []
+        mentionCandidatesQuery = nil
         mentionQuery = nil
     }
 
@@ -963,7 +970,10 @@ final class NativePeerSessions {
             break
         }
         if case .mentionCandidates(_, let query, let candidates) = message {
-            if query == mentionQuery { mentionCandidates = candidates }
+            if query == mentionQuery {
+                mentionCandidates = candidates
+                mentionCandidatesQuery = query
+            }
             return
         }
         if case .promptRejected = message {

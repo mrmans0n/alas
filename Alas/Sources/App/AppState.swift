@@ -16525,8 +16525,11 @@ extension AppState: RemoteSessionsProvider {
         }
         let paths = ((try? await fileIndex.entries(forWorktreePath: root)) ?? []).map(\.relativePath)
         let sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+        // An SSH worktree's files can't be checked without a round trip per
+        // file; a missing one still fails safely, as a dangling link.
         return RemoteMentions.candidates(
-            query: query, root: root, filePaths: paths, sessions: sessions, fileSymbols: fileSymbols)
+            query: query, root: root, filePaths: paths, sessions: sessions, fileSymbols: fileSymbols,
+            fileExists: { root.isRemoteAlasPath || FileManager.default.fileExists(atPath: $0.path) })
     }
 
     func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
