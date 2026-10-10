@@ -46,7 +46,10 @@ struct PluginCatalogTests {
         let loaded = try #require(catalog.index)
         await catalog.refresh(force: true)
 
-        guard case .failed = catalog.state else { Issue.record("expected the refresh to fail"); return }
+        guard case .failed = catalog.state else {
+            Issue.record("expected the refresh to fail")
+            return
+        }
         #expect(catalog.index == loaded)
     }
 
