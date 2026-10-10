@@ -391,7 +391,10 @@ struct RootView: View {
                     ),
                     collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
                     dictationLocale: state.config.harness.acpDictationLocale,
-                    onSelectDictationLocale: { [state] in state.config.harness.acpDictationLocale = $0 }
+                    onSelectDictationLocale: { [state] identifier in
+                        state.config.harness.acpDictationLocale = identifier
+                        state.saveConfig()
+                    }
                 )
                 .id(client.selectedSessionId)
             }

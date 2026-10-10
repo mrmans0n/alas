@@ -1411,12 +1411,16 @@ final class RemoteSessionGateway {
     /// `ACPTranscriptChangeLog`, which forces a fresh tail snapshot under a
     /// bumped epoch rather than a delta that could otherwise upsert a stale
     /// index against shifted content.
-    /// A user row's wire text: the prompt, then one labelled line per image.
-    /// Viewers rebuild it to recognise their own prompt in the transcript.
-    nonisolated static func userRowText(text: String, attachmentNames: [String?]) -> String {
+    /// A user row's wire text: the prompt, then one labelled line per image
+    /// and per mention. Viewers rebuild it to recognise their own prompt in
+    /// the transcript.
+    nonisolated static func userRowText(
+        text: String, attachmentNames: [String?], resourceNames: [String?] = []
+    ) -> String {
         var parts: [String] = []
         if !text.isEmpty { parts.append(text) }
         parts.append(contentsOf: attachmentNames.map { "🖼 \($0 ?? "Image")" })
+        parts.append(contentsOf: resourceNames.map { "📎 \($0 ?? "Resource")" })
         return parts.joined(separator: "\n\n")
     }
 
@@ -1431,8 +1435,13 @@ final class RemoteSessionGateway {
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).
-            let names = attachments.filter { !$0.isCheckpointReference }.map(\.name)
-            return .init(stableId: sid, kind: "user", text: userRowText(text: text, attachmentNames: names),
+            // The runner sends only `image/` attachments as images; the
+            // rest are resource links (mentions).
+            let shown = attachments.filter { !$0.isCheckpointReference }
+            let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
+            let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
+                                      resourceNames: shown.filter { !isImage($0) }.map(\.name))
+            return .init(stableId: sid, kind: "user", text: rowText,
                          json: nil, index: index)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)

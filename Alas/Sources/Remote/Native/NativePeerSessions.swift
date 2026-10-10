@@ -33,8 +33,8 @@ final class NativePeerSessions {
         func matches(_ row: RemoteWireMessage) -> Bool {
             row.kind == "user" && row.text == RemoteSessionGateway.userRowText(
                 text: text,
-                attachmentNames: attachments.map(\.name)
-                    + mentions.map { String($0.name.prefix(RemoteMentions.maxNameLength)) })
+                attachmentNames: attachments.map(\.name),
+                resourceNames: mentions.map { String($0.name.prefix(RemoteMentions.maxNameLength)) })
         }
     }
 
