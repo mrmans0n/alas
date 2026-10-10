@@ -126,7 +126,9 @@ final class ContentSearcher: Sendable {
                 )
                 return
             }
-            if capabilities?.helperHandshake != nil {
+            // The helper's search takes no exclusion globs, so a folder uses
+            // plain rg over ssh, which gets `folderExcludeGlobs`.
+            if capabilities?.helperHandshake != nil, !worktree.isFolder {
                 do {
                     try await streamHelperRg(
                         host: host,
