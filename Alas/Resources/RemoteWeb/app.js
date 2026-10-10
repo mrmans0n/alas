@@ -4362,6 +4362,9 @@ function updateMention() {
   if (mentionState && mentionState.start === token.start && mentionState.query === token.query) return;
   // Older rows stay up to avoid flicker; `itemsQuery` says which query they answer.
   const keep = mentionState && mentionState.start === token.start;
+  // Opening asks at once with the bare query, which refreshes the host's
+  // file listing; the typed query follows after the debounce.
+  if (!mentionState && currentSession) send({ type: "searchMentions", sessionId: currentSession, query: "" });
   mentionState = { start: token.start, query: token.query, items: keep ? mentionState.items : [],
                    itemsQuery: keep ? mentionState.itemsQuery : null, selected: 0 };
   clearTimeout(mentionTimer);
@@ -4416,14 +4419,17 @@ function renderMention() {
 function pickMention(m) {
   if (!mentionState || mentionState.itemsQuery !== mentionState.query) return;
   const ta = $("prompt");
+  const caret = ta.selectionStart;
+  // Drop picks whose markers are gone (the token being completed aside), so
+  // a deleted pick can't claim the new marker.
+  pendingMentions = liveMentions(ta.value.slice(0, mentionState.start) + ta.value.slice(caret));
   const isNew = !pendingMentions.some(p => p.kind === m.kind && p.value === m.value);
   // The host refuses a prompt over its cap; say so before the send.
-  if (isNew && liveMentions(ta.value).length >= MENTION_CAP) {
+  if (isNew && pendingMentions.length >= MENTION_CAP) {
     closeMention();
     alert("A message can mention at most " + MENTION_CAP + " items.");
     return;
   }
-  const caret = ta.selectionStart;
   const replacement = "@" + m.name + " ";
   ta.value = ta.value.slice(0, mentionState.start) + replacement + ta.value.slice(caret);
   const next = mentionState.start + replacement.length;

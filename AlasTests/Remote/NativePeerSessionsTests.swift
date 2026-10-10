@@ -1065,14 +1065,14 @@ struct NativePeerSessionsTests {
             RemoteMention(kind: RemoteMention.file, value: "f\($0)", name: "f\($0)")
         }
         client.draft = many.map { "@" + $0.name }.joined(separator: " ")
-        #expect(many.allSatisfy { client.addMention($0) == nil })
-        #expect(client.addMention(file) == NativePeerComposerState.tooManyMentions)
+        #expect(many.allSatisfy { client.addMention($0, in: client.draft) == nil })
+        #expect(client.addMention(file, in: client.draft) == NativePeerComposerState.tooManyMentions)
 
-        // Picks land in the draft as they're made; the session's marker is then deleted.
-        client.draft = "fix @App.swift"
-        client.addMention(file)
-        client.draft = "fix @App.swift @Refactor"
-        client.addMention(session)
+        // A pick replaced by another of the same name loses its marker.
+        let otherFile = RemoteMention(kind: RemoteMention.file, value: "Old/App.swift", name: "App.swift")
+        client.addMention(otherFile, in: "fix ")
+        client.addMention(file, in: "fix ")
+        client.addMention(session, in: "fix @App.swift ")
         client.draft = "fix @App.swift"
         client.sendPrompt()
         #expect(links.sent(to: "B").last == .sendPrompt(

@@ -697,6 +697,9 @@ private struct NativePeerComposer: View {
         guard sessionOpen, composerFocused, config?.supportsMentions == true, let caret,
               let token = NativePeerComposerState.activeMentionToken(in: client.draft as NSString, caret: caret)
         else { return closeMentionPicker() }
+        // Opening asks at once with the bare query, which refreshes the
+        // host's file listing; the typed query follows after the debounce.
+        if mentionTokenStart == nil { client.searchMentions("") }
         mentionTokenStart = token.start
         mentionQuery = token.query
     }
@@ -730,7 +733,9 @@ private struct NativePeerComposer: View {
         let completed = NativePeerComposerState.completingToken(
             "@" + mention.name, in: client.draft, tokenStart: start, caret: caret)
         closeMentionPicker()
-        if let refusal = client.addMention(mention) { return showNotice(refusal) }
+        let withoutToken = (client.draft as NSString)
+            .replacingCharacters(in: NSRange(location: start, length: max(0, caret - start)), with: "")
+        if let refusal = client.addMention(mention, in: withoutToken) { return showNotice(refusal) }
         client.draft = completed.text
         selection = TextSelection(insertionPoint: String.Index(utf16Offset: completed.caret, in: completed.text))
     }

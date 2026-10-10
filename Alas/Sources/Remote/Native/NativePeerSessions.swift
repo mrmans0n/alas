@@ -563,13 +563,15 @@ final class NativePeerSessions {
         }
     }
 
-    /// Stages a picked mention. Returns why it was refused, or nil once
-    /// it is staged.
+    /// Stages a picked mention. `text` is the draft without the token being
+    /// completed: staged mentions whose markers it lacks are dropped first,
+    /// so a deleted pick can't claim the new marker. Returns why the pick
+    /// was refused, or nil once it is staged.
     @discardableResult
-    func addMention(_ mention: RemoteMention) -> String? {
+    func addMention(_ mention: RemoteMention, in text: String) -> String? {
+        mentions = NativePeerComposerState.liveMentions(mentions, in: text)
         guard !mentions.contains(where: { $0.kind == mention.kind && $0.value == mention.value }) else { return nil }
         // The host refuses a prompt over its cap; say so before the send.
-        mentions = NativePeerComposerState.liveMentions(mentions, in: draft)
         guard mentions.count < RemoteSessionGateway.maxMentionCount else {
             return NativePeerComposerState.tooManyMentions
         }
