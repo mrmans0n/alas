@@ -684,6 +684,7 @@ struct RemoteWebAssetTests {
 
     @Test(arguments: [
         ("fix @App now", ["a"]), ("fix @Apple", []), ("see @App, then", ["a"]), ("x@App", []),
+        ("Review @App.", ["a"]), ("open @App.swift", []),
         // Two picks share a name: one marker keeps the first only.
         ("@App and @App", ["a", "b"]), ("@App alone", ["a"]),
     ])

@@ -4328,7 +4328,8 @@ function liveMentions(text) {
     for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + marker.length)) {
       const end = i + marker.length;
       const starts = i === 0 || /\s/.test(text[i - 1]);
-      const ends = end === text.length || /[\s,;:!?)\]}"']/.test(text[end]);
+      // Trailing punctuation may sit between the marker and the token's end.
+      const ends = /^[.,;:!?)\]}"']*(\s|$)/.test(text.slice(end));
       if (starts && ends) count++;
     }
     return count;

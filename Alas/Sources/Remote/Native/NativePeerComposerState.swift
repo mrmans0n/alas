@@ -138,11 +138,18 @@ enum NativePeerComposerState {
         }
     }
 
-    /// `@name` occurrences that start a token and end at whitespace,
-    /// closing punctuation or the end, so `@App` doesn't match `@Apple`.
+    /// `@name` occurrences that start a token and end it, allowing trailing
+    /// punctuation before whitespace or the end: `@App.swift.` keeps
+    /// `App.swift`, while `@App` matches neither `@Apple` nor `@App.swift`.
     private static func markerCount(_ name: String, in text: NSString) -> Int {
         let marker = "@" + name
-        let closers = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:!?)]}\"'"))
+        let punctuation = CharacterSet(charactersIn: ".,;:!?)]}\"'")
+        func scalar(at index: Int) -> UnicodeScalar { UnicodeScalar(text.character(at: index)) ?? "a" }
+        func endsToken(at start: Int) -> Bool {
+            var index = start
+            while index < text.length, punctuation.contains(scalar(at: index)) { index += 1 }
+            return index == text.length || CharacterSet.whitespacesAndNewlines.contains(scalar(at: index))
+        }
         var count = 0
         var search = NSRange(location: 0, length: text.length)
         while true {
@@ -150,9 +157,8 @@ enum NativePeerComposerState {
             guard found.location != NSNotFound else { return count }
             let end = NSMaxRange(found)
             let starts = found.location == 0
-                || CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(text.character(at: found.location - 1)) ?? " ")
-            let ends = end == text.length || closers.contains(UnicodeScalar(text.character(at: end)) ?? "a")
-            if starts && ends { count += 1 }
+                || CharacterSet.whitespacesAndNewlines.contains(scalar(at: found.location - 1))
+            if starts && endsToken(at: end) { count += 1 }
             search = NSRange(location: end, length: text.length - end)
         }
     }
