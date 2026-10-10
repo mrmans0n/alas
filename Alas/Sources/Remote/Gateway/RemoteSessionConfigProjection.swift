@@ -16,7 +16,40 @@ enum RemoteSessionConfigProjection {
             acceptsImages: session.promptCapabilities.image)
         config.chips = chips(session.chipState, configOptions: session.availableConfigOptions)
         config.supportsSteering = session.supportsSteering
+        config.availableCommands = session.promptSuggestions.map {
+            RemoteSlashCommand(command: $0.command, description: $0.description, hint: $0.hint)
+        }
+        config.usage = usage(context: session.contextUsage, modelName: session.currentModelDisplayName,
+                             lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
+        config.supportsQueueReorder = true
         return config
+    }
+
+    /// Nil when there is nothing for the ring or its popover to show, so a
+    /// viewer hides it exactly when the local composer would.
+    nonisolated static func usage(
+        context: ACPUsageInfo?, modelName: String?, lastTurn: ACPPromptQuota?, cumulative: ACPPromptQuota?
+    ) -> RemoteUsage? {
+        let usage = RemoteUsage(
+            modelName: modelName,
+            context: context.map {
+                RemoteContextWindow(used: $0.used, size: $0.size, costAmount: $0.cost?.amount,
+                                    costCurrency: $0.cost?.currency)
+            },
+            lastTurn: tokenRows(lastTurn),
+            cumulative: tokenRows(cumulative))
+        guard usage.context != nil || !usage.lastTurn.isEmpty || !usage.cumulative.isEmpty else { return nil }
+        return usage
+    }
+
+    /// The rows `ACPContextUsageButton` lists: one per model, or a single
+    /// total when the adapter sent no per-model breakdown.
+    nonisolated private static func tokenRows(_ quota: ACPPromptQuota?) -> [RemoteTokenUsage] {
+        guard let quota, quota.hasDisplayableContent else { return [] }
+        if quota.modelUsage.isEmpty {
+            return quota.tokenCount.map { [RemoteTokenUsage(label: "Total", tokens: $0.displayTotal)] } ?? []
+        }
+        return quota.modelUsage.map { RemoteTokenUsage(label: $0.model, tokens: $0.tokenCount.displayTotal) }
     }
 
     nonisolated static func chips(_ state: ACPChipState, configOptions: [ACPConfigOption]) -> RemoteChipState {

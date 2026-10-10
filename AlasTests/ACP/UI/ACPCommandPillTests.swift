@@ -35,6 +35,20 @@ struct ACPCommandPillTests {
         }
     }
 
+    @Test("the picker's token is a command-shaped word after a boundary, up to the caret", arguments: [
+        ("/rev", 4, 0, "rev"),
+        ("fix it /$skill", 14, 7, "$skill"),
+        ("line\n/", 6, 5, ""),
+        ("/review now", 3, 0, "re"),
+        ("abc/rev", 7, nil, nil),
+        ("/rev iew", 8, nil, nil),
+    ] as [(String, Int, Int?, String?)])
+    func slashPickerToken(text: String, caret: Int, start: Int?, query: String?) {
+        let token = ACPSlashCommand.activeToken(in: text as NSString, caret: caret)
+        #expect(token?.start == start)
+        #expect(token?.query == query)
+    }
+
     @Test("matches a known leading command and returns the rest")
     func matchesLeadingCommand() {
         let match = ACPSlashCommand.match(in: "/review the parser", suggestions: suggestions)

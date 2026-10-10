@@ -59,6 +59,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var queueRetries: [(id: String, itemId: UUID)] = []
     var queueEdits: [(id: String, itemId: UUID)] = []
     var queueClears: [String] = []
+    var queueMoves: [(id: String, itemId: UUID, targetItemId: UUID)] = []
+    var queuePromotes: [(id: String, itemId: UUID)] = []
     var steerPrompts: [(id: String, text: String)] = []
     var queueEditText: String?            // what queueEdit hands back
     /// When set, `queueEdit` delegates to this real manager instead of
@@ -369,6 +371,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return queueEditText
     }
     func queueClear(for id: String) { queueClears.append(id) }
+    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) {
+        queueMoves.append((id, itemId, targetItemId))
+    }
+    func queuePromote(for id: String, itemId: UUID) { queuePromotes.append((id, itemId)) }
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && steerPromptAccepts
         if accepted { steerPrompts.append((id, text)) }
@@ -544,10 +550,12 @@ enum InvalidAttachmentBatch: String, CaseIterable, Sendable {
 }
 
 enum QueueVerb: String, CaseIterable, Sendable {
-    case forceSend, remove, retry, edit, clear
+    case forceSend, remove, retry, edit, clear, move, promote
 
     func message(sessionId: String, itemId: UUID) -> RemoteClientMessage {
         switch self {
+        case .move: .queueMove(sessionId: sessionId, itemId: itemId.uuidString, targetItemId: UUID().uuidString)
+        case .promote: .queuePromote(sessionId: sessionId, itemId: itemId.uuidString)
         case .forceSend: .queueForceSend(sessionId: sessionId, itemId: itemId.uuidString)
         case .remove: .queueRemove(sessionId: sessionId, itemId: itemId.uuidString)
         case .retry: .queueRetry(sessionId: sessionId, itemId: itemId.uuidString)
@@ -564,6 +572,8 @@ enum QueueVerb: String, CaseIterable, Sendable {
         case .retry: provider.queueRetries.count
         case .edit: provider.queueEdits.count
         case .clear: provider.queueClears.count
+        case .move: provider.queueMoves.count
+        case .promote: provider.queuePromotes.count
         }
     }
 }

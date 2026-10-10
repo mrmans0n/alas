@@ -248,6 +248,25 @@ struct ACPSessionManagerTests {
         #expect(session.queue.map(\.id) == [itemId])
     }
 
+    @Test("remote queue move takes the target's slot and never passes the sending head")
+    func remoteQueueMoveFollowsTheLocalRowRules() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-move-\(UUID()).sqlite")
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt",
+                                        store: try ACPSessionStore(path: url.path))
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let (head, a, b, c) = (UUID(), UUID(), UUID(), UUID())
+        session.queue = [QueuedPrompt(id: head, blocks: [.text("head")], status: .sending)]
+            + [a, b, c].map { QueuedPrompt(id: $0, blocks: [.text("item")]) }
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+
+        await manager.queueMove(for: session.id, itemId: c, targetItemId: a)
+        #expect(session.queue.map(\.id) == [head, c, a, b])
+
+        await manager.queueMove(for: session.id, itemId: c, targetItemId: head)
+        #expect(session.queue.map(\.id) == [head, c, a, b])
+    }
+
     @Test("remote queue retry ignores stale retry requests")
     func remoteQueueRetryIgnoresStaleRequests() async throws {
         let url = FileManager.default.temporaryDirectory

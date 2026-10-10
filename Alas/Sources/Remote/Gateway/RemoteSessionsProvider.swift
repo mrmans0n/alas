@@ -61,6 +61,11 @@ protocol RemoteSessionsProvider: AnyObject {
     /// the item is gone or already `.sending` (mid-RPC, must not be duplicated).
     func queueEdit(for id: String, itemId: UUID) async -> String?
     func queueClear(for id: String) async
+    /// Moves `itemId` into `targetItemId`'s slot, the "Up next" row's move
+    /// and drop. A move the local queue would refuse is a no-op.
+    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) async
+    /// Moves `itemId` to the front without interrupting a running turn.
+    func queuePromote(for id: String, itemId: UUID) async
     /// Cancel the in-flight turn, send this prompt instead, without
     /// disturbing pending queued items.
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async

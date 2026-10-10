@@ -2008,13 +2008,46 @@ function setQueuedOpen(id) {
   renderQueue();
 }
 
-function queueAction(type, itemId) {
+function queueAction(type, itemId, extra) {
   if (!currentSession) return;
   ensureWriter();
-  const msg = { type, sessionId: currentSession };
+  const msg = { type, sessionId: currentSession, ...extra };
   if (itemId) msg.itemId = itemId;
   send(msg);
   openQueuedId = null;
+}
+
+// The neighbour each queued row's Move up / Move down swaps with, keyed by
+// item id, under the native row's rules (ACPTranscriptQueuePolicy): a move
+// never passes the in-flight head, and scheduled items neither move nor get
+// passed. The host re-checks against its full queue.
+function queueMoveTargets(items) {
+  const firstScheduled = items.findIndex(i => i.status === "pending" && i.scheduledAt);
+  const canMove = (src, dst) => {
+    if (src === dst || dst < 0 || dst > items.length) return false;
+    if (items[src].status === "sending") return false;
+    if (items.length > 0 && items[0].status === "sending" && dst === 0) return false;
+    if (src === items.length - 1 && dst === items.length) return false;
+    if (firstScheduled >= 0 && (items[src].scheduledAt || dst >= firstScheduled)) return false;
+    return true;
+  };
+  const neighbour = (idx, step) => {
+    for (let c = idx + step; c >= 0 && c < items.length; c += step) {
+      if (items[c].status !== "sending") return c;
+    }
+    return -1;
+  };
+  const targets = {};
+  items.forEach((item, idx) => {
+    if (item.status === "sending") return;
+    const up = neighbour(idx, -1);
+    const down = neighbour(idx, 1);
+    targets[item.id] = {
+      up: up >= 0 && canMove(idx, up) ? items[up].id : null,
+      down: down >= 0 && canMove(idx, down) ? items[down].id : null,
+    };
+  });
+  return targets;
 }
 
 function renderQueue() {
@@ -2092,6 +2125,18 @@ function queuedActions(item) {
     b.onclick = onclick;
     return b;
   };
+  if (sessionConfig && sessionConfig.supportsQueueReorder) {
+    const targets = queueMoveTargets(queueItems)[item.id] || {};
+    actions.appendChild(button("qa-front", "⤒", "Move to front",
+      () => queueAction("queuePromote", item.id)));
+    const move = (cls, glyph, label, target) => {
+      const b = button(cls, glyph, label, () => queueAction("queueMove", item.id, { targetItemId: target }));
+      b.disabled = !target;
+      actions.appendChild(b);
+    };
+    move("qa-up", "↑", "Move up", targets.up);
+    move("qa-down", "↓", "Move down", targets.down);
+  }
   actions.appendChild(button("qa-send", "▲", "Send now",
     () => queueAction("queueForceSend", item.id)));
   if (item.lastError) {
@@ -4068,6 +4113,185 @@ function renderConfigAffordances() {
   const cfg = sessionConfig;
   $("attach").classList.toggle("hidden", !(cfg && cfg.acceptsImages));
   renderConfigSheet();
+  renderUsage();
+  renderSlash();
+  renderQueue();
+}
+
+// --- Context usage ring (mirrors ACPContextUsageButton) ---
+function formatTokens(n) {
+  const v = Math.max(0, n);
+  if (v >= 1000000) return (v / 1000000).toFixed(1) + "M";
+  if (v >= 1000) return (v / 1000).toFixed(1) + "k";
+  return String(v);
+}
+
+function usageRatio(context) {
+  if (!context || context.size <= 0) return 0;
+  return Math.min(Math.max(context.used / context.size, 0), 1);
+}
+
+function renderUsage() {
+  const btn = $("usage");
+  const usage = sessionConfig && sessionConfig.usage;
+  btn.classList.toggle("hidden", !usage);
+  btn.innerHTML = "";
+  if (!usage) { hideUsageSheet(); return; }
+  if (usage.context) {
+    const ratio = usageRatio(usage.context);
+    const ring = el("span", "usage-ring");
+    ring.style.setProperty("--ratio", String(ratio));
+    ring.style.setProperty("--ring-color", ratio >= 0.95 ? "var(--del)" : ratio >= 0.8 ? "var(--mod)" : "var(--accent)");
+    btn.appendChild(ring);
+    btn.setAttribute("aria-label", "Context window: " + Math.round(ratio * 100) + "% in use");
+  } else {
+    btn.appendChild(el("span", "usage-icon", "▤"));
+    btn.setAttribute("aria-label", "Token usage");
+  }
+  renderUsageDetails(usage);
+}
+
+function renderUsageDetails(usage) {
+  const box = $("usage-details");
+  box.innerHTML = "";
+  if (usage.modelName) box.appendChild(el("p", "sheet-label", usage.modelName));
+  const row = (label, value) => {
+    const r = el("div", "usage-row");
+    r.append(el("span", "", label), el("span", "", value));
+    box.appendChild(r);
+  };
+  if (usage.context) {
+    const ratio = usageRatio(usage.context);
+    row("Context", formatTokens(usage.context.used) + " / " + formatTokens(usage.context.size)
+      + " (" + Math.round(ratio * 100) + "%)");
+    if (typeof usage.context.costAmount === "number" && usage.context.costCurrency) {
+      const symbol = usage.context.costCurrency === "USD" ? "$" : usage.context.costCurrency + " ";
+      row("Cost", symbol + usage.context.costAmount.toFixed(3));
+    }
+  }
+  const section = (title, rows) => {
+    if (!rows || rows.length === 0) return;
+    box.appendChild(el("p", "usage-section", title));
+    rows.forEach(r => row(r.label, formatTokens(r.tokens)));
+  };
+  section("Last turn", usage.lastTurn);
+  section("Cumulative", usage.cumulative);
+}
+
+function showUsageSheet() { $("usage-sheet").classList.remove("hidden"); }
+function hideUsageSheet() { $("usage-sheet").classList.add("hidden"); }
+
+// --- Slash command picker (mirrors ACPSlashPickerModel) ---
+// The `/word` the caret is typing: the slash starts the text or follows
+// whitespace, and only command characters sit between it and the caret.
+function slashToken(text, caret) {
+  for (let i = caret; i > 0; i--) {
+    const ch = text[i - 1];
+    if (ch === "/") {
+      const prev = i - 1 === 0 ? " " : text[i - 2];
+      if (prev !== " " && prev !== "\n" && prev !== "\t") return null;
+      return { start: i - 1, query: text.slice(i, caret) };
+    }
+    if (!/[A-Za-z0-9_:$-]/.test(ch)) return null;
+  }
+  return null;
+}
+
+// Exact > prefix > contains > subsequence, shorter names first; an empty
+// query keeps the host's order. Duplicates keep their first occurrence.
+function filterSlashCommands(commands, query) {
+  const seen = new Set();
+  const unique = commands.filter(c => !seen.has(c.command) && seen.add(c.command));
+  const q = query.toLowerCase();
+  if (!q) return unique;
+  const isSubsequence = (name) => {
+    let qi = 0;
+    for (const ch of name) { if (qi < q.length && ch === q[qi]) qi++; }
+    return qi === q.length;
+  };
+  const scored = [];
+  unique.forEach(c => {
+    const name = (c.command.startsWith("/") ? c.command.slice(1) : c.command).toLowerCase();
+    let score = null;
+    if (name === q) score = 1000;
+    else if (name.startsWith(q)) score = 900 - name.length;
+    else if (name.includes(q)) score = 600 - name.length;
+    else if (isSubsequence(name)) score = 300 - name.length;
+    if (score !== null) scored.push([c, score]);
+  });
+  scored.sort((a, b) => b[1] - a[1]);
+  return scored.map(pair => pair[0]);
+}
+
+let slashState = null;   // { start, items, selected } while the picker is open
+
+function renderSlash() {
+  const box = $("slash");
+  const ta = $("prompt");
+  const commands = (sessionConfig && sessionConfig.availableCommands) || [];
+  const token = commands.length > 0 && ta.selectionStart === ta.selectionEnd
+    ? slashToken(ta.value, ta.selectionStart) : null;
+  const items = token ? filterSlashCommands(commands, token.query) : [];
+  if (items.length === 0) {
+    slashState = null;
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  const keep = slashState && slashState.start === token.start
+    && slashState.query === token.query ? slashState.selected : 0;
+  slashState = { start: token.start, query: token.query, items, selected: Math.min(keep, items.length - 1) };
+  box.innerHTML = "";
+  items.forEach((c, idx) => {
+    const row = el("button", "slash-row");
+    row.type = "button";
+    row.setAttribute("role", "option");
+    if (idx === slashState.selected) { row.classList.add("is-selected"); row.setAttribute("aria-selected", "true"); }
+    row.appendChild(el("span", "slash-command", c.command));
+    if (c.hint) row.appendChild(el("span", "slash-hint", "‹" + c.hint + "›"));
+    if (c.description) row.appendChild(el("span", "slash-description", c.description));
+    // mousedown, not click: keep the textarea focused so the keyboard stays up.
+    row.onmousedown = (e) => { e.preventDefault(); pickSlash(c); };
+    box.appendChild(row);
+  });
+  box.classList.remove("hidden");
+  const selected = box.children[slashState.selected];
+  if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: "nearest" });
+}
+
+function pickSlash(command) {
+  if (!slashState) return;
+  const ta = $("prompt");
+  const caret = ta.selectionStart;
+  const replacement = command.command + " ";
+  ta.value = ta.value.slice(0, slashState.start) + replacement + ta.value.slice(caret);
+  const next = slashState.start + replacement.length;
+  ta.setSelectionRange(next, next);
+  ta.focus();
+  autoGrowPrompt();
+  renderSlash();
+  renderDriveBar(lastStreamingState);
+}
+
+// Arrow keys move, Enter/Tab accept, Escape closes. True when consumed.
+function handleSlashKey(e) {
+  if (!slashState) return false;
+  const n = slashState.items.length;
+  if (e.key === "ArrowUp") slashState.selected = (slashState.selected - 1 + n) % n;
+  else if (e.key === "ArrowDown") slashState.selected = (slashState.selected + 1) % n;
+  else if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    pickSlash(slashState.items[slashState.selected]);
+    return true;
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    slashState = null;
+    $("slash").classList.add("hidden");
+    return true;
+  } else return false;
+  e.preventDefault();
+  renderSlash();   // the token is unchanged, so the new selection is kept
+  return true;
 }
 
 // Host-normalized chips (newer hosts). Each chip dispatches by its source,
@@ -4227,6 +4451,9 @@ $("queue-menu").onclick = showSteerSheet;
 $("steer-now").onclick = () => { hideSteerSheet(); submitPrompt("steer"); };
 $("steer-stop").onclick = () => { hideSteerSheet(); $("stop").click(); };
 $("steer-close").onclick = hideSteerSheet;
+$("usage").onclick = showUsageSheet;
+$("usage-close").onclick = hideUsageSheet;
+$("usage-sheet").onclick = (e) => { if (e.target.id === "usage-sheet") hideUsageSheet(); };
 $("steer-sheet").onclick = (e) => { if (e.target.id === "steer-sheet") hideSteerSheet(); };
 $("cfg-autorun").onchange = (e) => { ensureWriter(); send({ type: "setAutoRun", sessionId: currentSession, enabled: e.target.checked }); };
 $("detail-rename").onclick = () => { if (currentSession) showRenameSheet(currentSession); };
@@ -4274,10 +4501,16 @@ $("stop").onclick = () => {
   send({ type: "stop", sessionId: currentSession });   // stop is leaseless — no lease takeover first
   markStopping(true);
 };
-listen("prompt", "input", () => { autoGrowPrompt(); renderDriveBar(lastStreamingState); });
+listen("prompt", "input", () => { autoGrowPrompt(); renderSlash(); renderDriveBar(lastStreamingState); });
 listen("prompt", "keydown", (e) => {
+  if (handleSlashKey(e)) return;
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
+listen("prompt", "click", renderSlash);
+listen("prompt", "keyup", (e) => {
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") renderSlash();
+});
+listen("prompt", "blur", () => { slashState = null; $("slash").classList.add("hidden"); });
 
 $("question-submit").onclick = submitQuestion;
 // Explicit Close + backdrop tap — a sheet can always be dismissed, and a closed

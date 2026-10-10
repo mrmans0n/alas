@@ -1708,33 +1708,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         onNextPromptStateChange(nextPromptInputState)
     }
 
-    /// Locate an active `/<word>` token at the caret. Active means: the
-    /// `/` starts at the beginning of the buffer or right after
-    /// whitespace, and everything between it and the caret is
-    /// command-shaped (letters / digits / `-` / `_` / `:` / `$`, the last
-    /// for skills some agents list as `/$name`). Returns the
-    /// `/`'s character index and the current query (without the slash).
+    /// See `ACPSlashCommand.activeToken(in:caret:)`.
     private func currentSlashToken() -> (start: Int, query: String)? {
-        let str = (string as NSString)
-        let caret = selectedRange().location
-        guard caret <= str.length else { return nil }
-        var i = caret
-        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:$")
-        while i > 0 {
-            let ch = str.substring(with: NSRange(location: i - 1, length: 1))
-            if ch == "/" {
-                let prevIsBoundary = i - 1 == 0 || {
-                    let pc = str.substring(with: NSRange(location: i - 2, length: 1))
-                    return pc == " " || pc == "\n" || pc == "\t"
-                }()
-                guard prevIsBoundary else { return nil }
-                let query = str.substring(with: NSRange(location: i, length: caret - i))
-                return (i - 1, query)
-            }
-            guard let c = ch.first, allowed.contains(c) else { return nil }
-            i -= 1
-        }
-        return nil
+        ACPSlashCommand.activeToken(in: string as NSString, caret: selectedRange().location)
     }
 
     func reconcileSlashPanel() {

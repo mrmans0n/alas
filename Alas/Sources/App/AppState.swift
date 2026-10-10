@@ -15875,6 +15875,20 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func queueMove(for id: String, itemId: UUID, targetItemId: UUID) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queueMove(for: id, itemId: itemId, targetItemId: targetItemId)
+            return
+        }
+    }
+
+    func queuePromote(for id: String, itemId: UUID) async {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            await mgr.queuePromote(for: id, itemId: itemId)
+            return
+        }
+    }
+
     func steerPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
             await mgr.steerPrompt(for: id, text: text, attachments: attachments, onResult: onResult)

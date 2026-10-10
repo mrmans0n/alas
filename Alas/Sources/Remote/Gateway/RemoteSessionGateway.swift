@@ -325,6 +325,15 @@ final class RemoteSessionGateway {
         case .queueClear(let id):
             guard provider.isWriter(for: id) else { return }
             await provider.queueClear(for: id)
+        case .queueMove(let id, let itemId, let targetItemId):
+            guard let target = UUID(uuidString: targetItemId) else { return }
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queueMove(for: id, itemId: uuid, targetItemId: target)
+            }
+        case .queuePromote(let id, let itemId):
+            await withQueueItem(id: id, itemId: itemId) { uuid in
+                await self.provider.queuePromote(for: id, itemId: uuid)
+            }
         case .listChanges(let id, let comparisonMode):
             let key = if let comparisonMode {
                 "listChanges\u{0}\(id)\u{0}\(comparisonMode.rawValue)"
@@ -507,9 +516,9 @@ final class RemoteSessionGateway {
 
     // MARK: attachment materialization
 
-    private static let maxAttachmentsBytes = 10_000_000
+    nonisolated static let maxAttachmentsBytes = 10_000_000
     /// Max images per prompt — parity with the native composer's limit.
-    static let maxAttachmentCount = 10
+    nonisolated static let maxAttachmentCount = 10
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
     /// batch violates the size cap or any entry isn't a real image (caller rejects
@@ -1382,6 +1391,15 @@ final class RemoteSessionGateway {
     /// `ACPTranscriptChangeLog`, which forces a fresh tail snapshot under a
     /// bumped epoch rather than a delta that could otherwise upsert a stale
     /// index against shifted content.
+    /// A user row's wire text: the prompt, then one labelled line per image.
+    /// Viewers rebuild it to recognise their own prompt in the transcript.
+    nonisolated static func userRowText(text: String, attachmentNames: [String?]) -> String {
+        var parts: [String] = []
+        if !text.isEmpty { parts.append(text) }
+        parts.append(contentsOf: attachmentNames.map { "🖼 \($0 ?? "Image")" })
+        return parts.joined(separator: "\n\n")
+    }
+
     static func toWire(
         _ message: ACPMessage,
         index: Int,
@@ -1393,10 +1411,9 @@ final class RemoteSessionGateway {
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).
-            var parts: [String] = []
-            if !text.isEmpty { parts.append(text) }
-            parts.append(contentsOf: attachments.filter { !$0.isCheckpointReference }.map { "🖼 \($0.name ?? "Image")" })
-            return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil, index: index)
+            let names = attachments.filter { !$0.isCheckpointReference }.map(\.name)
+            return .init(stableId: sid, kind: "user", text: userRowText(text: text, attachmentNames: names),
+                         json: nil, index: index)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):
