@@ -16511,6 +16511,40 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] {
+        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return [] }
+        let root = worktree.path
+        // A bare `@` opens the picker: list afresh then, as the local picker
+        // does on open, and reuse that listing while the query grows.
+        if query.trimmingCharacters(in: .whitespaces).isEmpty {
+            await fileIndex.invalidate(forWorktreePath: root)
+        }
+        var fileSymbols: [SymbolEntry] = []
+        if case .file(let file, _) = MentionSymbolQuery.parse(query.trimmingCharacters(in: .whitespaces)) {
+            fileSymbols = await ACPSymbolMentionSource.symbols(ofFileMatching: file, root: root, fileIndex: fileIndex)
+        }
+        let paths = ((try? await fileIndex.entries(forWorktreePath: root)) ?? []).map(\.relativePath)
+        let sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+        return RemoteMentions.candidates(
+            query: query, root: root, filePaths: paths, sessions: sessions, fileSymbols: fileSymbols)
+    }
+
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        guard !mentions.isEmpty else { return [] }
+        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
+        var attachments: [ACPMessage.Attachment] = []
+        for mention in mentions {
+            guard let attachment = await RemoteMentions.attachment(
+                for: mention, worktreeRoot: worktree.path, sessionId: sessionId,
+                isProjectSession: { [weak self] id in
+                    await self?.acpSessionMentionCandidate(sessionId: id)?.projectId == worktree.projectId
+                })
+            else { return nil }
+            attachments.append(attachment)
+        }
+        return attachments
+    }
+
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {

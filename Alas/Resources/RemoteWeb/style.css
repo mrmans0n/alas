@@ -272,10 +272,11 @@ a:hover { color: var(--accent-hover); }
 .usage-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 2px; color: var(--fg-muted); font-size: 14px; }
 .usage-row span:last-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .usage-section { margin: 12px 0 2px; color: var(--fg-faint); font-size: 12px; font-weight: 650; }
-#slash { max-height: 34vh; overflow-y: auto; margin: 0 0 8px; padding: 4px; border-radius: 12px; background: var(--bg-3); box-shadow: inset 0 0 0 0.5px var(--line-strong); }
+#slash, #mention { max-height: 34vh; overflow-y: auto; margin: 0 0 8px; padding: 4px; border-radius: 12px; background: var(--bg-3); box-shadow: inset 0 0 0 0.5px var(--line-strong); }
 .slash-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: none; color: var(--fg); text-align: left; cursor: pointer; }
 .slash-row.is-selected { background: color-mix(in oklab, var(--accent) 25%, transparent); }
 .slash-command { flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+.mention-icon { flex: 0 0 auto; width: 20px; color: var(--fg-muted); font-size: 12px; text-align: center; }
 .slash-hint, .slash-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-faint); font-size: 13px; }
 .action-btn { flex-shrink: 0; width: 46px; height: 46px; padding: 0; border: none; border-radius: 14px; display: grid; place-items: center; cursor: pointer; transition: transform .08s; position: relative; overflow: visible; }
 .action-btn:active { transform: scale(0.94); }

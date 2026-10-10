@@ -23,14 +23,18 @@ final class NativePeerSessions {
     struct PendingPrompt: Equatable {
         let text: String
         let attachments: [NativePeerAttachment]
+        var mentions: [RemoteMention] = []
 
         func matches(_ item: RemoteQueuedPrompt) -> Bool {
             item.text == text && item.imageCount == attachments.count
         }
 
+        /// The host lists images, then mentions, under the user's text.
         func matches(_ row: RemoteWireMessage) -> Bool {
             row.kind == "user" && row.text == RemoteSessionGateway.userRowText(
-                text: text, attachmentNames: attachments.map(\.name))
+                text: text,
+                attachmentNames: attachments.map(\.name)
+                    + mentions.map { String($0.name.prefix(RemoteMentions.maxNameLength)) })
         }
     }
 
@@ -56,6 +60,14 @@ final class NativePeerSessions {
     /// Images staged for the next prompt. Kept, like the draft, until the
     /// host confirms the send.
     private(set) var attachments: [NativePeerAttachment] = []
+    /// Mentions picked for the next prompt. One whose `@name` the user
+    /// deletes from the draft is left out of the send.
+    private(set) var mentions: [RemoteMention] = []
+    /// The host's answer to the latest `searchMentions`.
+    private(set) var mentionCandidates: [RemoteMention] = []
+    /// The query whose answer `mentionCandidates` waits for; older answers
+    /// are dropped.
+    @ObservationIgnored private var mentionQuery: String?
     /// Queue Edit text the host restored after the user left that session,
     /// put back into the draft when the session is selected again.
     @ObservationIgnored private var restoredDrafts: [String: String] = [:]
@@ -299,6 +311,7 @@ final class NativePeerSessions {
         snapshot = .init(groups: [], attentionRows: [])
         draft = ""
         attachments = []
+        resetMentions()
         restoredDrafts = [:]
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
@@ -386,6 +399,7 @@ final class NativePeerSessions {
         selectedSessionId = sessionId
         draft = restoredDrafts.removeValue(forKey: sessionId) ?? ""
         attachments = []
+        resetMentions()
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
         reloadWorkspace()
@@ -413,6 +427,7 @@ final class NativePeerSessions {
         transcript = nil
         draft = ""
         attachments = []
+        resetMentions()
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         isFetchingOlderMessages = false
@@ -431,14 +446,17 @@ final class NativePeerSessions {
     func sendPrompt(intent: ACPSubmitIntent = .auto) {
         guard pendingPrompt == nil else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mentions = NativePeerComposerState.liveMentions(mentions, in: text)
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        let pending = PendingPrompt(text: text, attachments: attachments)
+        let pending = PendingPrompt(text: text, attachments: attachments, mentions: mentions)
         pendingPrompt = pending
         pendingPromptExpectedIndex = transcript?.totalCount ?? 0
         pendingPromptPriorQueueIds = Set((transcript?.queue ?? []).filter(pending.matches).map(\.id))
         let wireIntent = intent == .steer ? "steer" : "auto"
         let wireAttachments = attachments.map(\.wire)
-        if drive({ .sendPrompt(sessionId: $0, text: text, attachments: wireAttachments, intent: wireIntent) }) {
+        if drive({
+            .sendPrompt(sessionId: $0, text: text, attachments: wireAttachments, intent: wireIntent, mentions: mentions)
+        }) {
             deliveryError = nil
         } else {
             pendingPrompt = nil
@@ -524,6 +542,31 @@ final class NativePeerSessions {
 
     func removeAttachment(_ id: UUID) {
         attachments.removeAll { $0.id == id }
+    }
+
+    /// Asks the host for `@` candidates; nil closes the picker.
+    func searchMentions(_ query: String?) {
+        guard query != mentionQuery else { return }
+        mentionQuery = query
+        // The shown candidates stay until the answer replaces them, so the
+        // list doesn't flicker empty on every keystroke.
+        let asked = query.map { query in
+            transcript?.config?.supportsMentions == true
+                && routeWhileOnline { .searchMentions(sessionId: $0, query: query) }
+        } ?? false
+        if !asked { mentionCandidates = [] }
+    }
+
+    func addMention(_ mention: RemoteMention) {
+        if !mentions.contains(where: { $0.kind == mention.kind && $0.value == mention.value }) {
+            mentions.append(mention)
+        }
+    }
+
+    private func resetMentions() {
+        mentions = []
+        mentionCandidates = []
+        mentionQuery = nil
     }
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
@@ -919,6 +962,10 @@ final class NativePeerSessions {
         default:
             break
         }
+        if case .mentionCandidates(_, let query, let candidates) = message {
+            if query == mentionQuery { mentionCandidates = candidates }
+            return
+        }
         if case .promptRejected = message {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
@@ -996,6 +1043,7 @@ final class NativePeerSessions {
     private func confirm(_ sent: PendingPrompt) {
         if draft.trimmingCharacters(in: .whitespacesAndNewlines) == sent.text { draft = "" }
         if attachments == sent.attachments { attachments = [] }
+        mentions = NativePeerComposerState.liveMentions(mentions, in: draft)
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
     }

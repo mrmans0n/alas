@@ -84,17 +84,51 @@ enum NativePeerComposerState {
         }
     }
 
-    /// Replaces the `/` token being typed with the picked command and a
+    /// Replaces the `/` or `@` token being typed with the pick and a
     /// trailing space, as the local picker does. Offsets are UTF-16, the
     /// unit `ACPSlashCommand.activeToken` and text selections share.
-    static func completingSlashCommand(
-        _ command: String, in text: String, tokenStart: Int, caret: Int
+    static func completingToken(
+        _ pick: String, in text: String, tokenStart: Int, caret: Int
     ) -> (text: String, caret: Int) {
         let string = text as NSString
-        let replacement = command + " "
+        let replacement = pick + " "
         let range = NSRange(location: tokenStart, length: max(0, caret - tokenStart))
         return (string.replacingCharacters(in: range, with: replacement),
                 tokenStart + (replacement as NSString).length)
+    }
+
+    /// The `@` token the caret is in: an `@` at the start or after
+    /// whitespace, then no whitespace up to the caret. Paths and
+    /// `File.swift#name` drill-downs are single tokens.
+    static func activeMentionToken(in text: NSString, caret: Int) -> (start: Int, query: String)? {
+        guard caret <= text.length else { return nil }
+        func isSpace(_ unit: unichar) -> Bool {
+            unit == 0x20 || unit == 0x0A || unit == 0x09 || unit == 0x0D
+        }
+        var index = caret
+        while index > 0 {
+            let unit = text.character(at: index - 1)
+            if unit == 0x40 {
+                guard index == 1 || isSpace(text.character(at: index - 2)) else { return nil }
+                return (index - 1, text.substring(with: NSRange(location: index, length: caret - index)))
+            }
+            if isSpace(unit) { return nil }
+            index -= 1
+        }
+        return nil
+    }
+
+    static func mentionIconName(_ mention: RemoteMention) -> String {
+        switch mention.kind {
+        case RemoteMention.session: "bubble.left.and.text.bubble.right"
+        case RemoteMention.symbol: "curlybraces"
+        default: mention.value.hasSuffix("/") ? "folder" : "doc"
+        }
+    }
+
+    /// The picked mentions whose `@name` is still in `text`.
+    static func liveMentions(_ mentions: [RemoteMention], in text: String) -> [RemoteMention] {
+        mentions.filter { text.contains("@" + $0.name) }
     }
 
     struct DictationEdit: Equatable {

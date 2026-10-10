@@ -673,6 +673,15 @@ struct RemoteWebAssetTests {
         }
     }
 
+    @Test(arguments: [("@", 1), ("see @Alas/App.swift", 18), ("mail a@b", 8), ("@done next", 10), ("x\n@a#b", 6)])
+    func mentionPickerOpensOnTheSameTokenAsTheNativeComposer(text: String, caret: Int) throws {
+        let token = try javascriptFunction("mentionToken").call(withArguments: [text, caret])
+        let native = NativePeerComposerState.activeMentionToken(in: text as NSString, caret: caret)
+        #expect(token?.isNull == (native == nil))
+        #expect(native.map { token?.objectForKeyedSubscript("start")?.toInt32() == Int32($0.start) } ?? true)
+        #expect(native.map { token?.objectForKeyedSubscript("query")?.toString() == $0.query } ?? true)
+    }
+
     @MainActor
     @Test func slashPickerRanksLikeTheNativePicker() throws {
         let commands = ["/review", "/init", "/init", "/compact", "/inspect"].map { ["command": $0] }

@@ -1024,10 +1024,46 @@ struct NativePeerSessionsTests {
     func pickingASlashCommandReplacesTheTypedToken(
         text: String, start: Int, caret: Int, expected: String, expectedCaret: Int
     ) {
-        let completed = NativePeerComposerState.completingSlashCommand(
+        let completed = NativePeerComposerState.completingToken(
             "/review", in: text, tokenStart: start, caret: caret)
         #expect(completed.text == expected)
         #expect(completed.caret == expectedCaret)
+    }
+
+    @Test(arguments: [
+        ("@", 1, 0, ""), ("see @Alas/Sources/App.swift", 27, 4, "Alas/Sources/App.swift"),
+        ("@App.swift#run", 14, 0, "App.swift#run"), ("mail a@b", 8, nil, nil), ("@done next", 10, nil, nil),
+        ("x\n@a", 4, 2, "a"),
+    ] as [(String, Int, Int?, String?)])
+    func mentionTokenIsTheAtWordAtTheCaret(text: String, caret: Int, start: Int?, query: String?) {
+        let token = NativePeerComposerState.activeMentionToken(in: text as NSString, caret: caret)
+        #expect(token?.start == start)
+        #expect(token?.query == query)
+    }
+
+    @Test func promptsCarryOnlyTheMentionsStillInTheDraftAndDropStaleCandidates() {
+        let (links, client) = drivenClient(canDrive: true)
+        var config = RemoteSessionConfig(sessionId: "s", models: [], modes: [], currentModel: nil, currentMode: nil,
+                                         autoRunEnabled: false, acceptsImages: false)
+        config.supportsMentions = true
+        links.receive(.sessionConfig(config), from: "B")
+        let file = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
+        let session = RemoteMention(kind: RemoteMention.session, value: "s2", name: "Refactor")
+
+        client.searchMentions("ap")
+        client.searchMentions("app")
+        #expect(links.sent(to: "B").contains(.searchMentions(sessionId: "s", query: "app")))
+        links.receive(.mentionCandidates(sessionId: "s", query: "ap", candidates: [session]), from: "B")
+        #expect(client.mentionCandidates.isEmpty)
+        links.receive(.mentionCandidates(sessionId: "s", query: "app", candidates: [file]), from: "B")
+        #expect(client.mentionCandidates == [file])
+
+        client.addMention(file)
+        client.addMention(session)
+        client.draft = "fix @App.swift"
+        client.sendPrompt()
+        #expect(links.sent(to: "B").last == .sendPrompt(
+            sessionId: "s", text: "fix @App.swift", attachments: [], intent: "auto", mentions: [file]))
     }
 
     @Test(arguments: [
@@ -1422,7 +1458,7 @@ struct NativePeerSessionsTests {
         client.sendPrompt()
 
         #expect(links.sent(to: "B").filter {
-            if case .sendPrompt(_, "run the checks", _, _) = $0 { return true }
+            if case .sendPrompt(_, "run the checks", _, _, _) = $0 { return true }
             return false
         }.count == 1)
         #expect(client.isPromptPending)

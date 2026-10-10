@@ -50,6 +50,8 @@ let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppr
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
+let pendingMentions = [];      // [{kind, value, name}] picked from the @ list; sent while "@name" stays in the text
+let lastSentMentions = [];     // mentions of the most recent sendPrompt, restored with its text
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
 let composerGeneration = 0;     // bumped by resetServerScopedState(); invalidates in-flight onFilesPicked() reads from a server the user has since left
 let renameTarget = null;
@@ -378,6 +380,7 @@ function handle(msg) {
     case "elicitationRequest": handlePromptRequest("elicitation", msg.sessionId, msg.payload); break;
     case "elicitationResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("elicitation", msg.sessionId); hideElicitation(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
+    case "mentionCandidates": applyMentionCandidates(msg); break;
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
       createState.worktrees = msg.worktrees || [];
@@ -4066,15 +4069,19 @@ function submitPrompt(intent) {
   if (!currentSession) return;
   if (!text && pendingAttachments.length === 0) return;   // nothing to send
   ensureWriter();                                    // grab the wheel first; ordered before the prompt
-  send({
+  const mentions = liveMentions(text);
+  const message = {
     type: "sendPrompt",
     sessionId: currentSession,
     text,
     attachments: pendingAttachments,
     intent: intent || "auto",
-  });
+  };
+  if (mentions.length) message.mentions = mentions;
+  send(message);
   lastSentText = text;                               // keep until the server accepts (or rejects) it
   lastSentAttachments = pendingAttachments;          // ditto for the staged images
+  lastSentMentions = mentions;
   ta.value = "";
   clearAttachments();
   autoGrowPrompt();                                  // collapse back to one row
@@ -4095,9 +4102,11 @@ function restoreRejectedPrompt() {
   if (!composingNew) {
     if (lastSentText) { ta.value = lastSentText; autoGrowPrompt(); }
     if (lastSentAttachments.length) { pendingAttachments = lastSentAttachments.slice(); renderChips(); }
+    pendingMentions = lastSentMentions.slice();
   }
   lastSentText = null;
   lastSentAttachments = [];
+  lastSentMentions = [];
   // renderChips() above only runs when there were attachments — a text-only
   // restore would otherwise leave the composer action (Send/Queue/hidden)
   // stale at "hidden" from the submit that just got rejected, stranding the
@@ -4294,6 +4303,126 @@ function handleSlashKey(e) {
   return true;
 }
 
+// --- @ mention picker (host-ranked, see RemoteMentions.swift) ---
+// The `@word` the caret is typing: the @ starts the text or follows
+// whitespace, and no whitespace sits between it and the caret.
+function mentionToken(text, caret) {
+  for (let i = caret; i > 0; i--) {
+    const ch = text[i - 1];
+    if (ch === "@") {
+      const prev = i - 1 === 0 ? " " : text[i - 2];
+      if (!/\s/.test(prev)) return null;
+      return { start: i - 1, query: text.slice(i, caret) };
+    }
+    if (/\s/.test(ch)) return null;
+  }
+  return null;
+}
+
+function liveMentions(text) {
+  return pendingMentions.filter(m => text.includes("@" + m.name))
+    .map(m => ({ kind: m.kind, value: m.value, name: m.name }));
+}
+
+let mentionState = null;   // { start, query, items, selected } while an @ token is typed
+let mentionTimer = null;
+
+// Asks the host about the token at the caret, debounced so typing a path
+// doesn't send a search per keystroke.
+function updateMention() {
+  const ta = $("prompt");
+  const token = sessionConfig && sessionConfig.supportsMentions && ta.selectionStart === ta.selectionEnd
+    ? mentionToken(ta.value, ta.selectionStart) : null;
+  if (!token) { closeMention(); return; }
+  if (mentionState && mentionState.start === token.start && mentionState.query === token.query) return;
+  const items = mentionState && mentionState.start === token.start ? mentionState.items : [];
+  mentionState = { start: token.start, query: token.query, items, selected: 0 };
+  clearTimeout(mentionTimer);
+  mentionTimer = setTimeout(() => {
+    if (mentionState && currentSession) send({ type: "searchMentions", sessionId: currentSession, query: mentionState.query });
+  }, 120);
+  renderMention();
+}
+
+function applyMentionCandidates(msg) {
+  if (msg.sessionId !== currentSession || !mentionState || msg.query !== mentionState.query) return;
+  mentionState.items = msg.candidates || [];
+  mentionState.selected = 0;
+  renderMention();
+}
+
+function mentionIcon(m) {
+  if (m.kind === "session") return "💬";
+  if (m.kind === "symbol") return "{ }";
+  return m.value.endsWith("/") ? "📁" : "📄";
+}
+
+function renderMention() {
+  const box = $("mention");
+  if (!mentionState || mentionState.items.length === 0) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = "";
+  mentionState.items.forEach((m, idx) => {
+    const row = el("button", "slash-row");
+    row.type = "button";
+    row.setAttribute("role", "option");
+    if (idx === mentionState.selected) { row.classList.add("is-selected"); row.setAttribute("aria-selected", "true"); }
+    row.appendChild(el("span", "mention-icon", mentionIcon(m)));
+    row.appendChild(el("span", "slash-command", m.name));
+    if (m.detail) row.appendChild(el("span", "slash-description", m.detail));
+    // mousedown, not click: keep the textarea focused so the keyboard stays up.
+    row.onmousedown = (e) => { e.preventDefault(); pickMention(m); };
+    box.appendChild(row);
+  });
+  box.classList.remove("hidden");
+  const selected = box.children[mentionState.selected];
+  if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: "nearest" });
+}
+
+function pickMention(m) {
+  if (!mentionState) return;
+  const ta = $("prompt");
+  const caret = ta.selectionStart;
+  const replacement = "@" + m.name + " ";
+  ta.value = ta.value.slice(0, mentionState.start) + replacement + ta.value.slice(caret);
+  const next = mentionState.start + replacement.length;
+  ta.setSelectionRange(next, next);
+  if (!pendingMentions.some(p => p.kind === m.kind && p.value === m.value)) pendingMentions.push(m);
+  closeMention();
+  ta.focus();
+  autoGrowPrompt();
+  renderDriveBar(lastStreamingState);
+}
+
+function closeMention() {
+  clearTimeout(mentionTimer);
+  mentionState = null;
+  $("mention").classList.add("hidden");
+}
+
+// Arrow keys move, Enter/Tab accept, Escape closes. True when consumed.
+function handleMentionKey(e) {
+  if (!mentionState || mentionState.items.length === 0) return false;
+  const n = mentionState.items.length;
+  if (e.key === "ArrowUp") mentionState.selected = (mentionState.selected - 1 + n) % n;
+  else if (e.key === "ArrowDown") mentionState.selected = (mentionState.selected + 1) % n;
+  else if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    pickMention(mentionState.items[mentionState.selected]);
+    return true;
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeMention();
+    return true;
+  } else return false;
+  e.preventDefault();
+  renderMention();
+  return true;
+}
+
 // Host-normalized chips (newer hosts). Each chip dispatches by its source,
 // so a config-backed model goes through setConfigOption, not setModel.
 function sendChip(chip, id) {
@@ -4377,7 +4506,8 @@ function hideSteerSheet() { $("steer-sheet").classList.add("hidden"); }
 function b64Bytes(b64) { return Math.floor(b64.length * 3 / 4); }   // decoded size estimate, good enough for the cap
 function attachedBytes() { return pendingAttachments.reduce((n, a) => n + b64Bytes(a.dataBase64), 0); }
 
-function clearAttachments() { pendingAttachments = []; renderChips(); }
+// Mentions go with the attachments: both are staged for the next prompt.
+function clearAttachments() { pendingAttachments = []; pendingMentions = []; closeMention(); renderChips(); }
 
 function renderChips() {
   const box = $("chips");
@@ -4501,16 +4631,16 @@ $("stop").onclick = () => {
   send({ type: "stop", sessionId: currentSession });   // stop is leaseless — no lease takeover first
   markStopping(true);
 };
-listen("prompt", "input", () => { autoGrowPrompt(); renderSlash(); renderDriveBar(lastStreamingState); });
+listen("prompt", "input", () => { autoGrowPrompt(); renderSlash(); updateMention(); renderDriveBar(lastStreamingState); });
 listen("prompt", "keydown", (e) => {
-  if (handleSlashKey(e)) return;
+  if (handleMentionKey(e) || handleSlashKey(e)) return;
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
-listen("prompt", "click", renderSlash);
+listen("prompt", "click", () => { renderSlash(); updateMention(); });
 listen("prompt", "keyup", (e) => {
-  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") renderSlash();
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") { renderSlash(); updateMention(); }
 });
-listen("prompt", "blur", () => { slashState = null; $("slash").classList.add("hidden"); });
+listen("prompt", "blur", () => { slashState = null; $("slash").classList.add("hidden"); closeMention(); });
 
 $("question-submit").onclick = submitQuestion;
 // Explicit Close + backdrop tap — a sheet can always be dismissed, and a closed

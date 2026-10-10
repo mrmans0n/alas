@@ -303,6 +303,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         }
     }
 
+    /// What `remoteMentionAttachments` answers for a non-empty list.
+    var mentionAttachments: [ACPMessage.Attachment]? = []
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        mentions.isEmpty ? [] : mentionAttachments
+    }
+
     var writtenAttachmentURLs: [URL] = []
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
@@ -1491,6 +1497,30 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.isEmpty)
         await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [], intent: "auto")) // trimmed before forwarding
         #expect(provider.prompts.map(\.text) == ["hi"])
+    }
+
+    @Test func sendPromptSendsResolvedMentionsAfterImagesAndRefusesUnresolvedOnesBeforeWriting() async throws {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png.base64EncodedString())
+        let mention = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
+
+        provider.mentionAttachments = nil
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
+                                    mentions: [mention]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.prompts.isEmpty)
+        #expect(provider.writtenAttachmentURLs.isEmpty)
+
+        let linked = ACPMessage.Attachment(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil)
+        provider.mentionAttachments = [linked]
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
+                                    mentions: [mention]))
+        #expect(provider.lastAttachments.map(\.mimeType) == ["image/png", nil])
+        #expect(provider.lastAttachments.last == linked)
     }
 
     @Test func droppedSendPromptEmitsRejection() async {
