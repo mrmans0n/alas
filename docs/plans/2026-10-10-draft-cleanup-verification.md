@@ -20,8 +20,12 @@ It refuses paraphrases, capitalization changes, interior punctuation changes,
 and punctuation that could detach an attachment or condition. It preserves raw
 technical tokens, commands, code and quoted content, including smart quotes.
 Incomplete quotes/code and inputs over 2,000 editable UTF-8 bytes are refused.
-The complete JSON-encoded prompt plus instructions must also fit the 4,096-byte
-input budget; escaping-heavy drafts are refused before generation.
+The complete JSON-encoded prompt plus instructions reserves a 1,024-token
+response allocation within the conservative 4,096-byte budget. The unchanged
+JSON response plus 256 bytes for punctuation/formatting must fit that response
+allocation, using bytes as a conservative token bound. This can refuse drafts
+below the raw 2,000-byte limit; escaping-heavy or large echoes are refused before
+generation.
 
 Mention, image, command, path, upstream-reference and collapsed-paste objects
 are retained in place. Their content is not generated or sent to the model.

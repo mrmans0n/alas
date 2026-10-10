@@ -191,6 +191,7 @@ struct ACPDraftCleanupTests {
     @Test("cleanup refuses incomplete protected structure and oversized input", arguments: [
         "fix `unfinished code", "keep \"unfinished quote", "keep 'unfinished quote", String(repeating: "word ", count: 900),
         String(repeating: "\"", count: 2_000),
+        "um check " + String(repeating: "qzxjkv", count: 175),
     ])
     func refusesUnsupportedDraft(_ text: String) {
         #expect(throws: ACPDraftCleanupFailure.self) {
