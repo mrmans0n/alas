@@ -180,7 +180,7 @@ final class RemoteSessionGateway {
             reportTabAction(await provider.openSessionTab(for: id), sessionId: id)
         case .closeSessionTab(let id):
             reportTabAction(await provider.closeSessionTab(for: id), sessionId: id)
-        case .sendPrompt(let id, let text, let attachments, let intent):
+        case .sendPrompt(let id, let text, let attachments, let intent, let mentions):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
             // decoded images to disk, and a non-writer must be rejected without
             // leaving orphan files under acp-attachments/. The manager re-checks
@@ -193,15 +193,24 @@ final class RemoteSessionGateway {
                 return
             }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hasContent = !trimmed.isEmpty || !attachments.isEmpty
+            let hasContent = !trimmed.isEmpty || !attachments.isEmpty || !mentions.isEmpty
             guard hasContent else {
                 send(.promptRejected(sessionId: id))
                 return
             }
-            guard let materialized = materialize(attachments, for: id) else {
+            // Resolved before `materialize` writes anything, so a refused
+            // mention leaves no orphan image files.
+            guard mentions.count <= Self.maxMentionCount,
+                  let mentioned = await provider.remoteMentionAttachments(mentions, sessionId: id)
+            else {
+                send(.promptRejected(sessionId: id))
+                return
+            }
+            guard let images = materialize(attachments, for: id) else {
                 send(.promptRejected(sessionId: id))   // oversize / non-image
                 return
             }
+            let materialized = images + mentioned
             // The manager owns the writer/lease re-check and the eventual
             // delivery result. Emit promptRejected on any failure — refused
             // now (not writer / needs auth) OR a session/prompt RPC that fails
@@ -219,7 +228,9 @@ final class RemoteSessionGateway {
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
-                    if refusalIsSynchronous.value { self.discardAttachmentFiles(materialized) }
+                    // Only the image files we wrote: mentioned files are the
+                    // user's own.
+                    if refusalIsSynchronous.value { self.discardAttachmentFiles(images) }
                 }
             }
             // "steer" cancels the running turn and sends immediately while
@@ -414,6 +425,14 @@ final class RemoteSessionGateway {
             case .failure(let reason, let message):
                 send(.fileTreeFailed(sessionId: id, path: path, reason: reason, message: message))
             }
+        case .searchMentions(let id, let query):
+            // Ungated by the writer lease, like the file reads: seeing a
+            // session is enough to read its project.
+            // An overlong query gets no rows rather than rows for a prefix
+            // the viewer would take as the answer to the whole query.
+            let candidates = query.count > Self.maxMentionQueryLength
+                ? [] : await provider.remoteMentionCandidates(sessionId: id, query: query)
+            send(.mentionCandidates(sessionId: id, query: query, candidates: candidates))
         case .readFile(let id, let path):
             let key = "readFile\u{0}\(id)\u{0}\(path)"
             guard inFlightFileRequests.insert(key).inserted else { return }
@@ -519,6 +538,9 @@ final class RemoteSessionGateway {
     nonisolated static let maxAttachmentsBytes = 10_000_000
     /// Max images per prompt — parity with the native composer's limit.
     nonisolated static let maxAttachmentCount = 10
+    /// Caps the mentions one prompt resolves, as the image cap does.
+    nonisolated static let maxMentionCount = 50
+    nonisolated static let maxMentionQueryLength = 256
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
     /// batch violates the size cap or any entry isn't a real image (caller rejects
@@ -1391,12 +1413,16 @@ final class RemoteSessionGateway {
     /// `ACPTranscriptChangeLog`, which forces a fresh tail snapshot under a
     /// bumped epoch rather than a delta that could otherwise upsert a stale
     /// index against shifted content.
-    /// A user row's wire text: the prompt, then one labelled line per image.
-    /// Viewers rebuild it to recognise their own prompt in the transcript.
-    nonisolated static func userRowText(text: String, attachmentNames: [String?]) -> String {
+    /// A user row's wire text: the prompt, then one labelled line per image
+    /// and per mention. Viewers rebuild it to recognise their own prompt in
+    /// the transcript.
+    nonisolated static func userRowText(
+        text: String, attachmentNames: [String?], resourceNames: [String?] = []
+    ) -> String {
         var parts: [String] = []
         if !text.isEmpty { parts.append(text) }
         parts.append(contentsOf: attachmentNames.map { "🖼 \($0 ?? "Image")" })
+        parts.append(contentsOf: resourceNames.map { "📎 \($0 ?? "Resource")" })
         return parts.joined(separator: "\n\n")
     }
 
@@ -1411,8 +1437,13 @@ final class RemoteSessionGateway {
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).
-            let names = attachments.filter { !$0.isCheckpointReference }.map(\.name)
-            return .init(stableId: sid, kind: "user", text: userRowText(text: text, attachmentNames: names),
+            // The runner sends only `image/` attachments as images; the
+            // rest are resource links (mentions).
+            let shown = attachments.filter { !$0.isCheckpointReference }
+            let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
+            let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
+                                      resourceNames: shown.filter { !isImage($0) }.map(\.name))
+            return .init(stableId: sid, kind: "user", text: rowText,
                          json: nil, index: index)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)

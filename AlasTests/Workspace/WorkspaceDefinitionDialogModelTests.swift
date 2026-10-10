@@ -4,10 +4,13 @@ import Testing
 
 @Suite("Workspace definition dialog model")
 struct WorkspaceDefinitionDialogModelTests {
-    @Test func trimsNameFiltersToExactHostAndPreventsDuplicateMembers() {
+    @Test func trimsNameFiltersToExactHostAndGitProjectsAndPreventsDuplicateMembers() {
         let local = project(id: "local", name: "Local", path: "/repos/local")
         let remote = project(id: "remote", name: "Remote", path: "/repos/remote", host: "builder")
-        var model = WorkspaceDefinitionDialogModel(name: "  Release train  ", executionLocation: .local, projects: [local, remote])
+        var folder = project(id: "folder", name: "Notes", path: "/notes")
+        folder.kind = .folder
+        var model = WorkspaceDefinitionDialogModel(
+            name: "  Release train  ", executionLocation: .local, projects: [local, remote, folder])
 
         #expect(model.trimmedName == "Release train")
         #expect(model.eligibleProjects.map(\.id) == ["local"])
@@ -15,6 +18,8 @@ struct WorkspaceDefinitionDialogModelTests {
         let duplicated = model.add(project: local)
         #expect(added)
         #expect(!duplicated)
+        let addedFolder = model.add(project: folder)
+        #expect(!addedFolder)
         #expect(model.members.map(\.projectID) == ["local"])
     }
 

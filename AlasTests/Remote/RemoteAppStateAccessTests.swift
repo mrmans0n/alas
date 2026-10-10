@@ -1182,7 +1182,8 @@ struct RemoteAppStateAccessTests {
         #expect(nonACP == .failure("Agent is no longer available."))
     }
 
-    @Test func remoteProjectsPreserveConfiguredProjectIDsAndNames() async {
+    /// The list drives worktree creation, so folder projects are left out.
+    @Test func remoteProjectsPreserveConfiguredGitProjectIDsAndNames() async {
         let firstProject = ProjectConfig(
             id: "project-first",
             name: "First Project",
@@ -1197,8 +1198,10 @@ struct RemoteAppStateAccessTests {
             color: "green",
             addedAt: Date()
         )
+        let folder = ProjectConfig(
+            id: "project-folder", name: "Notes", path: "/tmp/notes", color: "red", addedAt: Date(), kind: .folder)
         let state = AppState(store: ProjectMemoryStore(
-            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+            projectsFile: ProjectsFile(projects: [firstProject, folder, secondProject])
         ))
 
         let projects = await state.remoteProjects()

@@ -51,6 +51,26 @@ struct ContentSearcherTests {
         #expect(pairs == ["a.txt:3", "nested/b.txt:2", "nested/b.txt:3"])
     }
 
+    /// A folder prunes what its file index prunes; a file named like a
+    /// skipped directory is still searched.
+    @Test func folderSearchSkipsDotAndGeneratedDirectories() async throws {
+        try #require(await rgAvailable())
+        let dir = try await makeRepo(files: [
+            ("node_modules/x.txt", "needle\n"), (".cache/y.txt", "needle\n"),
+            ("build", "needle\n"), ("src/z.txt", "needle\n"),
+        ])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var paths = Set<String>()
+        for try await hit in ContentSearcher().search(
+            query: "needle",
+            options: SearchContentOptions(),
+            worktrees: [SearchWorktree(id: "w1", projectId: "p1", displayName: "w", absolutePath: dir, isFolder: true)]
+        ) {
+            paths.insert(hit.relativePath)
+        }
+        #expect(paths == ["build", "src/z.txt"])
+    }
+
     @Test func cancellationStopsStream() async throws {
         try #require(await rgAvailable())
         // Build a directory big enough that rg takes >50ms.

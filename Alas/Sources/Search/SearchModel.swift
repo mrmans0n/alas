@@ -11,6 +11,7 @@ struct SearchWorktree: Equatable, Sendable, Identifiable {
     var executionLocation: ExecutionLocation? = nil
     var workspaceCheckoutID: UUID? = nil
     var workspaceCheckoutMemberID: UUID? = nil
+    var isFolder = false
 
     var remoteHost: String? {
         switch executionLocation?.normalized {

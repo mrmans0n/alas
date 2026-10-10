@@ -180,6 +180,24 @@ struct AppStateRunScheduleTests {
         #expect(fixture.state.runScriptFailures(in: "wt-1").isEmpty)
     }
 
+    /// A worktree-creating schedule over every project skips folders rather
+    /// than failing on each run.
+    @Test func worktreeCreatingScheduleSkipsFolderProjects() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var folder = fixture.project
+        folder.kind = .folder
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [folder])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+
+        let outcome = await fixture.state.runSchedule(schedule(
+            target: .allProjects,
+            composition: RunScheduleComposition(agentId: "term-agent")
+        )).outcome
+
+        #expect(outcome == .skipped(reason: AppState.folderWorktreeCreationMessage))
+    }
+
     @Test func remoteProjectRunsOnItsHost() async throws {
         let fixture = try makeFixture(host: "devbox")
         // This test covers remote launch routing, not repository-hook I/O.

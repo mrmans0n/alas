@@ -23,6 +23,7 @@ private final class WorktreeWatcherStreamContext {
 final class WorktreeWatcher {
     var onChange: (() -> Void)?
     private let path: URL
+    private let watchesGitDir: Bool
     private var stream: FSEventStreamRef?
     private var gitDirStream: FSEventStreamRef?
     private var isRunning = false
@@ -35,8 +36,9 @@ final class WorktreeWatcher {
     // pane stuck on stale data.
     private let debouncer = DebounceTimer(interval: 0.5, maxWait: 2.0)
 
-    init(path: URL) {
+    init(path: URL, watchesGitDir: Bool = true) {
         self.path = path
+        self.watchesGitDir = watchesGitDir
         self.eventQueue.setSpecific(key: eventQueueKey, value: ())
         self.debouncer.onFire = { [weak self] in
             self?.onChange?()
@@ -55,6 +57,7 @@ final class WorktreeWatcher {
         // never blocks watcher startup. Worktree-file events still flow.
         // `Task` inherits the main actor here, so the continuation after the
         // await is already back on main — no explicit `MainActor.run` needed.
+        guard watchesGitDir else { return }
         Task { [weak self] in
             guard let self else { return }
             guard let gitDir = await Self.resolveGitDir(at: self.path) else { return }

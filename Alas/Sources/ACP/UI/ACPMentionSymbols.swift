@@ -7,6 +7,29 @@ struct ACPSymbolMentionSource {
     /// For `File.swift#name`: the symbols of the worktree file that best
     /// matches `fileQuery`. Works local and remote.
     let fileSymbols: @Sendable (_ fileQuery: String) async -> [SymbolEntry]
+
+    /// The symbols of the worktree file that best matches `fileQuery`.
+    static func symbols(
+        ofFileMatching fileQuery: String, root: URL, fileIndex: FileIndex, isFolder: Bool = false
+    ) async -> [SymbolEntry] {
+        // From FileIndex paths, not the picker's file list: that list
+        // drops remote entries, and drill-down is remote's only route.
+        // Each step can be slow (enumeration, a remote read, parsing),
+        // and a newer keystroke or the closed picker cancels this one.
+        let entries = (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []
+        guard !Task.isCancelled else { return [] }
+        let urls = entries.map { root.appendingPathComponent($0.relativePath) }
+        // The listing keeps tracked files deleted from the working tree, so
+        // an unreadable match falls through to the next, however many there are.
+        for match in MentionFuzzy.rank(files: urls, query: fileQuery, limit: urls.count, relativeTo: root) {
+            guard !Task.isCancelled else { return [] }
+            let relativePath = String(match.path.dropFirst(root.path.count + 1))
+            if let source = await SymbolSource.read(root: root, relativePath: relativePath) {
+                return Task.isCancelled ? [] : SymbolExtractor.symbols(in: source, relativePath: relativePath)
+            }
+        }
+        return []
+    }
 }
 
 enum MentionScope: Int, CaseIterable, Identifiable {

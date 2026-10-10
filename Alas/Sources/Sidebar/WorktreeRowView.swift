@@ -758,7 +758,10 @@ struct WorktreeRowView: View {
             Divider()
         }
         Button("Copy Path", action: onCopyPath)
-        Button("Copy Branch Name", action: onCopyBranch)
+        // Folder-project rows have no branch.
+        if !worktree.branch.isEmpty {
+            Button("Copy Branch Name", action: onCopyBranch)
+        }
         if !worktree.path.isRemoteAlasPath {
             Button("Reveal in Finder", action: onRevealInFinder)
         }

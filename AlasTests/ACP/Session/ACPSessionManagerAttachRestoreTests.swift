@@ -1191,6 +1191,57 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(promptSends.first?.operationKey.rawValue == neverSent.brokerOperationKey)
     }
 
+    @Test("cached recovery persists answered prompt removal before reconnect or detach",
+          arguments: [false, true], ["restart", "detach"])
+    func cachedRecoveryPersistsAnsweredPrompt(resume: Bool, action: String) async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let setupGate = AttachPhaseGate()
+        var setupCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            continueInterruptedSessions: { resume },
+            setupEvaluator: { _ in
+                setupCount += 1
+                if setupCount > 1 { await setupGate.enterAndWait() }
+                return .ready
+            },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
+        let session = manager.createSession(id: "local", agentId: "claude")
+        session.continuesInterruptedTurns = { resume }
+        await manager.attach(to: session.id, freshlyCreated: true)
+        session.queue = [QueuedPrompt(
+            blocks: [.text("first")], status: .sending, transcriptRecorded: true,
+            dispatchCount: 1)]
+        session.transcript.messages = [
+            .user(id: UUID(), text: "first", attachments: []),
+            .agent(id: UUID(), StreamingText("started")),
+        ]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        let recovery = Task {
+            if action == "restart" { await manager.restartConnection(to: session.id) }
+            else { await manager.detach(sessionId: session.id) }
+        }
+        defer { Task { await setupGate.release() } }
+        if action == "restart" {
+            try await waitUntilAsync { await setupGate.hasEntered }
+        } else {
+            await recovery.value
+        }
+        await manager.flushAllPersistence()
+        #expect(session.queue.map(\.blocks) == (resume ? [[.text(ACPSession.interruptedTurnContinueText)]] : []))
+        let reloaded = try await ACPSessionHydrator(path: path).mirrorSnapshot(sessionId: session.id)
+        #expect(reloaded.queue.map(\.blocks) == (resume ? [[.text(ACPSession.interruptedTurnContinueText)]] : []))
+        await setupGate.release()
+        await recovery.value
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("restart before queued prompt handoff keeps the prompt eligible for delivery")
     func restartBeforeQueuedPromptHandoffKeepsPromptEligible() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

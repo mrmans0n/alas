@@ -102,7 +102,9 @@ final class RepoSelectorModel {
             for w in rest {
                 rows.append(.worktree(w, indices: [], isCurrent: w.id == currentId))
             }
-            rows.append(.action(.newWorktreeForRepo(projectId: project.id)))
+            if !project.isFolder {
+                rows.append(.action(.newWorktreeForRepo(projectId: project.id)))
+            }
         }
 
         rows.append(.actionsHeader)

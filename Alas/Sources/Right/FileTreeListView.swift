@@ -14,7 +14,7 @@ struct FileTreeContext {
     /// Repo-level bookmarked paths, for the context menu's add/remove wording.
     let bookmarks: [String]
     let onSelectFile: (FileTreeNode) -> Void
-    let onFileHistory: (FileTreeNode) -> Void
+    let onFileHistory: ((FileTreeNode) -> Void)?
     let onCreateFile: (String) -> Void
     let onCreateFolder: (String) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
@@ -286,7 +286,7 @@ struct FileTreeListView: View {
                 context.onCreateFolder(node.path)
             } : nil,
             onOpenInAlas: node.kind == .file ? { context.onSelectFile(node) } : nil,
-            onFileHistory: node.kind == .file ? { context.onFileHistory(node) } : nil,
+            onFileHistory: node.kind == .file ? context.onFileHistory.map { history in { history(node) } } : nil,
             onCopyRelativePath: { Clipboard.copy(node.path) },
             onCopyFullPath: { Clipboard.copyPath(context.worktreePath.appendingPathComponent(node.path).path) },
             onToggleBookmark: { context.onToggleBookmark(node) }

@@ -62,7 +62,7 @@ struct NewWorktreeDialog: View {
         self.presetProjectId = presetProjectId
         let initialSelection = Self.initialSelection(
             presetProjectId: presetProjectId,
-            projects: state.projects,
+            projects: state.worktreeProjects,
             repoHasGGConfig: { project in
                 GGStackGate.repoHasGGConfig(repoPath: project.path)
             }
@@ -98,7 +98,7 @@ struct NewWorktreeDialog: View {
                 }
             },
             content: {
-                if state.projects.isEmpty {
+                if state.worktreeProjects.isEmpty {
                     DialogField(label: "Repository") {
                         Text("No projects yet — add one first.").font(.system(size: 12))
                             .foregroundColor(theme.color("fg-dim"))
@@ -107,7 +107,7 @@ struct NewWorktreeDialog: View {
                     DialogField(label: "Repository") {
                         ProjectPicker(
                             selection: $projectId,
-                            projects: state.projects,
+                            projects: state.worktreeProjects,
                             icon: { state.effectiveIcon(for: $0) }
                         )
                     }
@@ -174,7 +174,7 @@ struct NewWorktreeDialog: View {
             onCancel: { presented = false },
             onConfirm: create,
             confirmEnabled: Self.canCreate(
-                projectsEmpty: state.projects.isEmpty,
+                projectsEmpty: state.worktreeProjects.isEmpty,
                 branchEmpty: activeName.isEmpty,
                 branchValidation: branchValidationMessage,
                 ggConfigurationMissing: ggConfigurationMissing,
@@ -187,7 +187,7 @@ struct NewWorktreeDialog: View {
             if projectId.isEmpty {
                 projectId = Self.initialProjectId(
                     presetProjectId: presetProjectId,
-                    projects: state.projects
+                    projects: state.worktreeProjects
                 )
             }
             applyGGModeDefault(for: projectId)
@@ -262,11 +262,11 @@ struct NewWorktreeDialog: View {
     }
 
     private var presetProject: ProjectConfig? {
-        Self.resolvedPresetProject(presetProjectId: presetProjectId, projects: state.projects)
+        Self.resolvedPresetProject(presetProjectId: presetProjectId, projects: state.worktreeProjects)
     }
 
     private var showsRepositorySelector: Bool {
-        !state.projects.isEmpty && presetProject == nil
+        !state.worktreeProjects.isEmpty && presetProject == nil
     }
 
     private var activeName: String {
@@ -315,7 +315,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var ggStackAvailability: GGStackCreateMode.Availability {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return .hidden }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return .hidden }
         let gatePassed = state.config.changes.stackedDiffsEnabled
             && GGAvailability.shared.isInstalled
             && project.host == nil
@@ -327,7 +327,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var createsGGStack: Bool {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return false }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return false }
         return GGStackCreateMode.createsStack(
             masterEnabled: state.config.changes.stackedDiffsEnabled,
             ggInstalled: GGAvailability.shared.isInstalled,
@@ -339,7 +339,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var stackedDiffsRequested: Bool {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return false }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return false }
         return GGStackCreateMode.createsStack(
             masterEnabled: state.config.changes.stackedDiffsEnabled,
             ggInstalled: true,
@@ -364,7 +364,7 @@ struct NewWorktreeDialog: View {
         if createsGGStack, case .enabled(let username) = ggStackAvailability {
             return GGConfigReader.composeStackBranch(username: username, stackName: stackName)
         }
-        let project = state.projects.first(where: { $0.id == projectId })
+        let project = state.worktreeProjects.first(where: { $0.id == projectId })
         return WorktreeBranchName.compose(
             name: branch,
             prefix: state.config.worktrees.branchPrefix,
@@ -381,7 +381,7 @@ struct NewWorktreeDialog: View {
     /// off/unavailable or gg config records no base (then the picker stays free).
     private var stackPinnedBase: String? {
         guard createsGGStack, case .enabled = ggStackAvailability,
-              let project = state.projects.first(where: { $0.id == projectId })
+              let project = state.worktreeProjects.first(where: { $0.id == projectId })
         else { return nil }
         return GGConfigReader.defaultBase(repoPath: project.path)
     }
@@ -389,7 +389,7 @@ struct NewWorktreeDialog: View {
     /// Where the worktree will land, once there is a name to place it; the
     /// base branch is already in the field below.
     private var subtitleText: String {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else {
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else {
             return "Create a worktree."
         }
         guard !activeName.isEmpty else { return "Create a worktree in \(project.name)." }
@@ -406,7 +406,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var effectiveAutoLaunchAgent: AgentDefinition? {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return nil }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return nil }
         let agentId = Self.resolvedAutoLaunchAgentID(
             globalAgentId: state.config.agents.worktreeAutoLaunch.agentId,
             projectMode: project.startupScripts.worktreeAgentMode,
@@ -421,7 +421,7 @@ struct NewWorktreeDialog: View {
     /// installed, enabled agent. The worktree being created does not exist
     /// yet, so this resolves from the primary checkout. Local projects only.
     private var repoDefaultAgentId: String? {
-        guard let project = state.projects.first(where: { $0.id == projectId }),
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }),
               project.host == nil,
               let candidate = state.repoConfig(
                   worktreeRoot: URL(fileURLWithPath: project.path, isDirectory: true)
@@ -441,7 +441,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var renderedPath: String {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return "" }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return "" }
         return WorktreePathTemplateRenderer.render(
             template: state.config.worktrees.pathTemplate,
             worktreeRoot: state.config.worktrees.rootPath,
@@ -452,7 +452,7 @@ struct NewWorktreeDialog: View {
 
     private func loadBranchesForSelectedProject() {
         createErrorMessage = nil
-        guard let project = state.projects.first(where: { $0.id == projectId }) else {
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else {
             branches = []
             branchLoadError = nil
             isLoadingBranches = false
@@ -489,7 +489,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func applyLaunchDefaults(for selectedProjectId: String) {
-        let project = state.projects.first { $0.id == selectedProjectId }
+        let project = state.worktreeProjects.first { $0.id == selectedProjectId }
         let preference = project?.effectiveWorktreeLaunchPreference
         let defaults = Self.resolvedLaunchDefaults(
             projectOpenAfterCreate: preference?.openAfterCreate,
@@ -523,7 +523,7 @@ struct NewWorktreeDialog: View {
                 try await loader.suggestions(projectID: projectID, limit: limit)
             },
             selectedProjectID: projectId,
-            projects: { state.projects },
+            projects: { state.worktreeProjects },
             resolvedIssueChanged: prewarmName
         )
     }
@@ -557,7 +557,7 @@ struct NewWorktreeDialog: View {
         let resolvedProjectID = Self.projectIDAfterIssueAttach(
             preferredProjectID: effects.preferredProjectID,
             currentProjectID: projectId,
-            availableProjectIDs: state.projects.map(\.id)
+            availableProjectIDs: state.worktreeProjects.map(\.id)
         )
         if projectId != resolvedProjectID {
             issueDrivenProjectChangeID = resolvedProjectID
@@ -655,7 +655,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func applyGGModeDefault(for selectedProjectId: String) {
-        guard let project = state.projects.first(where: { $0.id == selectedProjectId }) else {
+        guard let project = state.worktreeProjects.first(where: { $0.id == selectedProjectId }) else {
             ggMode = .off
             return
         }
@@ -666,7 +666,7 @@ struct NewWorktreeDialog: View {
     }
 
     private func create() {
-        guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
+        guard let project = state.worktreeProjects.first(where: { $0.id == projectId }) else { return }
         cancelNameSuggestion()
         let createdBranch = effectiveBranch
         let dest = URL(fileURLWithPath: renderedPath)
@@ -716,7 +716,7 @@ struct NewWorktreeDialog: View {
 
     private func submitCreate() {
         guard Self.canCreate(
-            projectsEmpty: state.projects.isEmpty,
+            projectsEmpty: state.worktreeProjects.isEmpty,
             branchEmpty: activeName.isEmpty,
             branchValidation: branchValidationMessage,
             ggConfigurationMissing: ggConfigurationMissing,
@@ -1000,7 +1000,7 @@ struct NewWorktreeDialog: View {
 
     private var launchEligibleAgents: [AgentDefinition] {
         Self.launchEligibleAgents(
-            isRemoteProject: state.projects.first(where: { $0.id == projectId })?.host != nil,
+            isRemoteProject: state.worktreeProjects.first(where: { $0.id == projectId })?.host != nil,
             configuredEnabledAgents: configuredEnabledAgents,
             locallyEnabledAgents: state.agentRegistry.enabled()
         )

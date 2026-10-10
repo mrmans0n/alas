@@ -7,7 +7,8 @@ struct FilesTabView: View {
     let worktreePath: URL
     @Binding var openPaths: Set<String>
     let onSelectFile: (FileTreeNode) -> Void
-    let onFileHistory: (FileTreeNode) -> Void
+    /// Nil where there is no git history (folder projects).
+    let onFileHistory: ((FileTreeNode) -> Void)?
     let onCreateFile: (String) -> Void
     let onCreateFolder: (String) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool

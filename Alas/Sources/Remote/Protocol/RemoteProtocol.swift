@@ -31,6 +31,24 @@ struct RemoteServerIdentity: Equatable, Sendable {
     }
 }
 
+/// An `@` mention, offered by the host's `mentionCandidates` and sent back
+/// with a prompt. The host resolves `value` itself and refuses a prompt
+/// whose mention it can't resolve inside the session's project.
+struct RemoteMention: Codable, Equatable, Hashable, Sendable {
+    static let file = "file"
+    static let session = "session"
+    static let symbol = "symbol"
+
+    /// `file`, `session` or `symbol`.
+    let kind: String
+    /// A worktree-relative path, a session id, or an `alas-symbol` URI.
+    let value: String
+    /// What the composer shows after the `@`.
+    let name: String
+    /// Secondary text for the picker row.
+    var detail: String? = nil
+}
+
 struct RemoteModelInfo: Codable, Equatable, Sendable {
     let id: String
     let name: String
@@ -60,6 +78,9 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// Set by hosts that serve `queueMove` and `queuePromote`. Older hosts
     /// drop unknown verbs, so viewers hide reordering without it.
     var supportsQueueReorder: Bool? = nil
+    /// Set by hosts that serve `searchMentions` and resolve `sendPrompt`
+    /// mentions. Older hosts would drop both.
+    var supportsMentions: Bool? = nil
 }
 
 struct RemoteSlashCommand: Codable, Equatable, Sendable {
@@ -163,7 +184,12 @@ enum RemoteClientMessage: Equatable, Sendable {
     case openSessionTab(sessionId: String)
     /// Closes the host's tab for a session, keeping it in recent history.
     case closeSessionTab(sessionId: String)
-    case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment], intent: String)
+    case sendPrompt(
+        sessionId: String, text: String, attachments: [RemoteAttachment], intent: String,
+        mentions: [RemoteMention] = [])
+    /// Asks for `@` candidates matching `query`; answered by
+    /// `mentionCandidates`. Served when `supportsMentions` is set.
+    case searchMentions(sessionId: String, query: String)
     case stop(sessionId: String)
     case setModel(sessionId: String, modelId: String)
     case setMode(sessionId: String, modeId: String)
@@ -209,7 +235,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -288,7 +314,11 @@ extension RemoteClientMessage: Codable {
                 attachments: try c.decodeIfPresent([RemoteAttachment].self, forKey: .attachments) ?? [],
                 // Absent on clients cached before queue parity shipped; those
                 // clients only ever meant "auto".
-                intent: try c.decodeIfPresent(String.self, forKey: .intent) ?? "auto")
+                intent: try c.decodeIfPresent(String.self, forKey: .intent) ?? "auto",
+                mentions: try c.decodeIfPresent([RemoteMention].self, forKey: .mentions) ?? [])
+        case "searchMentions":
+            self = .searchMentions(sessionId: try c.decode(String.self, forKey: .sessionId),
+                                   query: try c.decode(String.self, forKey: .query))
         case "stop":
             self = .stop(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "setModel":
@@ -457,12 +487,17 @@ extension RemoteClientMessage: Codable {
         case .closeSessionTab(let s):
             try c.encode("closeSessionTab", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .sendPrompt(let s, let t, let a, let intent):
+        case .sendPrompt(let s, let t, let a, let intent, let mentions):
             try c.encode("sendPrompt", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(t, forKey: .text)
             try c.encode(a, forKey: .attachments)
             try c.encode(intent, forKey: .intent)
+            if !mentions.isEmpty { try c.encode(mentions, forKey: .mentions) }
+        case .searchMentions(let s, let query):
+            try c.encode("searchMentions", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(query, forKey: .query)
         case .stop(let s):
             try c.encode("stop", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -716,6 +751,9 @@ enum RemoteServerMessage: Equatable, Sendable {
     case fileUnavailable(
         sessionId: String, path: String, reason: RemoteFileAccessReason,
         byteSize: Int?, message: String?)
+    /// The answer to `searchMentions`, echoing its query so a viewer drops
+    /// answers to keystrokes it has moved past.
+    case mentionCandidates(sessionId: String, query: String, candidates: [RemoteMention])
     /// Peer console traffic; see `PeerConsoleEvent`.
     case console(PeerConsoleEvent)
 }
@@ -725,7 +763,8 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions
+        case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, itemId, text
@@ -873,6 +912,7 @@ extension RemoteServerMessage: Codable {
             config.availableCommands = try? c.decodeIfPresent([RemoteSlashCommand].self, forKey: .availableCommands) ?? nil
             config.usage = try? c.decodeIfPresent(RemoteUsage.self, forKey: .usage) ?? nil
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
+            config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -961,6 +1001,11 @@ extension RemoteServerMessage: Codable {
                 path: try c.decode(String.self, forKey: .path),
                 text: try c.decode(String.self, forKey: .text),
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
+        case "mentionCandidates":
+            self = .mentionCandidates(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                query: try c.decode(String.self, forKey: .query),
+                candidates: try c.decode([RemoteMention].self, forKey: .candidates))
         case "fileUnavailable":
             self = .fileUnavailable(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1120,6 +1165,7 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.availableCommands, forKey: .availableCommands)
             try c.encodeIfPresent(cfg.usage, forKey: .usage)
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
+            try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)
@@ -1212,6 +1258,11 @@ extension RemoteServerMessage: Codable {
             try c.encode(path, forKey: .path)
             try c.encode(text, forKey: .text)
             try c.encode(truncated, forKey: .truncated)
+        case .mentionCandidates(let s, let query, let candidates):
+            try c.encode("mentionCandidates", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(query, forKey: .query)
+            try c.encode(candidates, forKey: .candidates)
         case .fileUnavailable(let s, let path, let reason, let byteSize, let message):
             try c.encode("fileUnavailable", forKey: .type)
             try c.encode(s, forKey: .sessionId)

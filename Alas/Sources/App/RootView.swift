@@ -389,7 +389,12 @@ struct RootView: View {
                         fontFamily: state.config.agents.chatFontFamily,
                         fontSize: state.config.agents.chatFontSize
                     ),
-                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
+                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+                    dictationLocale: state.config.harness.acpDictationLocale,
+                    onSelectDictationLocale: { [state] identifier in
+                        state.config.harness.acpDictationLocale = identifier
+                        state.saveConfig()
+                    }
                 )
                 .id(client.selectedSessionId)
             }
@@ -1221,7 +1226,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let q = p
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenReviewPalette)) { _ in
-                guard !state.projects.isEmpty else { return }
+                guard state.canOpenReviewPalette else { return }
                 state.openReviewPaletteOverlay()
             }
         let r = q

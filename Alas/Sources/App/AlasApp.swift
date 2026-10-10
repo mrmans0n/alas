@@ -387,7 +387,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasNewWorktree, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .newWorktree))
-            .disabled(state.projects.isEmpty)
+            .disabled(state.worktreeProjects.isEmpty)
             Button("Focus Main Worktree") {
                 NotificationCenter.default.post(name: .alasFocusMainWorktree, object: nil)
             }
@@ -401,7 +401,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasOpenReviewPalette, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .openReviewPalette))
-            .disabled(state.projects.isEmpty)
+            .disabled(!state.canOpenReviewPalette)
             Button("Run Script…") {
                 NotificationCenter.default.post(name: .alasOpenRunScriptPalette, object: nil)
             }

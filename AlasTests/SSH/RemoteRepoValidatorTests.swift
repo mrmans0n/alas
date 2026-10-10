@@ -23,6 +23,27 @@ struct RemoteRepoValidatorTests {
         #expect(calls[0].args.last?.contains("git -C") == true)
     }
 
+    @Test func folderValidationChecksOnlyThatTheDirectoryExists() async throws {
+        let recorder = RemoteRepoValidatorRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: ""),
+        ])
+
+        await #expect(throws: RemoteRepoValidationError.self) {
+            try await RemoteRepoValidator.validate(
+                host: "devbox",
+                path: "/var/www",
+                kind: .folder,
+                runner: { executable, args, timeout in
+                    await recorder.run(executable: executable, args: args, timeout: timeout)
+                }
+            )
+        }
+
+        let script = await recorder.calls.first?.args.last ?? ""
+        #expect(script.contains("test -d"))
+        #expect(!script.contains("git"))
+    }
+
     @Test func connectionFailurePreservesSSHDetail() async throws {
         let recorder = RemoteRepoValidatorRunner(results: [
             ProcessResult(exitCode: 255, stdout: "", stderr: "Host key verification failed."),

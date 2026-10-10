@@ -18,6 +18,13 @@ final class ACPUpstreamReferenceStore: ObservableObject {
                 now: { Date() }
             )
         }
+
+        /// Folder projects have no git, so there is no remote to ask for.
+        static var noRemotes: Environment {
+            var environment = live
+            environment.remotes = { _ in [] }
+            return environment
+        }
     }
 
     enum Entry: Equatable {
@@ -49,11 +56,12 @@ final class ACPUpstreamReferenceStore: ObservableObject {
     @MainActor
     final class Registry {
         private var stores: [String: ACPUpstreamReferenceStore] = [:]
+        var environment: Environment = .live
 
         func store(for worktreeRoot: URL) -> ACPUpstreamReferenceStore {
             let root = worktreeRoot.standardizedFileURL
             if let existing = stores[root.path] { return existing }
-            let store = ACPUpstreamReferenceStore(worktreeRoot: root)
+            let store = ACPUpstreamReferenceStore(worktreeRoot: root, environment: environment)
             stores[root.path] = store
             return store
         }
