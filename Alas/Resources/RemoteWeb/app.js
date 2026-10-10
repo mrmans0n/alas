@@ -4319,9 +4319,26 @@ function mentionToken(text, caret) {
   return null;
 }
 
+// Mirrors NativePeerComposerState.liveMentions: a mention stays while its
+// `@name` is a whole token, one mention per marker for shared names.
 function liveMentions(text) {
-  return pendingMentions.filter(m => text.includes("@" + m.name))
-    .map(m => ({ kind: m.kind, value: m.value, name: m.name }));
+  const markerCount = (name) => {
+    const marker = "@" + name;
+    let count = 0;
+    for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + marker.length)) {
+      const end = i + marker.length;
+      const starts = i === 0 || /\s/.test(text[i - 1]);
+      const ends = end === text.length || /[\s,;:!?)\]}"']/.test(text[end]);
+      if (starts && ends) count++;
+    }
+    return count;
+  };
+  const left = new Map();
+  return pendingMentions.filter(m => {
+    const count = left.has(m.name) ? left.get(m.name) : markerCount(m.name);
+    left.set(m.name, count - 1);
+    return count > 0;
+  }).map(m => ({ kind: m.kind, value: m.value, name: m.name }));
 }
 
 let mentionState = null;   // { start, query, items, selected } while an @ token is typed

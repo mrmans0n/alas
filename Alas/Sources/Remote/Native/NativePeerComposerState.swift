@@ -126,9 +126,35 @@ enum NativePeerComposerState {
         }
     }
 
-    /// The picked mentions whose `@name` is still in `text`.
+    /// The picked mentions whose `@name` is still in `text` as a whole
+    /// token. Mentions sharing a name keep one each per marker left, in
+    /// pick order.
     static func liveMentions(_ mentions: [RemoteMention], in text: String) -> [RemoteMention] {
-        mentions.filter { text.contains("@" + $0.name) }
+        var markersLeft: [String: Int] = [:]
+        return mentions.filter { mention in
+            let count = markersLeft[mention.name] ?? markerCount(mention.name, in: text as NSString)
+            markersLeft[mention.name] = count - 1
+            return count > 0
+        }
+    }
+
+    /// `@name` occurrences that start a token and end at whitespace,
+    /// closing punctuation or the end, so `@App` doesn't match `@Apple`.
+    private static func markerCount(_ name: String, in text: NSString) -> Int {
+        let marker = "@" + name
+        let closers = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:!?)]}\"'"))
+        var count = 0
+        var search = NSRange(location: 0, length: text.length)
+        while true {
+            let found = text.range(of: marker, options: [], range: search)
+            guard found.location != NSNotFound else { return count }
+            let end = NSMaxRange(found)
+            let starts = found.location == 0
+                || CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(text.character(at: found.location - 1)) ?? " ")
+            let ends = end == text.length || closers.contains(UnicodeScalar(text.character(at: end)) ?? "a")
+            if starts && ends { count += 1 }
+            search = NSRange(location: end, length: text.length - end)
+        }
     }
 
     struct DictationEdit: Equatable {

@@ -682,6 +682,21 @@ struct RemoteWebAssetTests {
         #expect(native.map { token?.objectForKeyedSubscript("query")?.toString() == $0.query } ?? true)
     }
 
+    @Test(arguments: [
+        ("fix @App now", ["a"]), ("fix @Apple", []), ("see @App, then", ["a"]), ("x@App", []),
+        // Two picks share a name: one marker keeps the first only.
+        ("@App and @App", ["a", "b"]), ("@App alone", ["a"]),
+    ])
+    func sendsOnlyMentionsWhoseWholeMarkerRemains(text: String, expected: [String]) throws {
+        let mentions = ["a", "b"].map { RemoteMention(kind: RemoteMention.file, value: $0, name: "App") }
+        #expect(NativePeerComposerState.liveMentions(mentions, in: text).map(\.value) == expected)
+        let live = try javascriptFunction("liveMentions")
+        live.context.setObject(mentions.map { ["kind": $0.kind, "value": $0.value, "name": $0.name] },
+                               forKeyedSubscript: "pendingMentions" as NSString)
+        let values = (live.call(withArguments: [text])?.toArray() as? [[String: Any]])?.compactMap { $0["value"] as? String }
+        #expect(values == expected)
+    }
+
     @MainActor
     @Test func slashPickerRanksLikeTheNativePicker() throws {
         let commands = ["/review", "/init", "/init", "/compact", "/inspect"].map { ["command": $0] }
