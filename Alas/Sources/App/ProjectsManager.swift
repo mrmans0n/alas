@@ -122,6 +122,7 @@ final class ProjectsManager {
         displayName: String,
         icon: ProjectIcon,
         host: String? = nil,
+        kind: ProjectKind = .git,
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
@@ -134,13 +135,20 @@ final class ProjectsManager {
                 throw NSError(domain: "ProjectsManager", code: 2,
                               userInfo: [NSLocalizedDescriptionKey: "Invalid SSH host: \"\(host)\""])
             }
-            try await RemoteRepoValidator.validate(host: host, path: path.path)
+            try await RemoteRepoValidator.validate(host: host, path: path.path, kind: kind)
             storedPath = RemotePath.virtual(host: host, realPath: path.path)
         } else {
             guard !RemotePath.isReserved(path.path) else { throw RemotePath.reservedForRemoteError(path.path) }
             storedPath = path.path
-            let isRepo = try await git.isGitRepository(path)
-            guard isRepo else {
+            if kind == .folder {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDirectory),
+                      isDirectory.boolValue
+                else {
+                    throw NSError(domain: "ProjectsManager", code: 4,
+                                  userInfo: [NSLocalizedDescriptionKey: "Not a directory: \(path.path)"])
+                }
+            } else if try await !git.isGitRepository(path) {
                 throw NSError(domain: "ProjectsManager", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
             }
@@ -156,6 +164,7 @@ final class ProjectsManager {
             mcpServers: mcpServers,
             worktreeBranchTemplate: WorktreeBranchName.normalizedTemplate(worktreeBranchTemplate),
             host: host,
+            kind: kind,
             approvedRepoHookHashes: approvedRepoHookHashes
         )
         projects.append(project)
@@ -393,6 +402,22 @@ final class ProjectsManager {
         applyWorktreeOrdering(projectId: projectId)
     }
 
+    /// The single row of a folder project. Built without touching git or the
+    /// filesystem so refreshes stay stable and never persist churn.
+    static func folderWorktree(for project: ProjectConfig) -> Worktree {
+        let path = URL(fileURLWithPath: project.path)
+        return Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: project.name,
+            branch: "",
+            path: path,
+            isMainWorktree: true,
+            status: .clean,
+            lastActivity: project.addedAt
+        )
+    }
+
     func populateConfiguredProjectWorktreesForRecovery() {
         for project in projects where worktreesByProject[project.id, default: []].isEmpty {
             let cachedWorktrees = project.cachedWorktrees.filter {
@@ -405,6 +430,10 @@ final class ProjectsManager {
             }
             let path = URL(fileURLWithPath: project.path)
             guard project.host != nil || FileManager.default.fileExists(atPath: path.path) else { continue }
+            if project.isFolder {
+                insertOptimisticWorktree(Self.folderWorktree(for: project))
+                continue
+            }
             let branch = WorktreeService.localBranchName(forWorktreeAt: path) ?? ""
             insertOptimisticWorktree(Worktree(
                 id: Worktree.makeId(path: path),
@@ -569,7 +598,9 @@ final class ProjectsManager {
         let url: URL
         // gg clean can remove the linked worktree stored as the project path.
         // Query from another cached checkout so the deleted row can be reconciled.
-        if project.host == nil,
+        if project.isFolder {
+            url = configuredURL
+        } else if project.host == nil,
            !FileManager.default.fileExists(atPath: configuredURL.path),
            let survivingWorktree = worktreesByProject[projectId, default: []].first(where: {
                FileManager.default.fileExists(atPath: $0.path.path)
@@ -578,7 +609,9 @@ final class ProjectsManager {
         } else {
             url = configuredURL
         }
-        let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
+        let trees = project.isFolder
+            ? [Self.folderWorktree(for: project)]
+            : try await worktreeSvc.list(repoPath: url, projectId: projectId)
         let anchorChanged = url.standardizedFileURL != configuredURL.standardizedFileURL
 
         // Reconcile optimistic rows: preserve creating rows until the owner

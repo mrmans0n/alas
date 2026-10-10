@@ -145,6 +145,42 @@ struct ProjectsManagerTests {
         #expect(mgr.projects.count == (underReservedPrefix ? 0 : 1))
     }
 
+    /// No `git init`: if adding or refreshing ran `git rev-parse` or
+    /// `git worktree list`, the add would throw or the row would be missing.
+    @Test func folderProjectAddsPlainDirectoryAsOneSynthesizedRow() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("alas-pm-folder-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mgr = ProjectsManager(persistedProjects: [])
+
+        let project = try await mgr.addProject(
+            path: dir, displayName: "notes", icon: .default(color: "#fff"), kind: .folder)
+        try await mgr.refreshWorktrees(projectId: project.id)
+
+        #expect(project.kind == .folder)
+        let rows = mgr.worktrees(projectId: project.id)
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == Worktree.makeId(path: dir))
+        #expect(rows.first?.title == dir.lastPathComponent)
+        #expect(rows.first?.lineageID == nil)
+        #expect(rows.first.map { mgr.isMain($0, in: project) } == true)
+        // A second refresh is stable, so nothing is re-persisted.
+        #expect(try await mgr.refreshWorktrees(projectId: project.id) == false)
+    }
+
+    @Test(arguments: [false, true])
+    func folderProjectRejectsAPathThatIsNotADirectory(pathExistsAsFile: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("alas-pm-not-dir-\(UUID().uuidString)")
+        if pathExistsAsFile { _ = FileManager.default.createFile(atPath: path.path, contents: Data()) }
+        defer { try? FileManager.default.removeItem(at: path) }
+        let mgr = ProjectsManager(persistedProjects: [])
+
+        await #expect(throws: (any Error).self) {
+            try await mgr.addProject(path: path, displayName: "x", icon: .default(color: "#fff"), kind: .folder)
+        }
+        #expect(mgr.projects.isEmpty)
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }

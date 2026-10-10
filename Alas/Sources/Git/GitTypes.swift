@@ -24,9 +24,9 @@ struct Worktree: Identifiable, Equatable, Codable {
     var isDetached: Bool { branch == "(detached)" }
 
     /// Label that tells worktrees apart in lists: the branch, or the checkout
-    /// directory name when HEAD is detached, since every detached worktree
-    /// shares the same branch value.
-    var title: String { isDetached ? path.lastPathComponent : branch }
+    /// directory name when HEAD is detached (every detached worktree shares
+    /// the same branch value) or there is no branch (folder projects).
+    var title: String { isDetached || branch.isEmpty ? path.lastPathComponent : branch }
 
     enum CodingKeys: String, CodingKey {
         case id, projectId, name, branch, path, isMainWorktree, status,

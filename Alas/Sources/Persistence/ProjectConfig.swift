@@ -127,6 +127,12 @@ struct ProjectsFile: Codable, Equatable {
     var projects: [ProjectConfig]
 }
 
+// MARK: - ProjectKind
+/// A `.folder` project is a plain directory: one synthesized row, no git.
+enum ProjectKind: String, Codable, Equatable {
+    case git, folder
+}
+
 // MARK: - ProjectConfig
 struct ProjectConfig: Codable, Equatable, Identifiable {
     let id: String           // UUID string
@@ -159,6 +165,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeBranchTemplate: String?
     /// SSH destination when this project lives on another machine.
     var host: String?
+    /// Omitted from disk for `.git`, so git projects encode exactly as before.
+    var kind: ProjectKind = .git
+    var isFolder: Bool { kind == .folder }
     /// Per-project stacked-diffs (gg) mode. Defaults to `.auto`.
     var ggMode: GGProjectMode = .auto
     /// Sparse per-worktree overrides. Missing entries inherit project policy.
@@ -187,7 +196,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, ggMode,
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, kind, ggMode,
              ggWorktreeModes, issueAttachments, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
     }
@@ -210,6 +219,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeLaunchPreference: CreationLaunchPreference? = nil,
         worktreeBranchTemplate: String? = nil,
         host: String? = nil,
+        kind: ProjectKind = .git,
         ggMode: GGProjectMode = .auto,
         ggWorktreeModes: [String: GGWorktreeMode] = [:],
         issueAttachments: [String: IssueAttachment] = [:],
@@ -234,6 +244,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.worktreeLaunchPreference = worktreeLaunchPreference
         self.worktreeBranchTemplate = worktreeBranchTemplate
         self.host = host
+        self.kind = kind
         self.ggMode = ggMode
         self.ggWorktreeModes = ggWorktreeModes
         self.issueAttachments = issueAttachments
@@ -277,6 +288,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
             )
         }
         host = try? c.decode(String.self, forKey: .host)
+        kind = (try? c.decode(ProjectKind.self, forKey: .kind)) ?? .git
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
         issueAttachments = (try? c.decode([String: IssueAttachment].self, forKey: .issueAttachments)) ?? [:]
@@ -380,6 +392,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encodeIfPresent(worktreeLaunchPreference, forKey: .worktreeLaunchPreference)
         try c.encodeIfPresent(worktreeBranchTemplate, forKey: .worktreeBranchTemplate)
         try c.encodeIfPresent(host, forKey: .host)
+        if kind != .git {
+            try c.encode(kind, forKey: .kind)
+        }
         try c.encode(ggMode, forKey: .ggMode)
         let sparseGGWorktreeModes = ggWorktreeModes.filter { $0.value != .inherit }
         if !sparseGGWorktreeModes.isEmpty {
