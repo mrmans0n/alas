@@ -161,6 +161,11 @@ struct ACPDraftCleanupTests {
         ("check this then run frobnicate verify", "check this then run frobnicate verify."),
         ("check this then execute frobnicate verify", "check this then execute frobnicate verify."),
         ("check this then invoke frobnicate verify", "check this then invoke frobnicate verify."),
+        ("check with make test", "check with make test."),
+        ("check using widget verify", "check using widget verify."),
+        ("check this and widget verify", "check this and widget verify."),
+        ("make no new tasks", "make no new tasks."),
+        ("check with make test no new tasks", "check with make test no new tasks."),
     ])
     func refusesUnsafeEdits(_ input: (String, String)) throws {
         let plan = try ACPDraftCleanupPlan(draft: .init(segments: [.text(input.0)]))
@@ -170,8 +175,8 @@ struct ACPDraftCleanupTests {
     }
 
     @Test("cleanup preserves mixed languages and uncertainty", arguments: [
-        ("maybe check esto pero no publiques", "maybe check esto pero no publiques."),
-        ("uh quizás revisa ACPComposer.swift sin cambiar el alcance", "quizás revisa ACPComposer.swift sin cambiar el alcance."),
+        ("maybe check this", "maybe check this."),
+        ("uh quizás revisa ACPComposer.swift sin cambiar el alcance", "quizás revisa ACPComposer.swift sin cambiar el alcance"),
     ])
     func permitsConservativeEdits(_ input: (String, String)) throws {
         let plan = try ACPDraftCleanupPlan(draft: .init(segments: [.text(input.0)]))

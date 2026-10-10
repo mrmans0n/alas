@@ -12,9 +12,9 @@ Acceptance is one native undoable edit and has no submission path.
 
 This first implementation accepts removal of a leading `um` or `uh` before
 recognized request phrasing, and addition of a final period to ordinary prose at
-the end of the draft that starts with recognized request/restriction phrasing.
-Bare command-like drafts and command tails introduced by run/execute/invoke are
-left unchanged regardless of the executable name.
+the end of the draft with a recognized complete prose clause, such as
+`check this`, `do not push` or `no new tasks`. Ambiguous endings, including
+commands embedded in prose, are left unchanged regardless of executable name.
 All other words, punctuation and whitespace remain exact.
 It refuses paraphrases, capitalization changes, interior punctuation changes,
 and punctuation that could detach an attachment or condition. It preserves raw
@@ -27,6 +27,9 @@ The review marks attachments and collapsed pastes at their original positions.
 Editor revision and session identity guard generation and acceptance. Editing,
 restoring a draft, switching sessions, dictation, IME, pickers and Writing Tools
 invalidate an outstanding preview. Editing and then undoing does not revive it.
+Model availability is checked afresh when the user requests cleanup; an
+unavailable model produces an explanation without changing the draft. No cached
+availability result disables the action until an unrelated redraw.
 
 ## Focused checks
 

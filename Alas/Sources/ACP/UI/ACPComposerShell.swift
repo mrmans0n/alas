@@ -754,10 +754,10 @@ struct ACPComposer: View {
         .buttonStyle(.plain)
         .accessibilityLabel(actions.draftCleanup.isGenerating ? "Cancel draft cleanup" : "Clean up draft")
         .help(actions.draftCleanup.isGenerating ? "Cleaning up on device. Click to cancel."
-              : (LocalTextAppleIntelligence.isAvailable
-                 ? "Clean up draft on device. Review changes before accepting."
-                 : ACPDraftCleanupFailure.unavailable.localizedDescription))
-        .disabled(!actions.draftCleanup.isGenerating && (actions.canCleanUpDraft?() != true || !LocalTextAppleIntelligence.isAvailable
+              : "Clean up draft on device. Review changes before accepting. Requires Apple Intelligence on macOS 26 or later.")
+        // Check model readiness afresh on each explicit request. A cached
+        // unavailable result must not lock an idle composer out after readiness changes.
+        .disabled(!actions.draftCleanup.isGenerating && (actions.canCleanUpDraft?() != true
                   || dictation.state == .preparing || dictation.state == .listening
                   || actions.draftCleanup.isPresented))
     }
