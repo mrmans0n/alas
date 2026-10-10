@@ -411,6 +411,8 @@ final class PluginManager {
 
     /// Stops every loop and host. The manager is not reused afterwards.
     func shutdown() async {
+        // Before waiting on queued operations: the catalog is not fetched while plugins are off.
+        catalog.cancel()
         await serialized {
             self.isShutDown = true
             self.snapshotTask?.cancel()

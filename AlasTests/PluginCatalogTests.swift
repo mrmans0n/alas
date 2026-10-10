@@ -53,6 +53,28 @@ struct PluginCatalogTests {
         #expect(catalog.index == loaded)
     }
 
+    /// Turning plugins off stops a load nobody else can cancel, such as the one started at launch.
+    @MainActor
+    @Test(.timeLimit(.minutes(1))) func cancelStopsALoadInFlight() async {
+        let (started, starting) = AsyncStream<Void>.makeStream()
+        let catalog = PluginCatalog(fetch: { _ in
+            starting.yield()
+            try await Task.sleep(for: .seconds(3600))
+            return Data()
+        })
+        let load = Task { await catalog.refresh() }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+
+        catalog.cancel()
+        await load.value
+
+        guard case .failed = catalog.state else {
+            Issue.record("expected the load to stop")
+            return
+        }
+    }
+
     struct RowCase: Sendable, CustomTestStringConvertible {
         let name: String
         let installed: (folder: String, version: String, hash: String)?
