@@ -335,9 +335,10 @@ struct AgentHookSocketServerTests {
     /// `rm -rf /tmp/alas-*`) must not strand its clients until a relaunch:
     /// the bind path comes back on its own and `onRebind` lets the owner
     /// relink its sessions. An isolated profile's `hooks` directory loses its
-    /// runtime root with it.
-    @Test(arguments: [false, true])
-    func deletedSocketDirectoryIsRestored(isolated: Bool) async throws {
+    /// runtime root with it, and a file recreated at the bind path is not
+    /// mistaken for the listener.
+    @Test(arguments: [(false, false), (true, false), (false, true)])
+    func deletedSocketDirectoryIsRestored(isolated: Bool, replaced: Bool) async throws {
         let (root, cleanup) = tmpSocketDir()
         defer { cleanup() }
         let dir = isolated ? "\(root)/hooks" : root
@@ -349,6 +350,10 @@ struct AgentHookSocketServerTests {
         server.onRebind = { [weak server] in _ = server?.linkSession(leafId: key) }
 
         try FileManager.default.removeItem(atPath: root)
+        if replaced {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            #expect(FileManager.default.createFile(atPath: "\(dir)/pid-1", contents: nil))
+        }
 
         let deadline = ContinuousClock.now + .seconds(15)
         while access(link, F_OK) != 0, ContinuousClock.now < deadline {

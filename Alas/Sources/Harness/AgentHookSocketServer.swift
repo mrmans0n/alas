@@ -13,7 +13,7 @@ import Foundation
 /// Soundness rests on two invariants, both enforced below:
 ///
 /// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
-///    `_listenActive` and the four handlers are private and are only read or
+///    `_bindIdentity`, `_listenActive` and the four handlers are private and are only read or
 ///    written inside `lock`. Nothing else in the class is mutable:
 ///    `clientTasks` does its own locking, everything else is `let` or
 ///    `static`.
@@ -37,6 +37,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private let lock = NSLock()
     private var _socketPath: String?
     private var _bindPath: String?
+    /// Device and inode of the socket file this instance bound, so a path
+    /// someone else recreated is not mistaken for the live listener.
+    private var _bindIdentity: FileIdentity?
     /// Serial queue that owns the blocking accept loop. A forever-loop that
     /// spends most of its life blocked in `poll` must not run on the Swift
     /// cooperative pool: a blocked cooperative thread is unavailable to every
@@ -100,9 +103,11 @@ final class AgentHookSocketServer: @unchecked Sendable {
         // The listening socket is bound to the same path callers use, so
         // `_socketPath` and `_bindPath` coincide here. They diverge only via
         // `linkSession`, which hands out a symlink.
+        let identity = Self.fileIdentity(socketPath)
         lock.withLock {
             self._socketPath = socketPath
             self._bindPath = socketPath
+            self._bindIdentity = identity
         }
     }
 
@@ -296,17 +301,33 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private func rebindIfUnlinked() -> Int32? {
         lock.withLock {
             guard _listenActive, let bindPath = _bindPath else { return nil }
-            var st = Darwin.stat()
-            guard Darwin.lstat(bindPath, &st) != 0 else { return nil }
+            let current = Self.fileIdentity(bindPath)
+            guard current == nil || current != _bindIdentity else { return nil }
             // The same `rm` removes an isolated profile's runtime root
             // (`/tmp/alas-<uid>-<hash>`), and another user could recreate it.
             if let runtimeRoot {
                 guard Self.prepareSocketDirectory(runtimeRoot, ownerUid: getuid()) else { return nil }
             }
             guard Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid()) else { return nil }
+            // Whatever else sits at our bind path, in a directory we own
+            // again, is not ours to keep.
+            unlink(bindPath)
             let socketFD = Self.createSocket(path: bindPath)
-            return socketFD >= 0 ? socketFD : nil
+            guard socketFD >= 0 else { return nil }
+            _bindIdentity = Self.fileIdentity(bindPath)
+            return socketFD
         }
+    }
+
+    struct FileIdentity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
+
+    private static func fileIdentity(_ path: String) -> FileIdentity? {
+        var st = Darwin.stat()
+        guard Darwin.lstat(path, &st) == 0 else { return nil }
+        return FileIdentity(device: st.st_dev, inode: st.st_ino)
     }
 
     private func listenState() -> Bool {

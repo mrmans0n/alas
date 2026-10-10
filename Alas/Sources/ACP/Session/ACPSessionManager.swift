@@ -9302,12 +9302,17 @@ extension ACPSessionManager {
         for parentID in Array(sideQuestions.keys) {
             await dismissSideQuestion(parentID: parentID)
         }
-        let ids = Set(runners.keys)
-            .union(attachingSessions.keys)
-            .union(attachmentAttempts.keys)
-        for id in ids {
+        for id in localSessionIDs {
             try? await disposeSession(id: id)
         }
+    }
+
+    /// Sessions this instance runs or is still attaching: the ones whose
+    /// socket links it owns.
+    var localSessionIDs: Set<ACPSession.ID> {
+        Set(runners.keys)
+            .union(attachingSessions.keys)
+            .union(attachmentAttempts.keys)
     }
 
     func detach(sessionId: ACPSession.ID) async {
