@@ -15103,6 +15103,8 @@ private extension WorkspaceCheckoutMember {
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 extension AppState: RemoteSessionsProvider {
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
+        // A folder has no git metrics to compute.
+        if project.isFolder { return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree) }
         let git = GitService()
         do {
             async let status = git.status(worktreePath: worktree.path)

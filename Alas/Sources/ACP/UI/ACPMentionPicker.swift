@@ -688,7 +688,8 @@ enum MentionFuzzy {
         "__pycache__", ".idea", ".vscode", ".superpowers",
     ]
 
-    static func collectFiles(under root: URL, limit: Int) -> [URL] {
+    /// `includesDirectories: false` yields only files, so `limit` counts files alone.
+    static func collectFiles(under root: URL, limit: Int, includesDirectories: Bool = true) -> [URL] {
         var out: [URL] = []
         let skipDirs = skippedDirectoryNames
         guard let it = FileManager.default.enumerator(
@@ -708,6 +709,7 @@ enum MentionFuzzy {
                 it.skipDescendants()
                 continue
             }
+            if !includesDirectories, url.hasDirectoryPath { continue }
             // Directories are pickable too — the enumerator yields them with
             // `hasDirectoryPath` set, which the picker uses to show a folder
             // icon and to emit a directory resource link. We still recurse into

@@ -101,8 +101,7 @@ actor FileIndex {
         }
         let rootPath = worktree.standardizedFileURL.path
         let root = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        return MentionFuzzy.collectFiles(under: worktree, limit: Self.folderFileLimit)
-            .filter { !$0.hasDirectoryPath }
+        return MentionFuzzy.collectFiles(under: worktree, limit: Self.folderFileLimit, includesDirectories: false)
             .compactMap { url in
                 let path = url.standardizedFileURL.path
                 return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : nil
