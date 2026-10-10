@@ -21,6 +21,7 @@ enum ACPDraftCleanupFailure: Error, LocalizedError {
 /// Only text segments go to the model. Attachments and collapsed pastes remain
 /// in their original slots and never become model-authored placeholders.
 struct ACPDraftCleanupPlan: Sendable {
+    static let inputTokenLimit = 4_096
     let draft: ACPComposerDraft
     let textIndices: [Int]
     var texts: [String] {
@@ -36,6 +37,9 @@ struct ACPDraftCleanupPlan: Sendable {
         guard !textIndices.isEmpty, texts.reduce(0, { $0 + $1.utf8.count }) <= 2_000,
               draft.segments.count <= 32 else { throw ACPDraftCleanupFailure.unsupportedDraft }
         for text in texts { _ = try Self.protectedContent(text) }
+        guard Self.instructions.utf8.count + prompt.utf8.count <= Self.inputTokenLimit else {
+            throw ACPDraftCleanupFailure.unsupportedDraft
+        }
     }
 
     func validatedDraft(texts replacements: [String]) throws -> ACPComposerDraft {
@@ -252,7 +256,7 @@ enum ACPDraftCleanupGenerator {
         let request = LocalTextGenerationRequest(
             messageCandidates: [[.init(role: .system, content: ACPDraftCleanupPlan.instructions),
                                  .init(role: .user, content: plan.prompt)]],
-            inputTokenLimit: 4_096, maxTokens: 1_024, temperature: 0,
+            inputTokenLimit: ACPDraftCleanupPlan.inputTokenLimit, maxTokens: 1_024, temperature: 0,
             prefillStepSize: 512, timeout: .seconds(15)
         )
         guard let output = await LocalTextAppleIntelligence.generateWithTimeout(request),

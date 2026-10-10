@@ -20,6 +20,8 @@ It refuses paraphrases, capitalization changes, interior punctuation changes,
 and punctuation that could detach an attachment or condition. It preserves raw
 technical tokens, commands, code and quoted content, including smart quotes.
 Incomplete quotes/code and inputs over 2,000 editable UTF-8 bytes are refused.
+The complete JSON-encoded prompt plus instructions must also fit the 4,096-byte
+input budget; escaping-heavy drafts are refused before generation.
 
 Mention, image, command, path, upstream-reference and collapsed-paste objects
 are retained in place. Their content is not generated or sent to the model.
@@ -27,6 +29,8 @@ The review marks attachments and collapsed pastes at their original positions.
 Editor revision and session identity guard generation and acceptance. Editing,
 restoring a draft, switching sessions, dictation, IME, pickers and Writing Tools
 invalidate an outstanding preview. Editing and then undoing does not revive it.
+Acceptance maps the caret and selection through filler deletion and period
+insertion while retaining the single native undoable replacement.
 Model availability is checked afresh when the user requests cleanup; an
 unavailable model produces an explanation without changing the draft. No cached
 availability result disables the action until an unrelated redraw.
@@ -69,6 +73,11 @@ fixes. The same focused native command passed 129 tests in three suites after
 the fixes (128 passed and the opt-in evaluation skipped). Full SwiftFormat lint
 also passed. The first CI run stopped at formatting; its downstream coverage
 failure had no test-plan artifact. Formatting was corrected for the next push.
+Subsequent review added encoded-input budgeting and selection preservation.
+Their regressions failed before the fixes; the final focused native run passed
+130 tests in three suites (129 passed, zero failed, one opt-in evaluation skipped).
+Unicode fixtures were refreshed to still fail without byte comparison after the
+punctuation policy became stricter. Full formatting lint passed.
 
 ## Live evaluation and release gates
 

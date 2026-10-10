@@ -153,8 +153,8 @@ struct ACPDraftCleanupTests {
         ("check this", "um check this."),
         ("check /tmp/file.", "check /tmp/file"),
         (" check this ", "check this."),
-        ("check cafe\u{301}", "check café."),
-        ("check /tmp/cafe\u{301} then inspect", "check /tmp/café then inspect."),
+        ("um check cafe\u{301}", "check café"),
+        ("um check /tmp/cafe\u{301} then inspect", "check /tmp/café then inspect"),
         ("make test", "make test."),
         ("go test", "go test."),
         ("please run frobnicate verify", "please run frobnicate verify."),
@@ -190,6 +190,7 @@ struct ACPDraftCleanupTests {
 
     @Test("cleanup refuses incomplete protected structure and oversized input", arguments: [
         "fix `unfinished code", "keep \"unfinished quote", "keep 'unfinished quote", String(repeating: "word ", count: 900),
+        String(repeating: "\"", count: 2_000),
     ])
     func refusesUnsupportedDraft(_ text: String) {
         #expect(throws: ACPDraftCleanupFailure.self) {

@@ -8,6 +8,21 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("cleanup preserves the editing selection through filler removal and punctuation",
+          arguments: [(NSRange(location: 6, length: 0), NSRange(location: 3, length: 0)),
+                      (NSRange(location: 3, length: 5), NSRange(location: 0, length: 5)),
+                      (NSRange(location: 1, length: 0), NSRange(location: 0, length: 0)),
+                      (NSRange(location: 13, length: 0), NSRange(location: 11, length: 0))])
+    func cleanupPreservesSelection(_ input: (NSRange, NSRange)) throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "um check this"
+        textView.setSelectedRange(input.0)
+        let snapshot = try textView.draftCleanupSnapshot()
+        #expect(textView.applyDraftCleanup(snapshot, texts: ["check this."]))
+        #expect(textView.selectedRange() == input.1)
+    }
+
     @Test("cleanup eligibility excludes chips and whitespace",
           arguments: [NSAttributedString.Key.attachmentURI, .imageAttachmentURI, .commandChipName,
                       .upstreamReference, .pathReference, .pastedTextOrdinal])
