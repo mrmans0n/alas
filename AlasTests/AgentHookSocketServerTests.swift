@@ -330,4 +330,25 @@ struct AgentHookSocketServerTests {
         let response = try await sendToSocket(path: link, payload: "not json")
         #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
     }
+
+    /// Deleting the socket directory under a running instance (e.g.
+    /// `rm -rf /tmp/alas-*`) must not strand its clients until a relaunch:
+    /// the bind path and its session links come back on their own.
+    @Test
+    func deletedSocketDirectoryIsRestored() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let server = AgentHookSocketServer(socketPath: "\(dir)/pid-1")
+        defer { server.shutdown() }
+        let link = try #require(server.linkSession(leafId: AgentHookSocketServer.acpSessionLinkKey("s")))
+
+        try FileManager.default.removeItem(atPath: dir)
+
+        let deadline = ContinuousClock.now + .seconds(15)
+        while access(link, F_OK) != 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let response = try await sendToSocket(path: link, payload: "not json")
+        #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
+    }
 }

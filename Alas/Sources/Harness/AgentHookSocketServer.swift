@@ -13,7 +13,7 @@ import Foundation
 /// Soundness rests on two invariants, both enforced below:
 ///
 /// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
-///    `_listenActive` and the three handlers are private and are only read or
+///    `_listenActive`, `_linkedKeys` and the three handlers are private and are only read or
 ///    written inside `lock`. Nothing else in the class is mutable:
 ///    `clientTasks` does its own locking, everything else is `let` or
 ///    `static`.
@@ -45,6 +45,8 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// including the test bodies themselves.
     private let listenQueue = DispatchQueue(label: "io.nlopez.alas.agent-hook-listen", qos: .utility)
     private var _listenActive = false
+    /// Keys of live `linkSession` links, recreated when the socket is rebound.
+    private var _linkedKeys = Set<String>()
     private var _onEvent: EventHandler?
     private var _onCLIRequest: CLIRequestHandler?
     private var _onMCPHello: MCPHelloHandler?
@@ -150,6 +152,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
             unlink(stagingPath)
             return nil
         }
+        lock.withLock { _ = _linkedKeys.insert(leafId) }
         return linkPath
     }
 
@@ -163,6 +166,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// `TerminalService` explicitly closes a pane so we don't leave
     /// orphan symlinks in the socket directory.
     func unlinkSession(leafId: String) {
+        lock.withLock { _ = _linkedKeys.remove(leafId) }
         unlink("\(sessionLinkDirectory)/sock-\(leafId)")
     }
 
@@ -242,7 +246,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
             // The fd is owned by this closure: closed exactly once on the way
             // out, whether the loop exits because of `shutdown()` or because
             // `self` was deallocated while the block was still queued.
+            var socketFD = socketFD
             defer { close(socketFD) }
+            var idlePolls = 0
             while self?.listenState() == true {
                 var pollFD = pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0)
                 let ready = poll(&pollFD, 1, 200)
@@ -250,11 +256,41 @@ final class AgentHookSocketServer: @unchecked Sendable {
                     guard errno == EINTR else { break }
                     continue
                 }
-                guard ready > 0 else { continue }
+                guard ready > 0 else {
+                    // Every ~5s idle. A deleted socket file means no client
+                    // can connect, so the listener is idle exactly then.
+                    idlePolls += 1
+                    if idlePolls % 25 == 0, let rebound = self?.rebindIfUnlinked() {
+                        close(socketFD)
+                        socketFD = rebound
+                    }
+                    continue
+                }
                 self?.acceptAndHandle(socketFD: socketFD)
             }
         }
         return true
+    }
+
+    /// Binds a fresh listener when the socket file was deleted while Alas
+    /// runs (e.g. `rm -rf /tmp/alas-*`). The old fd keeps listening on an
+    /// inode nobody can reach, and every client, including `alas mcp`, fails
+    /// with "could not reach Alas" until the path exists again. Rebinding the
+    /// same path, and recreating the session links that went with it, heals
+    /// every client without a relaunch. Returns the new fd, or nil when the
+    /// path is intact or cannot be restored yet.
+    private func rebindIfUnlinked() -> Int32? {
+        guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
+        var st = Darwin.stat()
+        guard Darwin.lstat(bindPath, &st) != 0,
+              Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid())
+        else { return nil }
+        let socketFD = Self.createSocket(path: bindPath)
+        guard socketFD >= 0 else { return nil }
+        for key in lock.withLock({ _linkedKeys }) {
+            _ = linkSession(leafId: key)
+        }
+        return socketFD
     }
 
     private func listenState() -> Bool {
