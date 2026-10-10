@@ -575,6 +575,27 @@ struct NativePeerSessionsTests {
         #expect(client.workspace.document == nil)
     }
 
+    /// A folder project has no git, so a peer never asks it for changes.
+    @Test func folderWorktreeSessionRequestsNoChanges() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        let folder = RemoteSessionSummary(
+            id: "s", title: "s", agentId: "claude", status: "idle", canDrive: true,
+            worktree: .init(projectName: "notes", worktreeName: "notes", branch: "", path: "/peer/notes",
+                            metricsAvailable: false, comparisonRef: nil, commitCount: 0, changedFileCount: 0,
+                            addedLines: 0, deletedLines: 0, conflictCount: 0, isFolder: true))
+        links.receive(.sessionList(sessions: [folder]), from: "B")
+
+        client.select("B:s")
+
+        #expect(listChangesCount(links, "s") == 0)
+        #expect(!client.requestChanges())
+    }
+
     @Test func worktreeSummaryChangeRefreshesChanges() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

@@ -54,6 +54,7 @@ extension AppState {
                             projectName: $0.project.name,
                             worktree: $0.worktree,
                             isMain: projectsManager.isMain($0.worktree, in: $0.project),
+                            isFolder: $0.project.isFolder,
                             metrics: .unavailable
                         )
                     },

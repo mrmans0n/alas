@@ -660,6 +660,18 @@ struct RemoteWebAssetTests {
         #expect(targets?.objectForKeyedSubscript("head")?.isUndefined == true)
     }
 
+    /// A folder session hides Changes and never sends `listChanges`; an older
+    /// host's summary without the flag reads as a git worktree.
+    @Test func folderSummaryIsRecognizedOnlyWhenFlagged() throws {
+        let isFolder = try javascriptFunction("isFolderSummary")
+        func check(_ summary: Any) -> Bool? { isFolder.call(withArguments: [summary])?.toBool() }
+        #expect(check(["worktree": ["isFolder": true]]) == true)
+        #expect(check(["worktree": ["branch": "main"]]) == false)
+        #expect(check(NSNull()) == false)
+        let source = try asset("app.js")
+        #expect(source.contains("if (!currentSession || isFolderSummary(listedSessions.get(currentSession))) return;"))
+    }
+
     @Test(arguments: [
         ("/rev", 4, 0, "rev"), ("fix it /$skill", 14, 7, "$skill"), ("abc/rev", 7, nil, nil), ("/rev iew", 8, nil, nil),
     ] as [(String, Int, Int?, String?)])
@@ -1151,7 +1163,7 @@ struct RemoteWebAssetTests {
     @Test func openingASessionRequestsChangesForTheBadgesScope() throws {
         let js = try asset("app.js")
         let body = try #require(
-            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2200) })
+            js.range(of: "function openSession(id) {").map { js[$0.lowerBound...].prefix(2600) })
         #expect(body.contains("if (summary && summary.worktree) requestChanges();"))
     }
 

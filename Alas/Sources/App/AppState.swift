@@ -15143,6 +15143,7 @@ extension AppState: RemoteSessionsProvider {
             projectName: project.name,
             worktree: worktree,
             isMain: projectsManager.isMain(worktree, in: project),
+            isFolder: project.isFolder,
             metrics: .unavailable
         )
     }

@@ -40,10 +40,10 @@ struct NativePeerRightPaneView: View {
                     ))
                 }
                 RightPaneRail(
-                    activeTab: activeTab,
+                    activeTab: shownTab,
                     collapsed: collapsed,
                     changesCount: changesCount,
-                    tabs: RightPaneTab.peerAvailable,
+                    tabs: RightPaneTab.peerAvailable(isFolder: isFolder),
                     onAction: handle
                 )
             }
@@ -52,9 +52,9 @@ struct NativePeerRightPaneView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
             guard let raw = notification.object as? String,
                   let tab = RightPaneTab(rawValue: raw),
-                  RightPaneTab.peerAvailable.contains(tab)
+                  RightPaneTab.peerAvailable(isFolder: isFolder).contains(tab)
             else { return }
-            handle(RightPaneRailAction.resolve(tapped: tab, active: activeTab, collapsed: collapsed))
+            handle(RightPaneRailAction.resolve(tapped: tab, active: shownTab, collapsed: collapsed))
         }
         .onChange(of: client.selectedWorktree) { _, _ in openPaths = [] }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
@@ -88,12 +88,12 @@ struct NativePeerRightPaneView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        if activeTab == .agent {
+        if shownTab == .agent {
             agentTab
         } else if client.selectedSessionId == nil {
             // Changes and files are served per session.
             NativePeerRailMessage(text: "Select a session to see this worktree's changes and files.")
-        } else if activeTab == .files {
+        } else if shownTab == .files {
             filesTab
         } else {
             NativePeerChangesView(
@@ -173,6 +173,10 @@ struct NativePeerRightPaneView: View {
         }
     }
 
+    /// A folder project has no Changes tab, so it shows Files in its place.
+    private var isFolder: Bool { client.selectedWorktreeGroup?.isFolder == true }
+    private var shownTab: RightPaneTab { isFolder && activeTab == .changes ? .files : activeTab }
+
     private var changesCount: Int {
         if case .loaded(let changes) = client.workspace.changes { return changes.branchFiles.count }
         return client.selectedWorktreeGroup?.worktree?.changedFileCount ?? 0
@@ -181,7 +185,7 @@ struct NativePeerRightPaneView: View {
     private func handle(_ action: RightPaneRailAction) {
         let outcome = RightPaneRailModel.apply(
             action,
-            currentTab: activeTab,
+            currentTab: shownTab,
             currentVisible: state.config.rightPaneVisible
         )
         activeTab = outcome.tab

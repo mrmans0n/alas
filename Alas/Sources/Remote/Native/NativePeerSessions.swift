@@ -736,7 +736,8 @@ final class NativePeerSessions {
     func requestChanges() -> Bool {
         guard selectedSessionId != nil else { return false }
         workspaceSummary = selectedRow?.worktree
-        guard !changesRequestInFlight else { return false }
+        // A folder project has no git, so there are no changes to ask for.
+        guard workspaceSummary?.isFolder != true, !changesRequestInFlight else { return false }
         changesRequestInFlight = true
         workspace.beginChangesLoad()
         if !routeWhileOnline({

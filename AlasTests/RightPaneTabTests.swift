@@ -9,4 +9,9 @@ struct RightPaneTabTests {
     func availableTabsDropChangesOnlyForFolders(isFolder: Bool, expected: [RightPaneTab]) {
         #expect(RightPaneTab.available(isFolder: isFolder) == expected)
     }
+
+    @Test(arguments: [(false, [RightPaneTab.changes, .files, .agent]), (true, [RightPaneTab.files, .agent])])
+    func peerTabsDropChangesOnlyForFolders(isFolder: Bool, expected: [RightPaneTab]) {
+        #expect(RightPaneTab.peerAvailable(isFolder: isFolder) == expected)
+    }
 }

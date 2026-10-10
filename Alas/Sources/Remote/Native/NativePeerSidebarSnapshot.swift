@@ -218,6 +218,7 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         sessions.lazy.compactMap(\.worktree).first ?? consoles.lazy.compactMap(\.worktree).first
     }
     var isMain: Bool { worktree?.isMain == true }
+    var isFolder: Bool { worktree?.isFolder == true }
     /// The peer's own worktree id; nil when its rows carry none.
     var peerWorktreeId: String? {
         (sessions.map(\.worktreeId) + consoles.map(\.worktreeId)).lazy.compactMap { $0 }.first { !$0.isEmpty }

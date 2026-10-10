@@ -146,6 +146,9 @@ struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     var isMain: Bool? = nil
     var createdAt: Double? = nil
     var lastActivity: Double? = nil
+    /// True for a folder project, which has no git and so no Changes. Sent
+    /// only when true; nil (git, or an older host) keeps today's behavior.
+    var isFolder: Bool? = nil
 }
 
 struct RemoteWorktreeOption: Codable, Equatable, Sendable {

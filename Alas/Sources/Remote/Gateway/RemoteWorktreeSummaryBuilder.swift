@@ -10,6 +10,7 @@ enum RemoteWorktreeSummaryBuilder {
         projectName: String,
         worktree: Worktree,
         isMain: Bool,
+        isFolder: Bool = false,
         metrics: RemoteWorktreeSummaryMetrics
     ) -> RemoteWorktreeSummary {
         switch metrics {
@@ -29,7 +30,8 @@ enum RemoteWorktreeSummaryBuilder {
                 conflictCount: changes.filter { $0.conflict != nil }.count,
                 isMain: isMain,
                 createdAt: worktree.createdAt.timeIntervalSince1970,
-                lastActivity: worktree.lastActivity.timeIntervalSince1970
+                lastActivity: worktree.lastActivity.timeIntervalSince1970,
+                isFolder: isFolder ? true : nil
             )
         case .unavailable:
             return RemoteWorktreeSummary(
@@ -46,7 +48,8 @@ enum RemoteWorktreeSummaryBuilder {
                 conflictCount: 0,
                 isMain: isMain,
                 createdAt: worktree.createdAt.timeIntervalSince1970,
-                lastActivity: worktree.lastActivity.timeIntervalSince1970
+                lastActivity: worktree.lastActivity.timeIntervalSince1970,
+                isFolder: isFolder ? true : nil
             )
         }
     }
