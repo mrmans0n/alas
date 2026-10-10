@@ -16497,19 +16497,27 @@ extension AppState: RemoteSessionsProvider {
             // on every `listFiles` request, for the root AND every
             // directory a client expands, did substantial repeated I/O for
             // numbers nothing here displays.
-            let commits = try await git.commitsAhead(
-                at: worktree.path,
-                baseBranch: config.worktrees.baseBranch,
-                resolution: GitService.BaseResolution.forCommits(
-                    mode: comparisonMode ?? config.changes.comparisonMode,
-                    userOverrodeBaseBranch: false
-                ))
-            let changedEntries = try await git.changedFileBadges(
-                worktreePath: worktree.path, ref: commits.comparisonRef)
+            // A folder has no git: list the filesystem, with no change badges.
+            let isFolder = isFolderWorktree(worktree)
+            let changedEntries: [ChangedFile]
+            if isFolder {
+                changedEntries = []
+            } else {
+                let commits = try await git.commitsAhead(
+                    at: worktree.path,
+                    baseBranch: config.worktrees.baseBranch,
+                    resolution: GitService.BaseResolution.forCommits(
+                        mode: comparisonMode ?? config.changes.comparisonMode,
+                        userOverrodeBaseBranch: false
+                    ))
+                changedEntries = try await git.changedFileBadges(
+                    worktreePath: worktree.path, ref: commits.comparisonRef)
+            }
 
             guard let path, !path.isEmpty else {
-                let nodes = try await git.fileTree(
-                    worktreePath: worktree.path, statusEntries: changedEntries)
+                let nodes = isFolder
+                    ? try await git.plainDirectoryChildren(worktreePath: worktree.path, path: "")
+                    : try await git.fileTree(worktreePath: worktree.path, statusEntries: changedEntries)
                 let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))
                 return .success(nodes: capped.nodes, truncated: capped.truncated)
             }
@@ -16547,8 +16555,9 @@ extension AppState: RemoteSessionsProvider {
             // that directory.
             let badges = Dictionary(
                 changedEntries.map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
-            let nodes = try await git.fileTreeChildren(
-                worktreePath: worktree.path, path: path, badges: badges)
+            let nodes = isFolder
+                ? try await git.plainDirectoryChildren(worktreePath: worktree.path, path: path)
+                : try await git.fileTreeChildren(worktreePath: worktree.path, path: path, badges: badges)
             let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))
             return .success(nodes: capped.nodes, truncated: capped.truncated)
         } catch {
@@ -16582,7 +16591,10 @@ extension AppState: RemoteSessionsProvider {
             return .failure(reason: .notFound, byteSize: nil, message: nil)
         }
         do {
-            let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
+            // A folder has no ignore rules, and its tree lists every file.
+            let ignored = isFolderWorktree(worktree)
+                ? false
+                : try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
             if ignored {
                 return .failure(reason: .pathRejected, byteSize: nil, message: nil)
             }
