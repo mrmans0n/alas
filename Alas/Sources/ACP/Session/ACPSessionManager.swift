@@ -9325,6 +9325,18 @@ extension ACPSessionManager {
         }
     }
 
+    /// Sessions whose writer lease this instance holds, attached or still
+    /// attaching: the ones whose socket links it owns. Each lease is
+    /// re-read from the store, since the cached claim lags a takeover by
+    /// another instance; an attempt still waiting on a lease is not included.
+    func confirmedWriterLeaseSessionIDs() async -> [ACPSession.ID] {
+        var confirmed: [ACPSession.ID] = []
+        for sessionId in _ownedLeases where await confirmedWriterLease(for: sessionId) {
+            confirmed.append(sessionId)
+        }
+        return confirmed
+    }
+
     func detach(sessionId: ACPSession.ID) async {
         try? await tearDownSession(sessionId: sessionId, closeRemote: false)
     }

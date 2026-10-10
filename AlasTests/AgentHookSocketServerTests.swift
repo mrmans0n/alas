@@ -330,4 +330,47 @@ struct AgentHookSocketServerTests {
         let response = try await sendToSocket(path: link, payload: "not json")
         #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
     }
+
+    /// Deleting the socket directory under a running instance (e.g.
+    /// `rm -rf /tmp/alas-*`) must not strand its clients until a relaunch:
+    /// the bind path comes back on its own and `onRebind` lets the owner
+    /// relink its sessions. An isolated profile's `hooks` directory loses its
+    /// runtime root with it.
+    @Test(arguments: [false, true])
+    func deletedSocketDirectoryIsRestored(isolated: Bool) async throws {
+        let (root, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let dir = isolated ? "\(root)/hooks" : root
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let server = AgentHookSocketServer(socketPath: "\(dir)/pid-1", runtimeRoot: isolated ? root : nil)
+        defer { server.shutdown() }
+        let key = AgentHookSocketServer.acpSessionLinkKey("s")
+        let link = try #require(server.linkSession(leafId: key))
+        server.onRebind = { [weak server] in _ = server?.linkSession(leafId: key) }
+
+        try FileManager.default.removeItem(atPath: root)
+
+        let deadline = ContinuousClock.now + .seconds(15)
+        while access(link, F_OK) != 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let response = try await sendToSocket(path: link, payload: "not json")
+        #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
+    }
+
+    /// Servers in one process share the pid bind path; the newest owns it.
+    /// An older one must not take it back, or the two would trade the path
+    /// on every idle check.
+    @Test
+    func olderServerDoesNotReclaimAReplacedBindPath() {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/pid-1"
+        let older = AgentHookSocketServer(socketPath: path)
+        defer { older.shutdown() }
+        let newer = AgentHookSocketServer(socketPath: path)
+        defer { newer.shutdown() }
+
+        #expect(older.rebindIfUnlinked() == nil)
+    }
 }
