@@ -87,7 +87,8 @@ struct ACPDraftCleanupPlan: Sendable {
         var candidates = [body]
         // Hesitation deletion is limited to the beginning of a request. An
         // identifier in "rename um to uh" must survive, even when unquoted.
-        if let regex = try? NSRegularExpression(pattern: #"^(?:um|uh)[ ,]+(?=(?:please|fix|check|inspect|investigate|review|(?:can|could) you|maybe (?:fix|check|inspect|review)|quizás revisa|revisa|prüfe|vérifie)\b)"#),
+        if let regex = try? NSRegularExpression(pattern: #"^(?:um|uh)[ ,]+(?=(?:please|fix|check|inspect|investigate|review|(?:can|could) you|maybe (?:fix|check|inspect|review)|quizás revisa|revisa|prüfe|vérifie)\b)"#,
+                                               options: .caseInsensitive),
            let match = regex.firstMatch(in: body, range: NSRange(location: 0, length: (body as NSString).length)) {
             candidates.append((body as NSString).replacingCharacters(in: match.range, with: ""))
         }
@@ -105,7 +106,7 @@ struct ACPDraftCleanupPlan: Sendable {
         // isn't an arbitrary command. Accept only these complete prose clauses;
         // unknown endings stay exact, including commands embedded after prose.
         let pattern = #"^(?:(?:(?:um|uh)[ ,]+)?(?:please +)?(?:maybe +)?(?:fix|check|inspect|investigate|review|keep) +(?:this|that|it)|(?:(?:but|and) +)?(?:do not|don't|never) +(?:push|merge|send|submit)|no new tasks)$"#
-        return text.range(of: pattern, options: .regularExpression) != nil
+        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func protectedContent(_ text: String) throws -> [String] {
@@ -115,10 +116,11 @@ struct ACPDraftCleanupPlan: Sendable {
             let character = text[index]
             let previous = index > text.startIndex ? text[text.index(before: index)] : nil
             let next = text.index(after: index)
-            // Apostrophes in contractions aren't quotation delimiters.
-            let contraction = character == "'" && previous?.isLetter == true
-                && next < text.endIndex && text[next].isLetter
-            if "`\"“‘«「『".contains(character) || (character == "'" && !contraction) {
+            // Outside a quoted span, a word's apostrophe can be a contraction
+            // or possessive. Closing quotes are consumed with their opening
+            // delimiter below, before this scan resumes after the whole span.
+            let wordApostrophe = character == "'" && (previous?.isLetter == true || previous?.isNumber == true)
+            if "`\"“‘«「『".contains(character) || (character == "'" && !wordApostrophe) {
                 let opening = index
                 var delimiter = String(character)
                 if character == "`" {

@@ -177,6 +177,11 @@ struct ACPDraftCleanupTests {
     @Test("cleanup preserves mixed languages and uncertainty", arguments: [
         ("maybe check this", "maybe check this."),
         ("uh quizás revisa ACPComposer.swift sin cambiar el alcance", "quizás revisa ACPComposer.swift sin cambiar el alcance"),
+        ("Please check this", "Please check this."),
+        ("Do not push", "Do not push."),
+        ("Um, please check this", "please check this."),
+        ("uh check users' permissions", "check users' permissions"),
+        ("um check users' permissions and keep 'do not push'", "check users' permissions and keep 'do not push'"),
     ])
     func permitsConservativeEdits(_ input: (String, String)) throws {
         let plan = try ACPDraftCleanupPlan(draft: .init(segments: [.text(input.0)]))
@@ -184,7 +189,7 @@ struct ACPDraftCleanupTests {
     }
 
     @Test("cleanup refuses incomplete protected structure and oversized input", arguments: [
-        "fix `unfinished code", "keep \"unfinished quote", String(repeating: "word ", count: 900),
+        "fix `unfinished code", "keep \"unfinished quote", "keep 'unfinished quote", String(repeating: "word ", count: 900),
     ])
     func refusesUnsupportedDraft(_ text: String) {
         #expect(throws: ACPDraftCleanupFailure.self) {
