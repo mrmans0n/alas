@@ -39,6 +39,14 @@ extension AppState {
     /// config values it needs are snapshotted into plain `let`s right here
     /// (this function itself is MainActor-isolated) and the closure only
     /// captures the already-resolved values, never `self.config`.
+    /// The palette reviews the selected worktree's project (else the first),
+    /// which must be a git project.
+    @MainActor
+    var canOpenReviewPalette: Bool {
+        let projectId = selectedWorktreeId.flatMap { worktree(withId: $0)?.projectId } ?? projects.first?.id
+        return projects.first { $0.id == projectId }.map { !$0.isFolder } ?? false
+    }
+
     @MainActor
     func reviewTargetPaletteEnvironment() -> ReviewTargetPaletteEnvironment {
         let defaultBaseBranch = config.worktrees.baseBranch

@@ -9,12 +9,14 @@ struct ACPSymbolMentionSource {
     let fileSymbols: @Sendable (_ fileQuery: String) async -> [SymbolEntry]
 
     /// The symbols of the worktree file that best matches `fileQuery`.
-    static func symbols(ofFileMatching fileQuery: String, root: URL, fileIndex: FileIndex) async -> [SymbolEntry] {
+    static func symbols(
+        ofFileMatching fileQuery: String, root: URL, fileIndex: FileIndex, isFolder: Bool = false
+    ) async -> [SymbolEntry] {
         // From FileIndex paths, not the picker's file list: that list
         // drops remote entries, and drill-down is remote's only route.
         // Each step can be slow (enumeration, a remote read, parsing),
         // and a newer keystroke or the closed picker cancels this one.
-        let entries = (try? await fileIndex.entries(forWorktreePath: root)) ?? []
+        let entries = (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []
         guard !Task.isCancelled else { return [] }
         let urls = entries.map { root.appendingPathComponent($0.relativePath) }
         // The listing keeps tracked files deleted from the working tree, so

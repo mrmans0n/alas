@@ -42,7 +42,11 @@ extension AppState {
         let targets: [(project: ProjectConfig, worktree: Worktree)]
         switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
-            targets = resolved
+            // A worktree-creating schedule skips folders, which cannot have one.
+            targets = schedule.composition == nil ? resolved : resolved.filter { !$0.project.isFolder }
+            guard !targets.isEmpty else {
+                return RunScheduleRunReport(outcome: .skipped(reason: Self.folderWorktreeCreationMessage))
+            }
         case .unavailable(let reason):
             return RunScheduleRunReport(outcome: .skipped(reason: reason))
         }
@@ -346,6 +350,7 @@ extension AppState {
         rendered: String,
         project: ProjectConfig
     ) async -> Result<(branch: String, destination: URL, base: String), WorktreeCreationFailure> {
+        guard !project.isFolder else { return .failure(.init(message: AppState.folderWorktreeCreationMessage)) }
         let repoPath = URL(fileURLWithPath: project.path)
         let git = GitService()
         // Local branches only: `WorktreeService.add` decides whether to reuse
@@ -397,18 +402,18 @@ extension AppState {
             scripts = found
         case .failed(let message):
             return RunScheduleRunReport(
-                outcome: .launchFailed("Could not list scripts in \(worktree.branch): \(message)")
+                outcome: .launchFailed("Could not list scripts in \(worktree.title): \(message)")
             )
         }
         guard let script = scripts.first(where: { $0.key == key }) else {
             return RunScheduleRunReport(
-                outcome: .skipped(reason: "Script \(key) was not found in \(worktree.branch).")
+                outcome: .skipped(reason: "Script \(key) was not found in \(worktree.title).")
             )
         }
         if runningScriptTab(for: script, in: worktree) != nil
             || runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true {
             return RunScheduleRunReport(
-                outcome: .skipped(reason: "\(script.displayName) is already running in \(worktree.branch).")
+                outcome: .skipped(reason: "\(script.displayName) is already running in \(worktree.title).")
             )
         }
         var reference: RunScheduleFiring.RunReference?
@@ -425,7 +430,7 @@ extension AppState {
                     continuation.resume(returning: $0)
                 }
             case .alreadyStarting:
-                continuation.resume(returning: .launchFailed("\(script.displayName) is already starting in \(worktree.branch)."))
+                continuation.resume(returning: .launchFailed("\(script.displayName) is already starting in \(worktree.title)."))
             case .projectUnavailable:
                 continuation.resume(returning: .launchFailed("The project is no longer available."))
             case let .refused(_, message):
@@ -528,7 +533,7 @@ extension AppState {
             )
         }
         inAppNotifications.post(
-            "\(schedule.name): launched \(agentName) in \(worktree.branch)",
+            "\(schedule.name): launched \(agentName) in \(worktree.title)",
             severity: .success,
             worktreeID: worktree.id
         )
@@ -580,17 +585,17 @@ extension AppState {
             )
         }
         guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
-            let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
+            let message = "Could not open a chat session for \(agentName) in \(worktree.title)."
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
             return RunScheduleRunReport(outcome: .launchFailed(message))
         }
         if let reason = session.lastError {
-            let message = "\(agentName) could not start in \(worktree.branch): \(reason)"
+            let message = "\(agentName) could not start in \(worktree.title): \(reason)"
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
             return RunScheduleRunReport(outcome: .launchFailed(message))
         }
         inAppNotifications.post(
-            "\(schedule.name): launched \(agentName) in \(worktree.branch)",
+            "\(schedule.name): launched \(agentName) in \(worktree.title)",
             severity: .success,
             worktreeID: worktree.id
         )
@@ -617,18 +622,18 @@ extension AppState {
         switch completion?.result {
         case .completed:
             inAppNotifications.post(
-                "\(schedule.name): \(agentName) finished in \(worktree.branch)",
+                "\(schedule.name): \(agentName) finished in \(worktree.title)",
                 severity: .success,
                 worktreeID: worktree.id
             )
         case .failed(let message):
             reportScheduleFailure(
-                schedule, reason: "\(agentName) failed in \(worktree.branch): \(message)",
+                schedule, reason: "\(agentName) failed in \(worktree.title): \(message)",
                 project: project, worktree: worktree
             )
         case .limited:
             reportScheduleFailure(
-                schedule, reason: "\(agentName) hit its usage limit in \(worktree.branch).",
+                schedule, reason: "\(agentName) hit its usage limit in \(worktree.title).",
                 project: project, worktree: worktree
             )
         case .cancelled:
@@ -636,7 +641,7 @@ extension AppState {
             break
         case nil:
             reportScheduleFailure(
-                schedule, reason: "\(agentName) was still working in \(worktree.branch) after 4 hours; stopped waiting.",
+                schedule, reason: "\(agentName) was still working in \(worktree.title) after 4 hours; stopped waiting.",
                 project: project, worktree: worktree
             )
         }
@@ -752,7 +757,7 @@ extension AppState {
             // ready would be noise about work the user called off.
             guard !Task.isCancelled else { return }
             inAppNotifications.post(
-                "\(schedule.name): could not confirm the agent was ready in \(worktree.branch), so the prompt was not sent.",
+                "\(schedule.name): could not confirm the agent was ready in \(worktree.title), so the prompt was not sent.",
                 severity: .error,
                 worktreeID: worktree.id
             )
@@ -764,7 +769,7 @@ extension AppState {
         guard !Task.isCancelled else { return }
         guard typeIntoTerminal(text, sessionID: sessionID) else {
             inAppNotifications.post(
-                "\(schedule.name): the agent's terminal in \(worktree.branch) closed before the prompt could be sent.",
+                "\(schedule.name): the agent's terminal in \(worktree.title) closed before the prompt could be sent.",
                 severity: .error,
                 worktreeID: worktree.id
             )
@@ -786,7 +791,7 @@ extension AppState {
         // once more before submitting.
         guard await scheduledAgentOwnsTerminal(sessionID: sessionID, agentID: agentID) else {
             inAppNotifications.post(
-                "\(schedule.name): the agent stopped before the prompt could be submitted in \(worktree.branch).",
+                "\(schedule.name): the agent stopped before the prompt could be submitted in \(worktree.title).",
                 severity: .error,
                 worktreeID: worktree.id
             )

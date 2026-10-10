@@ -201,7 +201,9 @@ struct RepoGroupView: View {
             }
             Button("Reset Sort to Default", action: onResetSort)
                 .disabled(!project.worktreeOrderIsManual)
-            Button("Clean Up Worktrees…", action: onCleanupWorktrees)
+            if !project.isFolder {
+                Button("Clean Up Worktrees…", action: onCleanupWorktrees)
+            }
             Menu("Spaces") {
                 ForEach(spaces) { space in
                     let isMember = isProjectInSpace(space.id)
@@ -294,12 +296,14 @@ struct RepoGroupView: View {
                     tooltip: headerTooltip()
                 )
             }
-            SidebarHeaderCountPlusButton(
-                count: worktrees.count,
-                rowHovering: hovering,
-                help: "New worktree in \(project.name)",
-                action: onNewWorktree
-            )
+            if !project.isFolder {
+                SidebarHeaderCountPlusButton(
+                    count: worktrees.count,
+                    rowHovering: hovering,
+                    help: "New worktree in \(project.name)",
+                    action: onNewWorktree
+                )
+            }
         }
     }
 

@@ -29,14 +29,17 @@ struct WorkspaceDefinitionDialogModel: Equatable {
     var saveTitle: String { editingWorkspace == nil ? "Create Workspace" : "Save for Future Checkouts" }
 
     var eligibleProjects: [ProjectConfig] {
+        // A Workspace checks out worktrees, which a folder project cannot have.
         projects.filter { project in
-            Self.location(of: project) == executionLocation && !members.contains(where: { $0.projectID == project.id })
+            !project.isFolder && Self.location(of: project) == executionLocation
+                && !members.contains(where: { $0.projectID == project.id })
         }
     }
 
     @discardableResult
     mutating func add(project: ProjectConfig) -> Bool {
-        guard Self.location(of: project) == executionLocation, !members.contains(where: { $0.projectID == project.id }) else { return false }
+        guard !project.isFolder, Self.location(of: project) == executionLocation,
+              !members.contains(where: { $0.projectID == project.id }) else { return false }
         members.append(.init(projectID: project.id, fallbackProjectName: project.name, fallbackRepositoryRoot: project.path))
         return true
     }

@@ -786,7 +786,8 @@ private struct ACPSessionView: View {
             actions: composerActions,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
-                async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
+                async let entries = try? state.fileIndex.entries(
+                    forWorktreePath: worktree.path, isFolder: state.isFolderWorktree(worktree))
                 guard let entries = await entries else { return [] }
                 let root = worktree.path
                 var result: [URL] = []
@@ -982,6 +983,7 @@ private struct ACPSessionView: View {
         let root = worktree.path
         let fileIndex = state.fileIndex
         let symbolIndex = state.symbolIndex
+        let isFolder = state.isFolderWorktree(worktree)
         var index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?
         if !root.isRemoteAlasPath {
             index = {
@@ -989,14 +991,15 @@ private struct ACPSessionView: View {
                 // nil on a failed enumeration: the index replays its cache.
                 await symbolIndex.updates(root: root) {
                     await fileIndex.invalidate(forWorktreePath: root)
-                    return (try? await fileIndex.entries(forWorktreePath: root))?.map(\.relativePath)
+                    return (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder))?.map(\.relativePath)
                 }
             }
         }
         return ACPSymbolMentionSource(
             index: index,
             fileSymbols: { fileQuery in
-                await ACPSymbolMentionSource.symbols(ofFileMatching: fileQuery, root: root, fileIndex: fileIndex)
+                await ACPSymbolMentionSource.symbols(
+                    ofFileMatching: fileQuery, root: root, fileIndex: fileIndex, isFolder: isFolder)
             }
         )
     }

@@ -123,6 +123,29 @@ struct ProjectConfigTests {
         #expect(decoded.ggWorktreeModes.values.allSatisfy { $0 == .on })
     }
 
+    /// A git project encodes exactly as before the kind existed, so older
+    /// builds read and re-save it unchanged.
+    @Test(arguments: [ProjectKind.git, .folder])
+    func kindRoundTripsAndGitStaysOffDisk(kind: ProjectKind) throws {
+        let project = ProjectConfig(
+            id: "abc", name: "alpha", path: "/tmp/alpha",
+            color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0), kind: kind
+        )
+        let data = try JSONEncoder().encode(project)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"kind\"") == (kind == .folder))
+        #expect(try JSONDecoder().decode(ProjectConfig.self, from: data).kind == kind)
+    }
+
+    /// A missing or unknown kind must not throw: a decode error moves the
+    /// whole projects.json aside.
+    @Test(arguments: ["", #","kind":"submodule""#, #","kind":7"#])
+    func decodingMissingOrUnknownKindFallsBackToGit(kindFragment: String) throws {
+        let json = ##"{"id":"abc","name":"alpha","path":"/tmp/alpha","color":"#5fb7c4","addedAt":0"##
+            + kindFragment + "}"
+        let project = try JSONDecoder().decode(ProjectConfig.self, from: Data(json.utf8))
+        #expect(project.kind == .git)
+    }
+
     @Test func decodingOlderProjectsFileSuppliesEmptyHiddenPaths() throws {
         // Older projects.json files predate hiddenWorktreePaths.
         let json = """

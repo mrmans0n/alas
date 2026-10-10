@@ -27,12 +27,18 @@ struct RemoteContentSearchTests {
         ).contains("-i"))
     }
 
-    @Test func gitGrepAlwaysSearchesUntrackedAndSkipsBinary() {
-        let args = RemoteContentSearch.gitGrepArgs(query: "x", options: SearchContentOptions())
+    /// Folder projects are not repositories: they search with `--no-index`,
+    /// which git refuses to combine with `--untracked`.
+    @Test(arguments: [false, true])
+    func gitGrepSearchesUntrackedOrUnindexedFilesAndSkipsBinary(noIndex: Bool) {
+        let args = RemoteContentSearch.gitGrepArgs(query: "x", options: SearchContentOptions(), noIndex: noIndex)
         #expect(args.first == "grep")
-        for flag in ["-nI", "--column", "--untracked", "-z"] {
+        for flag in ["-nI", "--column", noIndex ? "--no-index" : "--untracked", "-z"] {
             #expect(args.contains(flag))
         }
+        #expect(!args.contains(noIndex ? "--untracked" : "--no-index"))
+        #expect(args.contains(":(exclude,glob)**/node_modules/**") == noIndex)
+        #expect(args.contains(":(exclude,glob)**/.*/**") == noIndex)
     }
 
     @Test func gitGrepUsesExtendedRegexWhenRegexSearchIsEnabled() {

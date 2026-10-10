@@ -80,6 +80,12 @@ final class ContentSearcher: Sendable {
         }
     }
 
+    /// rg only honors .gitignore inside a repository, so a folder prunes what
+    /// its file index prunes: dot entries and the skipped directory names.
+    /// The trailing slash limits a name to directories.
+    static let folderExcludeGlobs: [String] = ["--glob", "!.*"]
+        + MentionFuzzy.skippedDirectoryNames.sorted().flatMap { ["--glob", "!\($0)/"] }
+
     private func streamRg(
         query: String,
         options: SearchContentOptions,
@@ -100,6 +106,7 @@ final class ContentSearcher: Sendable {
             "--max-count=200",
             "--max-columns=400",
         ]
+        if worktree.isFolder { args += Self.folderExcludeGlobs }
         if options.caseSensitive { args.append("--case-sensitive") } else { args.append("--smart-case") }
         if options.wholeWord     { args.append("--word-regexp") }
         if !options.regex        { args.append("--fixed-strings") }
@@ -119,7 +126,9 @@ final class ContentSearcher: Sendable {
                 )
                 return
             }
-            if capabilities?.helperHandshake != nil {
+            // The helper's search takes no exclusion globs, so a folder uses
+            // plain rg over ssh, which gets `folderExcludeGlobs`.
+            if capabilities?.helperHandshake != nil, !worktree.isFolder {
                 do {
                     try await streamHelperRg(
                         host: host,
@@ -297,12 +306,13 @@ final class ContentSearcher: Sendable {
                 host: host,
                 cwd: worktree.absolutePath.path,
                 query: query,
-                options: options
+                options: options,
+                noIndex: worktree.isFolder
             )
             result = try await Process.run(invocation.executable, args: invocation.args, timeout: 60)
         } else {
             result = try await Process.git(
-                RemoteContentSearch.gitGrepArgs(query: query, options: options),
+                RemoteContentSearch.gitGrepArgs(query: query, options: options, noIndex: worktree.isFolder),
                 cwd: worktree.absolutePath,
                 remoteHost: worktree.remoteHost,
                 usesRemoteHostRegistry: worktree.usesRemoteHostRegistry,

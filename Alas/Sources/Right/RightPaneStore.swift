@@ -183,8 +183,9 @@ final class RightPaneStore {
             // guessed origin ref, don't start the initial refresh until the
             // probe either confirms it or falls back. That avoids racing two
             // refreshes with different base refs.
-            let shouldDeferInitialRefresh = rawDefault != baseBranch
-            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+            let isFolder = appState?.isFolderWorktree(worktree) ?? false
+            let shouldDeferInitialRefresh = rawDefault != baseBranch && !isFolder
+            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch, isFolder: isFolder)
             // The commits comparison starts from the effective default, while
             // the review loop keeps the configured base branch for PR actions.
             new.baseBranch = rawDefault
@@ -320,6 +321,7 @@ final class RightPaneStore {
         worktreePath: URL,
         rawBaseBranch: String
     ) {
+        guard !state.isFolder else { return }
         state.baseBranchProbeTask?.cancel()
         state.baseBranchProbeTask = Task { @MainActor [weak state] in
             guard let state = state else { return }
@@ -384,7 +386,7 @@ final class RightPaneStore {
     /// currently displaying the feature it gates.
     func retreatFromTab(_ tab: RightPaneTab) {
         for state in states.values where state.activeTab == tab {
-            state.activeTab = .changes
+            state.activeTab = state.defaultTab
         }
     }
 
@@ -479,7 +481,7 @@ final class RightPaneStore {
         guard !state.consumePendingRevealForPaneMount() else { return }
         // A plugin panel chosen by the user or a command stays; `RightPaneView` drops it if it's no longer offered.
         guard state.activePluginPanel == nil else { return }
-        state.activeTab = .changes
+        state.activeTab = state.defaultTab
     }
 
     /// Clears a reveal intent when its worktree replaces an already-visible

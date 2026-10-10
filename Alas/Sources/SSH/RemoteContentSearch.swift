@@ -12,8 +12,10 @@ enum RemoteContentSearch {
         return RemoteExec.invocation(host: host, cwd: cwd, command: command)
     }
 
-    static func gitGrepArgs(query: String, options: SearchContentOptions) -> [String] {
-        var args = ["grep", "-nI", "--column", "--untracked", "-z"]
+    /// `noIndex` searches a folder project, which is not a repository; git
+    /// rejects `--untracked` alongside `--no-index`.
+    static func gitGrepArgs(query: String, options: SearchContentOptions, noIndex: Bool = false) -> [String] {
+        var args = ["grep", "-nI", "--column", noIndex ? "--no-index" : "--untracked", "-z"]
         if options.regex {
             args.append("-E")
         } else {
@@ -27,11 +29,19 @@ enum RemoteContentSearch {
             args.append("-i")
         }
         args += ["-e", query, "--"]
+        if noIndex {
+            // Without git's ignore rules, prune what the folder file index
+            // prunes: dot-prefixed entries and the generated directories.
+            args += [":(exclude,glob)**/.*", ":(exclude,glob)**/.*/**"]
+            args += MentionFuzzy.skippedDirectoryNames.sorted().map { ":(exclude,glob)**/\($0)/**" }
+        }
         return args
     }
 
-    static func cappedGitGrepInvocation(host: String, cwd: String, query: String, options: SearchContentOptions) -> RemoteExecInvocation {
-        let gitArgs = gitGrepArgs(query: query, options: options).map(SSHCommand.shellQuote).joined(separator: " ")
+    static func cappedGitGrepInvocation(
+        host: String, cwd: String, query: String, options: SearchContentOptions, noIndex: Bool = false
+    ) -> RemoteExecInvocation {
+        let gitArgs = gitGrepArgs(query: query, options: options, noIndex: noIndex).map(SSHCommand.shellQuote).joined(separator: " ")
         let cap = maxGitGrepHits
         let command = [
             "fifo=\"${TMPDIR:-/tmp}/alas-git-grep-$$.fifo\"",

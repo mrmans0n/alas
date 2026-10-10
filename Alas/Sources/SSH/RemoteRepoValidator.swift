@@ -3,6 +3,7 @@ import Foundation
 enum RemoteRepoValidationError: LocalizedError {
     case connectionFailed(String)
     case notARepository(String)
+    case notADirectory(String)
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ enum RemoteRepoValidationError: LocalizedError {
             return message.isEmpty ? "Could not reach the host over SSH." : message
         case let .notARepository(path):
             return "Not a git repository on the remote host: \(path)"
+        case let .notADirectory(path):
+            return "Not a directory on the remote host: \(path)"
         }
     }
 }
@@ -22,12 +25,17 @@ struct RemoteRepoValidator {
     static func validate(
         host: String,
         path: String,
+        kind: ProjectKind = .git,
         runner: @escaping Runner = { executable, args, timeout in
             try await Process.run(executable, args: args, timeout: timeout)
         }
     ) async throws {
         let batchSSH = SSHCommand(host: host, mode: .batch)
-        let command = "git -C \(SSHCommand.shellQuote(path)) rev-parse --is-inside-work-tree"
+        let quoted = SSHCommand.shellQuote(path)
+        let command = switch kind {
+        case .git: "git -C \(quoted) rev-parse --is-inside-work-tree"
+        case .folder: "test -d \(quoted) && echo true"
+        }
         let result = try await runner(
             SSHCommand.executable,
             batchSSH.argv(remoteScript: SSHCommand.remoteScript(command: command)),
@@ -38,7 +46,9 @@ struct RemoteRepoValidator {
         }
         let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.exitCode == 0, output == "true" else {
-            throw RemoteRepoValidationError.notARepository(path)
+            throw kind == .git
+                ? RemoteRepoValidationError.notARepository(path)
+                : RemoteRepoValidationError.notADirectory(path)
         }
     }
 

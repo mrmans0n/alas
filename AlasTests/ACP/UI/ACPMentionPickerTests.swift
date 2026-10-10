@@ -103,6 +103,18 @@ struct ACPMentionPickerTests {
         #expect(MentionPickerNavigation.move(from: 0, by: 1, count: 0) == 0)
     }
 
+    /// Folder indexing caps files, so directories must not use up the limit,
+    /// and skip-list names prune only directories.
+    @Test func collectFilesWithoutDirectoriesCountsOnlyFilesTowardTheLimit() throws {
+        // `build` is a skipped directory name, but as a file it is kept.
+        let root = try makeTempTree(["a/b/c/one.txt", "d/e/two.txt", "f/build", "build/skipped.txt"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let collected = MentionFuzzy.collectFiles(under: root, limit: 3, includesDirectories: false)
+
+        #expect(Set(collected.map(\.lastPathComponent)) == ["one.txt", "two.txt", "build"])
+    }
+
     @Test("collectFiles includes directories alongside files, flagged as directories")
     func collectFilesIncludesDirectories() throws {
         let root = try makeTempTree([
