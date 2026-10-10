@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.10] - 2026-10-10
+
+### ✨ Features
+
+- Add model, thinking, mode, parameter, auto-run, queue, steer, and takeover controls to native peer composers and the phone web client (#1881).
+- Add a run-activity pill and let run scripts start without a visible console tab through metadata or a one-off Option-key override (#1884).
+- Show restart continuations as system notices instead of user messages while preserving delivery and replay behavior (#1885).
+- Match the local empty-worktree presentation for peers and offer New Session when the peer supports sessions (#1890).
+- Show each live session's native subagents in the Agents tab with status, duration, cancellation, and delegated-session labels (#1891).
+
+### ⚡ Performance
+
+- Keep long ACP transcripts at 60 fps by avoiding whole-transcript republishes, reducing row layout work, and lazily measuring off-screen history (#1886).
+- Keep the sidebar responsive with many repositories and peers by eliminating redundant polling updates, using lazy rows, and moving status animation to Core Animation (#1887).
+
+### 🐛 Fixes
+
+- Allow next-prompt suggestions after a submitted prompt by separating in-flight input from real pending composer input (#1883).
+- Restore queued peer text to its original session when an Edit reply arrives after switching sessions (#1889).
+
 ## [0.20.9] - 2026-10-09
 
 ### ✨ Features
