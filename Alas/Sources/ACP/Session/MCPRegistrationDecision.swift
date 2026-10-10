@@ -1,3 +1,9 @@
+import OSLog
+
+/// Built-in MCP registration timeline: attach, grace armed, proof received,
+/// grace resolved. Filter with `log stream --predicate 'category == "mcp-registration"'`.
+let mcpRegistrationLogger = Logger(subsystem: "io.nlopez.alas", category: "mcp-registration")
+
 enum MCPServerRegistration: Equatable {
     case unknown
     case registered
@@ -11,6 +17,11 @@ enum MCPRegistrationEvidence: Equatable {
     /// the MCP server's requests from the agent's shell running `alas`, so
     /// this proves the server only when no fresh hello can be expected.
     case request
+    /// A `cli` socket request the built-in server tagged as its own. It
+    /// proves some server for this session is running, but not which one: an
+    /// adopted agent that fell back to `session/new` may still run the server
+    /// from its earlier session.
+    case serverRequest
     /// The server's one-shot `mcp_hello`, sent when it starts.
     case hello
 }
@@ -57,6 +68,19 @@ enum MCPRegistrationDecision {
         }
     }
 
+    /// What a `cli` request shows. A request tagged with the transport the
+    /// current attach configured comes from a built-in server. A tag for
+    /// another transport comes from a server an earlier attach left running
+    /// (e.g. stdio after switching to HTTP), so it proves nothing about this
+    /// one. An untagged request may be the agent's shell.
+    static func requestEvidence(
+        serverTransport: MCPTransportKind?,
+        attachedTransport: MCPTransportKind?
+    ) -> MCPRegistrationEvidence {
+        guard let serverTransport else { return .request }
+        return serverTransport == attachedTransport ? .serverRequest : .none
+    }
+
     /// Whether the recorded hello counts for this attach: any hello does,
     /// except the one a superseded server sent before the attach started.
     static func isCurrentHello(_ sequence: Int?, staleSequence: Int?) -> Bool {
@@ -69,17 +93,24 @@ enum MCPRegistrationDecision {
     ///   survived an app restart in its broker). That server said hello to the
     ///   previous attach, so no hello will come; without evidence the state
     ///   stays `.unknown` rather than claiming the server never started.
+    /// - Parameter requiresFreshHello: an adopted agent fell back to
+    ///   `session/new`, so only the new server's hello proves this attach;
+    ///   its previous server's requests are indistinguishable from the new
+    ///   one's.
     static func resolve(
         evidence: MCPRegistrationEvidence,
         graceElapsed: Bool,
-        reattachedToRunningServer: Bool
+        reattachedToRunningServer: Bool,
+        requiresFreshHello: Bool = false
     ) -> MCPServerRegistration {
         switch evidence {
         case .hello:
             return .registered
+        case .serverRequest where !requiresFreshHello:
+            return .registered
         case .request where reattachedToRunningServer:
             return .registered
-        case .none, .request:
+        case .none, .request, .serverRequest:
             if reattachedToRunningServer { return .unknown }
             return graceElapsed ? .notRegistered : .unknown
         }

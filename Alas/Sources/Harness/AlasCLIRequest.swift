@@ -96,7 +96,10 @@ struct AlasCLIRequest: Equatable {
         default:
             return self
         }
-        return AlasCLIRequest(version: version, sessionId: sessionId, cwd: cwd, command: mapped)
+        return AlasCLIRequest(
+            version: version, sessionId: sessionId, cwd: cwd, command: mapped,
+            mcpServerTransport: mcpServerTransport
+        )
     }
 
     enum WorktreeCommand: Equatable {
@@ -133,6 +136,9 @@ struct AlasCLIRequest: Equatable {
     let sessionId: String?
     let cwd: String?
     let command: Command
+    /// Transport of the built-in `alas mcp` server that sent the request, or
+    /// nil for a shell `alas`. A tagged request proves the server is up.
+    var mcpServerTransport: MCPTransportKind? = nil
 
     var paths: [String] {
         switch command {
@@ -160,6 +166,7 @@ struct AlasCLIRequest: Equatable {
         var keep_branch: Bool?
         var checkout_id: String?
         var member_id: String?
+        var mcp_transport: String?
     }
 
     private struct ParamsEnvelope<P: Decodable>: Decodable {
@@ -597,7 +604,14 @@ struct AlasCLIRequest: Equatable {
             throw AlasCLIRequestError.unsupportedCommand
         }
 
-        return AlasCLIRequest(version: 1, sessionId: sessionId, cwd: cwd, command: command)
+        // SSE is never a built-in transport; anything unknown is untagged.
+        let mcpServerTransport = raw.mcp_transport
+            .flatMap(MCPTransportKind.init(rawValue:))
+            .flatMap { $0 == .sse ? nil : $0 }
+        return AlasCLIRequest(
+            version: 1, sessionId: sessionId, cwd: cwd, command: command,
+            mcpServerTransport: mcpServerTransport
+        )
     }
 }
 
