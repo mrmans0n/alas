@@ -35,18 +35,7 @@ struct LocalTextAppleFirstRouter {
 
     @MainActor
     private func generateAppleIntelligenceWithTimeout(_ request: LocalTextGenerationRequest) async -> String? {
-        let race = AppleGenerationRace()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                race.start(
-                    request: request,
-                    generator: generateWithAppleIntelligence,
-                    continuation: continuation
-                )
-            }
-        } onCancel: {
-            Task { @MainActor in race.finish(nil) }
-        }
+        await LocalTextAppleIntelligence.generateWithTimeout(request, generator: generateWithAppleIntelligence)
     }
 }
 
@@ -93,6 +82,23 @@ private final class AppleGenerationRace {
 }
 
 enum LocalTextAppleIntelligence {
+    /// Apple-only callers share the router's cancellation and timeout handling
+    /// without entering its optional MLX fallback path.
+    @MainActor
+    static func generateWithTimeout(
+        _ request: LocalTextGenerationRequest,
+        generator: @escaping LocalTextAppleFirstRouter.AppleGenerator = generate
+    ) async -> String? {
+        let race = AppleGenerationRace()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                race.start(request: request, generator: generator, continuation: continuation)
+            }
+        } onCancel: {
+            Task { @MainActor in race.finish(nil) }
+        }
+    }
+
     /// Cached briefly: each query is a round trip to the model service, and
     /// the sidebar asks once per worktree row on every render. Settings reads
     /// `LocalTextAppleAvailability.current()` directly, so it never shows a
