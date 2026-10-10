@@ -389,7 +389,9 @@ struct RootView: View {
                         fontFamily: state.config.agents.chatFontFamily,
                         fontSize: state.config.agents.chatFontSize
                     ),
-                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
+                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+                    dictationLocale: state.config.harness.acpDictationLocale,
+                    onSelectDictationLocale: { [state] in state.config.harness.acpDictationLocale = $0 }
                 )
                 .id(client.selectedSessionId)
             }

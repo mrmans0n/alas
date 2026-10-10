@@ -8,6 +8,8 @@ struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
     var typography: ACPChatTypography = .default
     var collapsesFinishedToolCalls = false
+    var dictationLocale = ""
+    var onSelectDictationLocale: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
 
@@ -24,7 +26,8 @@ struct NativePeerSessionView: View {
                         transcriptList(transcript, contentMaxWidth: contentMaxWidth)
                         NativePeerComposer(
                             client: client, transcript: transcript,
-                            typography: typography, contentMaxWidth: contentMaxWidth
+                            typography: typography, contentMaxWidth: contentMaxWidth,
+                            dictationLocale: dictationLocale, onSelectDictationLocale: onSelectDictationLocale
                         )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -332,6 +335,8 @@ private struct NativePeerComposer: View {
     let transcript: NativePeerTranscript
     let typography: ACPChatTypography
     let contentMaxWidth: CGFloat
+    let dictationLocale: String
+    let onSelectDictationLocale: (String) -> Void
     @Environment(\.theme) private var theme
     @FocusState private var composerFocused: Bool
     @State private var selection: TextSelection?
@@ -339,6 +344,13 @@ private struct NativePeerComposer: View {
     /// UTF-16 offset of the `/` the open picker completes; nil when closed.
     @State private var slashTokenStart: Int?
     @State private var notice: String?
+    @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
+    @State private var installedDictationLocales: [String] = []
+    /// The open volatile dictation span (UTF-16); nil when none is open.
+    @State private var dictationSpan: NSRange?
+    /// The draft as dictation last left it. Any other draft while a span is
+    /// open is a manual edit.
+    @State private var dictatedDraft: String?
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
@@ -385,11 +397,38 @@ private struct NativePeerComposer: View {
             )
             .allowsHitTesting(false)
         )
-        .onChange(of: client.draft) { _, _ in reconcileSlashPicker() }
+        .onChange(of: client.draft) { _, draft in
+            reconcileSlashPicker()
+            // As in the local composer, a manual edit mid-utterance stops
+            // dictation: the engine's next correction would otherwise land
+            // as a fresh span and duplicate the partial text.
+            if dictationSpan != nil, draft != dictatedDraft {
+                dictationSpan = nil
+                dictation.stop()
+            }
+        }
         .onChange(of: selection) { _, _ in reconcileSlashPicker() }
         .onChange(of: config?.availableCommands) { _, _ in reconcileSlashPicker() }
         .onChange(of: composerFocused) { _, focused in
             if !focused { slashTokenStart = nil }
+        }
+        .onAppear {
+            dictation.onTranscriptUpdate = { applyDictation($0, isFinal: $1) }
+            dictation.onStop = { dictationSpan = nil }
+            dictation.onNotice = { showNotice($0) }
+            dictation.preferredLocaleIdentifier = dictationLocale
+        }
+        .onDisappear { dictation.stop() }
+        .task { installedDictationLocales = await dictation.installedLocaleIdentifiers() }
+        .onChange(of: dictationLocale) { _, locale in
+            dictation.stop()
+            dictation.preferredLocaleIdentifier = locale
+        }
+        .onChange(of: dictation.state) { _, state in
+            if case .failed(let message) = state { showNotice(message) }
+        }
+        .onChange(of: sessionOpen) { _, open in
+            if !open { dictation.stop() }
         }
     }
 
@@ -435,6 +474,12 @@ private struct NativePeerComposer: View {
                 }
                 Spacer(minLength: 0)
                 if let usage = config?.usage { contextUsageButton(usage) }
+                if dictation.state != .unavailable {
+                    ACPDictationMicButton(
+                        dictation: dictation, installedLocales: installedDictationLocales,
+                        selectedLocale: dictationLocale, onSelectLocale: onSelectDictationLocale)
+                    .disabled(!sessionOpen)
+                }
                 if acceptsImages { attachButton }
                 if let chipState, let config {
                     chipRow(chipState: chipState, config: config)
@@ -446,7 +491,7 @@ private struct NativePeerComposer: View {
                         case .stop: client.stopSelected()
                         default:
                             guard !client.isPromptPending else { return }
-                            client.sendPrompt(intent: primarySubmitIntent(
+                            send(primarySubmitIntent(
                                 for: action,
                                 optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
                         }
@@ -455,10 +500,10 @@ private struct NativePeerComposer: View {
                         switch item {
                         case .queue:
                             guard !client.isPromptPending else { return }
-                            client.sendPrompt(intent: .auto)
+                            send(.auto)
                         case .steer:
                             guard !client.isPromptPending else { return }
-                            client.sendPrompt(intent: .steer)
+                            send(.steer)
                         case .stop: client.stopSelected()
                         }
                     },
@@ -475,7 +520,7 @@ private struct NativePeerComposer: View {
                         guard sessionOpen, !client.isPromptPending,
                               let intent = primarySubmitIntent(for: action, optionPressed: false)
                         else { return }
-                        client.sendPrompt(intent: intent)
+                        send(intent)
                     }
                     .keyboardShortcut(.return, modifiers: .command)
                     .frame(width: 0, height: 0)
@@ -492,6 +537,33 @@ private struct NativePeerComposer: View {
             attachImages(at: urls)
             return true
         }
+    }
+
+    /// Dictation stops first, so no late transcript lands in the cleared draft.
+    private func send(_ intent: ACPSubmitIntent) {
+        dictation.stop()
+        client.sendPrompt(intent: intent)
+    }
+
+    // MARK: - Dictation
+
+    /// The selection as UTF-16, or the end of the draft when there is none.
+    private var selectedRange: NSRange {
+        let draft = client.draft
+        guard case .selection(let range)? = selection?.indices, range.upperBound <= draft.endIndex else {
+            return NSRange(location: (draft as NSString).length, length: 0)
+        }
+        return NSRange(range, in: draft)
+    }
+
+    private func applyDictation(_ transcript: String, isFinal: Bool) {
+        guard sessionOpen else { return dictation.stop() }
+        let edit = NativePeerComposerState.applyingDictation(
+            transcript, isFinal: isFinal, to: client.draft, span: dictationSpan, selection: selectedRange)
+        dictationSpan = edit.span
+        dictatedDraft = edit.text
+        client.draft = edit.text
+        selection = TextSelection(insertionPoint: String.Index(utf16Offset: edit.caret, in: edit.text))
     }
 
     // MARK: - Slash commands

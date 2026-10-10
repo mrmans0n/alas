@@ -97,6 +97,31 @@ enum NativePeerComposerState {
                 tokenStart + (replacement as NSString).length)
     }
 
+    struct DictationEdit: Equatable {
+        var text: String
+        /// The volatile span the next update replaces; nil once committed.
+        var span: NSRange?
+        var caret: Int
+    }
+
+    /// Applies a dictation update the way the local text view does: a
+    /// volatile update replaces the previous volatile span in place, a final
+    /// one commits it, and with no span open the update replaces the
+    /// selection. Ranges are UTF-16.
+    static func applyingDictation(
+        _ transcript: String, isFinal: Bool, to text: String, span: NSRange?, selection: NSRange
+    ) -> DictationEdit {
+        let string = text as NSString
+        let base = span ?? selection
+        let location = min(base.location, string.length)
+        let target = NSRange(location: location, length: min(base.length, string.length - location))
+        let inserted = NSRange(location: location, length: (transcript as NSString).length)
+        return DictationEdit(
+            text: string.replacingCharacters(in: target, with: transcript),
+            span: isFinal ? nil : inserted,
+            caret: NSMaxRange(inserted))
+    }
+
     /// The local context ring's inputs, rebuilt from the host's reduced
     /// rows. Each row becomes a "model" whose total is the row's tokens,
     /// which is all the popover reads.

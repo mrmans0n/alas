@@ -1838,6 +1838,7 @@
 		CC531074F02A34E48A1E6133 /* ACPAgentProfilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A110966FCF7EA47C18BE71A /* ACPAgentProfilesTests.swift */; };
 		CC5A7E567AE76BC8D0D86D2C /* ACPAuthStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB24D2B5B40327AD5738C4FA /* ACPAuthStatusTests.swift */; };
 		CC64E79B9CF4AF1B3CE31261 /* ACPMentionChipAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 329882D757C34246C9848C3A /* ACPMentionChipAttachment.swift */; };
+		CC6894425092801571EB6AB0 /* ACPDictationMicButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C670526063771E2CDDBEA8EE /* ACPDictationMicButton.swift */; };
 		CC912749E15F84D70B279999 /* SnippetSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 162985B2A66A4E4FD99FA326 /* SnippetSessionTests.swift */; };
 		CCA4B9F1FFBE1CAC99839A07 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010B026A6251DEC1BD1961C0 /* WindowConfigurator.swift */; };
 		CCB0C90ABC15D987D0EEB230 /* AppConfigFilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBCC34174A7CEFA72099DDFD /* AppConfigFilesTests.swift */; };
@@ -4080,6 +4081,7 @@
 		C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentSearcherTests.swift; sourceTree = "<group>"; };
 		C60A6B7CB83D842FEE2D801C /* ThreePaneSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizingTests.swift; sourceTree = "<group>"; };
 		C6360E03040684CAE2BA0693 /* RemotePairingApprovalProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingApprovalProtocolTests.swift; sourceTree = "<group>"; };
+		C670526063771E2CDDBEA8EE /* ACPDictationMicButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPDictationMicButton.swift; sourceTree = "<group>"; };
 		C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTabView.swift; sourceTree = "<group>"; };
 		C6A69B1DDB598D9748E594ED /* RightPaneRailModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneRailModel.swift; sourceTree = "<group>"; };
 		C6B874BF8AEC4B60FC536E04 /* ProjectIconImageStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIconImageStaging.swift; sourceTree = "<group>"; };
@@ -6783,6 +6785,7 @@
 				8AD22187C951174C9ECEC4C4 /* ACPContextUsageButton.swift */,
 				BE3D3BB0A631D42AD22DBE0F /* ACPDelayedHoverVisibility.swift */,
 				53F2697D068C074A82959C9F /* ACPDelegatedSessionsPolicy.swift */,
+				C670526063771E2CDDBEA8EE /* ACPDictationMicButton.swift */,
 				BA6C7434D216D5C43A2FB921 /* ACPFileChip.swift */,
 				29D7631D754795D16E946440 /* ACPFileEditCard.swift */,
 				8B4BB6C10F3718F7D0A50BAE /* ACPFirstRunConnectingPolicy.swift */,
@@ -8683,6 +8686,7 @@
 				D5F6E4A363AB38F3FB364DB5 /* ACPDetectedAgentUpdates.swift in Sources */,
 				1F55E63544597FED6F86C395 /* ACPDictationEngine.swift in Sources */,
 				8B46DD8DE4E960A8A70B665D /* ACPDictationLocaleFormatter.swift in Sources */,
+				CC6894425092801571EB6AB0 /* ACPDictationMicButton.swift in Sources */,
 				DE91F7958CC50097DF9CAF8F /* ACPDictationService.swift in Sources */,
 				F7C010994E85C805815654A7 /* ACPDictationState.swift in Sources */,
 				2A19A7B4B392979989E25EC0 /* ACPDiffGenerator.swift in Sources */,

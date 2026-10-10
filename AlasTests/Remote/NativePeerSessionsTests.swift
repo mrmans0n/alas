@@ -1030,6 +1030,27 @@ struct NativePeerSessionsTests {
         #expect(completed.caret == expectedCaret)
     }
 
+    @Test(arguments: [
+        // No span: the update replaces the selection.
+        ("fix  bug", nil, NSRange(location: 4, length: 0), "the", false, "fix the bug", NSRange(location: 4, length: 3), 7),
+        ("fix old bug", nil, NSRange(location: 4, length: 3), "the", true, "fix the bug", nil, 7),
+        // A volatile correction replaces the open span, wherever the caret is.
+        ("fix teh bug", NSRange(location: 4, length: 3), NSRange(location: 0, length: 0), "the", false,
+         "fix the bug", NSRange(location: 4, length: 3), 7),
+        // A final update commits the span; the next one starts after it.
+        ("🙂 hel", NSRange(location: 3, length: 3), NSRange(location: 6, length: 0), "hello", true, "🙂 hello", nil, 8),
+        // A span the draft no longer covers is clamped, not trapped on.
+        ("ab", NSRange(location: 1, length: 9), NSRange(location: 2, length: 0), "c", false, "ac", NSRange(location: 1, length: 1), 2),
+    ] as [(String, NSRange?, NSRange, String, Bool, String, NSRange?, Int)])
+    func dictationReplacesItsSpanOrTheSelection(
+        text: String, span: NSRange?, selection: NSRange, transcript: String, isFinal: Bool,
+        expected: String, expectedSpan: NSRange?, expectedCaret: Int
+    ) {
+        let edit = NativePeerComposerState.applyingDictation(
+            transcript, isFinal: isFinal, to: text, span: span, selection: selection)
+        #expect(edit == .init(text: expected, span: expectedSpan, caret: expectedCaret))
+    }
+
     @Test func queueRowsMoveByTheLocalRulesAndRouteMoveAndPromote() {
         func item(_ id: UUID, status: String = "pending", scheduled: Bool = false) -> RemoteQueuedPrompt {
             RemoteQueuedPrompt(id: id.uuidString, text: "t", imageCount: 0, resourceCount: 0, status: status,
