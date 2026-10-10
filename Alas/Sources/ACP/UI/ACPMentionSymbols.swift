@@ -18,8 +18,8 @@ struct ACPSymbolMentionSource {
         guard !Task.isCancelled else { return [] }
         let urls = entries.map { root.appendingPathComponent($0.relativePath) }
         // The listing keeps tracked files deleted from the working tree, so
-        // an unreadable best match falls through to the next one.
-        for match in MentionFuzzy.rank(files: urls, query: fileQuery, limit: 5, relativeTo: root) {
+        // an unreadable match falls through to the next, however many there are.
+        for match in MentionFuzzy.rank(files: urls, query: fileQuery, limit: urls.count, relativeTo: root) {
             guard !Task.isCancelled else { return [] }
             let relativePath = String(match.path.dropFirst(root.path.count + 1))
             if let source = await SymbolSource.read(root: root, relativePath: relativePath) {

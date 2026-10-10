@@ -26,7 +26,7 @@ final class NativePeerSessions {
         var mentions: [RemoteMention] = []
 
         func matches(_ item: RemoteQueuedPrompt) -> Bool {
-            item.text == text && item.imageCount == attachments.count
+            item.text == text && item.imageCount == attachments.count && item.resourceCount == mentions.count
         }
 
         /// The host lists images, then mentions, under the user's text.

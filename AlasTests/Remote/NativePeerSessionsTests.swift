@@ -1077,6 +1077,17 @@ struct NativePeerSessionsTests {
         client.sendPrompt()
         #expect(links.sent(to: "B").last == .sendPrompt(
             sessionId: "s", text: "fix @App.swift", attachments: [], intent: "auto", mentions: [file]))
+
+        // Only a queue item carrying the mention confirms the send.
+        func queue(resources: Int) -> RemoteServerMessage {
+            .queueState(sessionId: "s", items: [RemoteQueuedPrompt(
+                id: UUID().uuidString, text: "fix @App.swift", imageCount: 0, resourceCount: resources,
+                status: "pending", lastError: nil, scheduledAt: nil)])
+        }
+        links.receive(queue(resources: 0), from: "B")
+        #expect(client.isPromptPending)
+        links.receive(queue(resources: 1), from: "B")
+        #expect(!client.isPromptPending)
     }
 
     @Test(arguments: [
