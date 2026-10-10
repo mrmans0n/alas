@@ -166,6 +166,9 @@ struct ProjectsManagerTests {
         #expect(rows.first.map { mgr.isMain($0, in: project) } == true)
         // A second refresh is stable, so nothing is re-persisted.
         #expect(try await mgr.refreshWorktrees(projectId: project.id) == false)
+        // A deleted folder fails like a deleted repository, so stale cleanup finds it.
+        try FileManager.default.removeItem(at: dir)
+        await #expect(throws: (any Error).self) { try await mgr.refreshWorktrees(projectId: project.id) }
     }
 
     @Test(arguments: [false, true])

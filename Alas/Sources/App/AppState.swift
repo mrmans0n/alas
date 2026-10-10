@@ -15352,13 +15352,15 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteProjects() async -> [RemoteProjectOption] {
-        projects.map { RemoteProjectOption(id: $0.id, name: $0.name) }
+        // This list drives worktree creation, which folder projects cannot do.
+        projects.filter { !$0.isFolder }.map { RemoteProjectOption(id: $0.id, name: $0.name) }
     }
 
     func remoteBranches(projectId: String) async -> RemoteBranchListResult {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure("Repository is no longer available.")
         }
+        guard !project.isFolder else { return .failure(Self.folderWorktreeCreationMessage) }
 
         do {
             let branches = try await GitService().branches(at: URL(fileURLWithPath: project.path))
@@ -15478,6 +15480,9 @@ extension AppState: RemoteSessionsProvider {
                 message: "Repository is no longer available.",
                 worktreeId: nil
             )
+        }
+        guard !project.isFolder else {
+            return .failure(stage: .worktree, message: Self.folderWorktreeCreationMessage, worktreeId: nil)
         }
 
         let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))

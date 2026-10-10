@@ -618,6 +618,12 @@ final class ProjectsManager {
         } else {
             url = configuredURL
         }
+        // A deleted local folder fails like a deleted repository, so stale
+        // project cleanup can find it.
+        if project.isFolder, project.host == nil, !FileManager.default.fileExists(atPath: configuredURL.path) {
+            throw NSError(domain: "ProjectsManager", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey: "Folder no longer exists: \(configuredURL.path)"])
+        }
         let trees = project.isFolder
             ? [Self.folderWorktree(for: project)]
             : try await worktreeSvc.list(repoPath: url, projectId: projectId)
