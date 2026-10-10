@@ -888,6 +888,8 @@ function openSession(id) {
   pendingExpandedPathsRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  // A folder project has no git, so it has no Changes tab.
+  $("tab-changes").classList.toggle("hidden", isFolderSummary(summary));
   // The session summary's changedFileCount is working-tree status only —
   // request the actual change list (comparison-ref scope, what the Changes
   // tab itself shows) so a freshly opened session's badge isn't stuck
@@ -927,8 +929,12 @@ function showTab(name) {
   if (name === "files") refreshFileTree();
 }
 
+function isFolderSummary(summary) {
+  return Boolean(summary && summary.worktree && summary.worktree.isFolder);
+}
+
 function requestChanges() {
-  if (!currentSession) return;
+  if (!currentSession || isFolderSummary(listedSessions.get(currentSession))) return;
   send({ type: "listChanges", sessionId: currentSession });
 }
 

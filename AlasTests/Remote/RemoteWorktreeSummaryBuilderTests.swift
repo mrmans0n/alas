@@ -44,13 +44,21 @@ struct RemoteWorktreeSummaryBuilderTests {
         #expect(summary.conflictCount == 1)
     }
 
-    @Test func unavailableMetricsKeepIdentityAndZeroCounts() {
+    /// The folder flag is sent only when true, so a git project's JSON is
+    /// unchanged for older peers.
+    @Test(arguments: [false, true])
+    func unavailableMetricsKeepIdentityAndZeroCounts(isFolder: Bool) throws {
         let summary = RemoteWorktreeSummaryBuilder.make(
             projectName: "alas",
             worktree: worktree(),
             isMain: false,
+            isFolder: isFolder,
             metrics: .unavailable
         )
+
+        #expect(summary.isFolder == (isFolder ? true : nil))
+        let json = String(decoding: try JSONEncoder().encode(summary), as: UTF8.self)
+        #expect(json.contains("isFolder") == isFolder)
 
         #expect(summary.projectName == "alas")
         #expect(summary.worktreeName == "feature-branch")

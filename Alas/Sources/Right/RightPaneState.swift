@@ -13,7 +13,9 @@ enum RightPaneTab: String {
 
     /// A peer worktree exposes read-only changes and files, and its sessions;
     /// run scripts and schedules belong to this Mac.
-    static let peerAvailable: [Self] = [.changes, .files, .agent]
+    static func peerAvailable(isFolder: Bool = false) -> [Self] {
+        isFolder ? [.files, .agent] : [.changes, .files, .agent]
+    }
 }
 
 struct RightPaneAttentionSnapshot: Equatable {
