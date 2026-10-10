@@ -8,6 +8,10 @@ extension AppState {
             actions: { [weak self] project in self?.pluginHostActions(for: project) ?? .inert })
         pluginManager = manager
         await manager.reload()
+        // So the attention inbox can list available updates without Settings having been opened. Not if plugins
+        // were turned off during the reload: the catalog is never fetched while they are off.
+        guard pluginManager === manager else { return }
+        await manager.catalog.refresh()
     }
 
     func setPluginsEnabled(_ enabled: Bool) async {

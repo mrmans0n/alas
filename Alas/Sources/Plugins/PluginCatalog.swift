@@ -118,15 +118,14 @@ final class PluginCatalog {
     nonisolated static let maxDownloadBytes = 8 << 20
 
     private(set) var state: State = .idle
+    /// The last index that loaded, kept through a refresh and its failure so known updates stay listed.
+    private(set) var index: PluginCatalogIndex?
     @ObservationIgnored let fetch: @Sendable (URL) async throws -> Data
     @ObservationIgnored private var lastLoad: ContinuousClock.Instant?
+    @ObservationIgnored private var inFlight: Task<Data, Error>?
 
     init(fetch: @escaping @Sendable (URL) async throws -> Data = { try await PluginCatalog.download($0) }) {
         self.fetch = fetch
-    }
-
-    var index: PluginCatalogIndex? {
-        if case .loaded(let index) = state { index } else { nil }
     }
 
     /// Loads the index unless it loaded recently; `force` always loads.
@@ -134,16 +133,28 @@ final class PluginCatalog {
         if state == .loading { return }
         if !force, index != nil, let lastLoad, ContinuousClock.now - lastLoad < Self.refreshInterval { return }
         state = .loading
+        let fetch = self.fetch
+        let download = Task { try await fetch(Self.indexURL) }
+        inFlight = download
+        defer { inFlight = nil }
         do {
-            let index = try JSONDecoder().decode(PluginCatalogIndex.self, from: try await fetch(Self.indexURL))
+            // The caller's cancellation still reaches the download, as it would without the separate task.
+            let data = try await withTaskCancellationHandler { try await download.value } onCancel: { download.cancel() }
+            let index = try JSONDecoder().decode(PluginCatalogIndex.self, from: data)
             guard index.format == PluginCatalogIndex.supportedFormat else { throw PluginCatalogError.unsupportedFormat }
             state = .loaded(index)
+            self.index = index
             lastLoad = .now
         } catch let error as PluginCatalogError {
             state = .failed(error.description)
         } catch {
             state = .failed("Could not load the plugin catalog: \(error.localizedDescription)")
         }
+    }
+
+    /// Stops a load in flight, even one started by a task nobody else can cancel.
+    func cancel() {
+        inFlight?.cancel()
     }
 
     nonisolated static func download(_ url: URL) async throws -> Data {

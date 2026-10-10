@@ -86,7 +86,7 @@ struct PluginsPane: View {
             }
         }
         .padding(.bottom, 12)
-        let updates = Self.updates(manager)
+        let updates = manager.catalogUpdates
         if !updates.isEmpty {
             updatesBanner(manager, updates)
         }
@@ -177,27 +177,14 @@ struct PluginsPane: View {
                 }
             case .loaded(let index):
                 ForEach(index.plugins) { entry in
-                    catalogRow(manager, entry, Self.row(manager, entry))
+                    catalogRow(manager, entry, manager.catalogRow(entry))
                 }
             }
         }
         .task { await catalog.refresh() }
     }
 
-    private static func row(_ manager: PluginManager, _ entry: PluginCatalogIndex.Entry) -> PluginCatalogRow {
-        PluginCatalogRow(
-            entry: entry, installed: manager.plugin(id: entry.id),
-            // Duplicates of this plugin, or anything else at the path install would use.
-            quarantined: manager.invalid.contains { $0.pluginID == entry.id } || manager.catalogPathIsTaken(id: entry.id))
-    }
-
-    private typealias Update = (entry: PluginCatalogIndex.Entry, version: PluginCatalogIndex.Version)
-
-    private static func updates(_ manager: PluginManager) -> [Update] {
-        (manager.catalog.index?.plugins ?? []).compactMap { entry in
-            if case .update(let version) = row(manager, entry) { (entry, version) } else { nil }
-        }
-    }
+    private typealias Update = PluginManager.CatalogUpdate
 
     private func updatesBanner(_ manager: PluginManager, _ updates: [Update]) -> some View {
         HStack {
