@@ -946,6 +946,18 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(msg) == msg)
     }
 
+    @Test func mentionVerbsRoundTrip() throws {
+        let mention = RemoteMention(kind: RemoteMention.file, value: "Alas/", name: "Alas", detail: nil)
+        let prompt = RemoteClientMessage.sendPrompt(
+            sessionId: "s1", text: "see @Alas", attachments: [], intent: "auto", mentions: [mention])
+        #expect(try roundTrip(prompt) == prompt)
+        #expect(try roundTrip(RemoteClientMessage.searchMentions(sessionId: "s1", query: "Al")) == .searchMentions(sessionId: "s1", query: "Al"))
+        let reply = RemoteServerMessage.mentionCandidates(sessionId: "s1", query: "Al", candidates: [
+            RemoteMention(kind: RemoteMention.session, value: "s2", name: "Refactor", detail: "Codex · main"),
+        ])
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: JSONEncoder().encode(reply)) == reply)
+    }
+
     @Test func fetchOlderRoundTrips() throws {
         let msg = RemoteClientMessage.fetchOlder(sessionId: "s1", beforeIndex: 120, limit: 90)
         let data = try JSONEncoder().encode(msg)

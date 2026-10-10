@@ -18,7 +18,7 @@ extension RemoteClientMessage {
              .openSessionTab(let id), .closeSessionTab(let id):
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
-             .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
+             .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _, _), .searchMentions(let id, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .setConfigOption(let id, _, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
              .queueMove(let id, _, _), .queuePromote(let id, _),
@@ -48,8 +48,9 @@ extension RemoteClientMessage {
         case .takeOver: return .takeOver(sessionId: new)
         case .openSessionTab: return .openSessionTab(sessionId: new)
         case .closeSessionTab: return .closeSessionTab(sessionId: new)
-        case .sendPrompt(_, let text, let attachments, let intent):
-            return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent)
+        case .sendPrompt(_, let text, let attachments, let intent, let mentions):
+            return .sendPrompt(sessionId: new, text: text, attachments: attachments, intent: intent, mentions: mentions)
+        case .searchMentions(_, let query): return .searchMentions(sessionId: new, query: query)
         case .stop: return .stop(sessionId: new)
         case .setModel(_, let modelId): return .setModel(sessionId: new, modelId: modelId)
         case .setMode(_, let modeId): return .setMode(sessionId: new, modeId: modeId)
@@ -107,7 +108,7 @@ extension RemoteServerMessage {
              .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _),
-             .fileUnavailable(let id, _, _, _, _):
+             .fileUnavailable(let id, _, _, _, _), .mentionCandidates(let id, _, _):
             return id
         case .sessionConfig(let cfg):
             return cfg.sessionId
@@ -186,6 +187,8 @@ extension RemoteServerMessage {
             return .fileContents(sessionId: new, path: path, text: text, truncated: truncated)
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             return .fileUnavailable(sessionId: new, path: path, reason: reason, byteSize: byteSize, message: message)
+        case .mentionCandidates(_, let query, let candidates):
+            return .mentionCandidates(sessionId: new, query: query, candidates: candidates)
         }
     }
 }

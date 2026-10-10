@@ -367,6 +367,9 @@ final class AppState {
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
+    /// Session candidates for each peer-viewed session's `@` picker, loaded
+    /// when the picker opens and reused while its query changes.
+    @ObservationIgnored private var remoteMentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
     /// affected data visible instead of silently treating it as empty.
@@ -10328,7 +10331,8 @@ final class AppState {
                 }
             },
             fileSearch: { query, wt in
-                try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)
+                // fff scans the whole tree, bypassing the folder index's cap and pruning.
+                wt.isFolder ? nil : try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)
             },
             rankFiles: { query, sources in
                 try await fileSearchRanker.rank(query: query, sources: sources)
@@ -16574,6 +16578,64 @@ extension AppState: RemoteSessionsProvider {
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
+    }
+
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] {
+        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return [] }
+        let root = worktree.path
+        // A bare `@` opens the picker: list files and sessions afresh then,
+        // as the local picker does on open, and reuse both while the query
+        // grows.
+        let opening = query.trimmingCharacters(in: .whitespaces).isEmpty
+        if opening {
+            await fileIndex.invalidate(forWorktreePath: root)
+        }
+        let isFolder = isFolderWorktree(worktree)
+        var fileSymbols: [SymbolEntry] = []
+        if case .file(let file, _) = MentionSymbolQuery.parse(query.trimmingCharacters(in: .whitespaces)) {
+            fileSymbols = await ACPSymbolMentionSource.symbols(
+                ofFileMatching: file, root: root, fileIndex: fileIndex, isFolder: isFolder)
+        }
+        let paths = ((try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []).map(\.relativePath)
+        let sessions: [ACPSessionMentionCandidate]
+        if !opening, let cached = remoteMentionSessions[sessionId] {
+            sessions = cached
+        } else {
+            sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+            remoteMentionSessions[sessionId] = sessions
+        }
+        // An SSH worktree's files can't be checked without a round trip per
+        // file; a missing one still fails safely, as a dangling link.
+        return RemoteMentions.candidates(
+            query: query, root: root, filePaths: paths, sessions: sessions, fileSymbols: fileSymbols,
+            fileExists: { root.isRemoteAlasPath || FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        guard !mentions.isEmpty else { return [] }
+        guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return nil }
+        let root = worktree.path
+        var attachments: [ACPMessage.Attachment] = []
+        for mention in mentions {
+            guard let attachment = await RemoteMentions.attachment(
+                for: mention, worktreeRoot: root, sessionId: sessionId,
+                isContainedFile: { path in
+                    // Symlinks of an SSH worktree only resolve on its host,
+                    // as for the remote file reads.
+                    guard root.isRemoteAlasPath else {
+                        return RemoteWorktreeFileAccess.resolve(path: path, in: root) != nil
+                    }
+                    guard let host = RemoteHostRegistry.shared.host(forPath: root.path) else { return false }
+                    return (try? await RemotePathContainment.verifyRemoteContainment(
+                        host: host, path: root.appendingPathComponent(path).path, worktreeRoot: root.path)) != nil
+                },
+                isProjectSession: { [weak self] id in
+                    await self?.acpSessionMentionCandidate(sessionId: id)?.projectId == worktree.projectId
+                })
+            else { return nil }
+            attachments.append(attachment)
+        }
+        return attachments
     }
 
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {

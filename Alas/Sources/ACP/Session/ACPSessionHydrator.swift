@@ -21,6 +21,14 @@ actor ACPSessionHydrator {
         self.store = try ACPSessionStore(path: path)
     }
 
+#if DEBUG
+    private var afterMessagesLoadedForTesting: (@Sendable () throws -> Void)?
+
+    func setAfterMessagesLoadedForTesting(_ callback: (@Sendable () throws -> Void)?) {
+        afterMessagesLoadedForTesting = callback
+    }
+#endif
+
     func hydrate(sessionId: String) async throws -> HydrationResult {
         var result = try loadSnapshot(sessionId: sessionId, includeDraft: true)
         // Post-load side effect: bump `last_opened_at` so the recents
@@ -41,17 +49,23 @@ actor ACPSessionHydrator {
     }
 
     private func loadSnapshot(sessionId: String, includeDraft: Bool) throws -> HydrationResult {
-        guard let row = try store.loadSession(id: sessionId) else {
-            throw Error.sessionNotFound(sessionId)
+        // Delivery evidence must not pair a newly persisted queue item with
+        // an older transcript when another connection writes during hydration.
+        let (row, stored, forkRecord, storedDraft, queue) = try store.db.transaction {
+            guard let row = try store.loadSession(id: sessionId) else {
+                throw Error.sessionNotFound(sessionId)
+            }
+            let stored = try store.loadMessages(sessionId: sessionId)
+#if DEBUG
+            try afterMessagesLoadedForTesting?()
+#endif
+            let forkRecord = try store.loadFork(targetSessionID: sessionId)
+            let storedDraft = includeDraft ? try? store.loadComposerDraftRecord(sessionId: sessionId) : nil
+            let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+            return (row, stored, forkRecord, storedDraft, queue)
         }
 
-        // Decode every stored message into a Sendable wire variant.
-        // Malformed payloads are skipped (matching the legacy try? in
-        // openSession) rather than failing the whole hydration.
-        let stored = try store.loadMessages(sessionId: sessionId)
-        let forkRecord = try store.loadFork(targetSessionID: sessionId)
-        let storedDraft = includeDraft ? try? store.loadComposerDraftRecord(sessionId: sessionId) : nil
-        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+        // Malformed message payloads are skipped rather than failing hydration.
         var staleSubmittedDraft = false
         var sawRecordedSubmittedDraft = false
         var messages: [ACPHydratedMessage] = []

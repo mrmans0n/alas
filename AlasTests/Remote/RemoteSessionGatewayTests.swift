@@ -303,6 +303,15 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         }
     }
 
+    var mentionCandidates: [RemoteMention] = []
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { mentionCandidates }
+
+    /// What `remoteMentionAttachments` answers for a non-empty list.
+    var mentionAttachments: [ACPMessage.Attachment]? = []
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        mentions.isEmpty ? [] : mentionAttachments
+    }
+
     var writtenAttachmentURLs: [URL] = []
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
@@ -1493,6 +1502,42 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
+    @Test func sendPromptSendsResolvedMentionsAfterImagesAndRefusesUnresolvedOnesBeforeWriting() async throws {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        let image = RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png.base64EncodedString())
+        let mention = RemoteMention(kind: RemoteMention.file, value: "App.swift", name: "App.swift")
+
+        provider.mentionAttachments = nil
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
+                                    mentions: [mention]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.prompts.isEmpty)
+        #expect(provider.writtenAttachmentURLs.isEmpty)
+
+        let linked = ACPMessage.Attachment(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil)
+        provider.mentionAttachments = [linked]
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "@App.swift", attachments: [image], intent: "auto",
+                                    mentions: [mention]))
+        #expect(provider.lastAttachments.map(\.mimeType) == ["image/png", nil])
+        #expect(provider.lastAttachments.last == linked)
+    }
+
+    @Test func overlongMentionQueriesGetNoRows() async {
+        let provider = FakeSessionsProvider()
+        provider.mentionCandidates = [RemoteMention(kind: RemoteMention.file, value: "a", name: "a")]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let long = String(repeating: "a", count: RemoteSessionGateway.maxMentionQueryLength + 1)
+        await gw.handle(.searchMentions(sessionId: "s1", query: long))
+        await gw.handle(.searchMentions(sessionId: "s1", query: "a"))
+        #expect(sent == [.mentionCandidates(sessionId: "s1", query: long, candidates: []),
+                         .mentionCandidates(sessionId: "s1", query: "a", candidates: provider.mentionCandidates)])
+    }
+
     @Test func droppedSendPromptEmitsRejection() async {
         // A non-writer sendPrompt must tell the client it was dropped so the
         // composer can restore the text instead of silently losing the message.
@@ -1648,8 +1693,15 @@ struct RemoteSessionGatewayTests {
             attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")])
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
         #expect(wire.kind == "user")
-        #expect(wire.text?.contains("shot.png") == true)
-        #expect((wire.text ?? "").isEmpty == false)
+        #expect(wire.text == "🖼 shot.png")
+    }
+
+    @Test func mentionAttachmentsRenderAsResourcesNotImages() {
+        let msg = ACPMessage.user(id: UUID(), text: "see @App.swift", attachments: [
+            .init(uri: "file:///w/App.swift", name: "App.swift", mimeType: nil),
+            .init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png"),
+        ])
+        #expect(RemoteSessionGateway.toWire(msg, index: 0).text == "see @App.swift\n\n🖼 shot.png\n\n📎 App.swift")
     }
 
     @Test func checkpointAttachmentDoesNotRenderAsRemotePlaceholder() {

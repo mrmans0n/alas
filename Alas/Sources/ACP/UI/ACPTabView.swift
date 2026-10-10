@@ -998,21 +998,8 @@ private struct ACPSessionView: View {
         return ACPSymbolMentionSource(
             index: index,
             fileSymbols: { fileQuery in
-                // From FileIndex paths, not the picker's file list: that list
-                // drops remote entries, and drill-down is remote's only route.
-                // Each step can be slow (enumeration, a remote read, parsing),
-                // and a newer keystroke or the closed picker cancels this one.
-                let entries = (try? await fileIndex.entries(forWorktreePath: root, isFolder: isFolder)) ?? []
-                guard !Task.isCancelled else { return [] }
-                let urls = entries.map { root.appendingPathComponent($0.relativePath) }
-                guard let best = MentionFuzzy.rank(files: urls, query: fileQuery, limit: 1, relativeTo: root).first,
-                      !Task.isCancelled
-                else { return [] }
-                let relativePath = String(best.path.dropFirst(root.path.count + 1))
-                guard let source = await SymbolSource.read(root: root, relativePath: relativePath),
-                      !Task.isCancelled
-                else { return [] }
-                return SymbolExtractor.symbols(in: source, relativePath: relativePath)
+                await ACPSymbolMentionSource.symbols(
+                    ofFileMatching: fileQuery, root: root, fileIndex: fileIndex, isFolder: isFolder)
             }
         )
     }
