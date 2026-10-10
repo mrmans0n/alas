@@ -683,13 +683,17 @@ struct RemoteWebAssetTests {
     }
 
     @Test(arguments: [
-        ("fix @App now", ["a"]), ("fix @Apple", []), ("see @App, then", ["a"]), ("x@App", []),
-        ("Review @App.", ["a"]), ("open @App.swift", []),
+        ("fix @App now", ["a"], "App"), ("fix @Apple", [], "App"), ("see @App, then", ["a"], "App"),
+        ("x@App", [], "App"), ("Review @App.", ["a"], "App"), ("open @App.swift", [], "App"),
         // Two picks share a name: one marker keeps the first only.
-        ("@App and @App", ["a", "b"]), ("@App alone", ["a"]),
-    ])
-    func sendsOnlyMentionsWhoseWholeMarkerRemains(text: String, expected: [String]) throws {
-        let mentions = ["a", "b"].map { RemoteMention(kind: RemoteMention.file, value: $0, name: "App") }
+        ("@App and @App", ["a", "b"], "App"), ("@App alone", ["a"], "App"),
+        // A marker counts once: the longer name claims it.
+        ("@App.", ["b"], "App."), ("@App @App.", ["a", "b"], "App."),
+    ] as [(String, [String], String)])
+    func sendsOnlyMentionsWhoseWholeMarkerRemains(text: String, expected: [String], secondName: String) throws {
+        let mentions = [("a", "App"), ("b", secondName)].map {
+            RemoteMention(kind: RemoteMention.file, value: $0.0, name: $0.1)
+        }
         #expect(NativePeerComposerState.liveMentions(mentions, in: text).map(\.value) == expected)
         let live = try javascriptFunction("liveMentions")
         live.context.setObject(mentions.map { ["kind": $0.kind, "value": $0.value, "name": $0.name] },

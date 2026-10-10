@@ -127,21 +127,33 @@ enum NativePeerComposerState {
     }
 
     /// The picked mentions whose `@name` is still in `text` as a whole
-    /// token. Mentions sharing a name keep one each per marker left, in
-    /// pick order.
+    /// token. Each marker counts for one mention: longer names claim theirs
+    /// first, so `@App.` stays `App.` rather than also keeping `App`, and
+    /// mentions sharing a name take markers in pick order.
     static func liveMentions(_ mentions: [RemoteMention], in text: String) -> [RemoteMention] {
-        var markersLeft: [String: Int] = [:]
-        return mentions.filter { mention in
-            let count = markersLeft[mention.name] ?? markerCount(mention.name, in: text as NSString)
-            markersLeft[mention.name] = count - 1
-            return count > 0
+        let text = text as NSString
+        let claimOrder = mentions.indices.sorted {
+            let (a, b) = ((mentions[$0].name as NSString).length, (mentions[$1].name as NSString).length)
+            return a != b ? a > b : $0 < $1
         }
+        var claimed: [NSRange] = []
+        var live = Set<Int>()
+        for index in claimOrder {
+            let free = markerRanges(mentions[index].name, in: text).first { range in
+                !claimed.contains { NSIntersectionRange($0, range).length > 0 }
+            }
+            if let free {
+                claimed.append(free)
+                live.insert(index)
+            }
+        }
+        return mentions.indices.filter(live.contains).map { mentions[$0] }
     }
 
     /// `@name` occurrences that start a token and end it, allowing trailing
-    /// punctuation before whitespace or the end: `@App.swift.` keeps
+    /// punctuation before whitespace or the end: `@App.swift.` matches
     /// `App.swift`, while `@App` matches neither `@Apple` nor `@App.swift`.
-    private static func markerCount(_ name: String, in text: NSString) -> Int {
+    private static func markerRanges(_ name: String, in text: NSString) -> [NSRange] {
         let marker = "@" + name
         let punctuation = CharacterSet(charactersIn: ".,;:!?)]}\"'")
         func scalar(at index: Int) -> UnicodeScalar { UnicodeScalar(text.character(at: index)) ?? "a" }
@@ -150,15 +162,15 @@ enum NativePeerComposerState {
             while index < text.length, punctuation.contains(scalar(at: index)) { index += 1 }
             return index == text.length || CharacterSet.whitespacesAndNewlines.contains(scalar(at: index))
         }
-        var count = 0
+        var ranges: [NSRange] = []
         var search = NSRange(location: 0, length: text.length)
         while true {
             let found = text.range(of: marker, options: [], range: search)
-            guard found.location != NSNotFound else { return count }
+            guard found.location != NSNotFound else { return ranges }
             let end = NSMaxRange(found)
             let starts = found.location == 0
                 || CharacterSet.whitespacesAndNewlines.contains(scalar(at: found.location - 1))
-            if starts && endsToken(at: end) { count += 1 }
+            if starts && endsToken(at: end) { ranges.append(found) }
             search = NSRange(location: end, length: text.length - end)
         }
     }

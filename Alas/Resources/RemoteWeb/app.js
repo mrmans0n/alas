@@ -4320,26 +4320,32 @@ function mentionToken(text, caret) {
 }
 
 // Mirrors NativePeerComposerState.liveMentions: a mention stays while its
-// `@name` is a whole token, one mention per marker for shared names.
+// `@name` is a whole token. Each marker counts once; longer names claim
+// first, and mentions sharing a name take markers in pick order.
 function liveMentions(text) {
-  const markerCount = (name) => {
+  const markerRanges = (name) => {
     const marker = "@" + name;
-    let count = 0;
+    const ranges = [];
     for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + marker.length)) {
       const end = i + marker.length;
       const starts = i === 0 || /\s/.test(text[i - 1]);
       // Trailing punctuation may sit between the marker and the token's end.
       const ends = /^[.,;:!?)\]}"']*(\s|$)/.test(text.slice(end));
-      if (starts && ends) count++;
+      if (starts && ends) ranges.push([i, end]);
     }
-    return count;
+    return ranges;
   };
-  const left = new Map();
-  return pendingMentions.filter(m => {
-    const count = left.has(m.name) ? left.get(m.name) : markerCount(m.name);
-    left.set(m.name, count - 1);
-    return count > 0;
-  }).map(m => ({ kind: m.kind, value: m.value, name: m.name }));
+  const order = pendingMentions.map((_, i) => i)
+    .sort((a, b) => (pendingMentions[b].name.length - pendingMentions[a].name.length) || a - b);
+  const claimed = [];
+  const live = new Set();
+  order.forEach(i => {
+    const free = markerRanges(pendingMentions[i].name)
+      .find(([s, e]) => !claimed.some(([cs, ce]) => s < ce && cs < e));
+    if (free) { claimed.push(free); live.add(i); }
+  });
+  return pendingMentions.filter((_, i) => live.has(i))
+    .map(m => ({ kind: m.kind, value: m.value, name: m.name }));
 }
 
 let mentionState = null;   // { start, query, items, selected } while an @ token is typed
