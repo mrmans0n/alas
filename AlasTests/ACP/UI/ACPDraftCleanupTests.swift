@@ -155,6 +155,12 @@ struct ACPDraftCleanupTests {
         (" check this ", "check this."),
         ("check cafe\u{301}", "check café."),
         ("check /tmp/cafe\u{301} then inspect", "check /tmp/café then inspect."),
+        ("make test", "make test."),
+        ("go test", "go test."),
+        ("please run frobnicate verify", "please run frobnicate verify."),
+        ("check this then run frobnicate verify", "check this then run frobnicate verify."),
+        ("check this then execute frobnicate verify", "check this then execute frobnicate verify."),
+        ("check this then invoke frobnicate verify", "check this then invoke frobnicate verify."),
     ])
     func refusesUnsafeEdits(_ input: (String, String)) throws {
         let plan = try ACPDraftCleanupPlan(draft: .init(segments: [.text(input.0)]))

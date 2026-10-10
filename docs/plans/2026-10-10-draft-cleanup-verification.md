@@ -12,7 +12,10 @@ Acceptance is one native undoable edit and has no submission path.
 
 This first implementation accepts removal of a leading `um` or `uh` before
 recognized request phrasing, and addition of a final period to ordinary prose at
-the end of the draft. All other words, punctuation and whitespace remain exact.
+the end of the draft that starts with recognized request/restriction phrasing.
+Bare command-like drafts and command tails introduced by run/execute/invoke are
+left unchanged regardless of the executable name.
+All other words, punctuation and whitespace remain exact.
 It refuses paraphrases, capitalization changes, interior punctuation changes,
 and punctuation that could detach an attachment or condition. It preserves raw
 technical tokens, commands, code and quoted content, including smart quotes.
