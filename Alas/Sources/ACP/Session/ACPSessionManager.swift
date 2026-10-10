@@ -5550,6 +5550,7 @@ extension ACPSessionManager {
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
+        session.deliveredQueuedPromptIDs = result.deliveredQueuedPromptIDs
         session.restoreQueue(
             result.queue,
             markLegacySendingUncertain: true,
@@ -7782,7 +7783,7 @@ extension ACPSessionManager {
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if session.queue.contains(where: { $0.status == .sending }) {
-                session.restoreQueue(session.queue, markLegacySendingUncertain: true)
+                session.restoreQueue(session.queue, markLegacySendingUncertain: true, useLiveTranscript: true)
             }
             let consumedDirectTurn = session.directTurnInFlight
             if session.consumeInterruptedTurns(resume: continueInterruptedSessions()) {
@@ -8017,7 +8018,8 @@ extension ACPSessionManager {
         session.restoreQueue(
             session.queue,
             markLegacySendingUncertain: true,
-            knownUnsentDispatches: unhandedQueueDispatches
+            knownUnsentDispatches: unhandedQueueDispatches,
+            useLiveTranscript: true
         )
         session.lastError = nil
         session.setupState = .checking
@@ -9667,7 +9669,8 @@ extension ACPSessionManager {
             session.restoreQueue(
                 session.queue,
                 markLegacySendingUncertain: true,
-                knownUnsentDispatches: unhandedQueueDispatches
+                knownUnsentDispatches: unhandedQueueDispatches,
+                useLiveTranscript: true
             )
         }
         var closeError: (any Error)?
