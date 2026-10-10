@@ -316,6 +316,23 @@ struct StartupRecoveryTests {
         #expect(await state.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: row.id) == false)
     }
 
+    /// A git and a folder project may register one path, so one worktree id:
+    /// each must get a pane of its own kind, not whichever was cached first.
+    @Test func sharedPathPaneFollowsTheOwningProjectsKind() {
+        let path = "/srv/alas-shared-\(UUID().uuidString)"
+        let git = ProjectConfig(id: "git", name: "Git", path: path, color: "#5fb7c4", addedAt: Date())
+        let folder = ProjectConfig(id: "folder", name: "Folder", path: path, color: "#5fb7c4", addedAt: Date(), kind: .folder)
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [git, folder])))
+        let row = { (project: ProjectConfig) in ProjectsManager.folderWorktree(for: project) }
+        let pane = { (project: ProjectConfig) in
+            state.rightPaneStore.state(for: row(project), baseBranch: "main", comparisonMode: .auto, activates: false)
+        }
+
+        #expect(pane(folder).isFolder)
+        #expect(!pane(git).isFolder)
+        #expect(pane(folder).isFolder)
+    }
+
     @Test func recoveryLaunchPopulatesConfiguredProjectWorktrees() {
         let root = RemotePath.virtual(host: "devbox", realPath: "/srv/alas-recovery-\(UUID().uuidString)")
         let linked = RemotePath.virtual(host: "devbox", realPath: "/srv/alas-linked-\(UUID().uuidString)")

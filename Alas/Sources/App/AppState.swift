@@ -5844,8 +5844,14 @@ final class AppState {
         projectGitWatchers[projectId] = watcher
     }
 
-    /// True when `path` is the single row of a folder project, for call sites
-    /// that only know a worktree path and must not run git against it.
+    /// Resolved through the owning project: a git project and a folder project
+    /// may register the same path.
+    func isFolderWorktree(_ worktree: Worktree) -> Bool {
+        projectsManager.projects.first { $0.id == worktree.projectId }?.isFolder == true
+    }
+
+    /// For call sites that only know a path: true when any folder project owns
+    /// it, so a shared path errs toward running no git.
     func isFolderPath(_ path: URL) -> Bool {
         let id = Worktree.makeId(path: path)
         return projectsManager.projects.contains {
@@ -10332,7 +10338,7 @@ final class AppState {
     func refreshSymbolIndexIfLoaded(worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId), !worktree.path.isRemoteAlasPath else { return }
         let root = worktree.path
-        let isFolder = isFolderPath(root)
+        let isFolder = isFolderWorktree(worktree)
         Task { [fileIndex, symbolIndex] in
             await symbolIndex.refreshIfLoaded(root: root) {
                 await fileIndex.invalidate(forWorktreePath: root)
@@ -12738,7 +12744,7 @@ final class AppState {
 
     func checkpointTarget(for worktree: Worktree) -> CheckpointWorktreeTarget? {
         guard !worktree.path.isRemoteAlasPath,
-              !isFolderPath(worktree.path),
+              !isFolderWorktree(worktree),
               let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         else { return nil }
         let project = projects.first(where: { $0.id == worktree.projectId })
@@ -13416,7 +13422,7 @@ final class AppState {
             }
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
-        if isFolderPath(worktree.path) {
+        if isFolderWorktree(worktree) {
             mgr.upstreamReferences.environment = .noRemotes
         }
         acpManagers[owner] = mgr

@@ -787,7 +787,7 @@ private struct ACPSessionView: View {
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
                 async let entries = try? state.fileIndex.entries(
-                    forWorktreePath: worktree.path, isFolder: state.isFolderPath(worktree.path))
+                    forWorktreePath: worktree.path, isFolder: state.isFolderWorktree(worktree))
                 guard let entries = await entries else { return [] }
                 let root = worktree.path
                 var result: [URL] = []
@@ -983,7 +983,7 @@ private struct ACPSessionView: View {
         let root = worktree.path
         let fileIndex = state.fileIndex
         let symbolIndex = state.symbolIndex
-        let isFolder = state.isFolderPath(root)
+        let isFolder = state.isFolderWorktree(worktree)
         var index: (@MainActor () async -> AsyncStream<WorktreeSymbolIndex.Snapshot>)?
         if !root.isRemoteAlasPath {
             index = {

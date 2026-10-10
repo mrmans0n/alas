@@ -118,6 +118,14 @@ final class RightPaneStore {
         activates: Bool = true
     ) -> RightPaneState {
         let id = worktree.id
+        let isFolder = appState?.isFolderWorktree(worktree) ?? false
+        // A git and a folder project can share a path, and so this id; a
+        // cached pane of the other kind would run or hide the wrong features.
+        if let existing = states[id], existing.isFolder != isFolder {
+            existing.stop()
+            states[id] = nil
+            if activeId == id { activeId = nil }
+        }
         let wasCached = states[id] != nil
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
@@ -183,7 +191,6 @@ final class RightPaneStore {
             // guessed origin ref, don't start the initial refresh until the
             // probe either confirms it or falls back. That avoids racing two
             // refreshes with different base refs.
-            let isFolder = appState?.isFolderPath(worktree.path) ?? false
             let shouldDeferInitialRefresh = rawDefault != baseBranch && !isFolder
             let new = RightPaneState(worktree: worktree, baseBranch: baseBranch, isFolder: isFolder)
             // The commits comparison starts from the effective default, while

@@ -49,9 +49,11 @@ actor FileIndex {
         forWorktreePath worktree: URL,
         remoteHost: String?,
         usesRemoteHostRegistry: Bool,
-        cacheKey key: String,
+        cacheKey baseKey: String,
         isFolder: Bool
     ) async throws -> [Entry] {
+        // Git and folder listings of one path differ, so they never share an entry.
+        let key = isFolder ? "folder:" + baseKey : baseKey
         if let hit = cache[key], Date().timeIntervalSince(hit.timestamp) < ttl {
             return hit.entries
         }
@@ -74,7 +76,9 @@ actor FileIndex {
             let result = try await RemoteExec.run(
                 host: remoteHost,
                 cwd: worktree.path,
-                command: "find . -name '.*' ! -name . -prune -o -type f -print0"
+                // Newline-delimited because BSD head has no -z; a filename
+                // containing a newline is split, which only mislists that file.
+                command: "find . -name '.*' ! -name . -prune -o -type f -print | head -n \(Self.folderFileLimit)"
             )
             guard result.exitCode == 0 else {
                 throw NSError(
@@ -84,7 +88,7 @@ actor FileIndex {
                 )
             }
             return result.stdout
-                .split(separator: "\0", omittingEmptySubsequences: true)
+                .split(separator: "\n", omittingEmptySubsequences: true)
                 .map { $0.hasPrefix("./") ? String($0.dropFirst(2)) : String($0) }
         }
         let root = worktree.standardizedFileURL.path + "/"
