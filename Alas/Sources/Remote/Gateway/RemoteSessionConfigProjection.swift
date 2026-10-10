@@ -22,6 +22,7 @@ enum RemoteSessionConfigProjection {
         config.usage = usage(context: session.contextUsage, modelName: session.currentModelDisplayName,
                              lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
         config.supportsQueueReorder = true
+        config.supportsMentions = true
         return config
     }
 

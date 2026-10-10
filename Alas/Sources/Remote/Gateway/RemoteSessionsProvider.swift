@@ -93,6 +93,12 @@ protocol RemoteSessionsProvider: AnyObject {
     func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+    /// Files, sessions and symbols of the session's project matching an
+    /// `@` query, as the local mention picker ranks them.
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention]
+    /// The prompt attachments for a viewer's mentions, or nil when any of
+    /// them doesn't resolve inside the session's project.
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]?
     /// Serves peer console traffic; nil when this app does not.
     var peerConsoleHost: PeerConsoleHost? { get }
 }
@@ -112,6 +118,11 @@ extension RemoteSessionsProvider {
     }
     func closeSessionTab(for id: String) async -> RemoteSessionTabActionResult {
         .failure("Closing session tabs is unavailable.")
+    }
+
+    func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] { [] }
+    func remoteMentionAttachments(_ mentions: [RemoteMention], sessionId: String) async -> [ACPMessage.Attachment]? {
+        mentions.isEmpty ? [] : nil
     }
 
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}

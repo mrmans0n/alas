@@ -8,6 +8,8 @@ struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
     var typography: ACPChatTypography = .default
     var collapsesFinishedToolCalls = false
+    var dictationLocale = ""
+    var onSelectDictationLocale: (String) -> Void = { _ in }
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
 
@@ -24,7 +26,8 @@ struct NativePeerSessionView: View {
                         transcriptList(transcript, contentMaxWidth: contentMaxWidth)
                         NativePeerComposer(
                             client: client, transcript: transcript,
-                            typography: typography, contentMaxWidth: contentMaxWidth
+                            typography: typography, contentMaxWidth: contentMaxWidth,
+                            dictationLocale: dictationLocale, onSelectDictationLocale: onSelectDictationLocale
                         )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -332,13 +335,27 @@ private struct NativePeerComposer: View {
     let transcript: NativePeerTranscript
     let typography: ACPChatTypography
     let contentMaxWidth: CGFloat
+    let dictationLocale: String
+    let onSelectDictationLocale: (String) -> Void
     @Environment(\.theme) private var theme
     @FocusState private var composerFocused: Bool
     @State private var selection: TextSelection?
     @StateObject private var slashPicker = ACPSlashPickerModel(suggestions: [])
     /// UTF-16 offset of the `/` the open picker completes; nil when closed.
     @State private var slashTokenStart: Int?
+    /// UTF-16 offset of the `@` the open mention picker completes.
+    @State private var mentionTokenStart: Int?
+    /// The `@` query to ask the host about, debounced by `.task(id:)`.
+    @State private var mentionQuery: String?
+    @State private var mentionHighlight = 0
     @State private var notice: String?
+    @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
+    @State private var installedDictationLocales: [String] = []
+    /// The open volatile dictation span (UTF-16); nil when none is open.
+    @State private var dictationSpan: NSRange?
+    /// The draft as dictation last left it. Any other draft while a span is
+    /// open is a manual edit.
+    @State private var dictatedDraft: String?
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && transcript.canDrive }
@@ -364,6 +381,7 @@ private struct NativePeerComposer: View {
                 Spacer(minLength: 0)
                 VStack(spacing: 6) {
                     if slashTokenStart != nil { slashPickerList }
+                    if mentionTokenStart != nil, !client.mentionCandidates.isEmpty { mentionPickerList }
                     composerPill
                 }
                 .frame(maxWidth: contentMaxWidth)
@@ -385,11 +403,53 @@ private struct NativePeerComposer: View {
             )
             .allowsHitTesting(false)
         )
-        .onChange(of: client.draft) { _, _ in reconcileSlashPicker() }
-        .onChange(of: selection) { _, _ in reconcileSlashPicker() }
+        .onChange(of: client.draft) { _, draft in
+            reconcileSlashPicker()
+            reconcileMentionPicker()
+            // As in the local composer, a manual edit mid-utterance stops
+            // dictation: the engine's next correction would otherwise land
+            // as a fresh span and duplicate the partial text.
+            if dictationSpan != nil, draft != dictatedDraft {
+                dictationSpan = nil
+                dictation.stop()
+            }
+        }
+        .onChange(of: selection) { _, _ in
+            reconcileSlashPicker()
+            reconcileMentionPicker()
+        }
+        .onChange(of: client.mentionCandidates) { _, _ in mentionHighlight = 0 }
+        .task(id: mentionQuery) {
+            // A closed picker answers at once; a keystroke waits briefly so
+            // typing a path doesn't send a search per character.
+            if mentionQuery != nil { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled else { return }
+            client.searchMentions(mentionQuery)
+        }
         .onChange(of: config?.availableCommands) { _, _ in reconcileSlashPicker() }
         .onChange(of: composerFocused) { _, focused in
-            if !focused { slashTokenStart = nil }
+            if !focused {
+                slashTokenStart = nil
+                closeMentionPicker()
+            }
+        }
+        .onAppear {
+            dictation.onTranscriptUpdate = { applyDictation($0, isFinal: $1) }
+            dictation.onStop = { dictationSpan = nil }
+            dictation.onNotice = { showNotice($0) }
+            dictation.preferredLocaleIdentifier = dictationLocale
+        }
+        .onDisappear { dictation.stop() }
+        .task { installedDictationLocales = await dictation.installedLocaleIdentifiers() }
+        .onChange(of: dictationLocale) { _, locale in
+            dictation.stop()
+            dictation.preferredLocaleIdentifier = locale
+        }
+        .onChange(of: dictation.state) { _, state in
+            if case .failed(let message) = state { showNotice(message) }
+        }
+        .onChange(of: sessionOpen) { _, open in
+            if !open { dictation.stop() }
         }
     }
 
@@ -421,7 +481,8 @@ private struct NativePeerComposer: View {
                     .disabled(!sessionOpen)
                     .accessibilityLabel("Message peer session")
                     .onKeyPress(keys: [.upArrow, .downArrow, .return, .tab, .escape]) { press in
-                        handleSlashKey(press)
+                        let mention = handleMentionKey(press)
+                        return mention == .handled ? mention : handleSlashKey(press)
                     }
             }
             .frame(minHeight: 44, maxHeight: 140)
@@ -442,7 +503,7 @@ private struct NativePeerComposer: View {
                 guard sessionOpen, !client.isPromptPending,
                       let intent = primarySubmitIntent(for: action, optionPressed: false)
                 else { return }
-                client.sendPrompt(intent: intent)
+                send(intent)
             }
             .keyboardShortcut(.return, modifiers: .command)
             .frame(width: 0, height: 0)
@@ -454,6 +515,33 @@ private struct NativePeerComposer: View {
             attachImages(at: urls)
             return true
         }
+    }
+
+    /// Dictation stops first, so no late transcript lands in the cleared draft.
+    private func send(_ intent: ACPSubmitIntent) {
+        dictation.stop()
+        client.sendPrompt(intent: intent)
+    }
+
+    // MARK: - Dictation
+
+    /// The selection as UTF-16, or the end of the draft when there is none.
+    private var selectedRange: NSRange {
+        let draft = client.draft
+        guard case .selection(let range)? = selection?.indices, range.upperBound <= draft.endIndex else {
+            return NSRange(location: (draft as NSString).length, length: 0)
+        }
+        return NSRange(range, in: draft)
+    }
+
+    private func applyDictation(_ transcript: String, isFinal: Bool) {
+        guard sessionOpen else { return dictation.stop() }
+        let edit = NativePeerComposerState.applyingDictation(
+            transcript, isFinal: isFinal, to: client.draft, span: dictationSpan, selection: selectedRange)
+        dictationSpan = edit.span
+        dictatedDraft = edit.text
+        client.draft = edit.text
+        selection = TextSelection(insertionPoint: String.Index(utf16Offset: edit.caret, in: edit.text))
     }
 
     // MARK: - Slash commands
@@ -506,9 +594,104 @@ private struct NativePeerComposer: View {
 
     private func pick(_ suggestion: ACPPromptSuggestion) {
         guard let start = slashTokenStart, let caret else { return }
-        let completed = NativePeerComposerState.completingSlashCommand(
+        let completed = NativePeerComposerState.completingToken(
             suggestion.command, in: client.draft, tokenStart: start, caret: caret)
         slashTokenStart = nil
+        client.draft = completed.text
+        selection = TextSelection(insertionPoint: String.Index(utf16Offset: completed.caret, in: completed.text))
+    }
+
+    // MARK: - Mentions
+
+    private var mentionPickerList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(client.mentionCandidates.enumerated()), id: \.element) { index, mention in
+                        mentionRow(mention, highlighted: index == mentionHighlight)
+                            .id(index)
+                            .contentShape(Rectangle())
+                            .onTapGesture { pickMention(mention) }
+                    }
+                }
+            }
+            .onChange(of: mentionHighlight) { _, index in proxy.scrollTo(index) }
+        }
+        .opacity(mentionRowsAreCurrent ? 1 : 0.55)
+        .frame(height: min(CGFloat(client.mentionCandidates.count) * 26 + 8, 220))
+        .padding(4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.color("line"), lineWidth: 0.5))
+    }
+
+    private func mentionRow(_ mention: RemoteMention, highlighted: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: NativePeerComposerState.mentionIconName(mention))
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-muted"))
+                .frame(width: 16)
+            Text(mention.name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.color("fg"))
+                .lineLimit(1)
+            if let detail = mention.detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(RoundedRectangle(cornerRadius: 6).fill(highlighted ? theme.color("accent").opacity(0.18) : .clear))
+    }
+
+    /// Opens, re-queries or closes the picker for the `@` token at the caret.
+    private func reconcileMentionPicker() {
+        guard sessionOpen, composerFocused, config?.supportsMentions == true, let caret,
+              let token = NativePeerComposerState.activeMentionToken(in: client.draft as NSString, caret: caret)
+        else { return closeMentionPicker() }
+        // Opening asks at once with the bare query, which refreshes the
+        // host's file listing; the typed query follows after the debounce.
+        if mentionTokenStart == nil { client.searchMentions("") }
+        mentionTokenStart = token.start
+        mentionQuery = token.query
+    }
+
+    private func closeMentionPicker() {
+        mentionTokenStart = nil
+        mentionQuery = nil
+    }
+
+    private func handleMentionKey(_ press: KeyPress) -> KeyPress.Result {
+        let candidates = client.mentionCandidates
+        guard mentionTokenStart != nil, !candidates.isEmpty else { return .ignored }
+        switch press.key {
+        case .upArrow: mentionHighlight = max(0, mentionHighlight - 1)
+        case .downArrow: mentionHighlight = min(candidates.count - 1, mentionHighlight + 1)
+        case .escape: closeMentionPicker()
+        default:
+            // Cmd+Return sends and Shift+Return adds a line, even with the picker open.
+            guard press.modifiers.isDisjoint(with: [.command, .shift]) else { return .ignored }
+            pickMention(candidates[min(mentionHighlight, candidates.count - 1)])
+        }
+        return .handled
+    }
+
+    /// Rows answering an older query stay up, dimmed, until the host
+    /// answers this one, and can't be picked meanwhile.
+    private var mentionRowsAreCurrent: Bool { client.mentionCandidatesQuery == mentionQuery }
+
+    private func pickMention(_ mention: RemoteMention) {
+        guard mentionRowsAreCurrent, let start = mentionTokenStart, let caret else { return }
+        let completed = NativePeerComposerState.completingToken(
+            "@" + mention.name, in: client.draft, tokenStart: start, caret: caret)
+        closeMentionPicker()
+        let withoutToken = (client.draft as NSString)
+            .replacingCharacters(in: NSRange(location: start, length: max(0, caret - start)), with: "")
+        if let refusal = client.addMention(mention, in: withoutToken) { return showNotice(refusal) }
         client.draft = completed.text
         selection = TextSelection(insertionPoint: String.Index(utf16Offset: completed.caret, in: completed.text))
     }
@@ -617,6 +800,7 @@ private struct NativePeerComposer: View {
             }
             Spacer(minLength: 0)
             if let usage = config?.usage { contextUsageButton(usage) }
+            if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }
             if let chipState, let config {
                 chipRow(chipState: chipState, config: config)
@@ -629,6 +813,7 @@ private struct NativePeerComposer: View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
             if let usage = config?.usage { contextUsageButton(usage) }
+            if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }
             Spacer(minLength: 0)
             if let chipState, let config {
@@ -646,6 +831,13 @@ private struct NativePeerComposer: View {
             }
             actionButton
         }
+    }
+
+    private var micButton: some View {
+        ACPDictationMicButton(
+            dictation: dictation, installedLocales: installedDictationLocales,
+            selectedLocale: dictationLocale, onSelectLocale: onSelectDictationLocale)
+        .disabled(!sessionOpen)
     }
 
     private var showsTakeOver: Bool {
@@ -666,7 +858,7 @@ private struct NativePeerComposer: View {
                 case .stop: client.stopSelected()
                 default:
                     guard !client.isPromptPending else { return }
-                    client.sendPrompt(intent: primarySubmitIntent(
+                    send(primarySubmitIntent(
                         for: action,
                         optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
                 }
@@ -675,10 +867,10 @@ private struct NativePeerComposer: View {
                 switch item {
                 case .queue:
                     guard !client.isPromptPending else { return }
-                    client.sendPrompt(intent: .auto)
+                    send(.auto)
                 case .steer:
                     guard !client.isPromptPending else { return }
-                    client.sendPrompt(intent: .steer)
+                    send(.steer)
                 case .stop: client.stopSelected()
                 }
             },

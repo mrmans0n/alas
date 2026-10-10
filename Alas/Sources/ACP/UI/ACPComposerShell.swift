@@ -465,8 +465,7 @@ struct ACPComposer: View {
                 // a language change made there would leave the running
                 // session transcribing under its original locale while the
                 // mic menu already shows the new one — mirrors the same
-                // guard `selectDictationLocale` applies for changes made
-                // through the mic's own menu.
+                // guard the mic's own menu applies.
                 dictation.stop()
                 dictation.preferredLocaleIdentifier = newValue
             }
@@ -711,54 +710,13 @@ struct ACPComposer: View {
     }
 
     private var micButton: some View {
-        Button {
-            dismissNextPromptOffer()
-            dictation.toggle()
-        } label: {
-            Image(systemName: ACPComposerControlPresentation.micIconName(for: dictation.state))
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(
-                    dictation.state == .listening
-                        ? ACPSelectChip.labelForeground(accent: theme.color("caution"), theme: theme)
-                        : theme.color("fg-muted")
-                )
-                .frame(width: 28, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(
-                            dictation.state == .listening
-                                ? theme.color("caution").opacity(0.55)
-                                : theme.color("bg-3").opacity(0.7)
-                        )
-                )
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Dictate")
-        .help(ACPComposerControlPresentation.micHelp(for: dictation.state))
-        .contextMenu {
-            ForEach(ACPComposerControlPresentation.dictationMenuItems(
-                installed: installedDictationLocales,
-                selected: dictationLocale
-            )) { item in
-                Button {
-                    selectDictationLocale(item.localeIdentifier)
-                } label: {
-                    // A checkmark prefix rather than a Toggle: these are
-                    // mutually exclusive and Toggle rows in a context menu
-                    // read as independently switchable.
-                    Text(item.isSelected ? "✓ \(item.title)" : item.title)
-                }
-            }
-        }
-    }
-
-    /// Applies a language picked from the mic's menu. Any active dictation
-    /// stops first, so a session never keeps running under a language the
-    /// menu no longer shows as current.
-    private func selectDictationLocale(_ identifier: String) {
-        dictation.stop()
-        onSelectDictationLocale(identifier)
+        ACPDictationMicButton(
+            dictation: dictation,
+            installedLocales: installedDictationLocales,
+            selectedLocale: dictationLocale,
+            onWillToggle: dismissNextPromptOffer,
+            onSelectLocale: onSelectDictationLocale
+        )
     }
 
     private var attachButton: some View {
