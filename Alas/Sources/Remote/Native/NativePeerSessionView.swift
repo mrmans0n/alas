@@ -388,6 +388,9 @@ private struct NativePeerComposer: View {
         .onChange(of: client.draft) { _, _ in reconcileSlashPicker() }
         .onChange(of: selection) { _, _ in reconcileSlashPicker() }
         .onChange(of: config?.availableCommands) { _, _ in reconcileSlashPicker() }
+        .onChange(of: composerFocused) { _, focused in
+            if !focused { slashTokenStart = nil }
+        }
     }
 
     private var composerPill: some View {
@@ -512,7 +515,7 @@ private struct NativePeerComposer: View {
     /// the way the local composer's text view does.
     private func reconcileSlashPicker() {
         let suggestions = NativePeerComposerState.slashSuggestions(from: config)
-        guard sessionOpen, !suggestions.isEmpty, let caret,
+        guard sessionOpen, composerFocused, !suggestions.isEmpty, let caret,
               let token = ACPSlashCommand.activeToken(in: client.draft as NSString, caret: caret)
         else {
             slashTokenStart = nil
@@ -532,8 +535,8 @@ private struct NativePeerComposer: View {
         case .downArrow: slashPicker.moveDown()
         case .escape: slashTokenStart = nil
         default:
-            // Cmd+Return sends, even with the picker open.
-            guard !press.modifiers.contains(.command), let suggestion = slashPicker.selected() else { return .ignored }
+            // Cmd+Return sends and Shift+Return adds a line, even with the picker open.
+            guard press.modifiers.isDisjoint(with: [.command, .shift]), let suggestion = slashPicker.selected() else { return .ignored }
             pick(suggestion)
         }
         return .handled
