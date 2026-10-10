@@ -3015,12 +3015,17 @@ final class ACPSession: ObservableObject, Identifiable {
         for index in queue.indices where newlyUncertain.contains(queue[index].id) {
             queue[index].awaitingInterruptionResume = true
         }
-        guard !deliveredQueuedPromptIDs.isEmpty else { return false }
+        guard queue.contains(where: \.deliveryUncertain) else { return false }
+        // A cached session may have received its reply after hydration, or
+        // been created without hydrating at all.
+        let delivered = deliveredQueuedPromptIDs.union(
+            QueuedPrompt.deliveredRecordedPromptIDs(in: queue, liveTranscript: transcript.messages))
+        guard !delivered.isEmpty else { return false }
         let count = queue.count
         queue.removeAll { item in
             item.deliveryUncertain
                 && item.lastError == QueuedPrompt.deliveryUncertaintyMessage
-                && deliveredQueuedPromptIDs.contains(item.id)
+                && delivered.contains(item.id)
                 && (newlyUncertain.contains(item.id) || item.dispatchedBrokerGeneration != nil)
         }
         guard queue.count != count else { return false }
