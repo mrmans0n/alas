@@ -487,73 +487,29 @@ private struct NativePeerComposer: View {
             }
             .frame(minHeight: 44, maxHeight: 140)
 
-            HStack(spacing: 8) {
-                if online, transcript.epoch != nil, !transcript.isClosed, !transcript.canDrive {
-                    Button("Take over") { client.takeOver() }
-                        .buttonStyle(PeerChipButtonStyle(theme: theme))
-                } else if canDrive {
-                    shortcutHint
-                }
-                Spacer(minLength: 0)
-                if let usage = config?.usage { contextUsageButton(usage) }
-                if dictation.state != .unavailable {
-                    ACPDictationMicButton(
-                        dictation: dictation, installedLocales: installedDictationLocales,
-                        selectedLocale: dictationLocale, onSelectLocale: onSelectDictationLocale)
-                    .disabled(!sessionOpen)
-                }
-                if acceptsImages { attachButton }
-                if let chipState, let config {
-                    chipRow(chipState: chipState, config: config)
-                }
-                ACPComposerActionButton(
-                    action: action,
-                    onPrimary: {
-                        switch action {
-                        case .stop: client.stopSelected()
-                        default:
-                            guard !client.isPromptPending else { return }
-                            send(primarySubmitIntent(
-                                for: action,
-                                optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
-                        }
-                    },
-                    onMenu: { item in
-                        switch item {
-                        case .queue:
-                            guard !client.isPromptPending else { return }
-                            send(.auto)
-                        case .steer:
-                            guard !client.isPromptPending else { return }
-                            send(.steer)
-                        case .stop: client.stopSelected()
-                        }
-                    },
-                    onSchedule: { _ in },
-                    queueBadgeCount: queueCount,
-                    nativeSteering: config?.supportsSteering == true,
-                    showsSchedule: false
-                )
-                .disabled(!sessionOpen)
-                .background {
-                    // Cmd+Return submits only; it must never reach Stop, which
-                    // the primary button shows while a turn runs on an empty draft.
-                    Button("") {
-                        guard sessionOpen, !client.isPromptPending,
-                              let intent = primarySubmitIntent(for: action, optionPressed: false)
-                        else { return }
-                        send(intent)
-                    }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .accessibilityHidden(true)
-                }
+            ViewThatFits(in: .horizontal) {
+                toolbar(showShortcuts: true)
+                toolbar(showShortcuts: false)
+                compactToolbar
             }
             .padding(.horizontal, 2)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: composerFocused)
+        .background {
+            // Cmd+Return submits only; it must never reach Stop, which
+            // the primary button shows while a turn runs on an empty draft.
+            Button("") {
+                guard sessionOpen, !client.isPromptPending,
+                      let intent = primarySubmitIntent(for: action, optionPressed: false)
+                else { return }
+                send(intent)
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
         .dropDestination(for: URL.self) { urls, _ in
             guard acceptsImages, sessionOpen else { return false }
             attachImages(at: urls)
@@ -833,24 +789,130 @@ private struct NativePeerComposer: View {
                                      lastTurnQuota: local.lastTurn, sessionQuotaTotal: local.cumulative)
     }
 
-    @ViewBuilder
-    private func chipRow(chipState: ACPChipState, config: RemoteSessionConfig) -> some View {
-        let chips = ACPComposerChips(
+    /// Same width ladder as the local composer: every chip with the shortcut
+    /// hint, then without it, then the model chip plus an Options popover.
+    private func toolbar(showShortcuts: Bool) -> some View {
+        HStack(spacing: 8) {
+            if showsTakeOver {
+                takeOverButton
+            } else if canDrive, showShortcuts {
+                shortcutHint
+            }
+            Spacer(minLength: 0)
+            if let usage = config?.usage { contextUsageButton(usage) }
+            if dictation.state != .unavailable { micButton }
+            if acceptsImages { attachButton }
+            if let chipState, let config {
+                chipRow(chipState: chipState, config: config)
+            }
+            actionButton
+        }
+    }
+
+    private var compactToolbar: some View {
+        HStack(spacing: 8) {
+            if showsTakeOver { takeOverButton }
+            if let usage = config?.usage { contextUsageButton(usage) }
+            if dictation.state != .unavailable { micButton }
+            if acceptsImages { attachButton }
+            Spacer(minLength: 0)
+            if let chipState, let config {
+                Group {
+                    if let model = chipState.models {
+                        chips(chipState: chipState, config: config).modelChip(model)
+                            .frame(maxWidth: 160, alignment: .trailing)
+                    }
+                    ACPComposerOptionsButton(
+                        chips: chips(chipState: chipState, config: config),
+                        autoRun: autoRun(chipState: chipState, config: config)
+                    )
+                }
+                .disabled(!sessionOpen)
+            }
+            actionButton
+        }
+    }
+
+    private var micButton: some View {
+        ACPDictationMicButton(
+            dictation: dictation, installedLocales: installedDictationLocales,
+            selectedLocale: dictationLocale, onSelectLocale: onSelectDictationLocale)
+        .disabled(!sessionOpen)
+    }
+
+    private var showsTakeOver: Bool {
+        online && transcript.epoch != nil && !transcript.isClosed && !transcript.canDrive
+    }
+
+    private var takeOverButton: some View {
+        Button("Take over") { client.takeOver() }
+            .buttonStyle(PeerChipButtonStyle(theme: theme))
+            .fixedSize()
+    }
+
+    private var actionButton: some View {
+        ACPComposerActionButton(
+            action: action,
+            onPrimary: {
+                switch action {
+                case .stop: client.stopSelected()
+                default:
+                    guard !client.isPromptPending else { return }
+                    send(primarySubmitIntent(
+                        for: action,
+                        optionPressed: NSApp.currentEvent?.modifierFlags.contains(.option) == true) ?? .auto)
+                }
+            },
+            onMenu: { item in
+                switch item {
+                case .queue:
+                    guard !client.isPromptPending else { return }
+                    send(.auto)
+                case .steer:
+                    guard !client.isPromptPending else { return }
+                    send(.steer)
+                case .stop: client.stopSelected()
+                }
+            },
+            onSchedule: { _ in },
+            queueBadgeCount: queueCount,
+            nativeSteering: config?.supportsSteering == true,
+            showsSchedule: false
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+        .disabled(!sessionOpen)
+    }
+
+    private func chips(chipState: ACPChipState, config: RemoteSessionConfig) -> ACPComposerChips {
+        ACPComposerChips(
             theme: theme, chipState: chipState,
             configOptions: NativePeerComposerState.configOptions(from: config),
             onSelect: { client.selectChip($0, itemId: $1) },
             onConfigValue: { client.setConfigValue(configId: $0, value: $1) })
+    }
+
+    private func autoRun(chipState: ACPChipState, config: RemoteSessionConfig) -> ACPComposerOptionsButton.AutoRun {
+        let isEnabled = config.autoRunEnabled == true
+        return .init(
+            isEnabled: isEnabled,
+            isDisabled: chipState.autoRun == .ignored || !sessionOpen,
+            help: chipState.autoRun == .ignored
+                ? "Auto-run has no effect — this agent doesn't request permissions"
+                : (isEnabled
+                    ? "Auto-run is ON — agent runs tools without asking"
+                    : "Click to skip permission prompts"),
+            toggle: { client.toggleAutoRun() })
+    }
+
+    @ViewBuilder
+    private func chipRow(chipState: ACPChipState, config: RemoteSessionConfig) -> some View {
+        let chips = chips(chipState: chipState, config: config)
+        let autoRun = autoRun(chipState: chipState, config: config)
         HStack(spacing: 8) {
             chips.fastModeToggle()
-            ACPAutoRunToggle(
-                isEnabled: config.autoRunEnabled == true,
-                isDisabled: chipState.autoRun == .ignored || !sessionOpen,
-                help: chipState.autoRun == .ignored
-                    ? "Auto-run has no effect — this agent doesn't request permissions"
-                    : (config.autoRunEnabled == true
-                        ? "Auto-run is ON — agent runs tools without asking"
-                        : "Click to skip permission prompts"),
-                onToggle: { client.toggleAutoRun() })
+            ACPAutoRunToggle(isEnabled: autoRun.isEnabled, isDisabled: autoRun.isDisabled,
+                             help: autoRun.help, onToggle: autoRun.toggle)
             if let thinking = chipState.thinking {
                 chips.thinkingChip(thinking).fixedSize(horizontal: true, vertical: false)
             }
