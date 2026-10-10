@@ -72,6 +72,10 @@ The 2026-10-10 standalone evaluation attempt on macOS 27 returned
 `LocalTextAppleAvailability.modelNotReady` for all 16 cases. There were no model
 outputs to assess. This is an unavailable-model result, not a successful live
 evaluation. The feature remains unavailable until the system model is ready.
+The native cleanup suite was then rerun with the evaluation environment enabled;
+its held-out test failed the availability prerequisite with `modelNotReady`.
+The other six cleanup tests passed. This confirms the native evaluation gate
+actually ran, but provides no generated-output acceptance evidence.
 
 Release remains blocked until an eligible Mac with a ready model passes:
 

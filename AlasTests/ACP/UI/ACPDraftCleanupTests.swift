@@ -153,6 +153,8 @@ struct ACPDraftCleanupTests {
         ("check this", "um check this."),
         ("check /tmp/file.", "check /tmp/file"),
         (" check this ", "check this."),
+        ("check cafe\u{301}", "check café."),
+        ("check /tmp/cafe\u{301} then inspect", "check /tmp/café then inspect."),
     ])
     func refusesUnsafeEdits(_ input: (String, String)) throws {
         let plan = try ACPDraftCleanupPlan(draft: .init(segments: [.text(input.0)]))

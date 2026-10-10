@@ -92,8 +92,11 @@ struct ACPDraftCleanupPlan: Sendable {
             candidates.append((body as NSString).replacingCharacters(in: match.range, with: ""))
         }
         return candidates.contains { candidate in
-            replacement == prefix + candidate + suffix
-                || (allowFinalPeriod && candidate.last?.isLetter == true && replacement == prefix + candidate + "." + suffix)
+            // Swift String equality accepts canonical Unicode equivalence.
+            // Draft tokens must retain their exact encoding, including paths.
+            replacement.utf8.elementsEqual((prefix + candidate + suffix).utf8)
+                || (allowFinalPeriod && candidate.last?.isLetter == true
+                    && replacement.utf8.elementsEqual((prefix + candidate + "." + suffix).utf8))
         }
     }
 
