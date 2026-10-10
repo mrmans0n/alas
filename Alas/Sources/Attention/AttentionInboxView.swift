@@ -80,7 +80,7 @@ struct AttentionInboxPresentation {
     var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
     var acknowledgeLabel: String? {
         guard !activeRows.isEmpty else { return nil }
-        return peerRows.isEmpty ? "Acknowledge all" : "Acknowledge local"
+        return peerRows.isEmpty && pluginUpdates.isEmpty ? "Acknowledge all" : "Acknowledge local"
     }
 
     /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.

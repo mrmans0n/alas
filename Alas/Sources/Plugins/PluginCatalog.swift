@@ -118,15 +118,13 @@ final class PluginCatalog {
     nonisolated static let maxDownloadBytes = 8 << 20
 
     private(set) var state: State = .idle
+    /// The last index that loaded, kept through a refresh and its failure so known updates stay listed.
+    private(set) var index: PluginCatalogIndex?
     @ObservationIgnored let fetch: @Sendable (URL) async throws -> Data
     @ObservationIgnored private var lastLoad: ContinuousClock.Instant?
 
     init(fetch: @escaping @Sendable (URL) async throws -> Data = { try await PluginCatalog.download($0) }) {
         self.fetch = fetch
-    }
-
-    var index: PluginCatalogIndex? {
-        if case .loaded(let index) = state { index } else { nil }
     }
 
     /// Loads the index unless it loaded recently; `force` always loads.
@@ -138,6 +136,7 @@ final class PluginCatalog {
             let index = try JSONDecoder().decode(PluginCatalogIndex.self, from: try await fetch(Self.indexURL))
             guard index.format == PluginCatalogIndex.supportedFormat else { throw PluginCatalogError.unsupportedFormat }
             state = .loaded(index)
+            self.index = index
             lastLoad = .now
         } catch let error as PluginCatalogError {
             state = .failed(error.description)

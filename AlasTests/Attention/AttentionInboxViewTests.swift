@@ -44,6 +44,12 @@ struct AttentionInboxViewTests {
         #expect(peerOnly.emptyTitle == nil)
         #expect(peerOnly.totalCount == 1)
         #expect(peerOnly.acknowledgeLabel == nil)
+
+        let update = PluginCatalogTests.version("1.0.0")
+        let withPluginUpdate = AttentionInboxPresentation(aggregation: local, loadError: nil,
+                                                          pluginUpdates: [(PluginCatalogTests.entry([update]), update)])
+        #expect(withPluginUpdate.totalCount == 3)
+        #expect(withPluginUpdate.acknowledgeLabel == "Acknowledge local")
     }
 
     @Test func clearingOrDisablingPeerAttentionRemovesOnlyLiveContribution() {
