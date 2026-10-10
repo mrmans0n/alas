@@ -3128,14 +3128,22 @@ struct ACPSessionManagerAttachRestoreTests {
             ACPConfigOption.currentValues(in: session.availableConfigOptions))
     }
 
-    @Test("reopened session keeps a config-option mode instead of replaying the stale legacy mode")
-    func reopenedSessionKeepsConfigOptionMode() async throws {
+    @Test("reopened config-option mode replays the legacy mode only when no config value was saved", arguments: [
+        (legacyMode: "default", savedConfigMode: "auto" as String?, expectedSetMode: nil as String?),
+        (legacyMode: "auto", savedConfigMode: nil, expectedSetMode: "auto"),
+    ])
+    func reopenedConfigOptionModeRestore(
+        legacyMode: String,
+        savedConfigMode: String?,
+        expectedSetMode: String?
+    ) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
-            currentMode: "default",
-            configOptionValues: ["mode": .string("auto")]
+            currentMode: legacyMode,
+            configOptionValues: savedConfigMode.map { ["mode": .string($0)] } ?? [:]
         ))
+        let loadedMode = savedConfigMode ?? "default"
         let client = ACPMockClient()
         scriptInitialize(client)
         client.script(method: "session/load") { _ in
@@ -3147,27 +3155,28 @@ struct ACPSessionManagerAttachRestoreTests {
                     .init(id: "auto", name: "Auto"),
                 ],
                 currentModel: nil,
-                currentMode: "auto",
+                currentMode: loadedMode,
                 promptSuggestions: [],
                 configOptions: [ACPConfigOption(
                     id: "mode",
                     name: "Mode",
                     category: "mode",
-                    currentValue: "auto",
+                    currentValue: .string(loadedMode),
                     options: [
                         .init(id: "default", name: "Default"),
                         .init(id: "auto", name: "Auto"),
                     ])]
             ))
         }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
         let manager = manager(store: store, client: client)
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
-        #expect(session.availableConfigOptions.first?.currentStringValue == "auto")
+        let setModes = client.sent.compactMap { $0.params as? ACPSessionSetModeParams }.map(\.modeId)
+        #expect(setModes == (expectedSetMode.map { [$0] } ?? []))
     }
 
     @Test("reopened session preserves config edits made while load is pending")
