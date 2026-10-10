@@ -681,13 +681,16 @@ enum MentionFuzzy {
         return result
     }
 
+    /// Generated or tooling directories a non-git walk never descends into.
+    static let skippedDirectoryNames: Set<String> = [
+        ".git", "node_modules", ".build", "build", "DerivedData", ".alas",
+        ".next", "dist", "out", "target", ".venv", "venv", ".tox", ".cache",
+        "__pycache__", ".idea", ".vscode", ".superpowers",
+    ]
+
     static func collectFiles(under root: URL, limit: Int) -> [URL] {
         var out: [URL] = []
-        let skipDirs: Set<String> = [
-            ".git", "node_modules", ".build", "build", "DerivedData", ".alas",
-            ".next", "dist", "out", "target", ".venv", "venv", ".tox", ".cache",
-            "__pycache__", ".idea", ".vscode", ".superpowers",
-        ]
+        let skipDirs = skippedDirectoryNames
         guard let it = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],

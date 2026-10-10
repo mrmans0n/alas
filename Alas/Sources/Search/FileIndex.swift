@@ -71,6 +71,14 @@ actor FileIndex {
     // semantics, since a folder has no git to define them.
     static let folderFileLimit = 50_000
 
+    /// Prunes the same names as the local walk, so generated trees cannot use up the cap.
+    static let remoteFolderListCommand: String = {
+        let pruned = MentionFuzzy.skippedDirectoryNames.sorted()
+            .map { "-name \(SSHCommand.shellQuote($0))" }
+            .joined(separator: " -o ")
+        return "find . \\( -name '.*' ! -name . -o \(pruned) \\) -prune -o -type f -print | head -n \(folderFileLimit)"
+    }()
+
     private func folderFilePaths(_ worktree: URL, remoteHost: String?) async throws -> [String] {
         if let remoteHost {
             let result = try await RemoteExec.run(
@@ -78,7 +86,7 @@ actor FileIndex {
                 cwd: worktree.path,
                 // Newline-delimited because BSD head has no -z; a filename
                 // containing a newline is split, which only mislists that file.
-                command: "find . -name '.*' ! -name . -prune -o -type f -print | head -n \(Self.folderFileLimit)"
+                command: Self.remoteFolderListCommand
             )
             guard result.exitCode == 0 else {
                 throw NSError(
@@ -91,7 +99,8 @@ actor FileIndex {
                 .split(separator: "\n", omittingEmptySubsequences: true)
                 .map { $0.hasPrefix("./") ? String($0.dropFirst(2)) : String($0) }
         }
-        let root = worktree.standardizedFileURL.path + "/"
+        let rootPath = worktree.standardizedFileURL.path
+        let root = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         return MentionFuzzy.collectFiles(under: worktree, limit: Self.folderFileLimit)
             .filter { !$0.hasDirectoryPath }
             .compactMap { url in

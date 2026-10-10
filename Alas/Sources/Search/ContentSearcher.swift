@@ -297,12 +297,13 @@ final class ContentSearcher: Sendable {
                 host: host,
                 cwd: worktree.absolutePath.path,
                 query: query,
-                options: options
+                options: options,
+                noIndex: worktree.isFolder
             )
             result = try await Process.run(invocation.executable, args: invocation.args, timeout: 60)
         } else {
             result = try await Process.git(
-                RemoteContentSearch.gitGrepArgs(query: query, options: options),
+                RemoteContentSearch.gitGrepArgs(query: query, options: options, noIndex: worktree.isFolder),
                 cwd: worktree.absolutePath,
                 remoteHost: worktree.remoteHost,
                 usesRemoteHostRegistry: worktree.usesRemoteHostRegistry,
