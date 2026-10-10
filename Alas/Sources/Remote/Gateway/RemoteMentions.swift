@@ -29,9 +29,11 @@ enum RemoteMentions {
         let files = filePaths.map { root.appendingPathComponent($0) }
         let directories = MentionFuzzy.pickerDirectories(
             forEntries: filePaths.map { ($0, $0.hasSuffix("/")) }, root: root)
-        // Ranked past the limit so missing files don't leave the list short.
-        let ranked = MentionFuzzy.rank(files: files + directories, query: query, limit: fileLimit * 3, relativeTo: root)
-        let fileRows = ranked.filter(fileExists).prefix(fileLimit)
+        // Everything is ranked and checked lazily in rank order, so missing
+        // files never leave the list short.
+        let candidates = files + directories
+        let ranked = MentionFuzzy.rank(files: candidates, query: query, limit: candidates.count, relativeTo: root)
+        let fileRows = ranked.lazy.filter(fileExists).prefix(fileLimit)
             .compactMap { url -> RemoteMention? in
                 guard url.path.count > root.path.count else { return nil }
                 let path = String(url.path.dropFirst(root.path.count + 1))

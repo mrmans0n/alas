@@ -36,13 +36,22 @@ struct FileIndexTests {
         #expect(paths == ["a.txt", "nested/b.txt"])
     }
 
+    /// `App.swift` and `Sources/App.swift`, both staged (listed as tracked),
+    /// built once per run and copied per test.
+    private static let symbolTemplate = Task { () throws -> URL in
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("alas-fi-symbols-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try "func gone() {}\n".write(to: dir.appendingPathComponent("App.swift"), atomically: true, encoding: .utf8)
+        try "func run() {}\n".write(to: dir.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["init", "-q"], cwd: dir)
+        _ = try await Process.git(["add", "."], cwd: dir)
+        return dir
+    }
+
     @Test func symbolDrillDownSkipsTrackedFilesDeletedFromTheWorkingTree() async throws {
-        let repo = try await makeRepo()
+        let repo = FileManager.default.temporaryDirectory.appendingPathComponent("alas-fi-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: try await Self.symbolTemplate.value, to: repo)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try write("func gone() {}\n", to: repo.appendingPathComponent("App.swift"))
-        try write("func run() {}\n", to: repo.appendingPathComponent("Sources/App.swift"))
-        _ = try await Process.git(["add", "."], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
         // Still tracked, so still listed, and it outranks the nested file.
         try FileManager.default.removeItem(at: repo.appendingPathComponent("App.swift"))
 

@@ -367,6 +367,9 @@ final class AppState {
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
+    /// Session candidates for each peer-viewed session's `@` picker, loaded
+    /// when the picker opens and reused while its query changes.
+    @ObservationIgnored private var remoteMentionSessions: [String: [ACPSessionMentionCandidate]] = [:]
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
     /// affected data visible instead of silently treating it as empty.
@@ -16514,9 +16517,11 @@ extension AppState: RemoteSessionsProvider {
     func remoteMentionCandidates(sessionId: String, query: String) async -> [RemoteMention] {
         guard case .found(let worktree) = remoteWorktreeContext(sessionId: sessionId) else { return [] }
         let root = worktree.path
-        // A bare `@` opens the picker: list afresh then, as the local picker
-        // does on open, and reuse that listing while the query grows.
-        if query.trimmingCharacters(in: .whitespaces).isEmpty {
+        // A bare `@` opens the picker: list files and sessions afresh then,
+        // as the local picker does on open, and reuse both while the query
+        // grows.
+        let opening = query.trimmingCharacters(in: .whitespaces).isEmpty
+        if opening {
             await fileIndex.invalidate(forWorktreePath: root)
         }
         var fileSymbols: [SymbolEntry] = []
@@ -16524,7 +16529,13 @@ extension AppState: RemoteSessionsProvider {
             fileSymbols = await ACPSymbolMentionSource.symbols(ofFileMatching: file, root: root, fileIndex: fileIndex)
         }
         let paths = ((try? await fileIndex.entries(forWorktreePath: root)) ?? []).map(\.relativePath)
-        let sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+        let sessions: [ACPSessionMentionCandidate]
+        if !opening, let cached = remoteMentionSessions[sessionId] {
+            sessions = cached
+        } else {
+            sessions = await acpSessionMentionCandidates(projectId: worktree.projectId, excluding: sessionId)
+            remoteMentionSessions[sessionId] = sessions
+        }
         // An SSH worktree's files can't be checked without a round trip per
         // file; a missing one still fails safely, as a dangling link.
         return RemoteMentions.candidates(
