@@ -181,6 +181,19 @@ struct ProjectsManagerTests {
         #expect(mgr.projects.isEmpty)
     }
 
+    /// Rows are keyed by path, so a folder cannot share a path with a git project.
+    @Test func folderProjectRefusesAPathAnotherProjectHolds() async throws {
+        let repo = try await makeRepo(name: "shared")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        _ = try await mgr.addProject(path: repo, displayName: "repo", color: "#fff")
+
+        await #expect(throws: (any Error).self) {
+            try await mgr.addProject(path: repo, displayName: "folder", icon: .default(color: "#fff"), kind: .folder)
+        }
+        #expect(mgr.projects.count == 1)
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }

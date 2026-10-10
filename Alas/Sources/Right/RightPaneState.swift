@@ -698,6 +698,7 @@ final class RightPaneState: GGSplitCommitServicing {
         if isFolder {
             if worktree.path.isRemoteAlasPath {
                 startRemoteHelperWatching()
+                startRemotePolling()
             } else {
                 watcher.start()
             }
@@ -1118,10 +1119,7 @@ final class RightPaneState: GGSplitCommitServicing {
         session.onEvent = { [weak self] _ in
             self?.remoteEventDebouncer.poke()
         }
-        // ponytail: a remote folder refreshes only on helper events; its
-        // polling fallback is git status, so there is none without the helper.
         session.onAvailabilityChanged = { [weak self] _ in
-            guard self?.isFolder == false else { return }
             self?.startRemotePolling()
         }
         remoteHelperSession = session
@@ -1148,6 +1146,11 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     private func remotePollTick() async {
+        // A folder has no git status to diff; re-listing its tree is the poll.
+        if isFolder {
+            await refresh()
+            return
+        }
         let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
         let status = try? await Process.git(["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktree.path)
         guard let status, !RemoteExec.isConnectionFailure(exitCode: status.exitCode) else {
