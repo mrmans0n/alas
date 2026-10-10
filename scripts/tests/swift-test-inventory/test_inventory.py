@@ -485,7 +485,7 @@ class InventoryTests(unittest.TestCase):
                         64, ["xcresulttool"], stderr="missing Info.plist")), patch("sys.stdout", output):
                 self.assertFalse(self.module.run_batch(plan, Path(directory), "ordinary", 0))
             self.assertIn("Test a() started.", output.getvalue())
-            self.assertIn("Timed out after 360 seconds", output.getvalue())
+            self.assertIn("Timed out after 480 seconds", output.getvalue())
             self.assertIn("AlasTests/A", output.getvalue())
             self.assertLess(output.getvalue().count("old build noise"), 100)
 

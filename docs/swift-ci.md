@@ -41,7 +41,7 @@ The build runner publishes compiled products and the test plan, then finishes.
 Four dependent test runners balance all ten ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
-has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
+has a wall-clock deadline, including startup and teardown: 480 seconds ordinary,
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
 locally in 229 seconds (286 seconds for its three-suite invocation), and the
@@ -270,7 +270,10 @@ suite until measured. Without `suites` the planner keeps the previous
 round-robin behavior.
 
 Ten batches preserve room for Xcode startup and result finalization within the
-360-second watchdog. In October 2026, an eight-batch invocation passed all
+ordinary watchdog, raised from 360 to 480 seconds after
+[run 38039465766](https://github.com/mrmans0n/alas/actions/runs/38039465766)
+timed out a shard's cold first invocation about 85% through a batch that took
+193 seconds on its rerun; no test was hung. In October 2026, an eight-batch invocation passed all
 1,708 definitions in 320.530 seconds but was interrupted before its result
 bundle finished. Replaying the 12,807-definition inventory with ten batches
 reduces the largest ordinary batch from 1,933 to 1,559 definitions; coverage,

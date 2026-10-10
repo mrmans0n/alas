@@ -5350,11 +5350,13 @@ struct ACPSessionManagerAttachRestoreTests {
 
         runner.flushQueueIfIdle()
         try await waitUntil {
+            // The runner is dropped before its connection shuts down, so
+            // wait for the shutdown too.
             manager.runners[session.id] == nil
                 && session.setupState == .needsAuth(methods: [method], reason: "login required")
+                && client.shutdownCount == 1
         }
 
-        #expect(client.shutdownCount == 1)
         #expect(client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"])
         #expect(session.queue.count == 1)
         #expect(session.queue[0].status == .pending)
