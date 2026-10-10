@@ -92,6 +92,9 @@ struct ACPInputField: NSViewRepresentable {
         let coord = context.coordinator
         let cleanup = actions.draftCleanup
         textView.onDraftCleanupInvalidated = { [weak cleanup] in cleanup?.invalidate() }
+        actions.canCleanUpDraft = { [weak coord] in
+            (coord?.textView as? ACPNSTextView)?.canCleanUpDraft == true
+        }
         actions.cleanUpDraft = { [weak coord, weak cleanup] in
             guard let textView = coord?.textView as? ACPNSTextView, let cleanup else { return }
             guard LocalTextAppleAvailability.current().isAvailable else {

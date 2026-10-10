@@ -57,6 +57,13 @@ was unavailable; this run does not validate ZMX. `git diff --check` also passed.
 Independent code review found no remaining concrete issues after preservation
 and stale-generation regressions were corrected. CI has not been run.
 
+The PR review then added byte-preserving Unicode comparisons and disabled
+cleanup for whitespace/chip-only drafts. Both regressions failed before their
+fixes. The same focused native command passed 129 tests in three suites after
+the fixes (128 passed and the opt-in evaluation skipped). Full SwiftFormat lint
+also passed. The first CI run stopped at formatting; its downstream coverage
+failure had no test-plan artifact. Formatting was corrected for the next push.
+
 ## Live evaluation and release gates
 
 `ACPDraftCleanupTests.evaluateHeldOutDraft` contains 16 held-out typed/dictated

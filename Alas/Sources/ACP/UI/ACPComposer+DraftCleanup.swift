@@ -12,9 +12,19 @@ struct ACPDraftCleanupEditorSnapshot {
 extension ACPNSTextView {
     var canCleanUpDraft: Bool {
         let state = nextPromptInputState
-        return isEditable && !state.hasMarkedText && !state.isDictating
+        guard isEditable && !state.hasMarkedText && !state.isDictating
             && !state.isPickerPresented && !state.hasPendingInput && !state.isInputBlocked
-            && !isWritingToolsActive
+            && !isWritingToolsActive else { return false }
+        let source = attributedString()
+        var hasEditableText = false
+        source.enumerateAttributes(in: NSRange(location: 0, length: source.length)) { attributes, range, stop in
+            if !attributes.isComposerChip,
+               !source.attributedSubstring(from: range).string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                hasEditableText = true
+                stop.pointee = true
+            }
+        }
+        return hasEditableText
     }
 
     func draftCleanupSnapshot() throws -> ACPDraftCleanupEditorSnapshot {

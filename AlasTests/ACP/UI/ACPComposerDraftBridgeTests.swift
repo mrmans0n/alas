@@ -8,6 +8,20 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("cleanup eligibility excludes chips and whitespace",
+          arguments: [NSAttributedString.Key.attachmentURI, .imageAttachmentURI, .commandChipName,
+                      .upstreamReference, .pathReference, .pastedTextOrdinal])
+    func cleanupNeedsEditableText(_ chipKey: NSAttributedString.Key) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = " \n"
+        #expect(!textView.canCleanUpDraft)
+        textView.textStorage?.append(NSAttributedString(string: "protected", attributes: [chipKey: "chip"]))
+        #expect(!textView.canCleanUpDraft)
+        textView.textStorage?.append(NSAttributedString(string: " check this"))
+        #expect(textView.canCleanUpDraft)
+    }
+
     @Test("accepted cleanup is one undoable edit that preserves chips and never submits")
     func cleanupAcceptanceIsUndoable() throws {
         var submissions = 0

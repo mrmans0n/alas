@@ -176,7 +176,8 @@ final class ACPDraftCleanupController {
         let job = Task { [weak self] in
             let texts = await generate(plan)
             guard let self, self.requestID == id, !Task.isCancelled else { return }
-            guard self.isCurrent() else { self.invalidate(); return }
+            guard self.isCurrent() else { self.invalidate()
+            return }
             self.isGenerating = false
             guard let texts, let proposed = try? plan.validatedDraft(texts: texts) else {
                 self.notice = ACPDraftCleanupFailure.unsafeResult.localizedDescription
@@ -231,7 +232,6 @@ final class ACPDraftCleanupController {
         isCurrent = { false }
         apply = { _ in false }
     }
-
 }
 
 enum ACPDraftCleanupGenerator {

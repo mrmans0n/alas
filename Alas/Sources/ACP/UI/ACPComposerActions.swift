@@ -19,6 +19,7 @@ enum ACPMessageQuote {
 @MainActor
 final class ACPComposerActions: ObservableObject {
     let draftCleanup = ACPDraftCleanupController()
+    var canCleanUpDraft: (() -> Bool)?
     var cleanUpDraft: (() -> Void)?
     var submitWithIntent: ((ACPSubmitIntent) -> Void)?
     var insertQuote: ((String) -> Void)?

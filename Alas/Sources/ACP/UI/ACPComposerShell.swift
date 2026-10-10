@@ -757,7 +757,7 @@ struct ACPComposer: View {
               : (LocalTextAppleIntelligence.isAvailable
                  ? "Clean up draft on device. Review changes before accepting."
                  : ACPDraftCleanupFailure.unavailable.localizedDescription))
-        .disabled(!actions.draftCleanup.isGenerating && (!hasText || !LocalTextAppleIntelligence.isAvailable
+        .disabled(!actions.draftCleanup.isGenerating && (actions.canCleanUpDraft?() != true || !LocalTextAppleIntelligence.isAvailable
                   || dictation.state == .preparing || dictation.state == .listening
                   || actions.draftCleanup.isPresented))
     }

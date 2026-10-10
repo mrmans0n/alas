@@ -196,5 +196,6 @@ private actor CleanupGenerationGate {
         if continuation != nil { return }
         await withCheckedContinuation { startedContinuation = $0 }
     }
-    func resume(_ texts: [String]) { continuation?.resume(returning: texts); continuation = nil }
+    func resume(_ texts: [String]) { continuation?.resume(returning: texts)
+    continuation = nil }
 }
