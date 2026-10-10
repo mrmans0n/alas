@@ -261,28 +261,38 @@ struct ACPComposer: View {
     }
 
     var body: some View {
-        switch placement {
-        case .inFlow:
-            VStack(spacing: 0) {
-                noticeBanner
-                composerRow
-                    .padding(.top, 28)
-                    .padding(
-                        .bottom,
-                        ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 0)
+        Group {
+            switch placement {
+            case .inFlow:
+                VStack(spacing: 0) {
+                    noticeBanner
+                    composerRow
+                        .padding(.top, 28)
+                        .padding(
+                            .bottom,
+                            ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 0)
+                        )
+                }
+                .frame(maxWidth: .infinity)
+            case .bottom:
+                GeometryReader { proxy in
+                    composerLayout(
+                        bottomInset: ACPComposerPlacement.bottomInset(
+                            for: placement,
+                            containerHeight: proxy.size.height
+                        )
                     )
-            }
-            .frame(maxWidth: .infinity)
-        case .bottom:
-            GeometryReader { proxy in
-                composerLayout(
-                    bottomInset: ACPComposerPlacement.bottomInset(
-                        for: placement,
-                        containerHeight: proxy.size.height
-                    )
-                )
+                }
             }
         }
+        .sheet(isPresented: Binding(
+            get: { actions.draftCleanup.isPresented && !actions.draftCleanup.isGenerating },
+            set: { if !$0 { actions.draftCleanup.dismiss() } }
+        )) {
+            ACPDraftCleanupReview(controller: actions.draftCleanup)
+        }
+        .onDisappear { actions.draftCleanup.dismiss() }
+        .onChange(of: session.id) { actions.draftCleanup.dismiss() }
     }
 
     /// Live ACP session-notice banner. Inserted as a sibling immediately
@@ -423,6 +433,7 @@ struct ACPComposer: View {
                     }
                 },
                 filesProvider: filesProvider,
+                onDraftCleanupNotice: { composerNotice = $0 },
                 nextPromptOffer: nextPromptOffer,
                 takeNextPromptOffer: takeNextPromptOffer,
                 dismissNextPromptOffer: dismissNextPromptOffer,
@@ -439,7 +450,10 @@ struct ACPComposer: View {
             .disabled(isMirror)
             .opacity(isMirror ? 0.5 : 1)
             .onChange(of: isMirror) { _, mirror in
-                if mirror { dictation.stop() }
+                if mirror {
+                    dictation.stop()
+                    actions.draftCleanup.invalidate()
+                }
             }
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
@@ -471,8 +485,10 @@ struct ACPComposer: View {
             }
             .onChange(of: composer.revision) { _, _ in
                 hasText = composer.draft.hasContent
+                actions.draftCleanup.invalidate()
             }
             .onChange(of: dictation.state) { _, state in
+                if state == .preparing || state == .listening { actions.draftCleanup.invalidate() }
                 guard case .failed(let message) = state else { return }
                 composerNotice = message
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -555,6 +571,7 @@ struct ACPComposer: View {
             contextUsageButton
             if dictation.state != .unavailable { micButton }
             attachButton
+            cleanupButton
             chips.fastModeToggle()
             autoRunToggle
             if let thinking = session.chipState.thinking {
@@ -587,6 +604,7 @@ struct ACPComposer: View {
             contextUsageButton
             if dictation.state != .unavailable { micButton }
             attachButton
+            cleanupButton
             Spacer(minLength: 0)
             if let models = session.chipState.models {
                 chips.modelChip(models)
@@ -717,6 +735,31 @@ struct ACPComposer: View {
             onWillToggle: dismissNextPromptOffer,
             onSelectLocale: onSelectDictationLocale
         )
+    }
+
+    private var cleanupButton: some View {
+        Button {
+            composerNotice = nil
+            if actions.draftCleanup.isGenerating {
+                actions.draftCleanup.dismiss()
+            } else {
+                actions.cleanUpDraft?()
+            }
+        } label: {
+            Image(systemName: actions.draftCleanup.isGenerating ? "xmark.circle" : "text.badge.checkmark")
+                .font(.system(size: 13))
+                .foregroundStyle(theme.color("fg-muted"))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(actions.draftCleanup.isGenerating ? "Cancel draft cleanup" : "Clean up draft")
+        .help(actions.draftCleanup.isGenerating ? "Cleaning up on device. Click to cancel."
+              : "Clean up draft on device. Review changes before accepting. Requires Apple Intelligence on macOS 26 or later.")
+        // Check model readiness afresh on each explicit request. A cached
+        // unavailable result must not lock an idle composer out after readiness changes.
+        .disabled(!actions.draftCleanup.isGenerating && (actions.canCleanUpDraft?() != true
+                  || dictation.state == .preparing || dictation.state == .listening
+                  || actions.draftCleanup.isPresented))
     }
 
     private var attachButton: some View {

@@ -8,6 +8,131 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("cleanup preserves the editing selection through filler removal and punctuation",
+          arguments: [(NSRange(location: 6, length: 0), NSRange(location: 3, length: 0)),
+                      (NSRange(location: 3, length: 5), NSRange(location: 0, length: 5)),
+                      (NSRange(location: 1, length: 0), NSRange(location: 0, length: 0)),
+                      (NSRange(location: 13, length: 0), NSRange(location: 11, length: 0))])
+    func cleanupPreservesSelection(_ input: (NSRange, NSRange)) throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "um check this"
+        textView.setSelectedRange(input.0)
+        let snapshot = try textView.draftCleanupSnapshot()
+        #expect(textView.applyDraftCleanup(snapshot, texts: ["check this."]))
+        #expect(textView.selectedRange() == input.1)
+    }
+
+    @Test("cleanup eligibility excludes chips and whitespace",
+          arguments: [NSAttributedString.Key.attachmentURI, .imageAttachmentURI, .commandChipName,
+                      .upstreamReference, .pathReference, .pastedTextOrdinal])
+    func cleanupNeedsEditableText(_ chipKey: NSAttributedString.Key) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = " \n"
+        #expect(!textView.canCleanUpDraft)
+        textView.textStorage?.append(NSAttributedString(string: "protected", attributes: [chipKey: "chip"]))
+        #expect(!textView.canCleanUpDraft)
+        textView.textStorage?.append(NSAttributedString(string: " check this"))
+        #expect(textView.canCleanUpDraft)
+    }
+
+    @Test("accepted cleanup is one undoable edit that preserves chips and never submits")
+    func cleanupAcceptanceIsUndoable() throws {
+        var submissions = 0
+        let (textView, coordinator, window) = makeSlashTextView { _, _, _, _, _ in
+            submissions += 1
+            return true
+        }
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let image = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup-\(UUID()).png")
+        try pngBytes.write(to: image)
+        defer { try? FileManager.default.removeItem(at: image) }
+        let original = ACPComposerDraft(segments: [
+            .text("um check "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .image(uri: image.absoluteString, mimeType: "image/png"),
+            .text(" but do not push"),
+        ])
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: original))
+        let snapshot = try textView.draftCleanupSnapshot()
+        try FileManager.default.removeItem(at: image)
+        #expect(textView.applyDraftCleanup(snapshot, texts: ["check ", " but do not push."]))
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == .init(segments: [
+            .text("check "), original.segments[1], original.segments[2], .text(" but do not push."),
+        ]))
+        coordinator.editorUndoManager.undo()
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == original)
+        #expect(submissions == 0)
+    }
+
+    @Test("cleanup refuses an edit followed by undo back to the original")
+    func cleanupRejectsChangedRevision() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "check this"
+        let snapshot = try textView.draftCleanupSnapshot()
+        textView.insertText(" newer", replacementRange: NSRange(location: textView.string.utf16.count, length: 0))
+        coordinator.editorUndoManager.undo()
+        #expect(textView.string == "check this")
+        #expect(!textView.applyDraftCleanup(snapshot, texts: ["check this."]))
+        #expect(textView.string == "check this")
+    }
+
+    @Test("cleanup refuses a different session even when its text is identical")
+    func cleanupRejectsDifferentSession() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "check this"
+        textView.draftCleanupSessionID = UUID().uuidString
+        let snapshot = try textView.draftCleanupSnapshot()
+        textView.draftCleanupSessionID = UUID().uuidString
+        #expect(!textView.applyDraftCleanup(snapshot, texts: ["check this."]))
+        #expect(textView.string == "check this")
+    }
+
+    @Test("review rejection, failure and cancellation leave the real composer untouched",
+          arguments: ["reject", "failure", "cancel"])
+    func cleanupReviewPreservesOriginal(_ outcome: String) async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "check this"
+        let snapshot = try textView.draftCleanupSnapshot()
+        let cleanup = ACPDraftCleanupController()
+        var applied = false
+        let job = cleanup.start(plan: snapshot.plan, isCurrent: { textView.isCurrentDraftCleanup(snapshot) }, apply: { texts in
+            applied = true
+            return textView.applyDraftCleanup(snapshot, texts: texts)
+        }, generate: { _ in outcome == "failure" ? nil : ["check this."] })
+        if outcome == "cancel" { cleanup.dismiss() }
+        await job.value
+        #expect(textView.string == "check this")
+        cleanup.dismiss()
+        #expect(textView.string == "check this")
+        #expect(!applied)
+    }
+
+    @Test("Writing Tools beginning invalidates a cleanup preview")
+    func writingToolsInvalidatesCleanup() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "check this"
+        let snapshot = try textView.draftCleanupSnapshot()
+        coordinator.textViewWritingToolsWillBegin(textView)
+        #expect(!textView.applyDraftCleanup(snapshot, texts: ["check this."]))
+        #expect(textView.string == "check this")
+    }
+
+    @Test("cleanup refuses active dictation and read-only editors", arguments: [true, false])
+    func cleanupRejectsConflictingInput(_ dictating: Bool) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "check this"
+        textView.nextPromptIsDictating = { dictating }
+        textView.isEditable = dictating
+        #expect(throws: ACPDraftCleanupFailure.self) { try textView.draftCleanupSnapshot() }
+    }
+
     @Test("restoring a draft flags a symbol badge whose declaration is gone, and only that one")
     func restoredDraftFlagsMissingSymbolBadges() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("presence-\(UUID().uuidString)")

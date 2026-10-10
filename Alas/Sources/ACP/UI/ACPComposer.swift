@@ -45,6 +45,7 @@ struct ACPInputField: NSViewRepresentable {
     /// falls back to a synchronous `FileManager` enumerator.
     let filesProvider: (@Sendable () async -> [URL])?
 
+    var onDraftCleanupNotice: (String) -> Void = { _ in }
     var nextPromptOffer: String? = nil
     var takeNextPromptOffer: () -> String? = { nil }
     var dismissNextPromptOffer: () -> Void = {}
@@ -75,6 +76,8 @@ struct ACPInputField: NSViewRepresentable {
         textView.textColor = NSColor(named: "fg") ?? NSColor.labelColor
         textView.insertionPointColor = NSColor.controlAccentColor
         context.coordinator.textView = textView
+        textView.draftCleanupSessionID = session.id
+        textView.onDraftCleanupNotice = onDraftCleanupNotice
         context.coordinator.startSymbolPresenceObservers()
         dropRouter.attach(textView)
         context.coordinator.onImageError = onImageError
@@ -87,6 +90,26 @@ struct ACPInputField: NSViewRepresentable {
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
+        let cleanup = actions.draftCleanup
+        textView.onDraftCleanupInvalidated = { [weak cleanup] in cleanup?.invalidate() }
+        actions.canCleanUpDraft = { [weak coord] in
+            (coord?.textView as? ACPNSTextView)?.canCleanUpDraft == true
+        }
+        actions.cleanUpDraft = { [weak coord, weak cleanup] in
+            guard let textView = coord?.textView as? ACPNSTextView, let cleanup else { return }
+            guard LocalTextAppleAvailability.current().isAvailable else {
+                textView.onDraftCleanupNotice?(ACPDraftCleanupFailure.unavailable.localizedDescription)
+                return
+            }
+            do {
+                let snapshot = try textView.draftCleanupSnapshot()
+                cleanup.start(plan: snapshot.plan, isCurrent: { [weak textView] in
+                    textView?.isCurrentDraftCleanup(snapshot) == true
+                }, apply: { [weak textView] texts in
+                    textView?.applyDraftCleanup(snapshot, texts: texts) == true
+                })
+            } catch { textView.onDraftCleanupNotice?(error.localizedDescription) }
+        }
         actions.submitWithIntent = { [weak coord] intent in
             guard let coord, let tv = coord.textView else { return }
             coord.submit(tv, intent: intent)
@@ -153,6 +176,11 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            if tv.draftCleanupSessionID != session.id {
+                tv.invalidateDraftCleanup()
+                tv.draftCleanupSessionID = session.id
+            }
+            tv.onDraftCleanupNotice = onDraftCleanupNotice
             tv.isEditable = isEnabled
             if !isEnabled {
                 tv.dismissFloatingPanels()
@@ -192,7 +220,13 @@ struct ACPInputField: NSViewRepresentable {
     private func configureNextPrompt(_ textView: ACPNSTextView) {
         textView.takeNextPromptOffer = takeNextPromptOffer
         textView.dismissNextPromptOffer = dismissNextPromptOffer
-        textView.onNextPromptStateChange = onNextPromptStateChange
+        textView.onNextPromptStateChange = { state in
+            onNextPromptStateChange(state)
+            if state.hasMarkedText || state.isDictating || state.isPickerPresented
+                || state.hasPendingInput || state.isInputBlocked {
+                actions.draftCleanup.invalidate()
+            }
+        }
         textView.nextPromptDraftIsEmpty = { composer.draft.isEmpty }
         textView.nextPromptInputBlocked = nextPromptInputBlocked
         textView.nextPromptIsDictating = nextPromptIsDictating
@@ -215,6 +249,7 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.invalidateDraftCleanup()
             tv.cancelSymbolPresenceCheck()
             coordinator.stopSymbolPresenceObservers()
             tv.clearNextPromptPresentation()
@@ -343,6 +378,9 @@ struct ACPInputField: NSViewRepresentable {
         private var lastAppliedComposerDraft: ACPComposerDraft
 
         func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
+        func textViewWritingToolsWillBegin(_ textView: NSTextView) {
+            (textView as? ACPNSTextView)?.invalidateDraftCleanup()
+        }
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingScheduledSubmitIDs: Set<Int> = []
@@ -658,6 +696,7 @@ struct ACPInputField: NSViewRepresentable {
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             if let tv = textView as? ACPNSTextView {
+                tv.invalidateDraftCleanup()
                 tv.invalidateNextPromptSuggestion()
                 tv.dismissSlashPanel()
                 // Direct storage replacement below never routes through
@@ -754,6 +793,7 @@ struct ACPInputField: NSViewRepresentable {
             isClearingSubmittedDraft = true
             defer { isClearingSubmittedDraft = false }
             if let tv = textView as? ACPNSTextView {
+                tv.invalidateDraftCleanup()
                 tv.dismissSlashPanel()
                 tv.dismissImageChipHover()
             }
@@ -1010,6 +1050,15 @@ extension NSAttributedString.Key {
 }
 
 final class ACPNSTextView: PairedDelimiterTextView {
+    private(set) var draftCleanupRevision: UInt64 = 0
+    var draftCleanupSessionID: ACPSession.ID?
+    var onDraftCleanupInvalidated: (() -> Void)?
+    var onDraftCleanupNotice: ((String) -> Void)?
+
+    func invalidateDraftCleanup() {
+        draftCleanupRevision &+= 1
+        onDraftCleanupInvalidated?()
+    }
     // Transient presentation only. The owner consumes the opportunity before insertion.
     var nextPromptOffer: String? {
         didSet {
@@ -1399,6 +1448,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func didChangeText() {
+        invalidateDraftCleanup()
         invalidateNextPromptSuggestion()
         super.didChangeText()
         if undoManager?.isUndoing == true || undoManager?.isRedoing == true,
