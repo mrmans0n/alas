@@ -292,9 +292,15 @@ final class AgentHookSocketServer: @unchecked Sendable {
         lock.withLock {
             guard _listenActive, let bindPath = _bindPath else { return nil }
             var st = Darwin.stat()
-            guard Darwin.lstat(bindPath, &st) != 0,
-                  Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid())
-            else { return nil }
+            guard Darwin.lstat(bindPath, &st) != 0 else { return nil }
+            // An isolated profile nests the directory in its runtime root
+            // (`/tmp/alas-<uid>-<hash>/hooks`), which the same `rm` removes.
+            // Only a missing parent is recreated: `/tmp` itself is never ours.
+            let parent = (sessionLinkDirectory as NSString).deletingLastPathComponent
+            if Darwin.lstat(parent, &st) != 0 {
+                guard Self.prepareSocketDirectory(parent, ownerUid: getuid()) else { return nil }
+            }
+            guard Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid()) else { return nil }
             let socketFD = Self.createSocket(path: bindPath)
             guard socketFD >= 0 else { return nil }
             for key in _linkedKeys {
