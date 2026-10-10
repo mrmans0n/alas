@@ -141,10 +141,7 @@ final class ProjectsManager {
             guard !RemotePath.isReserved(path.path) else { throw RemotePath.reservedForRemoteError(path.path) }
             storedPath = path.path
             if kind == .folder {
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDirectory),
-                      isDirectory.boolValue
-                else {
+                guard Self.isDirectory(path.path) else {
                     throw NSError(domain: "ProjectsManager", code: 4,
                                   userInfo: [NSLocalizedDescriptionKey: "Not a directory: \(path.path)"])
                 }
@@ -411,6 +408,11 @@ final class ProjectsManager {
         applyWorktreeOrdering(projectId: projectId)
     }
 
+    static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
     /// The single row of a folder project. Built without touching git or the
     /// filesystem so refreshes stay stable and never persist churn.
     static func folderWorktree(for project: ProjectConfig) -> Worktree {
@@ -620,7 +622,7 @@ final class ProjectsManager {
         }
         // A deleted local folder fails like a deleted repository, so stale
         // project cleanup can find it.
-        if project.isFolder, project.host == nil, !FileManager.default.fileExists(atPath: configuredURL.path) {
+        if project.isFolder, project.host == nil, !Self.isDirectory(configuredURL.path) {
             throw NSError(domain: "ProjectsManager", code: 6,
                           userInfo: [NSLocalizedDescriptionKey: "Folder no longer exists: \(configuredURL.path)"])
         }

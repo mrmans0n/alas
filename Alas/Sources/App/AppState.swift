@@ -5767,7 +5767,10 @@ final class AppState {
                 try await refreshProjectWorktrees(projectId: project.id)
             } catch {
                 guard project.host == nil else { continue }
-                guard !FileManager.default.fileExists(atPath: project.path) else { continue }
+                let pathSurvives = project.isFolder
+                    ? ProjectsManager.isDirectory(project.path)
+                    : FileManager.default.fileExists(atPath: project.path)
+                guard !pathSurvives else { continue }
                 staleProjectIds.append(project.id)
                 continue
             }
