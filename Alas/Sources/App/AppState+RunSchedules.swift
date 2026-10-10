@@ -42,7 +42,11 @@ extension AppState {
         let targets: [(project: ProjectConfig, worktree: Worktree)]
         switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
-            targets = resolved
+            // A worktree-creating schedule skips folders, which cannot have one.
+            targets = schedule.composition == nil ? resolved : resolved.filter { !$0.project.isFolder }
+            guard !targets.isEmpty else {
+                return RunScheduleRunReport(outcome: .skipped(reason: Self.folderWorktreeCreationMessage))
+            }
         case .unavailable(let reason):
             return RunScheduleRunReport(outcome: .skipped(reason: reason))
         }

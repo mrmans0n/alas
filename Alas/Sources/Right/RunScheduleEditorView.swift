@@ -62,8 +62,10 @@ struct RunScheduleEditorView: View {
                 whereSection
                 sectionRule
                 whenSection
-                sectionRule
-                compositionSection
+                if !targetsFolder {
+                    sectionRule
+                    compositionSection
+                }
                 if let message = errorMessage ?? draft.validationError, !draft.name.isEmpty || errorMessage != nil {
                     Text(message)
                         .font(.system(size: 11))
@@ -161,6 +163,12 @@ struct RunScheduleEditorView: View {
                 )
             }
         }
+    }
+
+    /// A folder project cannot have worktrees, so it cannot create one.
+    private var targetsFolder: Bool {
+        draft.targetKind != .allProjects
+            && draft.projectID.flatMap { id in state.projects.first { $0.id == id } }?.isFolder == true
     }
 
     private var compositionSection: some View {
@@ -621,6 +629,7 @@ struct RunScheduleEditorView: View {
     }
 
     private func submit() {
+        if targetsFolder { draft.createsWorktree = false }
         guard let built = draft.makeSchedule(existing: schedule) else {
             errorMessage = draft.validationError
             return
