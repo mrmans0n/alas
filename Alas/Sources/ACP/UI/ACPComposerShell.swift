@@ -205,8 +205,6 @@ struct ACPComposer: View {
     @State private var inputFocused = false
     @State private var hasText: Bool = false
     @State private var composerNotice: String?
-    @State private var showingCompactOptions = false
-    private let compactControlWidth: CGFloat = 164
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
     /// Languages ready to use without a download, for the mic's menu.
     @State private var installedDictationLocales: [String] = []
@@ -595,7 +593,14 @@ struct ACPComposer: View {
                 chips.modelChip(models)
                     .frame(maxWidth: 160, alignment: .trailing)
             }
-            compactOptionsButton
+            ACPComposerOptionsButton(
+                chips: chips,
+                autoRun: .init(isEnabled: session.autoRunEnabled, isDisabled: autoRunDisabled,
+                               help: autoRunHelp, toggle: toggleAutoRun),
+                providerName: session.currentProviderDisplayName,
+                authStatus: visibleAuthStatus,
+                onOpen: dismissNextPromptOffer
+            )
             actionButton
         }
     }
@@ -603,214 +608,6 @@ struct ACPComposer: View {
     private var visibleAuthStatus: ACPAuthStatus? {
         guard let status = session.authStatus, status.kind != .none else { return nil }
         return status
-    }
-
-    private var overflowItems: [ACPComposerOverflowItem] {
-        ACPComposerOverflowItem.items(
-            hasMode: session.chipState.mode != nil,
-            hasThinking: session.chipState.thinking != nil,
-            hasFastMode: chips.fastModeParameter != nil || chips.fastModeBooleanOption != nil,
-            parameterIDs: chips.parameterChips.map(\.id),
-            booleanIDs: chips.booleanConfigOptions.map(\.id),
-            hasProvider: session.currentProviderDisplayName != nil,
-            hasAuthentication: visibleAuthStatus != nil
-        )
-    }
-
-    private var compactOptionsButton: some View {
-        Button {
-            dismissNextPromptOffer()
-            showingCompactOptions.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                if session.autoRunEnabled {
-                    Circle()
-                        .fill(theme.color("caution"))
-                        .frame(width: 5, height: 5)
-                }
-                Text("Options")
-                    .font(.system(size: 11, weight: .semibold))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-            }
-            .foregroundStyle(theme.color("fg"))
-            .padding(.horizontal, 9)
-            .frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3")))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
-        }
-        .buttonStyle(.plain)
-        .fixedSize(horizontal: true, vertical: false)
-        .help("Session options")
-        .popover(isPresented: $showingCompactOptions, arrowEdge: .top) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Session settings")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(theme.color("fg-muted"))
-                        .padding(.bottom, 3)
-                    ForEach(overflowItems, id: \.self) { item in
-                        compactOptionRow(item)
-                    }
-                }
-                .padding(12)
-            }
-            .frame(width: 310)
-            .frame(maxHeight: 370)
-            .background(theme.color("bg-1"))
-        }
-    }
-
-    @ViewBuilder
-    private func compactOptionRow(_ item: ACPComposerOverflowItem) -> some View {
-        switch item {
-        case .mode:
-            if let mode = session.chipState.mode {
-                compactSelectRow("Mode", spec: mode, accent: chips.modeAccent(mode))
-            }
-        case .thinking:
-            if let thinking = session.chipState.thinking {
-                compactSelectRow("Thinking", spec: thinking, accent: theme.color("warn"))
-            }
-        case .fastMode:
-            compactFastModeRow
-        case .autoRun:
-            compactToggleRow(
-                "Auto-run",
-                isEnabled: session.autoRunEnabled,
-                icon: ACPComposerControlPresentation.autoRunIconName(isEnabled: session.autoRunEnabled),
-                foreground: ACPAutoRunToggle.foreground(isEnabled: session.autoRunEnabled, theme: theme),
-                background: ACPAutoRunToggle.background(isEnabled: session.autoRunEnabled, theme: theme),
-                border: ACPAutoRunToggle.border(isEnabled: session.autoRunEnabled, theme: theme),
-                isDisabled: autoRunDisabled,
-                help: autoRunHelp,
-                action: toggleAutoRun
-            )
-        case .parameter(let id):
-            if let parameter = chips.parameterChips.first(where: { $0.id == id }) {
-                compactSelectRow(parameter.label, spec: parameter.spec, accent: theme.color("fg-muted"))
-            }
-        case .boolean(let id):
-            if let option = chips.booleanConfigOptions.first(where: { $0.id == id }) {
-                compactToggleRow(
-                    option.name.isEmpty ? option.id : option.name,
-                    isEnabled: option.currentBoolValue == true,
-                    icon: option.currentBoolValue == true ? "checkmark.circle.fill" : "circle",
-                    foreground: theme.color("fg-muted"),
-                    background: theme.color("bg-3").opacity(0.7),
-                    border: theme.color("line"),
-                    action: { apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true)) }
-                )
-            }
-        case .provider:
-            if let name = session.currentProviderDisplayName {
-                compactInfoRow("Provider", value: name)
-            }
-        case .authentication:
-            if let status = visibleAuthStatus {
-                compactInfoRow("Sign-in", value: status.label)
-                    .help(authStatusHoverText(status))
-            }
-        }
-    }
-
-    private func compactSelectRow(_ title: String, spec: ChipSpec, accent: Color) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            chips.chip(spec: spec,
-                 label: chips.selectedName(spec: spec, fallback: title),
-                 placeholder: title,
-                 accent: accent,
-                 fillsWidth: true)
-                .frame(width: compactControlWidth)
-        }
-        .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
-    }
-
-    @ViewBuilder
-    private var compactFastModeRow: some View {
-        if let parameter = chips.fastModeParameter {
-            compactToggleRow(
-                "Fast mode",
-                isEnabled: chips.isFastModeEnabled(parameter.spec),
-                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: chips.isFastModeEnabled(parameter.spec)),
-                foreground: chips.fastModeFg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
-                background: chips.fastModeBg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
-                border: chips.fastModeBorder(isEnabled: chips.isFastModeEnabled(parameter.spec)),
-                isDisabled: chips.fastModeToggleTarget(for: parameter.spec) == nil,
-                help: chips.fastModeHelp(isEnabled: chips.isFastModeEnabled(parameter.spec),
-                                   canToggle: chips.fastModeToggleTarget(for: parameter.spec) != nil)
-            ) {
-                guard let targetId = chips.fastModeToggleTarget(for: parameter.spec) else { return }
-                apply(spec: parameter.spec, selectedId: targetId)
-            }
-        } else if let option = chips.fastModeBooleanOption {
-            compactToggleRow(
-                "Fast mode",
-                isEnabled: option.currentBoolValue == true,
-                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: option.currentBoolValue == true),
-                foreground: chips.fastModeFg(isEnabled: option.currentBoolValue == true),
-                background: chips.fastModeBg(isEnabled: option.currentBoolValue == true),
-                border: chips.fastModeBorder(isEnabled: option.currentBoolValue == true),
-                help: chips.fastModeHelp(isEnabled: option.currentBoolValue == true, canToggle: true)
-            ) {
-                apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true))
-            }
-        }
-    }
-
-    private func compactToggleRow(
-        _ title: String,
-        isEnabled: Bool,
-        icon: String,
-        foreground: Color,
-        background: Color,
-        border: Color,
-        isDisabled: Bool = false,
-        help: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Button(action: action) {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 14)
-                    Text(isEnabled ? "On" : "Off")
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(foreground)
-                .padding(.horizontal, 8)
-                .frame(width: compactControlWidth, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(background))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.75))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
-            .disabled(isDisabled)
-            .opacity(isDisabled ? 0.5 : 1)
-            .help(help ?? title)
-        }
-        .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
-    }
-
-    private func compactInfoRow(_ title: String, value: String) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-            Spacer(minLength: 8)
-            Text(value)
-                .foregroundStyle(theme.color("fg-muted"))
-                .lineLimit(1)
-        }
-        .frame(height: 24)
-        .font(.system(size: 11, weight: .medium))
     }
 
     private var shortcutHint: some View {
@@ -855,10 +652,10 @@ struct ACPComposer: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
             .accessibilityLabel("Signed in, \(status.label)")
-            .help(authStatusHoverText(status))
+            .help(Self.authStatusHoverText(status))
     }
 
-    private func authStatusHoverText(_ status: ACPAuthStatus) -> String {
+    static func authStatusHoverText(_ status: ACPAuthStatus) -> String {
         var parts: [String] = []
         if let plan = status.account?.plan, !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             parts.append(plan)
@@ -1052,6 +849,235 @@ struct ACPComposer: View {
         case .stop:
             stopTapped()
         }
+    }
+}
+
+/// The narrow toolbar's "Options" popover: every chip that no longer fits
+/// beside the model picker. Shared with the mirrored peer composer.
+struct ACPComposerOptionsButton: View {
+    struct AutoRun {
+        let isEnabled: Bool
+        let isDisabled: Bool
+        let help: String
+        let toggle: () -> Void
+    }
+
+    let chips: ACPComposerChips
+    let autoRun: AutoRun
+    var providerName: String?
+    var authStatus: ACPAuthStatus?
+    var onOpen: () -> Void = {}
+
+    @Environment(\.theme) private var theme
+    @State private var isPresented = false
+    private let controlWidth: CGFloat = 164
+
+    private var items: [ACPComposerOverflowItem] {
+        ACPComposerOverflowItem.items(
+            hasMode: chips.chipState.mode != nil,
+            hasThinking: chips.chipState.thinking != nil,
+            hasFastMode: chips.fastModeParameter != nil || chips.fastModeBooleanOption != nil,
+            parameterIDs: chips.parameterChips.map(\.id),
+            booleanIDs: chips.booleanConfigOptions.map(\.id),
+            hasProvider: providerName != nil,
+            hasAuthentication: authStatus != nil
+        )
+    }
+
+    var body: some View {
+        Button {
+            onOpen()
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                if autoRun.isEnabled {
+                    Circle()
+                        .fill(theme.color("caution"))
+                        .frame(width: 5, height: 5)
+                }
+                Text("Options")
+                    .font(.system(size: 11, weight: .semibold))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(theme.color("fg"))
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3")))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Session options")
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Session settings")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-muted"))
+                        .padding(.bottom, 3)
+                    ForEach(items, id: \.self) { item in
+                        row(item)
+                    }
+                }
+                .padding(12)
+            }
+            .frame(width: 310)
+            .frame(maxHeight: 370)
+            .background(theme.color("bg-1"))
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ item: ACPComposerOverflowItem) -> some View {
+        switch item {
+        case .mode:
+            if let mode = chips.chipState.mode {
+                selectRow("Mode", spec: mode, accent: chips.modeAccent(mode))
+            }
+        case .thinking:
+            if let thinking = chips.chipState.thinking {
+                selectRow("Thinking", spec: thinking, accent: theme.color("warn"))
+            }
+        case .fastMode:
+            fastModeRow
+        case .autoRun:
+            toggleRow(
+                "Auto-run",
+                isEnabled: autoRun.isEnabled,
+                icon: ACPComposerControlPresentation.autoRunIconName(isEnabled: autoRun.isEnabled),
+                foreground: ACPAutoRunToggle.foreground(isEnabled: autoRun.isEnabled, theme: theme),
+                background: ACPAutoRunToggle.background(isEnabled: autoRun.isEnabled, theme: theme),
+                border: ACPAutoRunToggle.border(isEnabled: autoRun.isEnabled, theme: theme),
+                isDisabled: autoRun.isDisabled,
+                help: autoRun.help,
+                action: autoRun.toggle
+            )
+        case .parameter(let id):
+            if let parameter = chips.parameterChips.first(where: { $0.id == id }) {
+                selectRow(parameter.label, spec: parameter.spec, accent: theme.color("fg-muted"))
+            }
+        case .boolean(let id):
+            if let option = chips.booleanConfigOptions.first(where: { $0.id == id }) {
+                toggleRow(
+                    option.name.isEmpty ? option.id : option.name,
+                    isEnabled: option.currentBoolValue == true,
+                    icon: option.currentBoolValue == true ? "checkmark.circle.fill" : "circle",
+                    foreground: theme.color("fg-muted"),
+                    background: theme.color("bg-3").opacity(0.7),
+                    border: theme.color("line"),
+                    action: { chips.onConfigValue(option.id, .boolean(option.currentBoolValue != true)) }
+                )
+            }
+        case .provider:
+            if let providerName {
+                infoRow("Provider", value: providerName)
+            }
+        case .authentication:
+            if let authStatus {
+                infoRow("Sign-in", value: authStatus.label)
+                    .help(ACPComposer.authStatusHoverText(authStatus))
+            }
+        }
+    }
+
+    private func selectRow(_ title: String, spec: ChipSpec, accent: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            chips.chip(spec: spec,
+                 label: chips.selectedName(spec: spec, fallback: title),
+                 placeholder: title,
+                 accent: accent,
+                 fillsWidth: true)
+                .frame(width: controlWidth)
+        }
+        .frame(height: 24)
+        .font(.system(size: 11, weight: .medium))
+    }
+
+    @ViewBuilder
+    private var fastModeRow: some View {
+        if let parameter = chips.fastModeParameter {
+            toggleRow(
+                "Fast mode",
+                isEnabled: chips.isFastModeEnabled(parameter.spec),
+                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: chips.isFastModeEnabled(parameter.spec)),
+                foreground: chips.fastModeFg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
+                background: chips.fastModeBg(isEnabled: chips.isFastModeEnabled(parameter.spec)),
+                border: chips.fastModeBorder(isEnabled: chips.isFastModeEnabled(parameter.spec)),
+                isDisabled: chips.fastModeToggleTarget(for: parameter.spec) == nil,
+                help: chips.fastModeHelp(isEnabled: chips.isFastModeEnabled(parameter.spec),
+                                   canToggle: chips.fastModeToggleTarget(for: parameter.spec) != nil)
+            ) {
+                guard let targetId = chips.fastModeToggleTarget(for: parameter.spec) else { return }
+                chips.onSelect(parameter.spec, targetId)
+            }
+        } else if let option = chips.fastModeBooleanOption {
+            toggleRow(
+                "Fast mode",
+                isEnabled: option.currentBoolValue == true,
+                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: option.currentBoolValue == true),
+                foreground: chips.fastModeFg(isEnabled: option.currentBoolValue == true),
+                background: chips.fastModeBg(isEnabled: option.currentBoolValue == true),
+                border: chips.fastModeBorder(isEnabled: option.currentBoolValue == true),
+                help: chips.fastModeHelp(isEnabled: option.currentBoolValue == true, canToggle: true)
+            ) {
+                chips.onConfigValue(option.id, .boolean(option.currentBoolValue != true))
+            }
+        }
+    }
+
+    private func toggleRow(
+        _ title: String,
+        isEnabled: Bool,
+        icon: String,
+        foreground: Color,
+        background: Color,
+        border: Color,
+        isDisabled: Bool = false,
+        help: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14)
+                    Text(isEnabled ? "On" : "Off")
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(foreground)
+                .padding(.horizontal, 8)
+                .frame(width: controlWidth, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(background))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.75))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
+            .disabled(isDisabled)
+            .opacity(isDisabled ? 0.5 : 1)
+            .help(help ?? title)
+        }
+        .frame(height: 24)
+        .font(.system(size: 11, weight: .medium))
+    }
+
+    private func infoRow(_ title: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(theme.color("fg-muted"))
+                .lineLimit(1)
+        }
+        .frame(height: 24)
+        .font(.system(size: 11, weight: .medium))
     }
 }
 
