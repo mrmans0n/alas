@@ -29,6 +29,10 @@ enum RemoteContentSearch {
             args.append("-i")
         }
         args += ["-e", query, "--"]
+        if noIndex {
+            // Without git's ignore rules, prune what the folder file index prunes.
+            args += MentionFuzzy.skippedDirectoryNames.sorted().map { ":(exclude,glob)**/\($0)/**" }
+        }
         return args
     }
 

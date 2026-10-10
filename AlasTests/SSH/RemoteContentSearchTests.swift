@@ -37,6 +37,7 @@ struct RemoteContentSearchTests {
             #expect(args.contains(flag))
         }
         #expect(!args.contains(noIndex ? "--untracked" : "--no-index"))
+        #expect(args.contains(":(exclude,glob)**/node_modules/**") == noIndex)
     }
 
     @Test func gitGrepUsesExtendedRegexWhenRegexSearchIsEnabled() {
