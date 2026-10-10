@@ -37,21 +37,25 @@ struct AgentsPane: View {
                     .padding(.bottom, 12)
 
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("AVAILABLE AGENTS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(0.6)
-                            .foregroundColor(theme.color("fg-dim"))
-                        Spacer()
-                        AlasButton(title: "Browse ACP Registry", style: .subtle) {
-                            registryBrowser = RegistryBrowserRequest()
-                        }
-                        AlasButton(title: "Add custom agent", style: .subtle) {
-                            editing = .new
-                        }
-                    }
-                    .padding(.bottom, 14)
+                    Text("AVAILABLE AGENTS")
+                        .font(.system(size: 11, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundColor(theme.color("fg-dim"))
+                        .padding(.bottom, 14)
                     cardGrid
+                    Text("Is your agent not on the list? [Browse the ACP registry](alas-agents:registry) or [add it manually](alas-agents:custom).")
+                        .font(.system(size: 12.5))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .tint(theme.color("accent"))
+                        .padding(.top, 12)
+                        .environment(\.openURL, OpenURLAction { url in
+                            if url.absoluteString == "alas-agents:registry" {
+                                registryBrowser = RegistryBrowserRequest()
+                            } else {
+                                editing = .new
+                            }
+                            return .handled
+                        })
                 }
                 .padding(.bottom, 18)
 
