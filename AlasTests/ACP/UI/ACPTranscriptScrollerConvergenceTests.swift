@@ -243,8 +243,11 @@ struct ACPTranscriptScrollerConvergenceTests {
         }
     }
 
+    /// A deadline, not a poll count: retired views release on later main-actor
+    /// turns, which a loaded CI runner can push past a second.
     private func waitForRetiredViews(_ tracked: ConvergenceWeakViews, fixture: ConvergenceScrollerFixture) async throws {
-        for _ in 0..<40 {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
             if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) <= fixture.pool.parkedIdsForTesting.count * 14 { return }
             try await Task.sleep(for: .milliseconds(25))
             autoreleasepool { fixture.window.layoutIfNeeded() }

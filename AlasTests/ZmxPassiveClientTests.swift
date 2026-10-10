@@ -352,11 +352,16 @@ private struct PassiveViewer {
     }
 
     /// Polls `stty size` until the PTY reports `expected` rows and columns.
+    /// A deadline, not a poll count: a resize is a round trip through the
+    /// client's reader thread, which a loaded CI runner can stall.
     func awaitSize(_ expected: String) async throws {
-        for _ in 0..<20 {
-            if try await query("$(stty size)") == expected { return }
+        let deadline = ContinuousClock.now + .seconds(10)
+        var size = ""
+        while ContinuousClock.now < deadline {
+            size = try await query("$(stty size)")
+            if size == expected { return }
         }
-        Issue.record("PTY size never became \(expected)")
+        try #require(size == expected, "PTY size stayed \(size), never became \(expected)")
     }
 
     func close() { client.close() }

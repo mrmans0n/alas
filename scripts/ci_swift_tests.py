@@ -116,7 +116,9 @@ def make_plan(document, policy, batch_count, suite_seconds=None):
             chunks = bounded_chunks
 
         def invocation_timeout(chunk):
-            return 360 if lane == "ordinary" or any(
+            if lane == "ordinary":
+                return 480
+            return 360 if any(
                 test in slow_tests for selector in chunk for test in groups.get(selector, [selector])) else 120
 
         if lane == "subprocess":

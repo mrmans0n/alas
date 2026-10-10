@@ -239,11 +239,11 @@ struct AppStateFocusMainWorktreeTests {
         return state
     }
 
-    /// Polls `condition` up to ~5s and reports failure on the deadline. The
-    /// sidebar pull posts asynchronously on the main actor after a real git
-    /// round trip, so the test waits on the event instead of a fixed sleep.
+    /// Polls `condition` up to ~15s and reports failure on the deadline. The
+    /// sidebar pull posts asynchronously on the main actor after a dozen real
+    /// git processes, which a loaded CI runner can stretch past five seconds.
     private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
