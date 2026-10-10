@@ -144,15 +144,21 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// one), so a client connecting while it is repointed never finds it
     /// missing.
     func linkSession(leafId: String) -> String? {
-        guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
-        let linkPath = "\(sessionLinkDirectory)/sock-\(leafId)"
-        let stagingPath = "\(sessionLinkDirectory)/.sock-\(leafId).\(UUID().uuidString.prefix(8))"
+        guard let bindPath = lock.withLock({ _bindPath }),
+              let linkPath = Self.link(leafId, to: bindPath, in: sessionLinkDirectory)
+        else { return nil }
+        lock.withLock { _ = _linkedKeys.insert(leafId) }
+        return linkPath
+    }
+
+    private static func link(_ leafId: String, to bindPath: String, in directory: String) -> String? {
+        let linkPath = "\(directory)/sock-\(leafId)"
+        let stagingPath = "\(directory)/.sock-\(leafId).\(UUID().uuidString.prefix(8))"
         guard symlink(bindPath, stagingPath) == 0 else { return nil }
         guard rename(stagingPath, linkPath) == 0 else {
             unlink(stagingPath)
             return nil
         }
-        lock.withLock { _ = _linkedKeys.insert(leafId) }
         return linkPath
     }
 
@@ -279,18 +285,23 @@ final class AgentHookSocketServer: @unchecked Sendable {
     /// same path, and recreating the session links that went with it, heals
     /// every client without a relaunch. Returns the new fd, or nil when the
     /// path is intact or cannot be restored yet.
+    ///
+    /// Runs entirely under `lock` so `shutdown()` lands either before it (no
+    /// rebind) or after it (and unlinks the new path), never in between.
     private func rebindIfUnlinked() -> Int32? {
-        guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
-        var st = Darwin.stat()
-        guard Darwin.lstat(bindPath, &st) != 0,
-              Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid())
-        else { return nil }
-        let socketFD = Self.createSocket(path: bindPath)
-        guard socketFD >= 0 else { return nil }
-        for key in lock.withLock({ _linkedKeys }) {
-            _ = linkSession(leafId: key)
+        lock.withLock {
+            guard _listenActive, let bindPath = _bindPath else { return nil }
+            var st = Darwin.stat()
+            guard Darwin.lstat(bindPath, &st) != 0,
+                  Self.prepareSocketDirectory(sessionLinkDirectory, ownerUid: getuid())
+            else { return nil }
+            let socketFD = Self.createSocket(path: bindPath)
+            guard socketFD >= 0 else { return nil }
+            for key in _linkedKeys {
+                _ = Self.link(key, to: bindPath, in: sessionLinkDirectory)
+            }
+            return socketFD
         }
-        return socketFD
     }
 
     private func listenState() -> Bool {
