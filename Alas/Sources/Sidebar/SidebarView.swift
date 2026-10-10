@@ -5,9 +5,9 @@ struct SidebarAttentionPresentation {
     let showsInbox: Bool
     let count: Int
 
-    init(enabled: Bool, aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = []) {
+    init(enabled: Bool, aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = [], pluginUpdateCount: Int = 0) {
         showsInbox = enabled
-        count = enabled ? aggregation.unresolvedCount + peerRows.count : 0
+        count = enabled ? aggregation.unresolvedCount + peerRows.count + pluginUpdateCount : 0
     }
 }
 
@@ -491,9 +491,10 @@ private struct SidebarAttentionHeader: View {
         let aggregation = state.attentionAggregation
         let peerRows = state.config.needsAttentionEnabled
             ? state.nativePeerSessions?.snapshot.attentionRows ?? [] : []
+        let pluginUpdates = state.config.needsAttentionEnabled ? state.pluginManager?.catalogUpdates ?? [] : []
         let presentation = SidebarAttentionPresentation(
             enabled: state.config.needsAttentionEnabled, aggregation: aggregation,
-            peerRows: peerRows
+            peerRows: peerRows, pluginUpdateCount: pluginUpdates.count
         )
         SidebarHeaderView(
             onSettings: onSettings,
@@ -506,6 +507,7 @@ private struct SidebarAttentionHeader: View {
             attentionInboxOpen: $state.isAttentionInboxOpen,
             attentionAggregation: aggregation,
             peerAttentionRows: peerRows,
+            pluginUpdates: pluginUpdates,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
             attentionNavigationErrors: state.attentionNavigationErrors,
@@ -515,8 +517,17 @@ private struct SidebarAttentionHeader: View {
                 state.nativePeerSessions?.select(row.id)
                 state.isAttentionInboxOpen = false
             },
+            onOpenPluginSettings: {
+                state.isAttentionInboxOpen = false
+                state.pendingSettingsSection = .plugins
+                onSettings()
+            },
             attentionRollUpSummarizer: state.makeAttentionRollUpSummarizer()
         )
+        // The catalog throttles itself, so a long-running app picks up new releases without fetching on every open.
+        .onChange(of: state.isAttentionInboxOpen) { _, isOpen in
+            if isOpen { Task { await state.pluginManager?.catalog.refresh() } }
+        }
     }
 }
 

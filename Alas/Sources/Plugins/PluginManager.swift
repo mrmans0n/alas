@@ -274,6 +274,24 @@ final class PluginManager {
         return !catalogOwnedIDs.contains(id)
     }
 
+    func catalogRow(_ entry: PluginCatalogIndex.Entry) -> PluginCatalogRow {
+        PluginCatalogRow(
+            entry: entry, installed: plugin(id: entry.id),
+            // Duplicates of this plugin, or anything else at the path install would use.
+            quarantined: invalid.contains { $0.pluginID == entry.id } || catalogPathIsTaken(id: entry.id))
+    }
+
+    typealias CatalogUpdate = (entry: PluginCatalogIndex.Entry, version: PluginCatalogIndex.Version)
+
+    /// Installed catalog plugins with a newer release, as of the last catalog load.
+    var catalogUpdates: [CatalogUpdate] {
+        (catalog.index?.plugins ?? []).compactMap { entry in
+            // Only installed plugins can update; skip the rest before `catalogRow` touches the disk.
+            guard plugin(id: entry.id) != nil, case .update(let version) = catalogRow(entry) else { return nil }
+            return (entry, version)
+        }
+    }
+
     /// The release's two or three files, checked against the record before anything is written.
     private func download(
         _ entry: PluginCatalogIndex.Entry, _ version: PluginCatalogIndex.Version

@@ -11,12 +11,14 @@ struct SidebarHeaderView: View {
     @Binding var attentionInboxOpen: Bool
     var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
     var peerAttentionRows: [RemoteSessionSummary] = []
+    var pluginUpdates: [PluginManager.CatalogUpdate] = []
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
     var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
     var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
     var onOpenPeerSession: (RemoteSessionSummary) -> Void = { _ in }
+    var onOpenPluginSettings: () -> Void = {}
     var attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil
     init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
@@ -28,12 +30,14 @@ struct SidebarHeaderView: View {
          attentionInboxOpen: Binding<Bool> = .constant(false),
          attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
          peerAttentionRows: [RemoteSessionSummary] = [],
+         pluginUpdates: [PluginManager.CatalogUpdate] = [],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
          onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
          onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in },
          onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in },
+         onOpenPluginSettings: @escaping () -> Void = {},
          attentionRollUpSummarizer: AttentionRollUpSummarizer? = nil) {
         self.onSettings = onSettings
         self.onAddProject = onAddProject
@@ -45,12 +49,14 @@ struct SidebarHeaderView: View {
         self._attentionInboxOpen = attentionInboxOpen
         self.attentionAggregation = attentionAggregation
         self.peerAttentionRows = peerAttentionRows
+        self.pluginUpdates = pluginUpdates
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
         self.onDismissAttentionItem = onDismissAttentionItem
         self.onOpenAttentionItem = onOpenAttentionItem
         self.onOpenPeerSession = onOpenPeerSession
+        self.onOpenPluginSettings = onOpenPluginSettings
         self.attentionRollUpSummarizer = attentionRollUpSummarizer
     }
     @Environment(\.theme) private var theme
@@ -81,12 +87,14 @@ struct SidebarHeaderView: View {
             AttentionInboxView(
                 aggregation: attentionAggregation,
                 peerRows: peerAttentionRows,
+                pluginUpdates: pluginUpdates,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,
                 onDismiss: onDismissAttentionItem,
                 onOpen: onOpenAttentionItem,
                 onOpenPeer: onOpenPeerSession,
+                onOpenPluginSettings: onOpenPluginSettings,
                 rollUpSummarizer: attentionRollUpSummarizer
             )
         }

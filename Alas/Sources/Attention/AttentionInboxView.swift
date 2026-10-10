@@ -73,9 +73,10 @@ struct AttentionInboxPresentation {
 
     let activeRows: [AttentionInboxRowPresentation]
     let peerRows: [RemoteSessionSummary]
+    let pluginUpdates: [PluginManager.CatalogUpdate]
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
-    var totalCount: Int { activeRows.count + peerRows.count }
+    var totalCount: Int { activeRows.count + peerRows.count + pluginUpdates.count }
     var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
     var acknowledgeLabel: String? {
         guard !activeRows.isEmpty else { return nil }
@@ -89,9 +90,10 @@ struct AttentionInboxPresentation {
     }
 
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
-         peerRows: [RemoteSessionSummary] = [], now: Date = Date()) {
+         peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [], now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         self.peerRows = peerRows
+        self.pluginUpdates = pluginUpdates
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
             loadError.map { PersistenceError(title: "History could not be loaded", message: $0) },
@@ -103,12 +105,14 @@ struct AttentionInboxPresentation {
 struct AttentionInboxView: View {
     let aggregation: AttentionAggregation
     let peerRows: [RemoteSessionSummary]
+    var pluginUpdates: [PluginManager.CatalogUpdate] = []
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     let onOpenPeer: (RemoteSessionSummary) -> Void
+    var onOpenPluginSettings: () -> Void = {}
     /// Nil hides the roll-up entirely, leaving the ordinary inbox.
     var rollUpSummarizer: AttentionRollUpSummarizer? = nil
     @Environment(\.theme) private var theme
@@ -125,7 +129,7 @@ struct AttentionInboxView: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let presentation = AttentionInboxPresentation(
                 aggregation: aggregation, loadError: loadError, writeError: writeError,
-                peerRows: peerRows, now: context.date
+                peerRows: peerRows, pluginUpdates: pluginUpdates, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
@@ -173,7 +177,8 @@ struct AttentionInboxView: View {
                         }
                         AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
                                            navigationErrors: navigationErrors, onDismiss: onDismiss,
-                                           onOpen: onOpen, onOpenPeer: onOpenPeer)
+                                           onOpen: onOpen, onOpenPeer: onOpenPeer,
+                                           onOpenPluginSettings: onOpenPluginSettings)
                     }
                     .padding(14)
                 }
@@ -217,6 +222,7 @@ struct AttentionInboxList: View {
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     var onOpenPeer: (RemoteSessionSummary) -> Void = { _ in }
+    var onOpenPluginSettings: () -> Void = {}
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -254,6 +260,29 @@ struct AttentionInboxList: View {
                         }
                         Spacer()
                         Button("Open") { onOpenPeer(row) }
+                            .controlSize(.small)
+                    }
+                    .padding(10)
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            if !presentation.pluginUpdates.isEmpty {
+                Text("Plugin updates")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.top, 10)
+                ForEach(presentation.pluginUpdates, id: \.entry.id) { update in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "puzzlepiece.extension")
+                            .foregroundStyle(theme.color("accent"))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(update.entry.name).font(.system(size: 13, weight: .medium))
+                            Text("Version \(update.version.version) available")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                        Spacer()
+                        Button("Open Settings", action: onOpenPluginSettings)
                             .controlSize(.small)
                     }
                     .padding(10)
