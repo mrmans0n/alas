@@ -17,14 +17,16 @@ struct ACPSymbolMentionSource {
         let entries = (try? await fileIndex.entries(forWorktreePath: root)) ?? []
         guard !Task.isCancelled else { return [] }
         let urls = entries.map { root.appendingPathComponent($0.relativePath) }
-        guard let best = MentionFuzzy.rank(files: urls, query: fileQuery, limit: 1, relativeTo: root).first,
-              !Task.isCancelled
-        else { return [] }
-        let relativePath = String(best.path.dropFirst(root.path.count + 1))
-        guard let source = await SymbolSource.read(root: root, relativePath: relativePath),
-              !Task.isCancelled
-        else { return [] }
-        return SymbolExtractor.symbols(in: source, relativePath: relativePath)
+        // The listing keeps tracked files deleted from the working tree, so
+        // an unreadable best match falls through to the next one.
+        for match in MentionFuzzy.rank(files: urls, query: fileQuery, limit: 5, relativeTo: root) {
+            guard !Task.isCancelled else { return [] }
+            let relativePath = String(match.path.dropFirst(root.path.count + 1))
+            if let source = await SymbolSource.read(root: root, relativePath: relativePath) {
+                return Task.isCancelled ? [] : SymbolExtractor.symbols(in: source, relativePath: relativePath)
+            }
+        }
+        return []
     }
 }
 

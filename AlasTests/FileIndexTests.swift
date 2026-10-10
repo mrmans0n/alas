@@ -36,6 +36,20 @@ struct FileIndexTests {
         #expect(paths == ["a.txt", "nested/b.txt"])
     }
 
+    @Test func symbolDrillDownSkipsTrackedFilesDeletedFromTheWorkingTree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try write("func gone() {}\n", to: repo.appendingPathComponent("App.swift"))
+        try write("func run() {}\n", to: repo.appendingPathComponent("Sources/App.swift"))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        // Still tracked, so still listed, and it outranks the nested file.
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("App.swift"))
+
+        let symbols = await ACPSymbolMentionSource.symbols(ofFileMatching: "App.swift", root: repo, fileIndex: FileIndex())
+        #expect(symbols.map(\.relativePath) == ["Sources/App.swift"])
+    }
+
     @Test func includesUntrackedRespectsGitignore() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
