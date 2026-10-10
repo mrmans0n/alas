@@ -6963,7 +6963,7 @@ final class AppState {
             guard let self else { return }
             self.refreshPersistedHookSymlinks()
             for manager in self.acpManagers.values {
-                for sessionId in manager.localSessionIDs {
+                for sessionId in manager.writerLeaseSessionIDs {
                     _ = self.acpSessionSocketPath(sessionId: sessionId)
                 }
             }

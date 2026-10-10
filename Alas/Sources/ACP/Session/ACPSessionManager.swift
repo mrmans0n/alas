@@ -9302,17 +9302,19 @@ extension ACPSessionManager {
         for parentID in Array(sideQuestions.keys) {
             await dismissSideQuestion(parentID: parentID)
         }
-        for id in localSessionIDs {
+        let ids = Set(runners.keys)
+            .union(attachingSessions.keys)
+            .union(attachmentAttempts.keys)
+        for id in ids {
             try? await disposeSession(id: id)
         }
     }
 
-    /// Sessions this instance runs or is still attaching: the ones whose
-    /// socket links it owns.
-    var localSessionIDs: Set<ACPSession.ID> {
-        Set(runners.keys)
-            .union(attachingSessions.keys)
-            .union(attachmentAttempts.keys)
+    /// Sessions whose writer lease this instance holds, attached or still
+    /// attaching: the ones whose socket links it owns. An attempt still
+    /// waiting on another instance's lease is not among them.
+    var writerLeaseSessionIDs: Set<ACPSession.ID> {
+        _ownedLeases.filter { !anotherLiveInstanceOwnsLease(sessionId: $0) }
     }
 
     func detach(sessionId: ACPSession.ID) async {
